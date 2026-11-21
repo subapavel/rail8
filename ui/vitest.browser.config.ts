@@ -1,12 +1,15 @@
 import { playwright } from '@vitest/browser-playwright';
 import { defineConfig, mergeConfig } from 'vitest/config';
-import viteConfig from './vite.config';
+import viteConfig from './vite.config.ts';
 
 // Component tests run in a real Chromium. The `playwright` devDependency is pinned: the provider takes it as a peer,
 // and the pinned release decides which Chromium build it wants.
 export default mergeConfig(
   viteConfig,
   defineConfig({
+    // Ant's test build gives every dialog and select the same id. Exercise the same
+    // generated ids and accessible names that the development server renders.
+    define: { 'process.env.NODE_ENV': JSON.stringify('development') },
     test: {
       include: ['src/**/*.browser.test.tsx'],
       browser: {

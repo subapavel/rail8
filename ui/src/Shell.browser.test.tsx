@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -35,6 +34,14 @@ const tab = (name: string) => page.getByRole('tab', { name });
 const tabs = () => page.getByRole('tab');
 
 describe('Shell', () => {
+  test('switches workspace theme without losing the active screen', async () => {
+    render(two, 'first');
+    await page.getByRole('button', { name: 'Use dark theme' }).click();
+    await expect.element(tab('First')).toHaveAttribute('aria-selected', 'true');
+    await page.getByRole('button', { name: 'Use light theme' }).click();
+    await expect.element(page.getByText('First screen')).toBeVisible();
+  });
+
   test('starts with the Home screen of the application open in a tab', async () => {
     render(screens, screens[0]?.id);
     await expect.element(page.getByRole('banner').getByText('Rail8')).toBeVisible();
@@ -69,10 +76,9 @@ describe('Shell', () => {
 
     await userEvent.tab();
     await expect.element(page.getByRole('button', { name: 'Close First' })).toHaveFocus();
-    await userEvent.tab();
-    await expect.element(tab('Second')).toHaveFocus();
-    await userEvent.keyboard('{Enter}');
-    await expect.element(tab('Second')).toHaveAttribute('aria-selected', 'true');
+    await userEvent.tab({ shift: true });
+    await userEvent.keyboard('{ArrowRight}{Enter}');
+    await expect.element(page.getByRole('tab', { name: /Second$/, selected: true })).toHaveFocus();
     await expect.element(page.getByText('Second screen')).toBeVisible();
 
     await userEvent.tab();

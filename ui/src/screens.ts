@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { createContext, type ReactNode } from 'react';
 
 /**
  * A screen of the application: its id, the title on its tab and in the navigation, and what it shows. `render` is
@@ -12,6 +12,9 @@ import type { ReactNode } from 'react';
 export interface Screen {
   id: string;
   title: string;
+  group?: string;
+  icon?: ReactNode;
+  description?: string;
   render: (open: (screen: Screen) => void) => ReactNode;
   beforeClose?: (close: () => void) => void;
 }
@@ -23,6 +26,20 @@ export interface Screen {
 export interface UiModule {
   order: number;
   screens: readonly Screen[];
+}
+
+export const RegisteredScreens = createContext<readonly Screen[]>([]);
+
+/** Groups retain the order in which modules register their screens. */
+export function groupedScreens(screens: readonly Screen[]): Map<string, Screen[]> {
+  const groups = new Map<string, Screen[]>();
+  for (const screen of screens) {
+    const name = screen.group ?? 'Workspace';
+    const entries = groups.get(name);
+    if (entries) entries.push(screen);
+    else groups.set(name, [screen]);
+  }
+  return groups;
 }
 
 const PLAIN_NAME = /^[a-z][a-z0-9-]*$/;
