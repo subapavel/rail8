@@ -1,5 +1,5 @@
-import { Button, Icon } from '@patternfly/react-core';
-import { ExclamationCircleIcon, ExclamationTriangleIcon, LockIcon, PlusCircleIcon } from '@patternfly/react-icons';
+import { ExclamationCircleOutlined, LockOutlined, PlusCircleOutlined, WarningOutlined } from '@ant-design/icons';
+import { Button } from 'antd';
 import {
   Background,
   BaseEdge,
@@ -20,14 +20,14 @@ import { placeOf } from './edit';
 import type { FlowEdge, FlowNode, FlowProblem, FlowView, Path } from './types';
 import { pointer } from './view';
 
-/** React Flow's look in PatternFly's tokens. */
+/** React Flow's look in Ant Design's tokens. */
 const FLOW_STYLE = {
-  '--xy-background-color': 'var(--pf-t--global--background--color--secondary--default)',
-  '--xy-edge-stroke': 'var(--pf-t--global--border--color--default)',
-  '--xy-edge-stroke-selected': 'var(--pf-t--global--border--color--clicked)',
-  '--xy-edge-label-color': 'var(--pf-t--global--text--color--regular)',
-  '--xy-edge-label-background-color': 'var(--pf-t--global--background--color--primary--default)',
-  '--xy-node-border-radius': 'var(--pf-t--global--border--radius--small)',
+  '--xy-background-color': 'var(--ant-color-bg-layout)',
+  '--xy-edge-stroke': 'var(--ant-color-border)',
+  '--xy-edge-stroke-selected': 'var(--ant-color-primary)',
+  '--xy-edge-label-color': 'var(--ant-color-text)',
+  '--xy-edge-label-background-color': 'var(--ant-color-bg-container)',
+  '--xy-node-border-radius': 'var(--ant-border-radius-sm)',
   '--xy-node-boxshadow-selected': 'none',
   height: '100%',
 } as CSSProperties;
@@ -53,17 +53,19 @@ const box = (selected: boolean, dashed: boolean): CSSProperties => ({
   width: '100%',
   height: '100%',
   boxSizing: 'border-box',
-  padding: 'var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)',
-  background: 'var(--pf-t--global--background--color--primary--default)',
-  border: `var(--pf-t--global--border--width--${selected ? 'strong' : 'regular'}) ${dashed ? 'dashed' : 'solid'} var(--pf-t--global--border--color--${selected ? 'clicked' : 'default'})`,
-  borderRadius: 'var(--pf-t--global--border--radius--small)',
+  padding: 'var(--ant-padding-xxs) var(--ant-padding-xs)',
+  background: 'var(--ant-color-bg-container)',
+  borderWidth: selected ? 'var(--ant-line-width-bold)' : 'var(--ant-line-width)',
+  borderStyle: dashed ? 'dashed' : 'solid',
+  borderColor: selected ? 'var(--ant-color-primary)' : 'var(--ant-color-border)',
+  borderRadius: 'var(--ant-border-radius-sm)',
   overflow: 'hidden',
-  fontSize: 'var(--pf-t--global--font--size--sm)',
+  fontSize: 'var(--ant-font-size)',
   cursor: 'pointer',
 });
 
 const line: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
-const subtle: CSSProperties = { ...line, color: 'var(--pf-t--global--text--color--subtle)', fontSize: 'var(--pf-t--global--font--size--xs)' };
+const subtle: CSSProperties = { ...line, color: 'var(--ant-color-text-secondary)', fontSize: 'var(--ant-font-size-sm)' };
 
 /** The marks of a node: its worst problem, and a lock. */
 function Marks({ node, problems }: { node: FlowNode; problems: FlowProblem[] }) {
@@ -71,19 +73,11 @@ function Marks({ node, problems }: { node: FlowNode; problems: FlowProblem[] }) 
   return (
     <span style={{ float: 'right' }}>
       {errors.length > 0 ? (
-        <Icon status="danger" size="sm" title={errors.map((p) => p.message).join('\n')}>
-          <ExclamationCircleIcon />
-        </Icon>
+        <ExclamationCircleOutlined style={{ color: 'var(--ant-color-error)' }} title={errors.map((p) => p.message).join('\n')} />
       ) : problems.length > 0 ? (
-        <Icon status="warning" size="sm" title={problems.map((p) => p.message).join('\n')}>
-          <ExclamationTriangleIcon />
-        </Icon>
+        <WarningOutlined style={{ color: 'var(--ant-color-warning)' }} title={problems.map((p) => p.message).join('\n')} />
       ) : null}
-      {node.locked !== undefined && (
-        <Icon size="sm" title={node.locked}>
-          <LockIcon />
-        </Icon>
-      )}
+      {node.locked !== undefined && <LockOutlined title={node.locked} />}
     </span>
   );
 }
@@ -96,7 +90,7 @@ const StepNode = memo(function StepNode({ data }: NodeProps<CanvasNode>) {
     <div style={box(selected, node.kind === 'flow' || node.kind === 'end')} aria-label={`${node.label}${what === undefined ? '' : ` (${what})`}`}>
       <Handles />
       <Marks node={node} problems={problems} />
-      <div style={{ ...line, fontWeight: 'var(--pf-t--global--font--weight--body--bold)', ...(node.defaultName ? { color: 'var(--pf-t--global--text--color--subtle)' } : {}) }}>
+      <div style={{ ...line, fontWeight: 'var(--ant-font-weight-strong)', ...(node.defaultName ? { color: 'var(--ant-color-text-secondary)' } : {}) }}>
         <span>{node.label}</span>
         {what !== undefined && <span style={{ ...subtle, fontWeight: 'normal' }}> · {what}</span>}
       </div>
@@ -121,12 +115,12 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<CanvasNode>) {
     <div
       style={{
         ...box(selected, node.kind === 'group'),
-        background: node.kind === 'lane' ? 'var(--pf-t--global--background--color--tertiary--default)' : 'transparent',
+        background: node.kind === 'lane' ? 'var(--ant-color-fill-tertiary)' : 'transparent',
         cursor: node.kind === 'lane' ? 'pointer' : 'default',
       }}
     >
       <Handles />
-      <div style={{ ...line, fontWeight: 'var(--pf-t--global--font--weight--body--bold)' }}>{node.kind === 'lane' ? `process ${node.label}` : node.label}</div>
+      <div style={{ ...line, fontWeight: 'var(--ant-font-weight-strong)' }}>{node.kind === 'lane' ? `process ${node.label}` : node.label}</div>
     </div>
   );
 });
@@ -143,10 +137,15 @@ const InsertStepEdge = memo(function InsertStepEdge(props: EdgeProps<InsertEdge>
   const { at, onInsert } = props.data!;
   return (
     <>
-      <BaseEdge id={props.id} path={path} {...(props.markerEnd === undefined ? {} : { markerEnd: props.markerEnd })} {...(props.style === undefined ? {} : { style: props.style })} />
+      <BaseEdge
+        id={props.id}
+        path={path}
+        {...(props.markerEnd === undefined ? {} : { markerEnd: props.markerEnd })}
+        {...(props.style === undefined ? {} : { style: props.style })}
+      />
       <EdgeLabelRenderer>
         <div className="nodrag nopan" style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`, pointerEvents: 'all' }}>
-          <Button variant="plain" size="sm" aria-label={`Add a step at ${placeOf(at)}`} icon={<PlusCircleIcon />} onClick={() => onInsert(at)} />
+          <Button type="text" size="small" aria-label={`Add a step at ${placeOf(at)}`} icon={<PlusCircleOutlined aria-hidden />} onClick={() => onInsert(at)} />
         </div>
       </EdgeLabelRenderer>
     </>
@@ -247,7 +246,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
       minZoom={0.2}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="var(--pf-t--global--border--color--subtle)" />
+      <Background color="var(--ant-color-border-secondary)" />
     </ReactFlow>
   );
 }

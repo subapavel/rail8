@@ -1,30 +1,6 @@
-import {
-  Alert,
-  Bullseye,
-  Button,
-  Content,
-  EmptyState,
-  EmptyStateBody,
-  Flex,
-  FlexItem,
-  Form,
-  FormGroup,
-  FormHelperText,
-  HelperText,
-  HelperTextItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  PageSection,
-  Spinner,
-  Stack,
-  StackItem,
-  TextInput,
-  Title,
-} from '@patternfly/react-core';
-import { PlusCircleIcon, SyncAltIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { PlusCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { ProTable } from '@ant-design/pro-components';
+import { Alert, Button, Empty, Flex, Form, Input, Modal, Spin, Typography } from 'antd';
 import { useCallback, useEffect, useId, useState } from 'react';
 import { FlowsError, type FlowList as Listed, type FlowsApi } from './api';
 import { edit } from './edit';
@@ -64,7 +40,16 @@ export const newFlowText = (id: string, from: string, to: string) =>
   edit('', {
     op: 'add',
     path: [],
-    value: { schemaVersion: 1, kind: 'flow', id, version: '0.1.0', from: { endpoint: from }, delivery: { mode: 'sync' }, limits: { maxBodyBytes: 1048576 }, steps: [{ type: 'to', endpoint: to }] },
+    value: {
+      schemaVersion: 1,
+      kind: 'flow',
+      id,
+      version: '0.1.0',
+      from: { endpoint: from },
+      delivery: { mode: 'sync' },
+      limits: { maxBodyBytes: 1048576 },
+      steps: [{ type: 'to', endpoint: to }],
+    },
   });
 
 /**
@@ -106,170 +91,152 @@ export function FlowList({ api, onOpen }: FlowListProps) {
       refresh();
       onOpen(draft.path, draft.id);
     } catch (error) {
-      setCreateFailure(error instanceof FlowsError && error.status === 412 ? `${draft.path} exists already; nothing was written.` : error instanceof Error ? error.message : String(error));
+      setCreateFailure(
+        error instanceof FlowsError && error.status === 412 ? `${draft.path} exists already; nothing was written.` : error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setCreating(false);
     }
   };
-  const field = (name: 'path' | 'id' | 'from' | 'to', label: string, help: string) => (
-    <FormGroup label={label} isRequired fieldId={`${ids}-${name}`}>
-      <TextInput
-        id={`${ids}-${name}`}
-        isRequired
-        value={draft?.[name] ?? ''}
-        validated={draft !== null && draft[name] !== '' && wrong[name] !== undefined ? 'error' : 'default'}
-        onChange={(_, text) =>
-          setDraft((d) =>
-            d === null ? d : name === 'id' && !d.pathTyped ? { ...d, id: text, path: `${folder}${text}.yaml` } : { ...d, [name]: text, ...(name === 'path' ? { pathTyped: true } : {}) },
-          )
-        }
-      />
-      <FormHelperText>
-        <HelperText>
-          <HelperTextItem variant={draft !== null && draft[name] !== '' && wrong[name] !== undefined ? 'error' : 'default'}>
-            {draft !== null && draft[name] !== '' && wrong[name] !== undefined ? wrong[name] : help}
-          </HelperTextItem>
-        </HelperText>
-      </FormHelperText>
-    </FormGroup>
-  );
+  const field = (name: 'path' | 'id' | 'from' | 'to', label: string, help: string) => {
+    const issue = draft?.[name] ? wrong[name] : undefined;
+    return (
+      <Form.Item label={label} required htmlFor={`${ids}-${name}`} validateStatus={issue ? 'error' : undefined} help={<span id={`${ids}-${name}-help`}>{issue ?? help}</span>}>
+        <Input
+          required
+          id={`${ids}-${name}`}
+          aria-label={label}
+          aria-describedby={`${ids}-${name}-help`}
+          aria-invalid={issue !== undefined}
+          value={draft?.[name] ?? ''}
+          onChange={({ target: { value: text } }) =>
+            setDraft((d) =>
+              d === null
+                ? d
+                : name === 'id' && !d.pathTyped
+                  ? { ...d, id: text, path: `${folder}${text}.yaml` }
+                  : { ...d, [name]: text, ...(name === 'path' ? { pathTyped: true } : {}) },
+            )
+          }
+        />
+      </Form.Item>
+    );
+  };
 
   let body;
   if (result.kind === 'reading') {
-    body = (
-      <Bullseye>
-        <Spinner aria-label="Reading the working folder" />
-      </Bullseye>
-    );
+    body = <Spin aria-label="Reading the working folder" />;
   } else if (result.kind === 'failed') {
-    body = (
-      <Alert variant="danger" isInline title="The working folder could not be read">
-        {result.message}
-      </Alert>
-    );
+    body = <Alert showIcon type="error" title="The working folder could not be read" description={result.message} />;
   } else if (!result.list.configured) {
     body = (
-      <EmptyState titleText="No working folder" headingLevel="h2">
-        <EmptyStateBody>
-          Start the UI with <code>RAIL8_WORKSPACE</code> set to the folder that holds your packages, such as{' '}
-          <code>RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev</code>.
-        </EmptyStateBody>
-      </EmptyState>
+      <Empty
+        description={
+          <>
+            <Typography.Title level={2}>No working folder</Typography.Title>
+            Start the UI with <code>RAIL8_WORKSPACE</code> set to the folder that holds your packages, such as <code>RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev</code>.
+          </>
+        }
+      />
     );
   } else if (result.list.items.length === 0) {
     body = (
-      <EmptyState titleText="No flow files" headingLevel="h2">
-        <EmptyStateBody>The working folder holds no YAML file of the kind flow.</EmptyStateBody>
-      </EmptyState>
+      <Empty
+        description={
+          <>
+            <Typography.Title level={2}>No flow files</Typography.Title>
+            The working folder holds no YAML file of the kind flow.
+          </>
+        }
+      />
     );
   } else {
     body = (
-      <Stack hasGutter>
+      <Flex vertical gap="middle">
         {result.list.truncated && (
-          <StackItem>
-            <Alert variant="warning" isInline title="Not every file of the working folder was looked at">
-              The working folder holds more YAML files than are read; only the first ones are listed.
-            </Alert>
-          </StackItem>
+          <Alert
+            type="warning"
+            showIcon
+            title="Not every file of the working folder was looked at"
+            description="The working folder holds more YAML files than are read; only the first ones are listed."
+          />
         )}
-        <StackItem>
-          <Table aria-label="Flow files" variant="compact">
-            <Thead>
-              <Tr>
-                <Th>Flow</Th>
-                <Th>File</Th>
-              </Tr>
-            </Thead>
-            <Tbody>
-              {result.list.items.map((item) => (
-                <Tr key={item.path}>
-                  <Td dataLabel="Flow">
-                    <Stack>
-                      <StackItem>
-                        <Button variant="link" isInline onClick={() => onOpen(item.path, 'id' in item ? item.id : (item.path.split('/').at(-1) ?? item.path))}>
-                          {'id' in item ? item.id : item.path.split('/').at(-1)}
-                        </Button>
-                      </StackItem>
-                      {'problem' in item && (
-                        <StackItem>
-                          <HelperText>
-                            <HelperTextItem variant="error">{item.problem}</HelperTextItem>
-                          </HelperText>
-                        </StackItem>
-                      )}
-                    </Stack>
-                  </Td>
-                  <Td dataLabel="File">{item.path}</Td>
-                </Tr>
-              ))}
-            </Tbody>
-          </Table>
-        </StackItem>
-      </Stack>
+        <ProTable<Listed['items'][number]>
+          aria-label="Flow files"
+          rowKey="path"
+          size="small"
+          dataSource={result.list.items}
+          search={false}
+          options={false}
+          toolBarRender={false}
+          pagination={false}
+          columns={[
+            {
+              title: 'Flow',
+              key: 'flow',
+              render: (_, item) => {
+                const id = 'id' in item ? item.id : (item.path.split('/').at(-1) ?? item.path);
+                return (
+                  <Flex vertical align="start">
+                    <Button type="link" onClick={() => onOpen(item.path, id)}>
+                      {id}
+                    </Button>
+                    {'problem' in item && <Typography.Text type="danger">{item.problem}</Typography.Text>}
+                  </Flex>
+                );
+              },
+            },
+            { title: 'File', dataIndex: 'path' },
+          ]}
+        />
+      </Flex>
     );
   }
 
   return (
-    <PageSection>
-      <Stack hasGutter>
-        <StackItem>
-          <Flex alignItems={{ default: 'alignItemsCenter' }}>
-            <FlexItem>
-              <Title headingLevel="h1">Flows</Title>
-            </FlexItem>
-            <FlexItem align={{ default: 'alignRight' }}>
-              <Button variant="secondary" size="sm" icon={<SyncAltIcon />} onClick={refresh}>
-                Refresh
-              </Button>{' '}
-              {result.kind === 'read' && result.list.configured && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={<PlusCircleIcon />}
-                  onClick={() => {
-                    setCreateFailure(null);
-                    setDraft({ path: folder, pathTyped: false, id: '', from: '', to: '' });
-                  }}
-                >
-                  New flow
-                </Button>
-              )}
-            </FlexItem>
-          </Flex>
-          <Content component="p">The flow files of the working folder. Each one opens in a tab of its own as a picture of its steps.</Content>
-        </StackItem>
-        <StackItem>{body}</StackItem>
-      </Stack>
-      <Modal variant="small" isOpen={draft !== null} onClose={() => !creating && setDraft(null)} aria-labelledby={`${ids}-new`}>
-        <ModalHeader title="New flow" labelId={`${ids}-new`} description="A synchronous flow with one step; the rest is added in its picture." />
-        <ModalBody>
-          <Form
-            id={`${ids}-form`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            {field('id', 'Id', 'The flow’s id.')}
-            {field('path', 'File', 'Its path in the working folder; nothing is written over an existing file.')}
-            {field('from', 'Arrives at', 'The id of the inbound endpoint the flow serves.')}
-            {field('to', 'Sends to', 'The id of the outbound endpoint its first step sends to.')}
-            {createFailure !== null && (
-              <Alert variant="danger" isInline title="The flow was not created">
-                {createFailure}
-              </Alert>
-            )}
-          </Form>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" type="submit" form={`${ids}-form`} isLoading={creating} isDisabled={creating || draft === null || Object.keys(wrong).length > 0}>
-            Create
+    <Flex vertical gap="middle">
+      <Flex align="center" gap="small" wrap>
+        <Typography.Title level={1} style={{ margin: 0 }}>
+          Flows
+        </Typography.Title>
+        <Flex gap="small" style={{ marginInlineStart: 'auto' }}>
+          <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
+            Refresh
           </Button>
-          <Button variant="link" isDisabled={creating} onClick={() => setDraft(null)}>
-            Cancel
-          </Button>
-        </ModalFooter>
+          {result.kind === 'read' && result.list.configured && (
+            <Button
+              type="primary"
+              icon={<PlusCircleOutlined aria-hidden />}
+              onClick={() => {
+                setCreateFailure(null);
+                setDraft({ path: folder, pathTyped: false, id: '', from: '', to: '' });
+              }}
+            >
+              New flow
+            </Button>
+          )}
+        </Flex>
+      </Flex>
+      <Typography.Text type="secondary">The flow files of the working folder. Each one opens in a tab of its own as a picture of its steps.</Typography.Text>
+      {body}
+      <Modal
+        open={draft !== null}
+        title="New flow"
+        okText="Create"
+        confirmLoading={creating}
+        okButtonProps={{ htmlType: 'submit', form: `${ids}-form`, disabled: creating || draft === null || Object.keys(wrong).length > 0 }}
+        cancelButtonProps={{ disabled: creating }}
+        onCancel={() => !creating && setDraft(null)}
+      >
+        <p>A synchronous flow with one step; the rest is added in its picture.</p>
+        <Form layout="vertical" id={`${ids}-form`} onFinish={() => void create()}>
+          {field('id', 'Id', 'The flow’s id.')}
+          {field('path', 'File', 'Its path in the working folder; nothing is written over an existing file.')}
+          {field('from', 'Arrives at', 'The id of the inbound endpoint the flow serves.')}
+          {field('to', 'Sends to', 'The id of the outbound endpoint its first step sends to.')}
+          {createFailure !== null && <Alert type="error" showIcon title="The flow was not created" description={createFailure} />}
+        </Form>
       </Modal>
-    </PageSection>
+    </Flex>
   );
 }
