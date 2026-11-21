@@ -1,27 +1,6 @@
-import {
-  Alert,
-  Badge,
-  Button,
-  EmptyState,
-  EmptyStateBody,
-  Form,
-  FormSelect,
-  FormSelectOption,
-  Label,
-  PageSection,
-  Spinner,
-  Stack,
-  StackItem,
-  TextInput,
-  Title,
-  ToggleGroup,
-  ToggleGroupItem,
-  Toolbar,
-  ToolbarContent,
-  ToolbarItem,
-} from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Alert, Badge, Button, Empty, Flex, Form, Input, Select, Spin, Tag, Typography } from 'antd';
+import { ProTable } from '@ant-design/pro-components';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminApi, Counts, Listed, ListQuery, Status } from './admin';
 import { duration } from './progress';
 
@@ -41,10 +20,10 @@ const RANGES = [
   { label: 'Last 7 days', minutes: 7 * 24 * 60 },
 ] as const;
 
-const STATUSES: { value: Status; label: string; status?: 'success' | 'danger' | 'info' }[] = [
-  { value: 'completed', label: 'Completed', status: 'success' },
-  { value: 'failed', label: 'Failed', status: 'danger' },
-  { value: 'running', label: 'Running', status: 'info' },
+const STATUSES: { value: Status; label: string; color?: 'success' | 'error' | 'processing' }[] = [
+  { value: 'completed', label: 'Completed', color: 'success' },
+  { value: 'failed', label: 'Failed', color: 'error' },
+  { value: 'running', label: 'Running', color: 'processing' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
@@ -82,7 +61,10 @@ const reason = (failed: unknown) => (failed instanceof Error ? failed.message : 
 
 /** The query the filters name, over the range that ends at `now`. */
 function queryOf(filters: Filters, now: Date): ListQuery {
-  const query: ListQuery = { from: new Date(now.getTime() - filters.minutes * 60_000).toISOString(), to: now.toISOString() };
+  const query: ListQuery = {
+    from: new Date(now.getTime() - filters.minutes * 60_000).toISOString(),
+    to: now.toISOString(),
+  };
   if (filters.flow !== '') query.flow = filters.flow;
   if (filters.status !== '') query.status = filters.status;
   if (filters.keyName.trim() !== '') query.key = { name: filters.keyName.trim(), value: filters.keyValue };
@@ -124,7 +106,8 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
       );
       api.list(query).then(
         (page) => {
-          if (asked === latest.current) setResult({ kind: 'shown', shown: { query, items: page.items, next: page.next, more: false } });
+          if (asked === latest.current)
+            setResult({ kind: 'shown', shown: { query, items: page.items, next: page.next, more: false } });
         },
         (failed: unknown) => {
           if (asked === latest.current) setResult({ kind: 'failed', message: reason(failed) });
@@ -157,18 +140,17 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
     readAgain(next);
   };
 
-  const search = (event: FormEvent) => {
-    event.preventDefault();
-    readAgain(filters);
-  };
-
   const loadMore = (shown: Shown) => {
     if (shown.next === null) return;
     const asked = ++latest.current;
     setResult({ kind: 'shown', shown: { ...shown, more: true } });
     api.list(shown.query, shown.next).then(
       (page) => {
-        if (asked === latest.current) setResult({ kind: 'shown', shown: { ...shown, items: [...shown.items, ...page.items], next: page.next, more: false } });
+        if (asked === latest.current)
+          setResult({
+            kind: 'shown',
+            shown: { ...shown, items: [...shown.items, ...page.items], next: page.next, more: false },
+          });
       },
       (failed: unknown) => {
         if (asked === latest.current) setResult({ kind: 'failed', message: reason(failed) });
@@ -176,199 +158,185 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
     );
   };
 
-  const open = (event: FormEvent) => {
-    event.preventDefault();
-    if (id.trim() !== '') onOpen(id.trim());
-  };
-
   return (
-    <PageSection>
-      <Stack hasGutter>
-        <StackItem>
-          <Title headingLevel="h1">Messages</Title>
-        </StackItem>
-        {flows.kind === 'failed' && (
-          <StackItem>
-            <Alert variant="danger" isInline title="The deployed flows could not be listed">
-              {flows.message}
-            </Alert>
-          </StackItem>
-        )}
-        <StackItem>
-          <Form onSubmit={search} aria-label="Filters">
-            <Toolbar>
-              <ToolbarContent>
-                <ToolbarItem>
-                  <FormSelect aria-label="Time range" value={filters.minutes} onChange={(_event, value) => choose({ minutes: Number(value) })}>
-                    {RANGES.map((range) => (
-                      <FormSelectOption key={range.minutes} value={range.minutes} label={range.label} />
-                    ))}
-                  </FormSelect>
-                </ToolbarItem>
-                <ToolbarItem>
-                  <FormSelect aria-label="Flow" value={filters.flow} isDisabled={flows.kind !== 'loaded'} onChange={(_event, value) => choose({ flow: value })}>
-                    <FormSelectOption value="" label="All flows" />
-                    {flows.kind === 'loaded' && flows.ids.map((deployed) => <FormSelectOption key={deployed} value={deployed} label={deployed} />)}
-                  </FormSelect>
-                </ToolbarItem>
-                <ToolbarItem>
-                  <FormSelect aria-label="Status" value={filters.status} onChange={(_event, value) => choose({ status: value as Status | '' })}>
-                    <FormSelectOption value="" label="All statuses" />
-                    {STATUSES.map((status) => (
-                      <FormSelectOption key={status.value} value={status.value} label={status.label} />
-                    ))}
-                  </FormSelect>
-                </ToolbarItem>
-                <ToolbarItem>
-                  <TextInput aria-label="Key name" placeholder="Key name" value={filters.keyName} onChange={(_event, value) => setFilters({ ...filters, keyName: value })} />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <TextInput aria-label="Key value" placeholder="Key value" value={filters.keyValue} onChange={(_event, value) => setFilters({ ...filters, keyValue: value })} />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <TextInput aria-label="Step name" placeholder="Step name" value={filters.step} onChange={(_event, value) => setFilters({ ...filters, step: value })} />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <Button type="submit" variant="primary">
-                    Search
-                  </Button>
-                </ToolbarItem>
-              </ToolbarContent>
-            </Toolbar>
-          </Form>
-        </StackItem>
-        <StackItem>
-          <Form onSubmit={open} aria-label="Open a message">
-            <Toolbar>
-              <ToolbarContent>
-                <ToolbarItem>
-                  <TextInput aria-label="Message id" placeholder="Message id" value={id} onChange={(_event, value) => setId(value)} />
-                </ToolbarItem>
-                <ToolbarItem>
-                  <Button type="submit" variant="secondary" isDisabled={id.trim() === ''}>
-                    Open
-                  </Button>
-                </ToolbarItem>
-              </ToolbarContent>
-            </Toolbar>
-          </Form>
-        </StackItem>
-        <StackItem>
-          <StatusCounts counted={counted} status={filters.status} onChoose={(status) => choose({ status })} />
-        </StackItem>
-        <StackItem>
-          <Results result={result} onOpen={onOpen} onMore={loadMore} />
-        </StackItem>
-      </Stack>
-    </PageSection>
+    <Flex vertical gap="middle">
+      <Typography.Title level={1}>Messages</Typography.Title>
+      {flows.kind === 'failed' && (
+        <Alert showIcon type="error" title="The deployed flows could not be listed" description={flows.message} />
+      )}
+      <Form aria-label="Filters" className="rail8-filters" onFinish={() => readAgain(filters)}>
+        <Flex gap="small" wrap>
+          <Select
+            aria-label="Time range"
+            value={filters.minutes}
+            onChange={(minutes) => choose({ minutes })}
+            options={RANGES.map(({ minutes, label }) => ({ value: minutes, label }))}
+            virtual={false}
+          />
+          <Select
+            aria-label="Flow"
+            value={filters.flow}
+            disabled={flows.kind !== 'loaded'}
+            onChange={(flow) => choose({ flow })}
+            options={[
+              { label: 'All flows', value: '' },
+              ...(flows.kind === 'loaded' ? flows.ids.map((value) => ({ label: value, value })) : []),
+            ]}
+            virtual={false}
+          />
+          <Select
+            aria-label="Status"
+            value={filters.status}
+            onChange={(status) => choose({ status })}
+            options={[{ label: 'All statuses', value: '' }, ...STATUSES]}
+            virtual={false}
+          />
+          <Input
+            aria-label="Key name"
+            placeholder="Key name"
+            value={filters.keyName}
+            onChange={(e) => setFilters({ ...filters, keyName: e.target.value })}
+          />
+          <Input
+            aria-label="Key value"
+            placeholder="Key value"
+            value={filters.keyValue}
+            onChange={(e) => setFilters({ ...filters, keyValue: e.target.value })}
+          />
+          <Input
+            aria-label="Step name"
+            placeholder="Step name"
+            value={filters.step}
+            onChange={(e) => setFilters({ ...filters, step: e.target.value })}
+          />
+          <Button type="primary" htmlType="submit">
+            Search
+          </Button>
+        </Flex>
+      </Form>
+      <Form
+        aria-label="Open a message"
+        onFinish={() => {
+          if (id.trim()) onOpen(id.trim());
+        }}
+      >
+        <Flex gap="small">
+          <Input
+            aria-label="Message id"
+            placeholder="Message id"
+            style={{ maxWidth: 320 }}
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+          />
+          <Button htmlType="submit" disabled={!id.trim()}>
+            Open
+          </Button>
+        </Flex>
+      </Form>
+      {counted.kind === 'loading' && <Spin aria-label="Counting the messages by status" />}
+      {counted.kind === 'failed' && (
+        <Alert
+          showIcon
+          type="error"
+          title="The messages could not be counted by status"
+          description={counted.message}
+        />
+      )}
+      {counted.kind === 'counted' && (
+        <Flex role="group" aria-label="Messages by status" gap="small" wrap>
+          {STATUSES.map(({ value, label }) => (
+            <Button
+              key={value}
+              aria-label={`${label} ${counted.counts[value]}`}
+              aria-pressed={filters.status === value}
+              type={filters.status === value ? 'primary' : 'default'}
+              onClick={() => choose({ status: filters.status === value ? '' : value })}
+            >
+              {label} <Badge count={counted.counts[value]} showZero overflowCount={Number.MAX_SAFE_INTEGER} />
+            </Button>
+          ))}
+        </Flex>
+      )}
+      {result.kind === 'loading' && <Spin aria-label="Reading the messages" />}
+      {result.kind === 'failed' && (
+        <Alert showIcon type="error" title="The messages could not be listed" description={result.message} />
+      )}
+      {result.kind === 'shown' && <MessageResults shown={result.shown} onOpen={onOpen} onMore={loadMore} />}
+    </Flex>
   );
 }
 
-function StatusLabel({ status }: { status: Status }) {
-  const shown = STATUSES.find((s) => s.value === status) ?? { value: status, label: status };
-  return shown.status === undefined ? <Label color="grey">{shown.label}</Label> : <Label status={shown.status}>{shown.label}</Label>;
-}
-
-/** The strip of counts by status; choosing a count narrows the list to its status, choosing the chosen one again shows every status. */
-function StatusCounts({ counted, status, onChoose }: { counted: Counted; status: Status | ''; onChoose: (status: Status | '') => void }) {
-  switch (counted.kind) {
-    case 'loading':
-      return <Spinner size="md" aria-label="Counting the messages by status" />;
-    case 'failed':
-      return (
-        <Alert variant="danger" isInline title="The messages could not be counted by status">
-          {counted.message}
-        </Alert>
-      );
-    case 'counted':
-      return (
-        <ToggleGroup aria-label="Messages by status">
-          {STATUSES.map((shown) => (
-            <ToggleGroupItem
-              key={shown.value}
-              text={
-                <>
-                  {shown.label} <Badge isRead={counted.counts[shown.value] === 0}>{counted.counts[shown.value]}</Badge>
-                </>
-              }
-              isSelected={status === shown.value}
-              onChange={(_event, selected) => onChoose(selected ? shown.value : '')}
-            />
-          ))}
-        </ToggleGroup>
-      );
-  }
-}
-
-function Results({ result, onOpen, onMore }: { result: Result; onOpen: (id: string) => void; onMore: (shown: Shown) => void }) {
-  switch (result.kind) {
-    case 'loading':
-      return <Spinner size="lg" aria-label="Reading the messages" />;
-    case 'failed':
-      return (
-        <Alert variant="danger" isInline title="The messages could not be listed">
-          {result.message}
-        </Alert>
-      );
-    case 'shown': {
-      const { shown } = result;
-      if (shown.items.length === 0) {
-        return (
-          <EmptyState titleText="No messages found" headingLevel="h2">
-            <EmptyStateBody>
-              No message that matches the filters arrived in the time range. A message whose arrival its flow does not record
-              (recording level errors or off) is not listed.
-            </EmptyStateBody>
-          </EmptyState>
-        );
-      }
-      return (
-        <Stack hasGutter>
-          <StackItem>
-            <Table aria-label="Messages" variant="compact">
-              <Thead>
-                <Tr>
-                  <Th>Started at</Th>
-                  <Th>Flow</Th>
-                  <Th>Status</Th>
-                  <Th>Duration</Th>
-                  <Th>Business keys</Th>
-                  <Th>Message id</Th>
-                </Tr>
-              </Thead>
-              <Tbody>
-                {shown.items.map((message) => (
-                  <Tr key={message.id}>
-                    <Td dataLabel="Started at">{message.startedAt}</Td>
-                    <Td dataLabel="Flow">{message.flow}</Td>
-                    <Td dataLabel="Status">
-                      <StatusLabel status={message.status} />
-                    </Td>
-                    <Td dataLabel="Duration">{duration(message.durationNanos)}</Td>
-                    <Td dataLabel="Business keys" modifier="breakWord">
-                      {Object.entries(message.keys)
-                        .map(([name, value]) => `${name}=${value}`)
-                        .join(', ')}
-                    </Td>
-                    <Td dataLabel="Message id">
-                      <Button variant="link" isInline onClick={() => onOpen(message.id)}>
-                        {message.id}
-                      </Button>
-                    </Td>
-                  </Tr>
-                ))}
-              </Tbody>
-            </Table>
-          </StackItem>
-          {shown.next !== null && (
-            <StackItem>
-              <Button variant="secondary" isLoading={shown.more} isDisabled={shown.more} onClick={() => onMore(shown)}>
-                Load more
+function MessageResults({
+  shown,
+  onOpen,
+  onMore,
+}: {
+  shown: Shown;
+  onOpen: (id: string) => void;
+  onMore: (shown: Shown) => void;
+}) {
+  if (!shown.items.length)
+    return (
+      <Empty
+        description={
+          <>
+            <h2>No messages found</h2>No message that matches the filters arrived in the time range. A message whose
+            arrival its flow does not record (recording level errors or off) is not listed.
+          </>
+        }
+      />
+    );
+  return (
+    <>
+      <ProTable<Listed>
+        rowKey="id"
+        size="small"
+        search={false}
+        options={false}
+        pagination={false}
+        toolBarRender={false}
+        dataSource={shown.items}
+        scroll={{ x: 'max-content' }}
+        cardBordered={false}
+        components={{
+          table: (props: React.TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Messages" />,
+        }}
+        columns={[
+          { title: 'Started at', dataIndex: 'startedAt' },
+          { title: 'Flow', dataIndex: 'flow' },
+          {
+            title: 'Status',
+            dataIndex: 'status',
+            render: (_, row) => {
+              const status = STATUSES.find(({ value }) => value === row.status);
+              return <Tag color={status?.color}>{status?.label ?? row.status}</Tag>;
+            },
+          },
+          { title: 'Duration', render: (_, row) => duration(row.durationNanos) },
+          {
+            title: 'Business keys',
+            render: (_, row) =>
+              Object.entries(row.keys)
+                .map(([name, value]) => `${name}=${value}`)
+                .join(', '),
+          },
+          {
+            title: 'Message id',
+            render: (_, row) => (
+              <Button type="link" onClick={() => onOpen(row.id)}>
+                {row.id}
               </Button>
-            </StackItem>
-          )}
-        </Stack>
-      );
-    }
-  }
+            ),
+          },
+        ]}
+      />
+      {shown.next !== null && (
+        <div>
+          <Button loading={shown.more} disabled={shown.more} onClick={() => onMore(shown)}>
+            Load more
+          </Button>
+        </div>
+      )}
+    </>
+  );
 }

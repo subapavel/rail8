@@ -1,30 +1,5 @@
-import {
-  Alert,
-  AlertActionLink,
-  Button,
-  CodeBlock,
-  CodeBlockCode,
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  EmptyState,
-  EmptyStateBody,
-  Flex,
-  FlexItem,
-  Label,
-  Modal,
-  ModalBody,
-  ModalHeader,
-  PageSection,
-  Spinner,
-  Stack,
-  StackItem,
-  Title,
-} from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
-import { useEffect, useId, useState } from 'react';
+import { Alert, Button, Descriptions, Empty, Flex, Modal, Spin, Tag, Typography } from 'antd';
+import { useEffect, useState } from 'react';
 import { PAYLOAD_SHOWN, type AdminApi, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
 
@@ -34,9 +9,14 @@ export interface MessageViewProps {
   id: string;
 }
 
-type Load = { kind: 'loading' } | { kind: 'missing' } | { kind: 'failed'; message: string } | { kind: 'loaded'; timeline: Timeline };
+type Load =
+  | { kind: 'loading' }
+  | { kind: 'missing' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'loaded'; timeline: Timeline };
 
-type Restart = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; attempt: number } | { kind: 'failed'; message: string };
+type Restart =
+  { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; attempt: number } | { kind: 'failed'; message: string };
 
 const waitLabels: Record<WaitReason, string> = {
   worker: 'Saved, waiting for a worker',
@@ -46,15 +26,15 @@ const waitLabels: Record<WaitReason, string> = {
 
 const reason = (failed: unknown) => (failed instanceof Error ? failed.message : String(failed));
 
-const outcomeLabels: Record<Outcome, { text: string; status?: 'success' | 'danger' }> = {
+const outcomeLabels: Record<Outcome, { text: string; status?: 'success' | 'error' }> = {
   OK: { text: 'OK', status: 'success' },
   FILTERED: { text: 'Filtered' },
-  FAILED: { text: 'Failed', status: 'danger' },
+  FAILED: { text: 'Failed', status: 'error' },
 };
 
 function OutcomeLabel({ outcome }: { outcome: Outcome }) {
   const { text, status } = outcomeLabels[outcome];
-  return status === undefined ? <Label color="grey">{text}</Label> : <Label status={status}>{text}</Label>;
+  return <Tag color={status}>{text}</Tag>;
 }
 
 /**
@@ -100,43 +80,31 @@ export function MessageView({ api, id }: MessageViewProps) {
   };
 
   return (
-    <PageSection>
-      <Stack hasGutter>
-        <StackItem>
-          <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }} alignItems={{ default: 'alignItemsCenter' }}>
-            <FlexItem>
-              <Title headingLevel="h1">Message {id}</Title>
-            </FlexItem>
-            <FlexItem>
-              <Button variant="secondary" onClick={refresh} isDisabled={load.kind === 'loading'}>
-                Refresh
-              </Button>
-            </FlexItem>
-          </Flex>
-        </StackItem>
-        {load.kind === 'loading' && (
-          <StackItem>
-            <Spinner size="lg" aria-label="Loading the message" />
-          </StackItem>
-        )}
-        {load.kind === 'missing' && (
-          <StackItem>
-            <EmptyState titleText="No such message" headingLevel="h2">
-              <EmptyStateBody>The node recorded no message with the id {id}.</EmptyStateBody>
-            </EmptyState>
-          </StackItem>
-        )}
-        {load.kind === 'failed' && (
-          <StackItem>
-            <Alert variant="danger" isInline title="The message could not be read">
-              {load.message}
-            </Alert>
-          </StackItem>
-        )}
-        {load.kind === 'loaded' && <Progress timeline={load.timeline} restart={restart} onRestart={runAgain} onShow={setShown} />}
-      </Stack>
+    <Flex vertical gap="middle">
+      <Flex justify="space-between" align="center" gap="small" wrap>
+        <Typography.Title level={1}>Message {id}</Typography.Title>
+        <Button onClick={refresh} disabled={load.kind === 'loading'}>
+          Refresh
+        </Button>
+      </Flex>
+      {load.kind === 'loading' && <Spin aria-label="Loading the message" />}
+      {load.kind === 'missing' && (
+        <Empty
+          description={
+            <>
+              <h2>No such message</h2>The node recorded no message with the id {id}.
+            </>
+          }
+        />
+      )}
+      {load.kind === 'failed' && (
+        <Alert showIcon type="error" title="The message could not be read" description={load.message} />
+      )}
+      {load.kind === 'loaded' && (
+        <Progress timeline={load.timeline} restart={restart} onRestart={runAgain} onShow={setShown} />
+      )}
       {shown !== null && <PayloadDialog api={api} id={id} step={shown} onClose={() => setShown(null)} />}
-    </PageSection>
+    </Flex>
   );
 }
 
@@ -152,104 +120,84 @@ function Progress({ timeline, restart, onRestart, onShow }: ProgressProps) {
   const { attempts, otherNanos, totalNanos } = account(timeline.steps);
   return (
     <>
-      <StackItem>
-        <DescriptionList isHorizontal isCompact>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Flow</DescriptionListTerm>
-            <DescriptionListDescription>{timeline.flow}</DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Attempts</DescriptionListTerm>
-            <DescriptionListDescription>{attempts.length}</DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>State</DescriptionListTerm>
-            <DescriptionListDescription>
-              <OutcomeLabel outcome={state.outcome} />
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
-      </StackItem>
-      {state.failed !== null && (
-        <StackItem>
-          <Alert
-            variant="danger"
-            isInline
-            title={`Step ${state.failed.step} (${state.failed.name}) of attempt ${state.attempt} failed`}
-            actionLinks={
-              <AlertActionLink onClick={onRestart} isDisabled={restart.kind === 'running' || restart.kind === 'done'}>
-                Restart
-              </AlertActionLink>
-            }
-          >
-            {state.failed.error ?? 'The step recorded no error message.'}
-          </Alert>
-        </StackItem>
+      <Descriptions
+        size="small"
+        items={[
+          { key: 'flow', label: 'Flow', children: timeline.flow },
+          { key: 'attempts', label: 'Attempts', children: attempts.length },
+          { key: 'state', label: 'State', children: <OutcomeLabel outcome={state.outcome} /> },
+        ]}
+      />
+      {state.failed && (
+        <Alert
+          showIcon
+          type="error"
+          title={`Step ${state.failed.step} (${state.failed.name}) of attempt ${state.attempt} failed`}
+          description={state.failed.error ?? 'The step recorded no error message.'}
+          action={
+            <Button onClick={onRestart} disabled={restart.kind === 'running' || restart.kind === 'done'}>
+              Restart
+            </Button>
+          }
+        />
       )}
       {restart.kind === 'done' && (
-        <StackItem>
-          <Alert variant="success" isInline title={`Restarted as attempt ${restart.attempt}`}>
-            The message runs again from its arrival. Refresh to see the steps of the new attempt.
-          </Alert>
-        </StackItem>
+        <Alert
+          showIcon
+          type="success"
+          title={`Restarted as attempt ${restart.attempt}`}
+          description="The message runs again from its arrival. Refresh to see the steps of the new attempt."
+        />
       )}
       {restart.kind === 'failed' && (
-        <StackItem>
-          <Alert variant="danger" isInline title="The restart was refused">
-            {restart.message}
-          </Alert>
-        </StackItem>
+        <Alert showIcon type="error" title="The restart was refused" description={restart.message} />
       )}
       {attempts.map(({ attempt, rows }) => (
-        <StackItem key={attempt}>
-          <Title headingLevel="h2">Attempt {attempt}</Title>
-          <Table aria-label={`Steps of attempt ${attempt}`} variant="compact">
-            <Thead>
-              <Tr>
-                <Th>Step</Th>
-                <Th>Name</Th>
-                <Th>Outcome</Th>
-                <Th>Started at</Th>
-                <Th>Wall time</Th>
-                <Th>CPU time</Th>
-                <Th>Payload</Th>
-                <Th>Error</Th>
-              </Tr>
-            </Thead>
-            <Tbody>
-              {rows.map((row, i) =>
-                row.kind === 'wait' ? (
-                  <Tr key={`wait-${i}`}>
-                    <Td dataLabel="Step" />
-                    <Td dataLabel="Name" colSpan={3}>
-                      {waitLabels[row.reason]}
-                    </Td>
-                    <Td dataLabel="Wall time">{duration(row.nanos)}</Td>
-                    <Td colSpan={3} />
-                  </Tr>
-                ) : (
-                  <StepRow key={row.step.step} step={row.step} attempt={attempt} onShow={onShow} />
-                ),
-              )}
-            </Tbody>
-          </Table>
-        </StackItem>
+        <section key={attempt}>
+          <Typography.Title level={2}>Attempt {attempt}</Typography.Title>
+          <div className="rail8-table-scroll">
+            <table className="rail8-document-table" aria-label={`Steps of attempt ${attempt}`}>
+              <thead>
+                <tr>
+                  {['Step', 'Name', 'Outcome', 'Started at', 'Wall time', 'CPU time', 'Payload', 'Error'].map(
+                    (label) => (
+                      <th scope="col" key={label}>
+                        {label}
+                      </th>
+                    ),
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, i) =>
+                  row.kind === 'wait' ? (
+                    <tr key={`wait-${i}`}>
+                      <td />
+                      <td colSpan={3}>{waitLabels[row.reason]}</td>
+                      <td>{duration(row.nanos)}</td>
+                      <td colSpan={3} />
+                    </tr>
+                  ) : (
+                    <StepRow key={row.step.step} step={row.step} attempt={attempt} onShow={onShow} />
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ))}
       {attempts.length > 0 && (
-        <StackItem>
-          <DescriptionList isHorizontal isCompact aria-label="Duration">
-            {otherNanos > 0 && (
-              <DescriptionListGroup>
-                <DescriptionListTerm>Other time between steps</DescriptionListTerm>
-                <DescriptionListDescription>{duration(otherNanos)}</DescriptionListDescription>
-              </DescriptionListGroup>
-            )}
-            <DescriptionListGroup>
-              <DescriptionListTerm>Total</DescriptionListTerm>
-              <DescriptionListDescription>{duration(totalNanos)}</DescriptionListDescription>
-            </DescriptionListGroup>
-          </DescriptionList>
-        </StackItem>
+        <section aria-label="Duration">
+          <Descriptions
+            size="small"
+            items={[
+              ...(otherNanos > 0
+                ? [{ key: 'other', label: 'Other time between steps', children: duration(otherNanos) }]
+                : []),
+              { key: 'total', label: 'Total', children: duration(totalNanos) },
+            ]}
+          />
+        </section>
       )}
     </>
   );
@@ -265,28 +213,30 @@ interface StepRowProps {
 function StepRow({ step, attempt, onShow }: StepRowProps) {
   const timed = step.name !== INGRESS;
   return (
-    <Tr>
-      <Td dataLabel="Step">{step.step}</Td>
-      <Td dataLabel="Name">{step.name}</Td>
-      <Td dataLabel="Outcome">
+    <tr>
+      <td>{step.step}</td>
+      <td>{step.name}</td>
+      <td>
         <OutcomeLabel outcome={step.outcome} />
-      </Td>
-      <Td dataLabel="Started at">{step.startedAt}</Td>
-      <Td dataLabel="Wall time">{timed ? duration(step.wallNanos) : ''}</Td>
-      <Td dataLabel="CPU time">{!timed ? '' : step.cpuNanos === null ? 'unknown' : duration(step.cpuNanos)}</Td>
-      <Td dataLabel="Payload">
+      </td>
+      <td>{step.startedAt}</td>
+      <td>{timed ? duration(step.wallNanos) : ''}</td>
+      <td>{!timed ? '' : step.cpuNanos === null ? 'unknown' : duration(step.cpuNanos)}</td>
+      <td>
         {step.body.kept ? (
-          <Button variant="link" isInline onClick={() => onShow(step)} aria-label={`Show the payload after step ${step.step} of attempt ${attempt}`}>
+          <Button
+            type="link"
+            onClick={() => onShow(step)}
+            aria-label={`Show the payload after step ${step.step} of attempt ${attempt}`}
+          >
             {step.body.size} B
           </Button>
         ) : (
           `${step.body.size} B, not kept`
         )}
-      </Td>
-      <Td dataLabel="Error" modifier="breakWord">
-        {step.error ?? ''}
-      </Td>
-    </Tr>
+      </td>
+      <td>{step.error ?? ''}</td>
+    </tr>
   );
 }
 
@@ -302,7 +252,6 @@ interface PayloadDialogProps {
 /** The payload after one step of one attempt, in a dialog: its content type and its text, the first part only when it is large. */
 function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
   const [load, setLoad] = useState<PayloadLoad>({ kind: 'loading' });
-  const titleId = useId();
 
   useEffect(() => {
     let current = true;
@@ -320,35 +269,28 @@ function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
   }, [api, id, step]);
 
   return (
-    <Modal isOpen variant="large" onClose={onClose} aria-labelledby={titleId}>
-      <ModalHeader title={`Payload after step ${step.step} (${step.name}), attempt ${step.attempt}`} labelId={titleId} />
-      <ModalBody>
-        {load.kind === 'loading' && <Spinner size="lg" aria-label="Loading the payload" />}
-        {load.kind === 'failed' && (
-          <Alert variant="danger" isInline title="The payload could not be read">
-            {load.message}
-          </Alert>
-        )}
-        {load.kind === 'loaded' && (
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">
-                {load.payload.contentType}, {step.body.size} B, {step.body.hash}
-              </Content>
-            </StackItem>
-            {!load.payload.complete && (
-              <StackItem>
-                <Alert variant="info" isInline title={`Showing the first ${PAYLOAD_SHOWN} B of ${step.body.size} B`} />
-              </StackItem>
-            )}
-            <StackItem>
-              <CodeBlock>
-                <CodeBlockCode>{load.payload.text}</CodeBlockCode>
-              </CodeBlock>
-            </StackItem>
-          </Stack>
-        )}
-      </ModalBody>
+    <Modal
+      open
+      width={800}
+      footer={null}
+      onCancel={onClose}
+      title={`Payload after step ${step.step} (${step.name}), attempt ${step.attempt}`}
+    >
+      {load.kind === 'loading' && <Spin aria-label="Loading the payload" />}
+      {load.kind === 'failed' && (
+        <Alert showIcon type="error" title="The payload could not be read" description={load.message} />
+      )}
+      {load.kind === 'loaded' && (
+        <Flex vertical gap="small">
+          <Typography.Text type="secondary">
+            {load.payload.contentType}, {step.body.size} B, {step.body.hash}
+          </Typography.Text>
+          {!load.payload.complete && (
+            <Alert showIcon type="info" title={`Showing the first ${PAYLOAD_SHOWN} B of ${step.body.size} B`} />
+          )}
+          <pre className="rail8-payload">{load.payload.text}</pre>
+        </Flex>
+      )}
     </Modal>
   );
 }
