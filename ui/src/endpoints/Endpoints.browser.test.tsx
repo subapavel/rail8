@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
@@ -165,7 +164,8 @@ describe('Endpoints', () => {
     await button('Edit').click();
     await settingsTab('Polling').click();
     await expect.element(text('Where a delivered file goes.')).not.toBeInTheDocument();
-    await field('afterSuccess').selectOptions('move');
+    await field('afterSuccess').click();
+    await page.getByRole('option', { name: 'move', exact: true }).click();
     await expect.element(field('moveTo')).toBeVisible();
     await button('Check').click();
     await expect.element(text('Check found issues')).toBeVisible();

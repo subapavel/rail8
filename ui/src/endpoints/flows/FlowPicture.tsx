@@ -1,47 +1,5 @@
-import {
-  Alert,
-  AlertActionCloseButton,
-  AlertGroup,
-  Bullseye,
-  Button,
-  CodeBlock,
-  CodeBlockCode,
-  Drawer,
-  DrawerActions,
-  DrawerCloseButton,
-  DrawerContent,
-  DrawerContentBody,
-  DrawerHead,
-  DrawerPanelBody,
-  DrawerPanelContent,
-  ExpandableSection,
-  Flex,
-  FlexItem,
-  Form,
-  FormGroup,
-  FormSelect,
-  FormSelectOption,
-  HelperText,
-  HelperTextItem,
-  Label,
-  List,
-  ListItem,
-  Menu,
-  MenuContent,
-  MenuItem,
-  MenuList,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  PageSection,
-  Spinner,
-  Stack,
-  StackItem,
-  TextInput,
-  Title,
-} from '@patternfly/react-core';
-import { CheckCircleIcon, EditIcon, SaveIcon, SyncAltIcon, UndoIcon } from '@patternfly/react-icons';
+import { CheckCircleOutlined, CloseOutlined, EditOutlined, ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Collapse, Flex, Form, Grid, Input, Menu, Modal, Select, Spin, Splitter, Tag, Typography } from 'antd';
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DiscardDialog } from '../../DiscardDialog';
@@ -126,7 +84,9 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [saving, setSaving] = useState(false);
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [saved, setSaved] = useState(0);
+  const { notification } = App.useApp();
+  const screens = Grid.useBreakpoint();
+  const [showProblems, setShowProblems] = useState(false);
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const ids = useId();
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
@@ -167,22 +127,10 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   }, [guardClose, unsaved]);
 
   if (result.kind === 'reading') {
-    return (
-      <PageSection>
-        <Bullseye>
-          <Spinner aria-label="Reading the flow file" />
-        </Bullseye>
-      </PageSection>
-    );
+    return <Spin aria-label="Reading the flow file" />;
   }
   if (result.kind === 'failed' || drawn === null) {
-    return (
-      <PageSection>
-        <Alert variant="danger" isInline title="The flow file could not be read">
-          {result.kind === 'failed' ? result.message : ''}
-        </Alert>
-      </PageSection>
-    );
+    return <Alert type="error" showIcon title="The flow file could not be read" description={result.kind === 'failed' ? result.message : ''} />;
   }
 
   const { view: picture, value } = drawn;
@@ -245,7 +193,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   // the step chosen, where it stands in its list, and how long that list is
   const step = node !== null && node.kind === 'step' && typeof node.path.at(-1) === 'number' ? node : null;
   const index = step === null ? -1 : (step.path.at(-1) as number);
-  const length = step === null ? 0 : picture.nodes.filter((n) => n.kind === 'step' && n.path.length === step.path.length && n.path.slice(0, -1).every((s, i) => step.path[i] === s)).length;
+  const length =
+    step === null ? 0 : picture.nodes.filter((n) => n.kind === 'step' && n.path.length === step.path.length && n.path.slice(0, -1).every((s, i) => step.path[i] === s)).length;
   const move = (by: -1 | 1) => {
     if (step !== null) change(moveStep(step.path, [...step.path.slice(0, -1), index + by]));
   };
@@ -378,7 +327,13 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       const next = await api.save(path, work.text, result.stored.etag);
       // editing goes on from the text saved, and undo still goes back through it
       setResult({ kind: 'read', stored: next, steps: result.steps, ingress: result.ingress });
-      setSaved((n) => n + 1);
+      notification.success({
+        key: path,
+        title: `Flow ${typeof value.id === 'string' ? value.id : path} saved`,
+        duration: 8,
+        role: 'status',
+        closable: { 'aria-label': 'Dismiss save notification' },
+      });
     } catch (error) {
       if (error instanceof FlowsError && error.status === 412) setConflict(true);
       else setSaveFailure(messageOf(error));
@@ -394,334 +349,244 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   const header = (
-    <Stack hasGutter>
-      <StackItem>
-        <Flex alignItems={{ default: 'alignItemsCenter' }}>
-          <FlexItem>
-            <Title headingLevel="h1">{typeof value.id === 'string' ? value.id : path}</Title>
-          </FlexItem>
-          {!canEdit && (
-            <FlexItem>
-              <Label variant="outline">Read-only</Label>
-            </FlexItem>
-          )}
-          {errors > 0 && (
-            <FlexItem>
-              <Label status="danger">{errors === 1 ? '1 problem' : `${errors} problems`}</Label>
-            </FlexItem>
-          )}
-          {warnings > 0 && (
-            <FlexItem>
-              <Label status="warning">{warnings === 1 ? '1 warning' : `${warnings} warnings`}</Label>
-            </FlexItem>
-          )}
-          <FlexItem align={{ default: 'alignRight' }}>
-            {work !== null ? (
-              <>
-                <Button size="sm" variant="secondary" icon={<UndoIcon />} isDisabled={work.undo.length === 0} onClick={undo}>
-                  Undo
-                </Button>{' '}
-                <Button size="sm" variant="link" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
-                  Cancel
-                </Button>{' '}
-                <Button size="sm" variant="secondary" icon={<CheckCircleIcon />} onClick={() => setCheck(picture.problems)}>
-                  Check
-                </Button>{' '}
-                <Button size="sm" variant="primary" icon={<SaveIcon />} isDisabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
-                  Save
+    <Flex vertical gap="small">
+      <Flex align="center" gap="small" wrap>
+        <Typography.Title level={1} style={{ margin: 0 }}>
+          {typeof value.id === 'string' ? value.id : path}
+        </Typography.Title>
+        {!canEdit && <Tag>Read-only</Tag>}
+        {errors > 0 && <Tag color="error">{errors === 1 ? '1 problem' : `${errors} problems`}</Tag>}
+        {warnings > 0 && <Tag color="warning">{warnings === 1 ? '1 warning' : `${warnings} warnings`}</Tag>}
+        <Flex wrap gap="small" style={{ marginInlineStart: 'auto' }}>
+          {work !== null ? (
+            <>
+              <Button icon={<UndoOutlined aria-hidden />} disabled={work.undo.length === 0} onClick={undo}>
+                Undo
+              </Button>
+              <Button type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
+                Cancel
+              </Button>
+              <Button icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(picture.problems)}>
+                Check
+              </Button>
+              <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
+                Save
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
+                Refresh
+              </Button>
+              {canEdit && (
+                <Button type="primary" icon={<EditOutlined aria-hidden />} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
+                  Edit
                 </Button>
-              </>
-            ) : (
-              <>
-                <Button variant="secondary" size="sm" icon={<SyncAltIcon />} onClick={refresh}>
-                  Refresh
-                </Button>
-                {canEdit && (
-                  <>
-                    {' '}
-                    <Button size="sm" variant="primary" icon={<EditIcon />} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
-                      Edit
-                    </Button>
-                  </>
-                )}
-              </>
-            )}
-          </FlexItem>
+              )}
+            </>
+          )}
         </Flex>
-      </StackItem>
-      <StackItem>
-        <code>{path}</code>
-      </StackItem>
-      {file.editable && picture.readable && picture.readOnly !== undefined && (
-        <StackItem>
-          <Alert variant="info" isInline isPlain title={`The editor shows this flow read-only: ${picture.readOnly}.`} />
-        </StackItem>
-      )}
+      </Flex>
+      <Typography.Text type="secondary">{path}</Typography.Text>
+      {file.editable && picture.readable && picture.readOnly !== undefined && <Alert type="info" showIcon title={`The editor shows this flow read-only: ${picture.readOnly}.`} />}
       {refused !== null && (
-        <StackItem>
-          <Alert
-            variant="danger"
-            isInline
-            title="The change was not made"
-            actionClose={<AlertActionCloseButton aria-label="Dismiss the refusal" onClose={() => setRefused(null)} />}
-          >
-            {refused}
-          </Alert>
-        </StackItem>
+        <Alert type="error" showIcon title="The change was not made" description={refused} closable={{ 'aria-label': 'Dismiss the refusal', onClose: () => setRefused(null) }} />
       )}
       {check !== null && (
-        <StackItem>
-          <Alert
-            variant={check.length > 0 ? 'warning' : 'success'}
-            isInline
-            role="status"
-            title={check.length > 0 ? 'Check found issues' : 'Check passed'}
-            actionClose={<AlertActionCloseButton aria-label="Dismiss check" onClose={() => setCheck(null)} />}
-          >
-            {check.length > 0 && (
-              <List aria-label="Issues">
-                {check.map((p, i) => (
-                  <ListItem key={i}>
-                    {placeOf(p.path)}: {p.message}
-                  </ListItem>
-                ))}
-              </List>
-            )}
-            <p>The node checks the flow again when the package is deployed.</p>
-          </Alert>
-        </StackItem>
+        <Alert
+          showIcon
+          type={check.length > 0 ? 'warning' : 'success'}
+          role="status"
+          title={check.length > 0 ? 'Check found issues' : 'Check passed'}
+          closable={{ 'aria-label': 'Dismiss check', onClose: () => setCheck(null) }}
+          description={
+            <>
+              {check.length > 0 && (
+                <ul aria-label="Issues">
+                  {check.map((p, i) => (
+                    <li key={i}>
+                      {placeOf(p.path)}: {p.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p>The node checks the flow again when the package is deployed.</p>
+            </>
+          }
+        />
       )}
-      {saveFailure !== null && (
-        <StackItem>
-          <Alert variant="danger" isInline title="The file was not saved">
-            {saveFailure}
-          </Alert>
-        </StackItem>
-      )}
+      {saveFailure !== null && <Alert type="error" showIcon title="The file was not saved" description={saveFailure} />}
       {picture.problems.length > 0 && (
-        <StackItem>
-          <ExpandableSection toggleTextCollapsed="Show the problems" toggleTextExpanded="Hide the problems" isExpanded={!picture.readable || undefined}>
-            <HelperText>
-              {picture.problems.map((p, i) => (
-                <HelperTextItem key={i} variant={p.warning === true ? 'warning' : 'error'}>
-                  {placeOf(p.path)}: {p.message}
-                </HelperTextItem>
-              ))}
-            </HelperText>
-          </ExpandableSection>
-        </StackItem>
+        <Collapse
+          size="small"
+          activeKey={!picture.readable || showProblems ? ['problems'] : []}
+          onChange={(keys) => setShowProblems(keys.includes('problems'))}
+          items={[
+            {
+              key: 'problems',
+              label: !picture.readable || showProblems ? 'Hide the problems' : 'Show the problems',
+              children: (
+                <Flex vertical>
+                  {picture.problems.map((p, i) => (
+                    <Typography.Text key={i} type={p.warning === true ? 'warning' : 'danger'}>
+                      {placeOf(p.path)}: {p.message}
+                    </Typography.Text>
+                  ))}
+                </Flex>
+              ),
+            },
+          ]}
+        />
       )}
-    </Stack>
+    </Flex>
   );
 
   if (!picture.readable) {
     return (
-      <PageSection>
-        <Stack hasGutter>
-          <StackItem>{header}</StackItem>
-          <StackItem>
-            <Alert variant="warning" isInline title="The flow cannot be drawn">
-              The file is shown as it is, with what keeps it from being drawn.
-            </Alert>
-          </StackItem>
-          <StackItem>
-            <CodeBlock>
-              <CodeBlockCode>{result.stored.file.text}</CodeBlockCode>
-            </CodeBlock>
-          </StackItem>
-        </Stack>
-      </PageSection>
+      <Flex vertical gap="middle">
+        {header}
+        <Alert type="warning" showIcon title="The flow cannot be drawn" description="The file is shown as it is, with what keeps it from being drawn." />
+        <pre>{result.stored.file.text}</pre>
+      </Flex>
     );
   }
 
-  const panel = (
-    <DrawerPanelContent isResizable defaultSize="28rem" minSize="20rem">
-      <DrawerHead>
-        <span />
-        {node !== null && (
-          <DrawerActions>
-            <DrawerCloseButton aria-label="Show the flow's settings" onClick={() => setSelected(null)} />
-          </DrawerActions>
-        )}
-      </DrawerHead>
-      <DrawerPanelBody>
-        <FlowPanel
-          flow={value}
-          {...(picture.settings === undefined ? {} : { settings: picture.settings })}
-          node={node}
-          {...(calls === undefined ? {} : { calls })}
-          {...(lane === null ? {} : { laneCalls: callsOf(picture, lane.label) })}
-          problems={picture.problems}
-          endpointForm={endpointForm}
-          openEndpoint={openEndpoint}
-          openFlow={openFlow}
-          {...(panelEdit === undefined ? {} : { edit: panelEdit })}
-        />
-      </DrawerPanelBody>
-    </DrawerPanelContent>
-  );
-
   return (
-    <PageSection padding={{ default: 'noPadding' }}>
-      <Stack>
-        <StackItem>
-          <PageSection>{header}</PageSection>
-        </StackItem>
-        <StackItem isFilled>
-          <Drawer isExpanded isInline position="end">
-            <DrawerContent panelContent={panel}>
-              <DrawerContentBody>
-                {/* the canvas takes its keys while it, or a node on it, has the focus */}
-                <div style={{ height: '70vh', minHeight: '24rem' }} data-testid="flow-canvas" tabIndex={-1} onKeyDown={onKey}>
-                  <ReactFlowProvider>
-                    <FlowCanvas
-                      view={picture}
-                      selected={selected === null ? null : pointer(selected)}
-                      onSelect={(n) => setSelected(n.path)}
-                      {...(work === null ? {} : { onInsert: setAdding })}
-                    />
-                  </ReactFlowProvider>
-                </div>
-              </DrawerContentBody>
-            </DrawerContent>
-          </Drawer>
-        </StackItem>
-      </Stack>
+    <Flex vertical gap="middle">
+      {header}
+      <Splitter orientation={screens.md === false ? 'vertical' : 'horizontal'} style={{ height: '70vh', minHeight: '24rem' }}>
+        <Splitter.Panel min="20%">
+          {/* The canvas takes its keys while it, or a node on it, has the focus. */}
+          <div style={{ height: '100%' }} data-testid="flow-canvas" tabIndex={-1} onKeyDown={onKey}>
+            <ReactFlowProvider>
+              <FlowCanvas
+                view={picture}
+                selected={selected === null ? null : pointer(selected)}
+                onSelect={(n) => setSelected(n.path)}
+                {...(work === null ? {} : { onInsert: setAdding })}
+              />
+            </ReactFlowProvider>
+          </div>
+        </Splitter.Panel>
+        <Splitter.Panel defaultSize="40%" min="24%" style={{ padding: 'var(--ant-padding)' }}>
+          {node !== null && (
+            <Flex justify="end">
+              <Button type="text" aria-label="Show the flow's settings" icon={<CloseOutlined aria-hidden />} onClick={() => setSelected(null)} />
+            </Flex>
+          )}
+          <FlowPanel
+            flow={value}
+            {...(picture.settings === undefined ? {} : { settings: picture.settings })}
+            node={node}
+            {...(calls === undefined ? {} : { calls })}
+            {...(lane === null ? {} : { laneCalls: callsOf(picture, lane.label) })}
+            problems={picture.problems}
+            endpointForm={endpointForm}
+            openEndpoint={openEndpoint}
+            openFlow={openFlow}
+            {...(panelEdit === undefined ? {} : { edit: panelEdit })}
+          />
+        </Splitter.Panel>
+      </Splitter>
       <Modal
-        variant="small"
-        isOpen={adding !== null}
-        onClose={() => {
+        open={adding !== null}
+        title="Add a step"
+        footer={null}
+        onCancel={() => {
           if (calling === null) {
             setAdding(null);
             setCallFailure(null);
           }
         }}
-        aria-labelledby={`${ids}-add`}
       >
-        <ModalHeader title="Add a step" labelId={`${ids}-add`} description={adding === null ? undefined : `At ${placeOf(adding)}`} />
-        <ModalBody>
-          <Stack hasGutter>
-            <StackItem>
-              <Menu isPlain aria-label="Step types" onSelect={(_, type) => add(String(type))}>
-                <MenuContent>
-                  <MenuList>
-                    {addable.map(({ type, from }) => (
-                      <MenuItem key={type} itemId={type} description={from} isDisabled={calling !== null}>
-                        {type}
-                      </MenuItem>
-                    ))}
-                  </MenuList>
-                </MenuContent>
-              </Menu>
-            </StackItem>
-            {flowsCalled.length > 0 && (
-              <StackItem>
-                <Title headingLevel="h3">Call a flow</Title>
-                <Menu
-                  isPlain
-                  aria-label="Flows to call"
-                  onSelect={(_, id) => {
-                    const called = flowsCalled.find((f) => f.path === id);
-                    if (called !== undefined) void addCall(called);
-                  }}
-                >
-                  <MenuContent>
-                    <MenuList>
-                      {flowsCalled.map((f) => (
-                        <MenuItem key={f.path} itemId={f.path} description={`Serves ${f.address ?? ''}`} isDisabled={calling !== null}>
-                          {f.id}
-                        </MenuItem>
-                      ))}
-                    </MenuList>
-                  </MenuContent>
-                </Menu>
-              </StackItem>
-            )}
-            {calling !== null && (
-              <StackItem>
-                <Spinner size="md" aria-label={`Creating ${calling}`} /> Creating the endpoint {calling}
-              </StackItem>
-            )}
-            {callFailure !== null && (
-              <StackItem>
-                <Alert variant="danger" isInline title="The call was not added">
-                  {callFailure}
-                </Alert>
-              </StackItem>
-            )}
-          </Stack>
-        </ModalBody>
-      </Modal>
-      <Modal variant="small" isOpen={newProcess !== null} onClose={() => setNewProcess(null)} aria-labelledby={`${ids}-process`}>
-        <ModalHeader title="Add a process" labelId={`${ids}-process`} description="A process holds at least one step: choose its first." />
-        <ModalBody>
-          <Form
-            id={`${ids}-process-form`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              createProcess();
-            }}
-          >
-            <FormGroup label="Name" isRequired fieldId={`${ids}-process-name`}>
-              <TextInput
-                id={`${ids}-process-name`}
-                isRequired
-                value={newProcess?.name ?? ''}
-                validated={newProcess?.refused === undefined ? 'default' : 'error'}
-                onChange={(_, name) => setNewProcess((p) => (p === null ? p : { name, type: p.type }))}
-              />
-              {newProcess?.refused !== undefined && (
-                <HelperText>
-                  <HelperTextItem variant="error">{newProcess.refused}</HelperTextItem>
-                </HelperText>
-              )}
-            </FormGroup>
-            <FormGroup label="First step" fieldId={`${ids}-process-type`}>
-              <FormSelect id={`${ids}-process-type`} value={newProcess?.type ?? ''} onChange={(_, type) => setNewProcess((p) => (p === null ? p : { ...p, type }))}>
-                {addable.map(({ type }) => (
-                  <FormSelectOption key={type} value={type} label={type} />
-                ))}
-              </FormSelect>
-            </FormGroup>
-          </Form>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" type="submit" form={`${ids}-process-form`} isDisabled={newProcess?.name === ''}>
-            Add
-          </Button>
-          <Button variant="link" onClick={() => setNewProcess(null)}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
-      <DiscardDialog isOpen={discarding !== null} name={typeof value.id === 'string' ? value.id : path} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
-      <Modal variant="small" isOpen={conflict} onClose={() => setConflict(false)} aria-labelledby={`${ids}-conflict`}>
-        <ModalHeader title="The file changed on disk" labelId={`${ids}-conflict`} />
-        <ModalBody>
-          <p>
-            <strong>{path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
-          </p>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" onClick={reload}>
-            Reload
-          </Button>
-          <Button variant="link" onClick={() => setConflict(false)}>
-            Keep editing
-          </Button>
-        </ModalFooter>
-      </Modal>
-      <AlertGroup isToast isLiveRegion aria-label="Save notifications">
-        {saved > 0 && (
-          <Alert
-            key={saved}
-            variant="success"
-            title={`Flow ${typeof value.id === 'string' ? value.id : path} saved`}
-            timeout={8000}
-            actionClose={<AlertActionCloseButton aria-label="Dismiss save notification" onClose={() => setSaved(0)} />}
+        {adding !== null && <p>At {placeOf(adding)}</p>}
+        <Flex vertical gap="middle">
+          <Menu
+            aria-label="Step types"
+            selectable={false}
+            onClick={({ key }) => add(key)}
+            items={addable.map(({ type, from }) => ({
+              key: type,
+              disabled: calling !== null,
+              label: (
+                <>
+                  {type} <Typography.Text type="secondary">{from}</Typography.Text>
+                </>
+              ),
+            }))}
           />
-        )}
-      </AlertGroup>
-    </PageSection>
+          {flowsCalled.length > 0 && (
+            <>
+              <Typography.Title level={3}>Call a flow</Typography.Title>
+              <Menu
+                aria-label="Flows to call"
+                selectable={false}
+                onClick={({ key }) => {
+                  const called = flowsCalled.find((f) => f.path === key);
+                  if (called !== undefined) void addCall(called);
+                }}
+                items={flowsCalled.map((f) => ({
+                  key: f.path,
+                  disabled: calling !== null,
+                  label: (
+                    <>
+                      {f.id} <Typography.Text type="secondary">Serves {f.address ?? ''}</Typography.Text>
+                    </>
+                  ),
+                }))}
+              />
+            </>
+          )}
+          {calling !== null && (
+            <Flex gap="small">
+              <Spin aria-label={`Creating ${calling}`} /> Creating the endpoint {calling}
+            </Flex>
+          )}
+          {callFailure !== null && <Alert type="error" showIcon title="The call was not added" description={callFailure} />}
+        </Flex>
+      </Modal>
+      <Modal
+        open={newProcess !== null}
+        title="Add a process"
+        okText="Add"
+        okButtonProps={{ htmlType: 'submit', form: `${ids}-process-form`, disabled: !newProcess?.name }}
+        onCancel={() => setNewProcess(null)}
+      >
+        <p>A process holds at least one step: choose its first.</p>
+        <Form layout="vertical" id={`${ids}-process-form`} onFinish={createProcess}>
+          <Form.Item label="Name" required htmlFor={`${ids}-process-name`} validateStatus={newProcess?.refused === undefined ? undefined : 'error'} help={newProcess?.refused}>
+            <Input
+              id={`${ids}-process-name`}
+              aria-label="Name"
+              required
+              value={newProcess?.name ?? ''}
+              onChange={({ target: { value: name } }) => setNewProcess((p) => (p === null ? p : { name, type: p.type }))}
+            />
+          </Form.Item>
+          <Form.Item label="First step" htmlFor={`${ids}-process-type`}>
+            <Select
+              virtual={false}
+              id={`${ids}-process-type`}
+              aria-label="First step"
+              value={newProcess?.type ?? ''}
+              options={addable.map(({ type }) => ({ value: type, label: type }))}
+              onChange={(type) => setNewProcess((p) => (p === null ? p : { ...p, type }))}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <DiscardDialog
+        isOpen={discarding !== null}
+        name={typeof value.id === 'string' ? value.id : path}
+        then={discarding?.then ?? ''}
+        onDiscard={discard}
+        onKeepEditing={() => setDiscarding(null)}
+      />
+      <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={reload} onCancel={() => setConflict(false)}>
+        <p>
+          <strong>{path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
+        </p>
+      </Modal>
+    </Flex>
   );
 }

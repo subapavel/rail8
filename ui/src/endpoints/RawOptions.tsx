@@ -1,4 +1,4 @@
-import { FormGroup, FormHelperText, HelperText, HelperTextItem, TextArea } from '@patternfly/react-core';
+import { Form, Input } from 'antd';
 import { useId, useState } from 'react';
 import type { Options } from './settings';
 
@@ -19,15 +19,23 @@ export function RawOptions({ options, readOnly, onChange, onInvalid }: RawOption
   const [text, setText] = useState(() => JSON.stringify(options, null, 2));
   const [invalid, setInvalid] = useState(false);
   return (
-    <FormGroup label="Settings" fieldId={id}>
-      <TextArea
+    <Form.Item
+      label="Settings"
+      htmlFor={id}
+      validateStatus={invalid ? 'error' : undefined}
+      extra={<span id={`${id}-help`}>The component describes no settings: its options are written here as one JSON object.</span>}
+      help={invalid && <span id={`${id}-error`}>is not a JSON object</span>}
+    >
+      <Input.TextArea
         id={id}
-        readOnlyVariant={readOnly ? 'default' : undefined}
+        aria-label="Settings"
+        readOnly={readOnly}
         value={text}
         rows={Math.min(20, text.split('\n').length + 1)}
-        resizeOrientation="vertical"
-        validated={invalid ? 'error' : 'default'}
-        onChange={(_, next) => {
+        style={{ resize: 'vertical' }}
+        aria-describedby={invalid ? `${id}-help ${id}-error` : `${id}-help`}
+        aria-invalid={invalid}
+        onChange={({ target: { value: next } }) => {
           setText(next);
           let parsed: unknown;
           try {
@@ -40,12 +48,6 @@ export function RawOptions({ options, readOnly, onChange, onInvalid }: RawOption
           if (isOptions(parsed)) onChange(parsed);
         }}
       />
-      <FormHelperText>
-        <HelperText>
-          <HelperTextItem>The component describes no settings: its options are written here as one JSON object.</HelperTextItem>
-          {invalid && <HelperTextItem variant="error">is not a JSON object</HelperTextItem>}
-        </HelperText>
-      </FormHelperText>
-    </FormGroup>
+    </Form.Item>
   );
 }

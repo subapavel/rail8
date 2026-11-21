@@ -1,4 +1,4 @@
-import { FormGroup, FormHelperText, FormSelect, FormSelectOption, HelperText, HelperTextItem, TextInput } from '@patternfly/react-core';
+import { Form, Input, Select } from 'antd';
 import { useId, useState, type ReactNode } from 'react';
 import { KNOWN_TYPES, type SettingsField } from './settings';
 
@@ -46,61 +46,73 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
   const known = KNOWN_TYPES.has(field.type);
   const [raw, setRaw] = useState<string | null>(null);
   const rawInvalid = raw !== null;
-  const validated = problem !== undefined || rawInvalid ? 'error' : 'default';
+  const status = problem !== undefined || rawInvalid ? 'error' : undefined;
+  const describedBy = `${id}-help`;
 
   const text = known ? shown(value) : value === undefined ? '' : JSON.stringify(value);
 
   let control;
   if (readOnly) {
     control = (
-      <TextInput
+      <Input
         id={id}
-        readOnlyVariant="default"
+        aria-label={field.name}
+        readOnly
         type={field.type === 'secret' ? 'password' : 'text'}
         value={text}
         placeholder={placeholder(field) ?? 'Not set'}
-        validated={validated}
+        aria-describedby={describedBy}
+        aria-invalid={status === 'error'}
+        status={status}
       />
     );
   } else if (field.type === 'boolean' || field.type === 'choice') {
     const values = field.type === 'boolean' ? ['true', 'false'] : (field.choices ?? []);
     const unset = field.default === undefined ? 'Not set' : `Not set (default: ${shown(field.default)})`;
     control = (
-      <FormSelect
+      <Select
         id={id}
+        aria-label={field.name}
+        aria-describedby={describedBy}
+        aria-invalid={status === 'error'}
+        aria-required={field.required}
+        status={status}
         value={shown(value)}
-        isRequired={field.required}
-        validated={validated}
-        onChange={(_, chosen) => onChange(chosen === '' ? undefined : field.type === 'boolean' ? chosen === 'true' : chosen)}
-      >
-        <FormSelectOption value="" label={unset} />
-        {/* a value the file holds that is none of the choices stays visible, so the check can name it */}
-        {value !== undefined && value !== null && !values.includes(shown(value)) && <FormSelectOption value={shown(value)} label={shown(value)} />}
-        {values.map((v) => (
-          <FormSelectOption key={v} value={v} label={v} />
-        ))}
-      </FormSelect>
+        virtual={false}
+        options={[
+          { value: '', label: unset },
+          ...(value !== undefined && value !== null && !values.includes(shown(value)) ? [{ value: shown(value), label: shown(value) }] : []),
+          ...values.map((v) => ({ value: v, label: v })),
+        ]}
+        onChange={(chosen) => onChange(chosen === '' ? undefined : field.type === 'boolean' ? chosen === 'true' : chosen)}
+      />
     );
   } else if (known) {
     control = (
-      <TextInput
+      <Input
         id={id}
+        aria-label={field.name}
         type={field.type === 'secret' ? 'password' : 'text'}
         inputMode={field.type === 'integer' ? 'numeric' : undefined}
         value={shown(value)}
         placeholder={placeholder(field)}
-        isRequired={field.required}
-        validated={validated}
-        onChange={(_, text) => onChange(field.type === 'integer' ? integer(text) : text === '' ? undefined : text)}
+        required={field.required}
+        aria-describedby={describedBy}
+        aria-invalid={status === 'error'}
+        status={status}
+        onChange={({ target: { value: text } }) => onChange(field.type === 'integer' ? integer(text) : text === '' ? undefined : text)}
       />
     );
   } else {
     control = (
-      <TextInput
+      <Input
         id={id}
+        aria-label={field.name}
         value={raw ?? text}
-        validated={validated}
-        onChange={(_, text) => {
+        aria-describedby={describedBy}
+        aria-invalid={status === 'error'}
+        status={status}
+        onChange={({ target: { value: text } }) => {
           if (text.trim() === '') {
             setRaw(null);
             onInvalid(false);
@@ -121,17 +133,22 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
   }
 
   return (
-    <FormGroup label={field.name} isRequired={field.required} fieldId={id}>
+    <Form.Item
+      label={field.name}
+      htmlFor={id}
+      required={field.required}
+      validateStatus={status}
+      help={
+        <div id={describedBy}>
+          <div>{field.help}</div>
+          {note !== undefined && <div>{note}</div>}
+          {!known && <div>Written as JSON.</div>}
+          {rawInvalid && <div>is not JSON</div>}
+          {problem !== undefined && <div>{problem}</div>}
+        </div>
+      }
+    >
       {control}
-      <FormHelperText>
-        <HelperText>
-          <HelperTextItem>{field.help}</HelperTextItem>
-          {note !== undefined && <HelperTextItem>{note}</HelperTextItem>}
-          {!known && <HelperTextItem>Written as JSON.</HelperTextItem>}
-          {rawInvalid && <HelperTextItem variant="error">is not JSON</HelperTextItem>}
-          {problem !== undefined && <HelperTextItem variant="error">{problem}</HelperTextItem>}
-        </HelperText>
-      </FormHelperText>
-    </FormGroup>
+    </Form.Item>
   );
 }

@@ -1,26 +1,5 @@
-import {
-  Alert,
-  Button,
-  Content,
-  Flex,
-  FlexItem,
-  Form,
-  FormGroup,
-  FormSelect,
-  FormSelectOption,
-  HelperText,
-  HelperTextItem,
-  Stack,
-  StackItem,
-  Tab,
-  TabContentBody,
-  Tabs,
-  TabTitleText,
-  TextInput,
-  Title,
-} from '@patternfly/react-core';
-import { ArrowDownIcon, ArrowUpIcon, PlusCircleIcon, TrashIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, PlusCircleOutlined } from '@ant-design/icons';
+import { Alert, Button, Flex, Form, Input, Select, Table, Tabs, Typography } from 'antd';
 import { useState, type ReactNode } from 'react';
 import { FieldControl } from '../FieldControl';
 import { RawOptions } from '../RawOptions';
@@ -68,13 +47,13 @@ const samePath = (a: Path, b: Path) => a.length === b.length && a.every((s, i) =
 function Problems({ problems }: { problems: FlowProblem[] }) {
   if (problems.length === 0) return null;
   return (
-    <HelperText>
+    <Flex vertical>
       {problems.map((p, i) => (
-        <HelperTextItem key={i} variant={p.warning === true ? 'warning' : 'error'}>
+        <Typography.Text key={i} type={p.warning === true ? 'warning' : 'danger'}>
           {placeOf(p.path)}: {p.message}
-        </HelperTextItem>
+        </Typography.Text>
       ))}
-    </HelperText>
+    </Flex>
   );
 }
 
@@ -88,21 +67,35 @@ const inside = (problems: FlowProblem[], at: Path) => problems.filter((p) => at.
  * a value when its field is required. Read-only it shows the value.
  */
 function Cell({ field, value, label, problem, onChange }: { field: StepField; value: unknown; label: string; problem: boolean; onChange?: (value: unknown) => void }) {
-  const validated = problem ? 'error' : 'default';
+  const status = problem ? 'error' : undefined;
   if (onChange === undefined || field.type === 'list' || field.type === 'map' || field.type === 'raw') return <>{shown(value)}</>;
   if (field.type === 'choice' || field.type === 'boolean') {
     const values = field.type === 'boolean' ? ['true', 'false'] : (field.choices ?? []);
     return (
-      <FormSelect aria-label={label} value={shown(value)} validated={validated} onChange={(_, chosen) => onChange(chosen === '' ? undefined : field.type === 'boolean' ? chosen === 'true' : chosen)}>
-        <FormSelectOption value="" label="Not set" />
-        {value !== undefined && value !== null && !values.includes(shown(value)) && <FormSelectOption value={shown(value)} label={shown(value)} />}
-        {values.map((v) => (
-          <FormSelectOption key={v} value={v} label={v} />
-        ))}
-      </FormSelect>
+      <Select
+        aria-label={label}
+        virtual={false}
+        value={shown(value)}
+        status={status}
+        aria-invalid={problem}
+        options={[
+          { value: '', label: 'Not set' },
+          ...(value !== undefined && value !== null && !values.includes(shown(value)) ? [{ value: shown(value), label: shown(value) }] : []),
+          ...values.map((v) => ({ value: v, label: v })),
+        ]}
+        onChange={(chosen) => onChange(chosen === '' ? undefined : field.type === 'boolean' ? chosen === 'true' : chosen)}
+      />
     );
   }
-  return <TextInput aria-label={label} value={shown(value)} validated={validated} onChange={(_, text) => onChange(text === '' && !field.required ? undefined : text)} />;
+  return (
+    <Input
+      aria-label={label}
+      value={shown(value)}
+      status={status}
+      aria-invalid={problem}
+      onChange={({ target: { value: text } }) => onChange(text === '' && !field.required ? undefined : text)}
+    />
+  );
 }
 
 /** The new row of a list field: each required field of an item, empty. */
@@ -112,56 +105,93 @@ const newRow = (item: readonly StepField[]) => Object.fromEntries(item.filter((f
  * A list field as a table: one row per item, one column per field of an item. While the flow is edited a row's values
  * change in place, and a row is added at the end, moved up or down, and removed, but the last one.
  */
-function ListTable({ field, values, at, problems, edit }: { field: Extract<StepField, { type: 'list' }>; values: Record<string, unknown>; at: Path; problems: FlowProblem[]; edit?: PanelEdit }) {
+function ListTable({
+  field,
+  values,
+  at,
+  problems,
+  edit,
+}: {
+  field: Extract<StepField, { type: 'list' }>;
+  values: Record<string, unknown>;
+  at: Path;
+  problems: FlowProblem[];
+  edit?: PanelEdit;
+}) {
   const items = Array.isArray(values[field.name]) ? (values[field.name] as unknown[]) : [];
   const step = at.slice(0, -1);
   return (
-    <FormGroup label={field.name} fieldId={`${placeOf(at)}`}>
-      <Content component="small">{field.help}</Content>
-      <Table aria-label={field.name} variant="compact">
-        <Thead>
-          <Tr>
-            {field.item.map((f) => (
-              <Th key={f.name}>{f.name}</Th>
-            ))}
-            {edit !== undefined && <Th screenReaderText="Row actions" />}
-          </Tr>
-        </Thead>
-        <Tbody>
-          {items.map((item, i) => {
-            const row = isRecord(item) ? item : {};
-            return (
-              <Tr key={i}>
-                {field.item.map((f) => (
-                  <Td key={f.name} dataLabel={f.name}>
-                    <Cell
-                      field={f}
-                      value={row[f.name]}
-                      label={`${f.name} of row ${i + 1}`}
-                      problem={inside(problems, [...at, i, f.name]).length > 0}
-                      {...(edit === undefined || !isRecord(item) ? {} : { onChange: (next: unknown) => edit.change(setField([...at, i], row, f.name, next, f.required), pointer([...at, i, f.name])) })}
-                    />
-                  </Td>
-                ))}
-                {edit !== undefined && (
-                  <Td isActionCell>
-                    <Button variant="plain" size="sm" aria-label={`Move row ${i + 1} up`} icon={<ArrowUpIcon />} isDisabled={i === 0} onClick={() => edit.change(moveRow(at, i, i - 1))} />
-                    <Button variant="plain" size="sm" aria-label={`Move row ${i + 1} down`} icon={<ArrowDownIcon />} isDisabled={i === items.length - 1} onClick={() => edit.change(moveRow(at, i, i + 1))} />
-                    <Button variant="plain" size="sm" aria-label={`Remove row ${i + 1}`} icon={<TrashIcon />} isDisabled={items.length === 1} onClick={() => edit.change(removeRow(at, i))} />
-                  </Td>
-                )}
-              </Tr>
-            );
-          })}
-        </Tbody>
-      </Table>
+    <Form.Item label={field.name}>
+      <Typography.Text type="secondary">{field.help}</Typography.Text>
+      <Table
+        aria-label={field.name}
+        size="small"
+        pagination={false}
+        dataSource={items.map((item, index) => ({ key: index, item }))}
+        columns={[
+          ...field.item.map((f) => ({
+            title: f.name,
+            key: f.name,
+            render: (_: unknown, { item, key: i }: { item: unknown; key: number }) => {
+              const row = isRecord(item) ? item : {};
+              return (
+                <Cell
+                  field={f}
+                  value={row[f.name]}
+                  label={`${f.name} of row ${i + 1}`}
+                  problem={inside(problems, [...at, i, f.name]).length > 0}
+                  {...(edit === undefined || !isRecord(item)
+                    ? {}
+                    : { onChange: (next: unknown) => edit.change(setField([...at, i], row, f.name, next, f.required), pointer([...at, i, f.name])) })}
+                />
+              );
+            },
+          })),
+          ...(edit === undefined
+            ? []
+            : [
+                {
+                  title: 'Row actions',
+                  key: 'actions',
+                  render: (_: unknown, { key: i }: { key: number }) => (
+                    <Flex gap="small" wrap>
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`Move row ${i + 1} up`}
+                        icon={<ArrowUpOutlined aria-hidden />}
+                        disabled={i === 0}
+                        onClick={() => edit.change(moveRow(at, i, i - 1))}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`Move row ${i + 1} down`}
+                        icon={<ArrowDownOutlined aria-hidden />}
+                        disabled={i === items.length - 1}
+                        onClick={() => edit.change(moveRow(at, i, i + 1))}
+                      />
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`Remove row ${i + 1}`}
+                        icon={<DeleteOutlined aria-hidden />}
+                        disabled={items.length === 1}
+                        onClick={() => edit.change(removeRow(at, i))}
+                      />
+                    </Flex>
+                  ),
+                },
+              ]),
+        ]}
+      />
       {edit !== undefined && (
-        <Button variant="link" isInline icon={<PlusCircleIcon />} onClick={() => edit.change(addRow(step, values, field.name, newRow(field.item)))}>
+        <Button type="link" icon={<PlusCircleOutlined aria-hidden />} onClick={() => edit.change(addRow(step, values, field.name, newRow(field.item)))}>
           Add a row
         </Button>
       )}
       <Problems problems={inside(problems, at)} />
-    </FormGroup>
+    </Form.Item>
   );
 }
 
@@ -187,11 +217,12 @@ function EntryKey({ field, name, taken, at, edit }: { field: Extract<StepField, 
   };
   return (
     <>
-      <TextInput
+      <Input
         aria-label={`Value ${name}`}
         value={text}
-        validated={wrong === null ? 'default' : 'error'}
-        onChange={(_, next) => {
+        status={wrong === null ? undefined : 'error'}
+        aria-invalid={wrong !== null}
+        onChange={({ target: { value: next } }) => {
           setText(next);
           edit.invalid(key, next !== name);
         }}
@@ -200,11 +231,7 @@ function EntryKey({ field, name, taken, at, edit }: { field: Extract<StepField, 
           if (event.key === 'Enter') commit();
         }}
       />
-      {wrong !== null && (
-        <HelperText>
-          <HelperTextItem variant="error">{wrong}</HelperTextItem>
-        </HelperText>
-      )}
+      {wrong !== null && <Typography.Text type="danger">{wrong}</Typography.Text>}
     </>
   );
 }
@@ -213,75 +240,103 @@ function EntryKey({ field, name, taken, at, edit }: { field: Extract<StepField, 
  * A map field as a table: one row per entry, its key and its value. While the flow is edited an entry's value changes
  * in place, its key is renamed in place, and an entry is added at the end and removed, but the last one.
  */
-function MapTable({ field, values, at, problems, edit }: { field: Extract<StepField, { type: 'map' }>; values: Record<string, unknown>; at: Path; problems: FlowProblem[]; edit?: PanelEdit }) {
+function MapTable({
+  field,
+  values,
+  at,
+  problems,
+  edit,
+}: {
+  field: Extract<StepField, { type: 'map' }>;
+  values: Record<string, unknown>;
+  at: Path;
+  problems: FlowProblem[];
+  edit?: PanelEdit;
+}) {
   const value = values[field.name];
   const entries = isRecord(value) ? Object.entries(value) : [];
   const keys = entries.map(([k]) => k);
   return (
-    <FormGroup label={field.name} fieldId={`${placeOf(at)}`}>
-      <Content component="small">{field.help}</Content>
-      <Table aria-label={field.name} variant="compact">
-        <Thead>
-          <Tr>
-            <Th>Value</Th>
-            <Th>{field.value.name}</Th>
-            {edit !== undefined && <Th screenReaderText="Row actions" />}
-          </Tr>
-        </Thead>
-        <Tbody>
-          {entries.map(([key, v], i) => (
-            <Tr key={edit === undefined ? key : `${i}-${key}-${edit.generation}`}>
-              <Td dataLabel="Value">{edit === undefined ? key : <EntryKey field={field} name={key} taken={keys} at={at} edit={edit} />}</Td>
-              <Td dataLabel={field.value.name}>
-                <Cell
-                  field={field.value}
-                  value={v}
-                  label={`${field.value.name} of ${key}`}
-                  problem={inside(problems, [...at, key]).length > 0}
-                  {...(edit === undefined ? {} : { onChange: (next: unknown) => edit.change(setField(at, value as Record<string, unknown>, key, next, true), pointer([...at, key])) })}
-                />
-              </Td>
-              {edit !== undefined && (
-                <Td isActionCell>
-                  <Button variant="plain" size="sm" aria-label={`Remove ${key}`} icon={<TrashIcon />} isDisabled={entries.length === 1} onClick={() => edit.change(removeRow(at, key))} />
-                </Td>
-              )}
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
+    <Form.Item label={field.name}>
+      <Typography.Text type="secondary">{field.help}</Typography.Text>
+      <Table
+        aria-label={field.name}
+        size="small"
+        pagination={false}
+        dataSource={entries.map(([name, value]) => ({ key: name, name, value }))}
+        columns={[
+          {
+            title: 'Value',
+            key: 'name',
+            render: (_, row) => (edit === undefined ? row.name : <EntryKey key={edit.generation} field={field} name={row.name} taken={keys} at={at} edit={edit} />),
+          },
+          {
+            title: field.value.name,
+            key: 'value',
+            render: (_, row) => (
+              <Cell
+                field={field.value}
+                value={row.value}
+                label={`${field.value.name} of ${row.name}`}
+                problem={inside(problems, [...at, row.name]).length > 0}
+                {...(edit === undefined
+                  ? {}
+                  : { onChange: (next: unknown) => edit.change(setField(at, value as Record<string, unknown>, row.name, next, true), pointer([...at, row.name])) })}
+              />
+            ),
+          },
+          ...(edit === undefined
+            ? []
+            : [
+                {
+                  title: 'Row actions',
+                  key: 'actions',
+                  render: (_: unknown, row: { name: string }) => (
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label={`Remove ${row.name}`}
+                      icon={<DeleteOutlined aria-hidden />}
+                      disabled={entries.length === 1}
+                      onClick={() => edit.change(removeRow(at, row.name))}
+                    />
+                  ),
+                },
+              ]),
+        ]}
+      />
       {edit !== undefined && (
-        <Button variant="link" isInline icon={<PlusCircleIcon />} onClick={() => edit.change(addEntry(at.slice(0, -1), values, field.name, ''))}>
+        <Button type="link" icon={<PlusCircleOutlined aria-hidden />} onClick={() => edit.change(addEntry(at.slice(0, -1), values, field.name, ''))}>
           Add a row
         </Button>
       )}
       <Problems problems={inside(problems, at)} />
-    </FormGroup>
+    </Form.Item>
   );
 }
 
 /** The fields of a form, each with its value from `values` and its problem, and editable with `edit`; lists and maps are tables. */
 function Fields({ fields, values, at, problems, edit }: { fields: StepField[]; values: Record<string, unknown>; at: Path; problems: FlowProblem[]; edit?: PanelEdit }) {
   return (
-    <Form isHorizontal={false} onSubmit={(e) => e.preventDefault()}>
+    <Form layout="vertical">
       {fields.map((f) => {
         const path = [...at, ...f.name.split('.')];
         const value = f.name.split('.').reduce<unknown>((v, k) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>)[k] : undefined), values);
         if ((f.type === 'list' || f.type === 'map') && (value === undefined || value === null)) {
           return (
-            <FormGroup key={f.name} label={f.name} fieldId={placeOf(path)}>
-              <Content component="small">Not set. {f.help}</Content>
+            <Form.Item key={f.name} label={f.name}>
+              <Typography.Text type="secondary">Not set. {f.help}</Typography.Text>
               {edit !== undefined && (
                 <Button
-                  variant="link"
-                  isInline
-                  icon={<PlusCircleIcon />}
+                  type="link"
+
+                  icon={<PlusCircleOutlined aria-hidden />}
                   onClick={() => edit.change(f.type === 'list' ? addRow(at, values, f.name, newRow(f.item)) : addEntry(at, values, f.name, ''))}
                 >
                   Add a row
                 </Button>
               )}
-            </FormGroup>
+            </Form.Item>
           );
         }
         const own = edit === undefined ? {} : { edit };
@@ -310,29 +365,27 @@ const defaultNameOf = (values: Record<string, unknown>) => String(values.type ==
 
 /** A step's form: its own settings, and the "Step" tab of the platform's keys. A rename, while it is edited, warns. */
 function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepForm; problems: FlowProblem[]; edit?: PanelEdit }) {
-  const [tab, setTab] = useState<string | number>('settings');
+  const [tab, setTab] = useState('settings');
   const [named] = useState(node.label);
   const own = Object.fromEntries(Object.entries(form.values).filter(([k]) => !STEP_KEYS.has(k)));
   const described = new Set(form.settings.fields.map((f) => f.name));
   const undescribed = Object.fromEntries(Object.entries(own).filter(([k]) => !described.has(k)));
   return (
-    <Tabs activeKey={tab} onSelect={(_, key) => setTab(key)} aria-label="Step settings" isBox={false}>
-      <Tab eventKey="settings" title={<TabTitleText>Settings</TabTitleText>}>
-        <TabContentBody hasPadding>
-          <Stack hasGutter>
-            {form.missing !== undefined && (
-              <StackItem>
-                <Alert variant="info" isInline isPlain title={form.missing} />
-              </StackItem>
-            )}
-            {form.settings.described ? (
-              <StackItem>
+    <Tabs
+      activeKey={tab}
+      onChange={setTab}
+      aria-label="Step settings"
+      items={[
+        {
+          key: 'settings',
+          label: 'Settings',
+          children: (
+            <Flex vertical gap="middle">
+              {form.missing !== undefined && <Alert type="info" showIcon title={form.missing} />}
+              {form.settings.described && (
                 <Fields fields={form.settings.fields} values={form.values} at={form.path} problems={problems} {...(edit === undefined ? {} : { edit })} />
-              </StackItem>
-            ) : null}
-            {(!form.settings.described || Object.keys(undescribed).length > 0) && (
-              <StackItem>
-                {/* the keys no field describes, kept as the file holds them */}
+              )}
+              {(!form.settings.described || Object.keys(undescribed).length > 0) && (
                 <RawOptions
                   key={`${node.id}-${edit?.generation ?? 0}`}
                   options={form.settings.described ? undescribed : own}
@@ -340,20 +393,18 @@ function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepFo
                   onChange={(next) => edit?.change(setKeys(form.path, form.settings.described ? undescribed : own, next), `${pointer(form.path)}#raw`)}
                   onInvalid={(bad) => edit?.invalid(`${pointer(form.path)}#raw`, bad)}
                 />
-              </StackItem>
-            )}
-          </Stack>
-        </TabContentBody>
-      </Tab>
-      <Tab eventKey="step" title={<TabTitleText>Step</TabTitleText>}>
-        <TabContentBody hasPadding>
-          <Stack hasGutter>
-            {edit !== undefined && node.label !== named && (
-              <StackItem>
-                <Alert variant="warning" isInline isPlain title={`Renamed from ${named}: the message history keeps ${named} on the rows written before.`} />
-              </StackItem>
-            )}
-            <StackItem>
+              )}
+            </Flex>
+          ),
+        },
+        {
+          key: 'step',
+          label: 'Step',
+          children: (
+            <Flex vertical gap="middle">
+              {edit !== undefined && node.label !== named && (
+                <Alert type="warning" showIcon title={`Renamed from ${named}: the message history keeps ${named} on the rows written before.`} />
+              )}
               <Fields
                 fields={stepTabFields(String(form.values.type), defaultNameOf(form.values))}
                 values={form.values}
@@ -361,11 +412,11 @@ function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepFo
                 problems={problems}
                 {...(edit === undefined ? {} : { edit })}
               />
-            </StackItem>
-          </Stack>
-        </TabContentBody>
-      </Tab>
-    </Tabs>
+            </Flex>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -379,33 +430,26 @@ function FlowSettings({ form, problems, edit }: { form: StepForm; problems: Flow
   const fields = new Set(form.settings.fields.map((f) => pointer(f.name.split('.'))));
   const rest = problems.filter((p) => p.path.length === 0 || (p.path[0] !== 'steps' && p.path[0] !== 'processes' && !fields.has(pointer(p.path))));
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Fields fields={form.settings.fields} values={form.values} at={[]} problems={problems} {...(edit === undefined ? {} : { edit })} />
-      </StackItem>
+    <Flex vertical gap="middle">
+      <Fields fields={form.settings.fields} values={form.values} at={[]} problems={problems} {...(edit === undefined ? {} : { edit })} />
       {Object.keys(undescribed).length > 0 && (
-        <StackItem>
-          {/* the keys no field describes, kept as the file holds them */}
-          <RawOptions
-            key={`flow-${edit?.generation ?? 0}`}
-            options={undescribed}
-            readOnly={edit === undefined}
-            onChange={(next) => edit?.change(setKeys([], undescribed, next), '#raw')}
-            onInvalid={(bad) => edit?.invalid('#raw', bad)}
-          />
-        </StackItem>
+        <RawOptions
+          key={`flow-${edit?.generation ?? 0}`}
+          options={undescribed}
+          readOnly={edit === undefined}
+          onChange={(next) => edit?.change(setKeys([], undescribed, next), '#raw')}
+          onInvalid={(bad) => edit?.invalid('#raw', bad)}
+        />
       )}
-      <StackItem>
-        <Problems problems={rest} />
-      </StackItem>
+      <Problems problems={rest} />
       {edit !== undefined && (
-        <StackItem>
-          <Button variant="secondary" size="sm" icon={<PlusCircleIcon />} onClick={edit.addProcess}>
+        <div>
+          <Button size="small" icon={<PlusCircleOutlined aria-hidden />} onClick={edit.addProcess}>
             Add a process
           </Button>
-        </StackItem>
+        </div>
       )}
-    </Stack>
+    </Flex>
   );
 }
 
@@ -414,39 +458,31 @@ function LaneEdit({ name, calls, edit }: { name: string; calls: FlowNode[]; edit
   const [text, setText] = useState(name);
   const unnamed = calls.filter((c) => c.defaultName).length;
   return (
-    <Form onSubmit={(e) => e.preventDefault()}>
-      <FormGroup label="Name" fieldId={`lane-${name}`}>
-        <Flex>
-          <FlexItem grow={{ default: 'grow' }}>
-            <TextInput id={`lane-${name}`} value={text} onChange={(_, next) => setText(next)} />
-          </FlexItem>
-          <FlexItem>
-            <Button variant="secondary" size="sm" isDisabled={text === name || text === ''} onClick={() => edit.renameProcess(name, text)}>
-              Rename
-            </Button>
-          </FlexItem>
+    <Form layout="vertical">
+      <Form.Item label="Name" htmlFor={`lane-${name}`}>
+        <Flex gap="small" wrap>
+          <div style={{ flex: 1 }}>
+            <Input aria-label="Name" id={`lane-${name}`} value={text} onChange={({ target: { value: next } }) => setText(next)} />
+          </div>
+          <Button size="small" disabled={text === name || text === ''} onClick={() => edit.renameProcess(name, text)}>
+            Rename
+          </Button>
         </Flex>
         {unnamed > 0 && (
-          <HelperText>
-            <HelperTextItem variant="warning">
-              {unnamed === 1 ? 'A call' : `${unnamed} calls`} without a name {unnamed === 1 ? 'is' : 'are'} named after the process: a rename changes the names its
-              steps run under, and the message history keeps {name} on the rows written before.
-            </HelperTextItem>
-          </HelperText>
+          <Typography.Text type="warning">
+            {unnamed === 1 ? 'A call' : `${unnamed} calls`} without a name {unnamed === 1 ? 'is' : 'are'} named after the process: a rename changes the names its steps run under,
+            and the message history keeps {name} on the rows written before.
+          </Typography.Text>
         )}
-      </FormGroup>
-      <Flex alignItems={{ default: 'alignItemsCenter' }}>
-        <FlexItem>
-          <Button variant="secondary" isDanger size="sm" icon={<TrashIcon />} isDisabled={calls.length > 0} onClick={() => edit.deleteProcess(name)}>
-            Delete process
-          </Button>
-        </FlexItem>
+      </Form.Item>
+      <Flex align="center" gap="small" wrap>
+        <Button danger size="small" icon={<DeleteOutlined aria-hidden />} disabled={calls.length > 0} onClick={() => edit.deleteProcess(name)}>
+          Delete process
+        </Button>
         {calls.length > 0 && (
-          <FlexItem>
-            <Content component="small">
-              {calls.length === 1 ? 'A step calls' : `${calls.length} steps call`} it: {calls.map((c) => placeOf(c.path)).join(', ')}.
-            </Content>
-          </FlexItem>
+          <Typography.Text type="secondary">
+            {calls.length === 1 ? 'A step calls' : `${calls.length} steps call`} it: {calls.map((c) => placeOf(c.path)).join(', ')}.
+          </Typography.Text>
         )}
       </Flex>
     </Form>
@@ -484,14 +520,10 @@ export function FlowPanel({ flow, settings, node, calls, laneCalls, problems, en
   const own = edit === undefined ? {} : { edit };
   if (node === null) {
     return (
-      <Stack hasGutter>
-        <StackItem>
-          <Title headingLevel="h2">Flow {shown(flow.id)}</Title>
-        </StackItem>
-        <StackItem>
-          {settings !== undefined && <FlowSettings key={edit?.generation ?? 0} form={settings} problems={problems} {...own} />}
-        </StackItem>
-      </Stack>
+      <Flex vertical gap="middle">
+        <Typography.Title level={2}>Flow {shown(flow.id)}</Typography.Title>
+        {settings !== undefined && <FlowSettings key={edit?.generation ?? 0} form={settings} problems={problems} {...own} />}
+      </Flex>
     );
   }
   const at = node.path;
@@ -500,107 +532,65 @@ export function FlowPanel({ flow, settings, node, calls, laneCalls, problems, en
   const flowLink = calls?.opens !== undefined && 'flow' in calls.opens ? calls.opens.flow : opens !== undefined && 'flow' in opens ? opens.flow : undefined;
   const editable = edit !== undefined && node.kind === 'step' && node.locked === undefined ? edit : undefined;
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Title headingLevel="h2">{node.kind === 'lane' ? `Process ${node.label}` : node.label}</Title>
-        <Content component="small">
+    <Flex vertical gap="middle">
+      <div>
+        <Typography.Title level={2}>{node.kind === 'lane' ? `Process ${node.label}` : node.label}</Typography.Title>
+        <Typography.Text type="secondary">
           {node.type ?? node.kind}
           {node.runs > 0 && ` · runs as ${node.runsAs.join(', ')}${node.runs > node.runsAs.length ? ` and ${node.runs - node.runsAs.length} more` : ''}`}
-        </Content>
-      </StackItem>
+        </Typography.Text>
+      </div>
       {editable !== undefined && (
-        <StackItem>
-          <Flex>
-            <FlexItem>
-              <Button variant="secondary" size="sm" icon={<ArrowUpIcon />} isDisabled={!editable.up} onClick={() => editable.move(-1)}>
-                Move up
-              </Button>
-            </FlexItem>
-            <FlexItem>
-              <Button variant="secondary" size="sm" icon={<ArrowDownIcon />} isDisabled={!editable.down} onClick={() => editable.move(1)}>
-                Move down
-              </Button>
-            </FlexItem>
-            <FlexItem>
-              <Button variant="secondary" isDanger size="sm" icon={<TrashIcon />} onClick={editable.remove}>
-                Delete
-              </Button>
-            </FlexItem>
-            {editable.lists.length > 0 && (
-              <FlexItem>
-                <FormSelect
-                  aria-label="Move to the end of"
-                  value=""
-                  onChange={(_, chosen) => {
-                    const list = editable.lists.find((l) => pointer(l.path) === chosen);
-                    if (list !== undefined) editable.moveTo(list.path);
-                  }}
-                >
-                  <FormSelectOption value="" label="Move to…" isDisabled />
-                  {editable.lists.map((l) => (
-                    <FormSelectOption key={pointer(l.path)} value={pointer(l.path)} label={l.label} />
-                  ))}
-                </FormSelect>
-              </FlexItem>
-            )}
-          </Flex>
-        </StackItem>
-      )}
-      {edit !== undefined && node.kind === 'lane' && (
-        <StackItem>
-          <LaneEdit key={`${node.id}-${edit.generation}`} name={node.label} calls={laneCalls ?? []} edit={edit} />
-        </StackItem>
-      )}
-      {node.locked !== undefined && (
-        <StackItem>
-          <Alert variant="info" isInline isPlain title={node.locked} />
-        </StackItem>
-      )}
-      {node.kind === 'lane' && node.runs === 0 && (
-        <StackItem>
-          <Content component="p">No step of this flow calls the process.</Content>
-        </StackItem>
-      )}
-      {node.form === undefined && mine.length > 0 && (
-        <StackItem>
-          <Problems problems={mine} />
-        </StackItem>
-      )}
-      {node.form !== undefined && (
-        <StackItem>
-          <StepTabs key={node.id} node={node} form={node.form} problems={mine} {...(editable === undefined ? {} : { edit: editable })} />
-        </StackItem>
-      )}
-      {node.form !== undefined && mine.some((p) => p.path.length <= at.length) && (
-        <StackItem>
-          <Problems problems={mine.filter((p) => p.path.length <= at.length)} />
-        </StackItem>
-      )}
-      {flowLink !== undefined && (
-        <StackItem>
-          <Button variant="secondary" onClick={() => openFlow(flowLink)}>
-            Open flow {calls?.label ?? node.label}
+        <Flex gap="small" wrap>
+          <Button size="small" icon={<ArrowUpOutlined aria-hidden />} disabled={!editable.up} onClick={() => editable.move(-1)}>
+            Move up
           </Button>
-        </StackItem>
+          <Button size="small" icon={<ArrowDownOutlined aria-hidden />} disabled={!editable.down} onClick={() => editable.move(1)}>
+            Move down
+          </Button>
+          <Button danger size="small" icon={<DeleteOutlined aria-hidden />} onClick={editable.remove}>
+            Delete
+          </Button>
+          {editable.lists.length > 0 && (
+            <Select
+              aria-label="Move to the end of"
+              placeholder="Move to…"
+              value={undefined}
+              virtual={false}
+              options={editable.lists.map((l) => ({ value: pointer(l.path), label: l.label }))}
+              onChange={(chosen) => {
+                const list = editable.lists.find((l) => pointer(l.path) === chosen);
+                if (list !== undefined) editable.moveTo(list.path);
+              }}
+            />
+          )}
+        </Flex>
+      )}
+      {edit !== undefined && node.kind === 'lane' && <LaneEdit key={`${node.id}-${edit.generation}`} name={node.label} calls={laneCalls ?? []} edit={edit} />}
+      {node.locked !== undefined && <Alert type="info" showIcon title={node.locked} />}
+      {node.kind === 'lane' && node.runs === 0 && <Typography.Text>No step of this flow calls the process.</Typography.Text>}
+      {node.form === undefined && mine.length > 0 && <Problems problems={mine} />}
+      {node.form !== undefined && <StepTabs key={node.id} node={node} form={node.form} problems={mine} {...(editable === undefined ? {} : { edit: editable })} />}
+      {node.form !== undefined && mine.some((p) => p.path.length <= at.length) && <Problems problems={mine.filter((p) => p.path.length <= at.length)} />}
+      {flowLink !== undefined && (
+        <div>
+          <Button onClick={() => openFlow(flowLink)}>Open flow {calls?.label ?? node.label}</Button>
+        </div>
       )}
       {opens !== undefined && 'endpoint' in opens && (
-        <StackItem>
-          <Stack hasGutter>
-            <StackItem>
-              <Button variant="secondary" onClick={() => openEndpoint(opens.endpoint)}>
-                Open endpoint
-              </Button>
-            </StackItem>
-            <StackItem>{endpointForm(opens.endpoint)}</StackItem>
-          </Stack>
-        </StackItem>
+        <Flex vertical gap="middle">
+          <div>
+            <Button onClick={() => openEndpoint(opens.endpoint)}>Open endpoint</Button>
+          </div>
+          {endpointForm(opens.endpoint)}
+        </Flex>
       )}
       {node.kind === 'from' && settings !== undefined && (
-        <StackItem>
-          <Title headingLevel="h3">Flow {shown(flow.id)}</Title>
+        <div>
+          <Typography.Title level={3}>Flow {shown(flow.id)}</Typography.Title>
           <FlowSettings key={edit?.generation ?? 0} form={settings} problems={problems} {...own} />
-        </StackItem>
+        </div>
       )}
-    </Stack>
+    </Flex>
   );
 }

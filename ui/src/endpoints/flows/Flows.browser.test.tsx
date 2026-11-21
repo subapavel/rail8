@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -194,10 +193,10 @@ describe('Flows', () => {
   test("shows a route's rules and a to's endpoints as tables", async () => {
     await open();
     await nodeOf('partner').click();
-    const endpoints = page.getByRole('grid', { name: 'endpoints' });
+    const endpoints = page.getByRole('table', { name: 'endpoints' });
     await expect.element(endpoints.getByText('partner-foreign')).toBeVisible();
     await nodeOf('route').click();
-    await expect.element(page.getByRole('grid', { name: 'routes' }).getByText("/Invoice/Currency = 'CZK'")).toBeVisible();
+    await expect.element(page.getByRole('table', { name: 'routes' }).getByText("/Invoice/Currency = 'CZK'")).toBeVisible();
   });
 
   test("shows the arrival's endpoint in its component's form, and opens it in a tab of its own", async () => {
@@ -481,7 +480,8 @@ describe('Editing the rest of a flow', () => {
     await open(flows);
     await button('Edit').click();
     await page.getByRole('textbox', { name: 'description' }).fill('Send an invoice on.');
-    await page.getByRole('combobox', { name: 'delivery.mode' }).selectOptions('at-least-once');
+    await page.getByRole('combobox', { name: 'delivery.mode' }).click();
+    await page.getByRole('option', { name: 'at-least-once', exact: true }).click();
     await button('Save').click();
     expect(lastSave(flows)).toBe(invoice.replace('Validate an invoice and send it on.', 'Send an invoice on.').replace('{ mode: sync }', '{ mode: at-least-once }'));
   });
@@ -496,7 +496,8 @@ describe('Editing the rest of a flow', () => {
     await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
     await expect.element(text('the flow has a process enrich already')).toBeVisible();
     await page.getByRole('textbox', { name: 'Name' }).fill('audit');
-    await page.getByRole('combobox', { name: 'First step' }).selectOptions('validate');
+    await page.getByRole('combobox', { name: 'First step' }).click();
+    await page.getByRole('option', { name: 'validate', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
     await expect.element(canvas().getByText('process audit')).toBeVisible();
     await canvas().getByText('process enrich').click();
@@ -506,7 +507,8 @@ describe('Editing the rest of a flow', () => {
     await button('Rename').click();
     await expect.element(canvas().getByText('process lookup')).toBeVisible();
     await nodeOf('to').click();
-    await page.getByRole('combobox', { name: 'Move to the end of' }).selectOptions('process audit');
+    await page.getByRole('combobox', { name: 'Move to the end of' }).click();
+    await page.getByRole('option', { name: 'process audit', exact: true }).click();
     await button('Save').click();
     expect(lastSave(flows)).toBe(`${processes.replace('  - type: process\n    process: enrich\n  - type: to\n    endpoint: partner-domestic\n', '  - type: process\n    process: lookup\n').replace('  enrich:\n', '  lookup:\n')}  audit:
     steps:

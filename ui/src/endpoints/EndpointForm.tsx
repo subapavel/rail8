@@ -1,32 +1,5 @@
-import {
-  Alert,
-  AlertActionCloseButton,
-  AlertGroup,
-  Bullseye,
-  Button,
-  Content,
-  Flex,
-  FlexItem,
-  Form,
-  Label,
-  LabelGroup,
-  List,
-  ListItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  PageSection,
-  Spinner,
-  Stack,
-  StackItem,
-  Tab,
-  TabContentBody,
-  Tabs,
-  TabTitleText,
-  Title,
-} from '@patternfly/react-core';
-import { CheckCircleIcon, EditIcon, SaveIcon } from '@patternfly/react-icons';
+import { CheckCircleOutlined, EditOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Flex, Form, Modal, Spin, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
 import type { EndpointsApi, StoredEndpoint } from './api';
@@ -51,28 +24,26 @@ export interface EndpointFormProps {
  * The component's description, while it is read, once read with its HTTP prefix and where the node takes requests, or
  * why it could not be.
  */
-type Described =
-  | { kind: 'reading' }
-  | { kind: 'read'; settings: SettingsDescription; httpPrefix: string | null; ingress: NodeIngress }
-  | { kind: 'missing'; why: string };
+type Described = { kind: 'reading' } | { kind: 'read'; settings: SettingsDescription; httpPrefix: string | null; ingress: NodeIngress } | { kind: 'missing'; why: string };
 
 /**
  * Under the address of an in endpoint: a preview of the URL senders call, or of the path on the node's HTTP port when
  * the node names no origin, built from the options shown with the node environment's overlay laid over them.
  */
 function ArrivalNote({ url, ingress, overlaid }: { url: string; ingress: NodeIngress; overlaid: boolean }) {
-  const where = ingress.httpOrigin === null ? (
-    <>
-      The path <strong>{url}</strong> on the node&apos;s HTTP port; the node names no origin for it (RAIL8_HTTP_ORIGIN).
-    </>
-  ) : (
-    <>
-      Senders call <strong>{url}</strong>.
-    </>
-  );
+  const where =
+    ingress.httpOrigin === null ? (
+      <>
+        The path <strong>{url}</strong> on the node&apos;s HTTP port; the node names no origin for it (RAIL8_HTTP_ORIGIN).
+      </>
+    ) : (
+      <>
+        Senders call <strong>{url}</strong>.
+      </>
+    );
   return (
     <>
-      <Label isCompact>Preview</Label> {where} Built from these settings
+      <Tag>Preview</Tag> {where} Built from these settings
       {overlaid ? `, with the address environment ${ingress.environment} sets` : ` in environment ${ingress.environment}`}, not from what is deployed.
     </>
   );
@@ -118,7 +89,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const [saving, setSaving] = useState(false);
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [saved, setSaved] = useState(0);
+  const { notification } = App.useApp();
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const tabsId = useId();
 
@@ -183,22 +154,10 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   }, [guardClose, unsaved]);
 
   if (failed !== null) {
-    return (
-      <PageSection>
-        <Alert variant="danger" isInline title={`${path} could not be read`}>
-          {failed}
-        </Alert>
-      </PageSection>
-    );
+    return <Alert showIcon type="error" title={`${path} could not be read`} description={failed} />;
   }
   if (stored === null) {
-    return (
-      <PageSection>
-        <Bullseye>
-          <Spinner aria-label={`Reading ${path}`} />
-        </Bullseye>
-      </PageSection>
-    );
+    return <Spin aria-label={`Reading ${path}`} />;
   }
 
   const { file } = stored;
@@ -243,7 +202,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     setSaveFailure(null);
     try {
       startFrom(await api.save(path, present(draft), stored.etag));
-      setSaved((n) => n + 1);
+      notification.success({ key: path, title: `Endpoint ${file.id} saved`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss save notification' } });
     } catch (error) {
       if (error instanceof Error && 'status' in error && error.status === 412) setConflict(true);
       else setSaveFailure(error instanceof Error ? error.message : String(error));
@@ -270,7 +229,12 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     if (tabId !== 'general') return fields;
     // on an in endpoint the node sets flow and maxBodyBytes itself: no field describes them, and they are no stray key
     const named = new Set([...settings.fields.map((f) => f.name), ...(file.direction === 'in' ? ['flow', 'maxBodyBytes'] : [])]);
-    return [...fields, ...Object.keys(options).filter((k) => !named.has(k) && options[k] !== undefined).map(undescribed)];
+    return [
+      ...fields,
+      ...Object.keys(options)
+        .filter((k) => !named.has(k) && options[k] !== undefined)
+        .map(undescribed),
+    ];
   };
 
   const canEdit = file.editable && settings !== null;
@@ -285,174 +249,146 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const activeTab = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? 'general');
 
   return (
-    <PageSection>
-      <Stack hasGutter>
-        <StackItem>
-          <Flex alignItems={{ default: 'alignItemsCenter' }}>
-            <FlexItem>
-              <Title headingLevel="h1" size="xl">
-                {file.id}
-              </Title>
-            </FlexItem>
-            <FlexItem>
-              <LabelGroup aria-label="Endpoint">
-                <Label color="blue">{file.scheme}</Label>
-                <Label>{file.direction}</Label>
-                {!file.editable && <Label variant="outline">Read-only</Label>}
-              </LabelGroup>
-            </FlexItem>
-            <FlexItem align={{ default: 'alignRight' }}>
-              {editing ? (
-                <>
-                  <Button size="sm" variant="link" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
-                    Cancel
-                  </Button>{' '}
-                  <Button size="sm" variant="secondary" icon={<CheckCircleIcon />} onClick={() => setCheck(problems)}>
-                    Check
-                  </Button>{' '}
-                  <Button size="sm" variant="primary" icon={<SaveIcon />} isDisabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
-                    Save
-                  </Button>
-                </>
-              ) : (
-                canEdit && (
-                  <Button size="sm" variant="primary" icon={<EditIcon />} onClick={() => setEditing(true)}>
-                    Edit
-                  </Button>
-                )
-              )}
-            </FlexItem>
-          </Flex>
-          <Content component="small">{file.path}</Content>
-          {file.description !== null && <Content component="p">{file.description}</Content>}
-        </StackItem>
-        {described.kind === 'missing' && (
-          <StackItem>
-            <Alert variant="warning" isInline title="The settings form needs the component's description">
+    <Flex vertical gap="middle">
+      <Flex align="center" wrap gap="small">
+        <Typography.Title level={1} style={{ margin: 0 }}>
+          {file.id}
+        </Typography.Title>
+        <Flex align="center" role="group" aria-label="Endpoint" gap="small">
+          <Tag color="blue">{file.scheme}</Tag>
+          <Tag>{file.direction}</Tag>
+          {!file.editable && <Tag>Read-only</Tag>}
+        </Flex>
+        <Flex gap="small" wrap style={{ marginInlineStart: 'auto' }}>
+          {editing ? (
+            <>
+              <Button type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
+                Cancel
+              </Button>
+              <Button icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(problems)}>
+                Check
+              </Button>
+              <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
+                Save
+              </Button>
+            </>
+          ) : (
+            canEdit && (
+              <Button type="primary" icon={<EditOutlined aria-hidden />} onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )
+          )}
+        </Flex>
+      </Flex>
+      <Typography.Text type="secondary">{file.path}</Typography.Text>
+      {file.description !== null && <Typography.Paragraph>{file.description}</Typography.Paragraph>}
+      {described.kind === 'missing' && (
+        <Alert
+          type="warning"
+          showIcon
+          title="The settings form needs the component's description"
+          description={
+            <>
               <p>{described.why}</p>
               <p>The file's settings are shown as they are; Edit needs the description.</p>
-            </Alert>
-          </StackItem>
-        )}
-        {file.environments.length > 0 && (
-          <StackItem>
-            <Alert variant="info" isInline title="Environments override some of these settings">
-              <List aria-label="Overrides">
-                {file.environments.map(({ name, options: overridden }) => (
-                  <ListItem key={name}>
-                    <strong>{name}</strong>: {overridden.length > 0 ? overridden.join(', ') : 'nothing'}
-                  </ListItem>
-                ))}
-              </List>
-            </Alert>
-          </StackItem>
-        )}
-        {check !== null && (
-          <StackItem>
-            <Alert
-              variant={check.length > 0 ? 'warning' : 'success'}
-              isInline
-              role="status"
-              title={check.length > 0 ? 'Check found issues' : 'Check passed'}
-              actionClose={<AlertActionCloseButton aria-label="Dismiss check" onClose={() => setCheck(null)} />}
-            >
+            </>
+          }
+        />
+      )}
+      {file.environments.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          title="Environments override some of these settings"
+          description={
+            <ul aria-label="Overrides">
+              {file.environments.map(({ name, options: overridden }) => (
+                <li key={name}>
+                  <strong>{name}</strong>: {overridden.length > 0 ? overridden.join(', ') : 'nothing'}
+                </li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+      {check !== null && (
+        <Alert
+          showIcon
+          type={check.length > 0 ? 'warning' : 'success'}
+          role="status"
+          title={check.length > 0 ? 'Check found issues' : 'Check passed'}
+          closable={{ 'aria-label': 'Dismiss check', onClose: () => setCheck(null) }}
+          description={
+            <>
               {check.length > 0 && (
-                <List aria-label="Issues">
+                <ul aria-label="Issues">
                   {check.map((p, i) => (
-                    <ListItem key={i}>{p.path === '' ? p.message : `${optionOf(p.path)} ${p.message}`}</ListItem>
+                    <li key={i}>{p.path === '' ? p.message : `${optionOf(p.path)} ${p.message}`}</li>
                   ))}
-                </List>
+                </ul>
               )}
               <p>The node checks the file again when the package is deployed.</p>
-            </Alert>
-          </StackItem>
-        )}
-        {saveFailure !== null && (
-          <StackItem>
-            <Alert variant="danger" isInline title="The file was not saved">
-              {saveFailure}
-            </Alert>
-          </StackItem>
-        )}
-        <StackItem isFilled>
-          {described.kind === 'reading' ? (
-            <Bullseye>
-              <Spinner aria-label="Reading the component's description" />
-            </Bullseye>
-          ) : settings === null || !settings.described ? (
-            <Form onSubmit={(e) => e.preventDefault()}>
-              <RawOptions
-                key={generation}
-                options={options}
-                readOnly={!editing}
-                onChange={(next) => {
-                  setCheck(null);
-                  setDraft(next);
-                }}
-                onInvalid={(bad) => markInvalid('', bad)}
-              />
-            </Form>
-          ) : (
-            <Tabs activeKey={activeTab} onSelect={(_, key) => setTab(String(key))} aria-label="Settings tabs" id={tabsId}>
-              {tabs.map((t) => {
-                const fields = fieldsOn(t.id);
-                return (
-                  <Tab key={t.id} eventKey={t.id} title={<TabTitleText>{t.label}</TabTitleText>}>
-                    <TabContentBody hasPadding>
-                      {fields.length === 0 ? (
-                        <Content component="p">No settings on this tab for an {file.direction} endpoint.</Content>
-                      ) : (
-                        <Form onSubmit={(e) => e.preventDefault()}>
-                          {fields.map((field) => (
-                            <FieldControl
-                              key={`${generation}-${field.name}`}
-                              field={field}
-                              value={options[field.name]}
-                              readOnly={!editing}
-                              onChange={(value) => change(field.name, value)}
-                              onInvalid={(bad) => markInvalid(field.name, bad)}
-                              problem={problemOf.get(field.name)}
-                              {...(field.name === 'address' && arrival !== undefined ? { note: arrival } : {})}
-                            />
-                          ))}
-                        </Form>
-                      )}
-                    </TabContentBody>
-                  </Tab>
-                );
-              })}
-            </Tabs>
-          )}
-        </StackItem>
-      </Stack>
-      <DiscardDialog isOpen={discarding !== null} name={file.id} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
-      <Modal variant="small" isOpen={conflict} onClose={() => setConflict(false)} aria-labelledby={`${tabsId}-conflict`}>
-        <ModalHeader title="The file changed on disk" labelId={`${tabsId}-conflict`} />
-        <ModalBody>
-          <p>
-            <strong>{file.path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
-          </p>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="primary" onClick={() => void reload()}>
-            Reload
-          </Button>
-          <Button variant="link" onClick={() => setConflict(false)}>
-            Keep editing
-          </Button>
-        </ModalFooter>
-      </Modal>
-      <AlertGroup isToast isLiveRegion aria-label="Save notifications">
-        {saved > 0 && (
-          <Alert
-            key={saved}
-            variant="success"
-            title={`Endpoint ${file.id} saved`}
-            timeout={8000}
-            actionClose={<AlertActionCloseButton aria-label="Dismiss save notification" onClose={() => setSaved(0)} />}
+            </>
+          }
+        />
+      )}
+      {saveFailure !== null && <Alert type="error" showIcon title="The file was not saved" description={saveFailure} />}
+      {described.kind === 'reading' ? (
+        <Spin aria-label="Reading the component's description" />
+      ) : settings === null || !settings.described ? (
+        <Form layout="vertical">
+          <RawOptions
+            key={generation}
+            options={options}
+            readOnly={!editing}
+            onChange={(next) => {
+              setCheck(null);
+              setDraft(next);
+            }}
+            onInvalid={(bad) => markInvalid('', bad)}
           />
-        )}
-      </AlertGroup>
-    </PageSection>
+        </Form>
+      ) : (
+        <Tabs
+          activeKey={activeTab}
+          onChange={setTab}
+          aria-label="Settings tabs"
+          id={tabsId}
+          items={tabs.map((t) => {
+            const fields = fieldsOn(t.id);
+            return {
+              key: t.id,
+              label: t.label,
+              children:
+                fields.length === 0 ? (
+                  <p>No settings on this tab for an {file.direction} endpoint.</p>
+                ) : (
+                  <Form layout="vertical">
+                    {fields.map((field) => (
+                      <FieldControl
+                        key={`${generation}-${field.name}`}
+                        field={field}
+                        value={options[field.name]}
+                        readOnly={!editing}
+                        onChange={(value) => change(field.name, value)}
+                        onInvalid={(bad) => markInvalid(field.name, bad)}
+                        problem={problemOf.get(field.name)}
+                        {...(field.name === 'address' && arrival !== undefined ? { note: arrival } : {})}
+                      />
+                    ))}
+                  </Form>
+                ),
+            };
+          })}
+        />
+      )}
+      <DiscardDialog isOpen={discarding !== null} name={file.id} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
+      <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={() => void reload()} onCancel={() => setConflict(false)}>
+        <p>
+          <strong>{file.path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
+        </p>
+      </Modal>
+    </Flex>
   );
 }
