@@ -1,6 +1,5 @@
-import { Button, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
-import { useId } from 'react';
-
+import { Button, Modal } from 'antd';
+import { useRef } from 'react';
 export interface DiscardDialogProps {
   isOpen: boolean;
   /** The name of what is being edited, such as a mapping's. */
@@ -13,24 +12,26 @@ export interface DiscardDialogProps {
 
 /** "Discard changes?": Discard changes, or Keep editing, which has the focus. */
 export function DiscardDialog({ isOpen, name, then, onDiscard, onKeepEditing }: DiscardDialogProps) {
-  const titleId = useId();
-  const keepEditingId = useId();
+  const keep = useRef<HTMLButtonElement>(null);
   return (
-    <Modal variant="small" isOpen={isOpen} onClose={onKeepEditing} aria-labelledby={titleId} elementToFocus={`#${CSS.escape(keepEditingId)}`}>
-      <ModalHeader title="Discard changes?" labelId={titleId} />
-      <ModalBody>
-        <p>
-          Discard your unsaved changes to <strong>{name}</strong> and {then}?
-        </p>
-      </ModalBody>
-      <ModalFooter>
-        <Button variant="danger" onClick={onDiscard}>
+    <Modal
+      open={isOpen}
+      title="Discard changes?"
+      footer={[
+        <Button key="discard" danger onClick={onDiscard}>
           Discard changes
-        </Button>
-        <Button id={keepEditingId} variant="link" onClick={onKeepEditing}>
+        </Button>,
+        <Button key="keep" type="primary" ref={keep} onClick={onKeepEditing}>
           Keep editing
-        </Button>
-      </ModalFooter>
+        </Button>,
+      ]}
+      afterOpenChange={(open) => {
+        if (open) keep.current?.focus();
+      }}
+      onOk={onDiscard}
+      onCancel={onKeepEditing}
+    >
+      Discard your unsaved changes to <strong>{name}</strong> and {then}?
     </Modal>
   );
 }

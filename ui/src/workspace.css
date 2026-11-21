@@ -1,0 +1,137 @@
+body {
+  margin: 0;
+}
+.rail8-app {
+  min-height: 100dvh;
+  background: var(--ant-color-bg-layout);
+}
+.rail8-layout {
+  min-height: 100dvh;
+}
+.rail8-header.ant-layout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-inline: var(--ant-padding-lg);
+  background: var(--ant-color-bg-container);
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+.rail8-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ant-margin-xs);
+  font-size: var(--ant-font-size-xl);
+  font-weight: 650;
+}
+.rail8-brand img {
+  width: 30px;
+  height: 30px;
+}
+.rail8-sidebar {
+  border-inline-end: 1px solid var(--ant-color-border-secondary);
+}
+.rail8-nav {
+  padding: var(--ant-padding);
+}
+.rail8-nav section + section {
+  margin-top: var(--ant-margin-lg);
+}
+.rail8-nav-group {
+  display: block;
+  padding-inline: var(--ant-padding-xs);
+  margin-bottom: var(--ant-margin-xs);
+  font-weight: 600;
+  font-size: var(--ant-font-size-sm);
+}
+.rail8-nav .ant-btn {
+  justify-content: flex-start;
+  min-height: 34px;
+  margin-block: 1px;
+}
+.rail8-nav .ant-btn[aria-current='page'] {
+  background: var(--ant-color-primary-bg);
+  color: var(--ant-color-primary-text);
+}
+.rail8-workspace {
+  min-width: 0;
+  padding: var(--ant-padding) var(--ant-padding-lg);
+}
+.rail8-workspace > .ant-breadcrumb {
+  margin-bottom: var(--ant-margin-sm);
+  overflow-wrap: anywhere;
+}
+.rail8-tabs > .ant-tabs-nav {
+  margin-bottom: 0;
+}
+.rail8-panel {
+  background: var(--ant-color-bg-container);
+  border: 1px solid var(--ant-color-border-secondary);
+  padding: var(--ant-padding-lg);
+  border-radius: 0 var(--ant-border-radius-lg) var(--ant-border-radius-lg) var(--ant-border-radius-lg);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rail8-panel h1 {
+  font-size: var(--ant-font-size-heading-2);
+}
+.rail8-panel h2 {
+  font-size: var(--ant-font-size-heading-4);
+}
+.rail8-launch-group {
+  margin-top: var(--ant-margin-lg);
+}
+.rail8-launch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: var(--ant-margin-sm);
+}
+.rail8-launch.ant-btn {
+  align-self: flex-start;
+  height: auto;
+  padding: 0;
+  font-weight: 600;
+}
+.rail8-empty {
+  padding: var(--ant-padding-xl);
+}
+.rail8-payload {
+  background: var(--ant-color-fill-quaternary);
+  padding: var(--ant-padding);
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rail8-filters .ant-select {
+  min-width: 145px;
+}
+.rail8-filters .ant-input {
+  width: 145px;
+}
+.rail8-document-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.rail8-document-table :is(th, td) {
+  text-align: start;
+  vertical-align: top;
+  padding: var(--ant-padding-xs);
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+.rail8-document-table th {
+  font-weight: 600;
+  background: var(--ant-color-fill-quaternary);
+}
+.rail8-table-scroll {
+  overflow-x: auto;
+}
+@media (max-width: 767px) {
+  .rail8-workspace,
+  .rail8-panel {
+    padding: var(--ant-padding-sm);
+  }
+  .rail8-header.ant-layout-header {
+    padding-inline: var(--ant-padding-sm);
+  }
+}
