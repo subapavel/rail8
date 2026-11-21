@@ -10,7 +10,7 @@ description: React rules for Rail8's UI — component composition and performanc
      `bundle-defer-third-party`, `rendering-hydration-*`, `rendering-script-defer-async`) and the
      rules that add a library (`async-dependencies`, `client-swr-dedup`, `client-event-listeners`). -->
 
-The UI is built from PatternFly components and tokens (skill `patternfly`); these rules shape the
+The UI is built from Ant Design components and tokens (skill `antd`); these rules shape the
 React code around them. A new npm dependency is a question for the owner-proxy.
 
 When you write or review a component, read the rule files below whose title matches what the code
