@@ -14,7 +14,7 @@ change touches. Everything in the repository is in English.
 - Verifiable goals: turn the task into a test that fails first, then make it pass.
 - Comments and docs are for people: what the code does, its inputs, its outputs. Each one stands on
   its own, with no task ids, decision ids or pointers to other files.
-- UI: PatternFly components and design tokens only (skill `patternfly`, PatternFly MCP).
+- UI: use Ant Design 6 components and design tokens, ProComponents v3 for enterprise tables, and React Flow for graphical editors. Consult the official Ant Design skill and MCP server.
 - Contracts first: a new contract (an adapter, a step, the API for custom code, plugin loading) is
   `class:C` work, designed and agreed before the implementation (skill `design-it-twice`).
 - Unsure? Ask the owner-proxy: open a GitHub issue labelled `owner-question` (agent `owner-proxy`).
@@ -75,3 +75,12 @@ mutation tests, a second Postgres, Windows and performance are switched off for 
 - Sizes are `long`. Every limit is finite.
 - Dependency licences: Apache 2.0, MIT, BSD, MPL 2.0, EPL only. SAP JCo is `provided` scope.
 - Never weaken or skip a test to go green; never put a secret in the repository.
+
+<!-- antd-cli setup start -->
+## Ant Design CLI Skill
+
+Use the shared Ant Design skill at `.agents/skills/antd/SKILL.md` before working on Ant Design code in this repository.
+
+The skill teaches agents when and how to call `@ant-design/cli` commands such as `antd info`, `antd doc`, `antd demo`, `antd token`, `antd semantic`, and `antd changelog`.
+
+<!-- antd-cli setup end -->

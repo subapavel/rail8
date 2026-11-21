@@ -4,9 +4,9 @@
       "type": "http",
       "url": "https://mcp.context7.com/mcp"
     },
-    "patternfly-mcp": {
+    "antd": {
       "command": "npx",
-      "args": ["-y", "@patternfly/patternfly-mcp@2.6.0"]
+      "args": ["-y", "@ant-design/cli@6.7.1", "mcp", "--version", "6.7.1"]
     }
   }
 }
