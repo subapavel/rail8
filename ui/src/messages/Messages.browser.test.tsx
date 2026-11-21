@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
@@ -92,7 +91,7 @@ describe('Messages', () => {
   test('opens on the messages of the last hour, newest first a page at a time, and opens each one in a tab of its own', async () => {
     const api = fakeApi();
     render(api);
-    const list = page.getByRole('grid', { name: 'Messages' });
+    const list = page.getByRole('table', { name: 'Messages' });
     await expect.element(list.getByRole('button', { name: 'm-1' })).toBeVisible();
     expect(api.list).toHaveBeenCalledWith(lastHour);
     await expect.element(list.getByText('2026-11-19T07:50:00Z')).toBeVisible();
@@ -127,14 +126,17 @@ describe('Messages', () => {
     await expect.element(page.getByRole('button', { name: 'm-1' })).toBeVisible();
     expect(api.flows).toHaveBeenCalledOnce();
 
-    await page.getByRole('combobox', { name: 'Time range' }).selectOptions('Last 24 hours');
+    await page.getByRole('combobox', { name: 'Time range' }).click();
+    await page.getByRole('option', { name: 'Last 24 hours', exact: true }).click();
     const day = { from: '2026-11-18T08:00:00.000Z', to: lastHour.to };
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith(day));
 
-    await page.getByRole('combobox', { name: 'Flow' }).selectOptions('demo/orders');
+    await page.getByRole('combobox', { name: 'Flow' }).click();
+    await page.getByRole('option', { name: 'demo/orders', exact: true }).click();
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...day, flow: 'demo/orders' }));
 
-    await page.getByRole('combobox', { name: 'Status' }).selectOptions('Failed');
+    await page.getByRole('combobox', { name: 'Status' }).click();
+    await page.getByRole('option', { name: 'Failed', exact: true }).click();
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...day, flow: 'demo/orders', status: 'failed' }));
 
     await page.getByRole('textbox', { name: 'Key name' }).fill('order');
@@ -162,17 +164,18 @@ describe('Messages', () => {
     await strip.getByRole('button', { name: 'Failed 2' }).click();
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, status: 'failed' }));
     await expect.element(strip.getByRole('button', { name: 'Failed 2' })).toHaveAttribute('aria-pressed', 'true');
-    await expect.element(page.getByRole('combobox', { name: 'Status' })).toHaveValue('failed');
-    await expect.element(page.getByRole('grid', { name: 'Messages' }).getByRole('button', { name: 'm-1' })).toBeVisible();
+    await expect.element(page.getByRole('form', { name: 'Filters' }).getByText('Failed', { exact: true })).toBeVisible();
+    await expect.element(page.getByRole('table', { name: 'Messages' }).getByRole('button', { name: 'm-1' })).toBeVisible();
 
-    await page.getByRole('combobox', { name: 'Flow' }).selectOptions('demo/orders');
+    await page.getByRole('combobox', { name: 'Flow' }).click();
+    await page.getByRole('option', { name: 'demo/orders', exact: true }).click();
     await vi.waitFor(() => expect(api.counts).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders' }));
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders', status: 'failed' }));
 
     await strip.getByRole('button', { name: 'Failed 2' }).click();
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders' }));
     await expect.element(strip.getByRole('button', { name: 'Failed 2' })).toHaveAttribute('aria-pressed', 'false');
-    await expect.element(page.getByRole('combobox', { name: 'Status' })).toHaveValue('');
+    await expect.element(page.getByText('All statuses', { exact: true })).toBeVisible();
   });
 
   test("shows the node's error when the messages cannot be counted, and the list still", async () => {
@@ -219,12 +222,12 @@ describe('Messages', () => {
 
     await expect.element(page.getByRole('heading', { name: 'Attempt 1' })).toBeVisible();
     await expect.element(page.getByRole('heading', { name: 'Attempt 2' })).toBeVisible();
-    const first = page.getByRole('grid', { name: 'Steps of attempt 1' });
+    const first = page.getByRole('table', { name: 'Steps of attempt 1' });
     await expect.element(first.getByText('2026-11-17T10:01:01Z')).toBeVisible();
     await expect.element(first.getByText('partner refused: 503')).toBeVisible();
     await expect.element(first.getByText('1.5 µs')).toBeVisible();
     expect(first.getByText('2.5 ms').elements()).toHaveLength(2);
-    const second = page.getByRole('grid', { name: 'Steps of attempt 2' });
+    const second = page.getByRole('table', { name: 'Steps of attempt 2' });
     await expect.element(second.getByText('4 B, not kept')).toBeVisible();
 
     await expect.element(page.getByRole('tabpanel', { name: 'm-1' }).getByText('demo/orders')).toBeVisible();
@@ -233,14 +236,14 @@ describe('Messages', () => {
 
   test('shows the wait for a worker between two steps, so the rows add up to the duration in the list', async () => {
     render(fakeApi({ list: async () => ({ items: [row('m-3', { flow: 'demo/invoice-async', durationNanos: 26_200_000 })], next: null }) }));
-    await expect.element(page.getByRole('grid', { name: 'Messages' }).getByText('26.2 ms')).toBeVisible();
+    await expect.element(page.getByRole('table', { name: 'Messages' }).getByText('26.2 ms')).toBeVisible();
     await page.getByRole('button', { name: 'm-3' }).click();
 
-    const steps = page.getByRole('grid', { name: 'Steps of attempt 1' });
+    const steps = page.getByRole('table', { name: 'Steps of attempt 1' });
     const rows = steps.getByRole('row');
     await expect.element(rows.nth(2)).toHaveTextContent('Saved, waiting for a worker19.6 ms');
-    expect(rows.elements().map((r) => r.querySelector('[data-label="Wall time"]')?.textContent)).toEqual([undefined, '', '19.6 ms', '2.2 ms', '4.3 ms']);
-    expect(rows.nth(1).element().querySelector('[data-label="CPU time"]')?.textContent).toBe('');
+    expect(rows.elements().slice(1).map((r, index) => r.querySelectorAll('td')[index === 1 ? 2 : 4]?.textContent)).toEqual(['', '19.6 ms', '2.2 ms', '4.3 ms']);
+    expect(rows.nth(1).getByRole('cell').nth(5).element().textContent).toBe('');
     expect(steps.getByText('Between steps').elements()).toHaveLength(0);
 
     const total = page.getByRole('tabpanel', { name: 'm-3' }).getByLabelText('Duration');
