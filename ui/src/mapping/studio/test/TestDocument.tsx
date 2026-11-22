@@ -1,4 +1,5 @@
-import { Alert, Button, Card, Empty, Flex, Input, Modal, Spin, Table, Tag } from 'antd';
+import { Alert, Button, Card, Empty, Flex, Input, Spin, Table, Tag } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import {
   AlignLeftOutlined,
   BranchesOutlined,
@@ -310,8 +311,7 @@ export function TestDocument({
       )}
       {toggles(`${side} panel`, SECTIONS, section, setSection)}
       {xmlEditor && (
-        <Modal
-          open
+        <MountedModal
           title={input ? 'XML editor' : 'XML viewer'}
           width="min(90vw, 1000px)"
           onCancel={() => setXmlEditor(false)}
@@ -320,7 +320,7 @@ export function TestDocument({
           <Suspense fallback={<Spin aria-label="Loading XML editor" />}>
             <XmlEditor value={displayed} readOnly={!input || readOnly} onChange={edit} label={input ? 'XML source document' : 'XML result document'} />
           </Suspense>
-        </Modal>
+        </MountedModal>
       )}
     </Card>
   );

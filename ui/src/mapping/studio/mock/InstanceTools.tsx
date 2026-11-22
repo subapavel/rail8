@@ -1,4 +1,5 @@
-import { Alert, Form, Input, Modal, Select } from 'antd';
+import { Alert, Form, Input, Select } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { UploadOutlined, FileAddOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
@@ -152,9 +153,8 @@ export function InstanceTools({
       {notice && !dialog && <small role="status">{notice}</small>}
 
       {dialog === 'add' && (
-        <Modal
+        <MountedModal
           title="Add Test Instance"
-          open
           onCancel={close}
           cancelText="Cancel"
           okText="OK"
@@ -166,12 +166,11 @@ export function InstanceTools({
             </Form.Item>
             {notice && <Alert type="error" title={notice} />}
           </Form>
-        </Modal>
+        </MountedModal>
       )}
       {dialog === 'delete' && current && (
-        <Modal
+        <MountedModal
           title="Delete Test Instance"
-          open
           onCancel={close}
           cancelText="Cancel"
           okText="Delete"
@@ -182,7 +181,7 @@ export function InstanceTools({
           }}
         >
           Delete {current.name} from this browser?
-        </Modal>
+        </MountedModal>
       )}
     </>
   );

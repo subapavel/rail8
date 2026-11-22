@@ -1,4 +1,5 @@
-import { Alert, Button, Descriptions, Empty, Flex, Modal, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Descriptions, Empty, Flex, Spin, Tag, Typography } from 'antd';
+import { MountedModal } from '../MountedModal';
 import { useEffect, useState } from 'react';
 import { PAYLOAD_SHOWN, type AdminApi, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
@@ -269,8 +270,7 @@ function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
   }, [api, id, step]);
 
   return (
-    <Modal
-      open
+    <MountedModal
       width={800}
       footer={null}
       onCancel={onClose}
@@ -291,6 +291,6 @@ function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
           <pre className="rail8-payload">{load.payload.text}</pre>
         </Flex>
       )}
-    </Modal>
+    </MountedModal>
   );
 }

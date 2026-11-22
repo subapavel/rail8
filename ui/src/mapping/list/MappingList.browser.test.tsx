@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -11,15 +12,15 @@ let host: HTMLElement | undefined;
 let consoleError: ReturnType<typeof vi.spyOn>;
 
 function render(api: ApiClient, onCreated: (id: string) => void = () => undefined, onOpen: (id: string) => void = () => undefined) {
+  renderScreen(<MappingList api={api} onOpen={onOpen} onCreated={onCreated} />);
+}
+
+function renderScreen(screen: ReactNode) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  root.render(
-    <QueryClientProvider client={queryClient}>
-      <MappingList api={api} onOpen={onOpen} onCreated={onCreated} />
-    </QueryClientProvider>,
-  );
+  root.render(<QueryClientProvider client={queryClient}>{screen}</QueryClientProvider>);
 }
 
 /** The fake with a spy on createMapping, so a test can read the request the modal sent. */
@@ -198,8 +199,18 @@ describe('the New mapping modal', () => {
     expect(createMapping.mock.calls).toEqual([[{ id: 'orders/inbound/order-to-invoice', description: 'Turns an order into an invoice.' }]]);
   });
 
-  test('closes once the mapping is created, and the table lists it', async () => {
-    render(fakeApiClient());
+  test('closes once the mapping is created, lists it, and preserves the focus set by its caller', async () => {
+    const api = fakeApiClient();
+    function MappingPage() {
+      const [created, setCreated] = useState('');
+      return (
+        <>
+          <MappingList api={api} onOpen={() => {}} onCreated={setCreated} />
+          {created && <h2 tabIndex={-1} ref={(heading) => heading?.focus()}>{created}</h2>}
+        </>
+      );
+    }
+    renderScreen(<MappingPage />);
 
     await page.getByRole('button', { name: 'New mapping' }).click();
     await field('Name').fill('order-to-invoice');
@@ -207,6 +218,7 @@ describe('the New mapping modal', () => {
 
     await expect.element(modal()).not.toBeInTheDocument();
     await expect.element(rows().filter({ hasText: 'order-to-invoice' })).toHaveLength(1);
+    await expect.element(page.getByRole('heading', { name: 'order-to-invoice' })).toHaveFocus();
   });
 
   test('without a package the name is the id; an empty description is not sent; spaces around name and package are dropped', async () => {

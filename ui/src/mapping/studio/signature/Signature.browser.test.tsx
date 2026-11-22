@@ -265,7 +265,7 @@ describe('the Signature tab', () => {
 
     await expect.element(row('Source', 1).getByRole('button', { name: 'Choose message 1' })).toHaveTextContent('PlaceOrder');
     await expect.element(row('Source', 1).getByRole('button', { name: 'Choose namespace or ID 1' })).toHaveTextContent('urn:example:orders');
-    await expect.element(row('Source', 1).getByText('WSDL message', { exact: true })).toBeVisible();
+    await expect.element(row('Source', 1).getByTitle('WSDL message', { exact: true })).toBeVisible();
   });
 });
 
@@ -425,7 +425,9 @@ describe('mapping parameters, a preview feature', () => {
   test('carry the Preview badge naming #167, and are kept in the browser, never in the model', async () => {
     const browserState = memoryBrowserState();
     renderStudio(fakeApiClient(), 'mappings/order-id-copy', { startEditing: true, browserState });
-    await parameters().getByText('Preview').hover();
+    const badge = parameters().getByText('Preview', { exact: true });
+    await expect.element(badge).toBeVisible();
+    (badge.element() as HTMLElement).focus();
     await expect
       .element(page.getByRole('tooltip'))
       .toHaveTextContent('Mapping parameters: a preview kept in this browser only, never in the mapping file (#167).');

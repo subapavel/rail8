@@ -1,4 +1,5 @@
-import { Alert, Form, Input, Modal, Select } from 'antd';
+import { Alert, Form, Input, Select } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { useId, useState } from 'react';
 import type { Diagnostic } from '../../api/client';
 import { choiceOf, draftOf, ROOT_KINDS, type ChoiceDraft, type Direction } from './message-choice';
@@ -54,8 +55,7 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
   );
 
   return (
-    <Modal
-      open
+    <MountedModal
       title={title}
       onCancel={onClose}
       cancelText="Cancel"
@@ -119,6 +119,6 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
           </>
         )}
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }

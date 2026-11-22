@@ -1,4 +1,5 @@
-import { Button, Flex, Input, Modal, Table, Tag } from 'antd';
+import { Button, Flex, Input, Table, Tag } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useRef, useState, type FormEvent } from 'react';
 import { ARCHIVE_EXAMPLES, type Archive } from '../mock/function-model';
@@ -48,8 +49,7 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
     setNotice('');
   }
   return (
-    <Modal
-      open
+    <MountedModal
       title={namespaces ? 'Choose Namespace' : 'Choose Imported Archive'}
       onCancel={close}
       cancelText="Cancel"
@@ -109,6 +109,6 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
         />
       </div>
       <p role="status">{notice}</p>
-    </Modal>
+    </MountedModal>
   );
 }

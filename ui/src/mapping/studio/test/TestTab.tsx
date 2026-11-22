@@ -1,4 +1,5 @@
-import { Button, Card, Divider, Flex, Modal, Select } from 'antd';
+import { Button, Card, Divider, Flex, Select } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { CaretRightOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { useStore } from 'zustand';
@@ -216,11 +217,11 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
         </VerticalSplitLayout>
       </div>
       {expanded && (
-        <Modal open title="Processing Log" onCancel={() => setExpanded(false)} footer={<Button onClick={() => setExpanded(false)}>Close</Button>}>
+        <MountedModal title="Processing Log" onCancel={() => setExpanded(false)} footer={<Button onClick={() => setExpanded(false)}>Close</Button>}>
           <p>{runLog ? `Simulation · ${runLog.level}` : 'Compile of the working copy'}</p>
           <CopyTextButton label="processing log" text={text} />
           <LogBody lines={lines} />
-        </Modal>
+        </MountedModal>
       )}
     </Flex>
   );

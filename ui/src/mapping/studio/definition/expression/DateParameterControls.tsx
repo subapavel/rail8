@@ -1,4 +1,5 @@
-import { Col, Form, Modal, Row, Select } from 'antd';
+import { Col, Form, Row, Select } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { useState } from 'react';
 
 const datePatterns = ['ddMMyyyy', 'MMddyyyy', 'yyyyMMdd', 'MMyyyydd', 'ddyyyyMM', 'yyyyddMM', 'yyddMM', 'ddMMyy', 'MMddyy', ''];
@@ -34,7 +35,7 @@ export function DateFormatHelp({ apply, close }: { apply: (format: string) => vo
     </Form.Item>
   );
   return (
-    <Modal open title="SimpleDateFormat" onCancel={close} okText="Apply format" onOk={() => apply(result)}>
+    <MountedModal title="SimpleDateFormat" onCancel={close} okText="Apply format" onOk={() => apply(result)}>
       <Form layout="vertical">
         <Row gutter={16}>
           <Col xs={24} sm={12}>
@@ -51,6 +52,6 @@ export function DateFormatHelp({ apply, close }: { apply: (format: string) => vo
           <output id="date-format-preview">{result || '—'}</output>
         </Form.Item>
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }

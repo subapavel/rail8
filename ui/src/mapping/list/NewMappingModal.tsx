@@ -1,4 +1,5 @@
-import { Alert, Form, Input, Modal } from 'antd';
+import { Alert, Form, Input } from 'antd';
+import { MountedModal } from '../../MountedModal';
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { describeError, type ApiClient, type CreateMappingRequest } from '../api/client';
@@ -87,8 +88,7 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
     },
   ];
   return (
-    <Modal
-      open
+    <MountedModal
       title="New mapping"
       onCancel={onClose}
       okText="Create"
@@ -123,6 +123,6 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
           );
         })}
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }

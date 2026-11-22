@@ -1,4 +1,5 @@
-import { Form, Input, Modal } from 'antd';
+import { Form, Input } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { useId, useState } from 'react';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
@@ -25,7 +26,7 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
   const valid = NAME.test(value) && value.length <= 90;
   const used = valid && taken(`${parent}/$${value}`);
   return (
-    <Modal open title="Add Variable" onCancel={close} okText="Create" okButtonProps={{ htmlType: 'submit', form: formId, disabled: !valid || used }}>
+    <MountedModal title="Add Variable" onCancel={close} okText="Create" okButtonProps={{ htmlType: 'submit', form: formId, disabled: !valid || used }}>
       <p>/{localPath(parent)}</p>
       <Form
         layout="vertical"
@@ -54,6 +55,6 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
         </Form.Item>
       </Form>
       <small>A preview: the variable is kept in this browser only, never in the mapping file.</small>
-    </Modal>
+    </MountedModal>
   );
 }

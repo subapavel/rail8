@@ -1,4 +1,5 @@
-import { Button, Card, Flex, Modal } from 'antd';
+import { Button, Card, Flex } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { BranchesOutlined, CodeOutlined, FolderOpenOutlined, LinkOutlined, GroupOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import type { BrowserStateStore } from '../browser-state/browser-state';
@@ -142,8 +143,8 @@ export function TextPreview({ model, onOpen }: { model: MappingModel; onOpen: (t
 /** The Clear Mapping dialog: asks before it clears the expressions of all target fields. */
 export function ClearMapping({ onClear, onClose }: { onClear: () => void; onClose: () => void }) {
   return (
-    <Modal open title="Clear Mapping" onCancel={onClose} onOk={onClear} okText="Clear mapping" okButtonProps={{ danger: true, icon: <DeleteOutlined aria-hidden /> }}>
+    <MountedModal title="Clear Mapping" onCancel={onClose} onOk={onClear} okText="Clear mapping" okButtonProps={{ danger: true, icon: <DeleteOutlined aria-hidden /> }}>
       Clear the expressions for all target fields in this local mapping?
-    </Modal>
+    </MountedModal>
   );
 }

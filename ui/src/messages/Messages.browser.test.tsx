@@ -291,6 +291,7 @@ describe('Messages', () => {
 
     await dialog.getByRole('button', { name: 'Close' }).click();
     await expect.element(dialog).not.toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Show the payload after step 1 of attempt 1' })).toHaveFocus();
   });
 
   test('says when the node recorded no message with the id of a tab', async () => {

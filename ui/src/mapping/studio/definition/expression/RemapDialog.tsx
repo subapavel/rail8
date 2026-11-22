@@ -1,4 +1,5 @@
-import { Form, Modal, Select } from 'antd';
+import { Form, Select } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { useState } from 'react';
 import type { FieldPath } from '../../../generated/mapping-model';
 import { localPath, stepName } from '../../../model/field-path';
@@ -20,7 +21,7 @@ export function RemapDialog({ field, choices, remap, close }: RemapDialogProps) 
   const [choice, setChoice] = useState('');
   const title = `Remap · ${stepName(field)}`;
   return (
-    <Modal open title={title} onCancel={close} okText="Remap" okButtonProps={{ htmlType: 'submit', form: 'remap-form', disabled: !choice }}>
+    <MountedModal title={title} onCancel={close} okText="Remap" okButtonProps={{ htmlType: 'submit', form: 'remap-form', disabled: !choice }}>
       <Form layout="vertical" id="remap-form" onFinish={() => remap(choice)}>
         <p>The source structure has no field /{localPath(field)}. Choose the source field the box reads instead; it keeps its connections.</p>
         <Form.Item label="Source field" htmlFor="remap-source-field">
@@ -35,6 +36,6 @@ export function RemapDialog({ field, choices, remap, close }: RemapDialogProps) 
           />
         </Form.Item>
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }
