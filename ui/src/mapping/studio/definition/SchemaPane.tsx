@@ -478,10 +478,8 @@ function FieldRows({
                 {...rowActions(path)}
               >
                 <td>
-                  <Flex
-                    gap="var(--ant-size-xxs)"
-                    align="center"
-
+                  <div
+                    className="schema-field-content"
                     style={{ paddingInlineStart: `calc(${depth} * var(--ant-size))` }}
                   >
                     {expandable && toggleable ? (
@@ -499,16 +497,16 @@ function FieldRows({
                         {expandable && <DownOutlined aria-hidden />}
                       </span>
                     )}
-                    <Button
-                      type="link"
-
-                      icon={<FieldTypeIcon type={type} />}
+                    <button
+                      type="button"
+                      className="schema-field-name"
                       aria-label={variable ? `Variable ${name}` : undefined}
                       title={`${localPath(path)} · ${variable ? 'Variable' : type} · ${occurrenceText(field)}`}
                       {...fieldActions(path)}
                     >
+                      <FieldTypeIcon type={type} />
                       {name}
-                    </Button>
+                    </button>
                     {variable && <PreviewBadge feature="Variables" issue={VARIABLES_ISSUE} />}
                     {/* a row shows its most urgent field status: orphaned before connected */}
                     {orphaned.has(path) ? (
@@ -520,7 +518,7 @@ function FieldRows({
                     ) : (
                       connected.has(path) && <CheckOutlined style={{ color: 'var(--ant-color-success)' }} title="Connected" aria-label="Connected" />
                     )}
-                  </Flex>
+                  </div>
                 </td>
                 {selection && (
                   <td>
