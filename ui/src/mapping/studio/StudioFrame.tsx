@@ -1,29 +1,18 @@
+import './studio.css';
+import { Alert, Button, Empty, Flex, Tabs } from 'antd';
 import {
-  Alert,
-  AlertActionCloseButton,
-  AlertGroup,
-  Button,
-  EmptyState,
-  EmptyStateActions,
-  EmptyStateBody,
-  EmptyStateFooter,
-  Flex,
-  FlexItem,
-  List,
-  ListItem,
-  PageSection,
-  Stack,
-  StackItem,
-  Tab,
-  TabContent,
-  Tabs,
-  TabTitleIcon,
-  TabTitleText,
-  Title,
-} from '@patternfly/react-core';
-import { CheckCircleIcon, CodeIcon, CubesIcon, EditIcon, ExchangeAltIcon, FlaskIcon, ListAltIcon, ProjectDiagramIcon, SaveIcon } from '@patternfly/react-icons';
+  CheckCircleOutlined,
+  CloseOutlined,
+  CodeOutlined,
+  EditOutlined,
+  ExperimentOutlined,
+  PartitionOutlined,
+  ProfileOutlined,
+  SaveOutlined,
+  SwapOutlined,
+} from '@ant-design/icons';
 import { useMutation } from '@tanstack/react-query';
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { useStore } from 'zustand';
 import { describeError, type ApiClient } from '../api/client';
 import { describeRefusal, type Refusal } from '../model/command';
@@ -43,12 +32,12 @@ import { selectUnsaved, type StudioTab, type WorkingCopyState, type WorkingCopyS
 
 /** The tabs the studio shows, in their order, each with its title and icon. */
 const VIEWS = [
-  ['overview', 'Overview', ListAltIcon],
-  ['definition', 'Definition', ProjectDiagramIcon],
-  ['test', 'Test', FlaskIcon],
-  ['signature', 'Signature', ExchangeAltIcon],
-  ['functions', 'Functions', CodeIcon],
-] as const satisfies readonly (readonly [StudioTab, string, typeof ListAltIcon])[];
+  ['overview', 'Overview', ProfileOutlined],
+  ['definition', 'Definition', PartitionOutlined],
+  ['test', 'Test', ExperimentOutlined],
+  ['signature', 'Signature', SwapOutlined],
+  ['functions', 'Functions', CodeOutlined],
+] as const satisfies readonly (readonly [StudioTab, string, typeof ProfileOutlined])[];
 
 /** The key of the tab a mapping was last left on, kept per mapping as a viewer preference. */
 export const lastTabKey = (mappingId: string) => `mapping:${mappingId}:studio-tab`;
@@ -98,10 +87,17 @@ function movedTo(key: string, index: number, count: number): number | undefined 
 function navigateTabs(event: KeyboardEvent<HTMLElement>) {
   const target = event.target as HTMLElement;
   if (target.getAttribute('role') !== 'tab') return;
-  const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const list = target.closest('[role="tablist"]');
+  if (!list || list.getAttribute('aria-label') !== 'Editor views') return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.stopPropagation();
+    return;
+  }
+  const tabs = [...list.querySelectorAll<HTMLElement>('[role="tab"]')];
   const next = movedTo(event.key, tabs.indexOf(target), tabs.length);
   if (next === undefined) return;
   event.preventDefault();
+  event.stopPropagation();
   tabs[next]!.focus();
   tabs[next]!.click();
 }
@@ -140,8 +136,6 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   const unsaved = useStore(store, selectUnsaved);
   const panelRef = useRef<HTMLElement>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
-  const panelId = useId();
-  const labelId = (view: StudioTab) => `${panelId}-${view}`;
   const testSession = useTestSession(store, api, mappingId, browserState);
 
   const changeTab = useCallback(
@@ -241,7 +235,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   useEffect(() => {
     const press = (event: globalThis.KeyboardEvent) => {
       if (!panelRef.current?.checkVisibility()) return;
-      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
+      if ([...document.querySelectorAll<HTMLElement>('[role="dialog"]')].some((dialog) => dialog.checkVisibility())) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault();
         void save();
@@ -271,179 +265,166 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   const refusal = useStore(store, (s) => s.refusal);
   const [dismissed, setDismissed] = useState<Refusal | null>(null);
 
+  useEffect(() => {
+    if (!saved) return;
+    const timeout = window.setTimeout(() => setSaved(0), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [saved]);
+  useEffect(() => {
+    // Name the tab list and keep each tab's name stable while its keyboard hint is announced.
+    const list = panelRef.current?.querySelector('[role="tablist"]');
+    list?.setAttribute('aria-label', 'Editor views');
+    list?.querySelectorAll('[role="tab"]').forEach((item, index) => item.setAttribute('aria-label', VIEWS[index]![1]));
+  }, []);
+
+  const panel = {
+    overview: <MappingOverview mappingId={mappingId} store={store} />,
+    definition: hasMessages ? (
+      <DefinitionTab
+        mappingId={mappingId}
+        api={api}
+        store={store}
+        session={testSession}
+        browserState={browserState}
+        onChooseMessages={() => changeTab('signature')}
+      />
+    ) : (
+      <ChooseMessages onChoose={() => changeTab('signature')} />
+    ),
+    test: hasMessages ? (
+      <TestTab mappingId={mappingId} store={store} session={testSession} browserState={browserState} />
+    ) : (
+      <ChooseMessages onChoose={() => changeTab('signature')} />
+    ),
+    signature: <Signature mappingId={mappingId} api={api} store={store} browserState={browserState} />,
+    functions: <FunctionsTab mappingId={mappingId} api={api} store={store} browserState={browserState} />,
+  };
+
   return (
-    <PageSection>
-      <Stack hasGutter>
-        <StackItem>
-          <Flex alignItems={{ default: 'alignItemsCenter' }} flexWrap={{ default: 'nowrap' }}>
-            <FlexItem grow={{ default: 'grow' }}>
-              <Tabs
-                isSubtab
-                activeKey={tab}
-                onSelect={(_, key) => changeTab(key as StudioTab)}
-                tabListAriaLabel="Editor views"
-                onKeyDown={navigateTabs}
-              >
-                {VIEWS.map(([key, label, Icon]) => (
-                  <Tab
-                    key={key}
-                    eventKey={key}
-                    title={
-                      <>
-                        <TabTitleIcon>
-                          <Icon />
-                        </TabTitleIcon>
-                        <TabTitleText id={labelId(key)}>{label}</TabTitleText>
-                      </>
-                    }
-                    tabIndex={tab === key ? 0 : -1}
-                    tabContentRef={panelRef}
-                    tabContentId={panelId}
-                  />
-                ))}
-              </Tabs>
-            </FlexItem>
-            <FlexItem>
-              <Title headingLevel="h1" size="lg">
-                {name}
-              </Title>
-            </FlexItem>
-            <FlexItem>
-              {editing ? (
-                <>
-                  <Button size="sm" variant="link" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
-                    Cancel
-                  </Button>{' '}
-                  <Button size="sm" variant="secondary" icon={<CheckCircleIcon />} isDisabled={!unsaved || checking} onClick={runCheck}>
-                    {checking ? 'Checking…' : 'Check'}
-                  </Button>{' '}
-                  <Button size="sm" variant="primary" icon={<SaveIcon />} isDisabled={!unsaved || saving} onClick={() => void save()}>
-                    Save
-                  </Button>
-                </>
-              ) : (
-                <Button ref={editButtonRef} size="sm" variant="primary" icon={<EditIcon />} onClick={() => store.getState().startEditing()}>
-                  Edit
-                </Button>
-              )}
-              <AboutStudio />
-            </FlexItem>
-          </Flex>
-        </StackItem>
-        {check !== null && (
-          <StackItem>
-            <CheckResult issues={check} onDismiss={() => setCheck(null)} />
-          </StackItem>
-        )}
-        {notice !== null && (
-          <StackItem>
-            <Alert variant="info" isInline role="status" title={notice} actionClose={<AlertActionCloseButton aria-label="Dismiss message" onClose={() => setNotice(null)} />} />
-          </StackItem>
-        )}
-        {failure && (
-          <StackItem>
-            <Alert variant="danger" isInline title={failure.title}>
+    <section className="rail8-page studio-workspace" ref={panelRef}>
+      <Flex align="center" justify="space-between" wrap gap="small">
+        <h1>{name}</h1>
+        <Flex align="center" gap="small">
+          {editing ? (
+            <>
+              <Button onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>Cancel</Button>
+              <Button icon={<CheckCircleOutlined aria-hidden />} disabled={!unsaved || checking} onClick={runCheck}>
+                {checking ? 'Checking…' : 'Check'}
+              </Button>
+              <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving} onClick={() => void save()}>
+                Save
+              </Button>
+            </>
+          ) : (
+            <Button ref={editButtonRef} type="primary" icon={<EditOutlined aria-hidden />} onClick={() => store.getState().startEditing()}>
+              Edit
+            </Button>
+          )}
+          <AboutStudio />
+        </Flex>
+      </Flex>
+      {check !== null && <CheckResult issues={check} onDismiss={() => setCheck(null)} />}
+      {notice !== null && (
+        <Alert type="info" role="status" showIcon title={<h3>{notice}</h3>} action={<Dismiss label="Dismiss message" onClick={() => setNotice(null)} />} />
+      )}
+      {failure && (
+        <Alert
+          type="error"
+          showIcon
+          title={<h3>{failure.title}</h3>}
+          description={
+            <>
               <p>{failure.detail}</p>
-              <List aria-label="Save diagnostics">
+              <ul aria-label="Save diagnostics">
                 {failure.diagnostics.map(({ severity, code, message }, i) => (
-                  <ListItem key={i}>
+                  <li key={i}>
                     {severity} <code>{code}</code>: {message}
-                  </ListItem>
+                  </li>
                 ))}
-              </List>
-            </Alert>
-          </StackItem>
-        )}
-        {refusal !== null && refusal !== dismissed && (
-          <StackItem>
-            <Alert
-              variant="warning"
-              isInline
-              title={describeRefusal(refusal)}
-              actionClose={<AlertActionCloseButton aria-label="Dismiss refusal" onClose={() => setDismissed(refusal)} />}
-            />
-          </StackItem>
-        )}
-        <StackItem isFilled>
-          <TabContent id={panelId} ref={panelRef} aria-labelledby={labelId(tab)}>
-            {tab === 'overview' && <MappingOverview mappingId={mappingId} store={store} />}
-            {tab === 'definition' &&
-              (hasMessages ? (
-                <DefinitionTab mappingId={mappingId} api={api} store={store} session={testSession} browserState={browserState} onChooseMessages={() => changeTab('signature')} />
-              ) : (
-                <ChooseMessages onChoose={() => changeTab('signature')} />
-              ))}
-            {tab === 'test' &&
-              (hasMessages ? (
-                <TestTab mappingId={mappingId} store={store} session={testSession} browserState={browserState} />
-              ) : (
-                <ChooseMessages onChoose={() => changeTab('signature')} />
-              ))}
-            {tab === 'signature' && <Signature mappingId={mappingId} api={api} store={store} browserState={browserState} />}
-            {tab === 'functions' && <FunctionsTab mappingId={mappingId} api={api} store={store} browserState={browserState} />}
-          </TabContent>
-        </StackItem>
-      </Stack>
+              </ul>
+            </>
+          }
+        />
+      )}
+      {refusal !== null && refusal !== dismissed && (
+        <Alert
+          type="warning"
+          showIcon
+          title={<h3>{describeRefusal(refusal)}</h3>}
+          action={<Dismiss label="Dismiss refusal" onClick={() => setDismissed(refusal)} />}
+        />
+      )}
+      <div onKeyDownCapture={navigateTabs}>
+        <Tabs
+          activeKey={tab}
+          onChange={(key) => changeTab(key as StudioTab)}
+          animated={false}
+          destroyOnHidden
+          items={VIEWS.map(([key, label, Icon]) => ({ key, label, icon: <Icon aria-hidden />, children: panel[key] }))}
+        />
+      </div>
       <DiscardDialog isOpen={discarding !== null} name={name} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
       <SaveConflict store={store} />
-      <AlertGroup isToast isLiveRegion aria-label="Save notifications">
-        {saved > 0 && (
-          <Alert
-            key={saved}
-            variant="success"
-            title={`Mapping ${name} saved`}
-            // a timed-out alert renders nothing by itself; the next save's key mounts a new one
-            timeout={8000}
-            actionClose={<AlertActionCloseButton aria-label="Dismiss save notification" onClose={() => setSaved(0)} />}
-          />
-        )}
-      </AlertGroup>
-    </PageSection>
+      {saved > 0 && (
+        <Alert
+          className="studio-save-notice"
+          type="success"
+          showIcon
+          role="status"
+          title={<h3>Mapping {name} saved</h3>}
+          action={<Dismiss label="Dismiss save notification" onClick={() => setSaved(0)} />}
+        />
+      )}
+    </section>
   );
 }
 
-/** The result of a check: the issues found or that it passed, to copy and dismiss. */
+function Dismiss({ label, onClick }: { label: string; onClick: () => void }) {
+  return <Button size="small" type="text" aria-label={label} onClick={onClick} icon={<CloseOutlined />} />;
+}
+
 function CheckResult({ issues, onDismiss }: { issues: string[]; onDismiss: () => void }) {
   const found = issues.length > 0;
   const text = found ? ['Check found issues', ...issues].join('\n') : `Check passed · ${CHECK_PASSED}`;
   return (
     <Alert
-      variant={found ? 'warning' : 'success'}
-      isInline
+      type={found ? 'warning' : 'success'}
+      showIcon
       role="status"
-      title={found ? 'Check found issues' : 'Check passed'}
-      actionClose={
-        <>
-          <CopyTextButton label="check result" text={text} />
-          <AlertActionCloseButton aria-label="Dismiss check" onClose={onDismiss} />
-        </>
+      aria-label={found ? 'Warning' : 'Success'}
+      title={<h3>{found ? 'Check found issues' : 'Check passed'}</h3>}
+      description={
+        found ? (
+          <ul>
+            {issues.map((issue, i) => (
+              <li key={i}>{issue}</li>
+            ))}
+          </ul>
+        ) : (
+          CHECK_PASSED
+        )
       }
-    >
-      {found ? (
-        <List>
-          {issues.map((issue, i) => (
-            <ListItem key={i}>{issue}</ListItem>
-          ))}
-        </List>
-      ) : (
-        CHECK_PASSED
-      )}
-    </Alert>
+      action={
+        <Flex>
+          <CopyTextButton label="check result" text={text} />
+          <Dismiss label="Dismiss check" onClick={onDismiss} />
+        </Flex>
+      }
+    />
   );
 }
 
-/** The body of Definition and Test while the mapping lacks a message: what to do, and the way to the Signature tab. */
 function ChooseMessages({ onChoose }: { onChoose: () => void }) {
   return (
-    <EmptyState titleText="Choose the source and target messages" headingLevel="h2" icon={CubesIcon}>
-      <EmptyStateBody>This tab needs both messages of the mapping.</EmptyStateBody>
-      <EmptyStateFooter>
-        <EmptyStateActions>
-          <Button variant="link" onClick={onChoose}>
-            Choose them on the Signature tab
-          </Button>
-        </EmptyStateActions>
-      </EmptyStateFooter>
-    </EmptyState>
+    <Empty
+      description={
+        <>
+          <h2>Choose the source and target messages</h2>
+          <p>This tab needs both messages of the mapping.</p>
+        </>
+      }
+    >
+      <Button onClick={onChoose}>Choose them on the Signature tab</Button>
+    </Empty>
   );
 }

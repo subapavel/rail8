@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { chooseOption, expectOptions } from '../select-test';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -27,7 +27,13 @@ function renderStudio(api: ApiClient, mappingId: string, options: { startEditing
   document.body.append(host);
   root = createRoot(host);
   root.render(
-    <Studio mappingId={mappingId} api={api} browserState={options.browserState ?? memoryBrowserState()} openOn="signature" startEditing={options.startEditing} />,
+    <Studio
+      mappingId={mappingId}
+      api={api}
+      browserState={options.browserState ?? memoryBrowserState()}
+      openOn="signature"
+      startEditing={options.startEditing}
+    />,
   );
 }
 
@@ -42,7 +48,8 @@ const messages = (side: 'Source' | 'Target') => page.getByRole('region', { name:
 const table = (side: 'Source' | 'Target') => page.getByRole('table', { name: `${side} signature` });
 /** The `n`th message row of a side, from 1. */
 const row = (side: 'Source' | 'Target', n: number) => table(side).getByRole('row').nth(n);
-const tool = (side: 'Source' | 'Target', name: string) => page.getByRole('toolbar', { name: `${side} message actions` }).getByRole('button', { name, exact: true });
+const tool = (side: 'Source' | 'Target', name: string) =>
+  page.getByRole('toolbar', { name: `${side} message actions` }).getByRole('button', { name, exact: true });
 const choice = (side: 'source' | 'target') => page.getByRole('dialog', { name: `Choose ${side} message` });
 const blank = (): Record<string, MappingModel> => ({ 'mappings/blank': { formatVersion: 1 } });
 
@@ -72,11 +79,11 @@ describe('the Signature tab', () => {
       await expect.element(messages(side).getByLabelText(`${side} messages chosen`)).toHaveTextContent('1');
       await expect.element(messages(side)).toMatchTextContent(/Packagemappings/);
       await expect.element(table(side).getByRole('row')).toHaveLength(2);
-      await expect.element(row(side, 1).getByRole('combobox', { name: 'Message type' })).toHaveValue('element');
+      await expect.element(row(side, 1).getByText('XML element', { exact: true })).toBeVisible();
       await expect.element(row(side, 1).getByRole('button', { name: 'Choose message 1' })).toHaveTextContent('Order');
       await expect.element(row(side, 1).getByRole('button', { name: 'Choose message 1' })).toHaveAttribute('title', ORDER_XSD);
       await expect.element(row(side, 1).getByRole('button', { name: 'Choose namespace or ID 1' })).toHaveTextContent('urn:rail8:corpus:skeleton');
-      await expect.element(row(side, 1).getByRole('combobox', { name: 'Occurrence' })).toHaveValue('1');
+      await expect.element(row(side, 1).getByText('1', { exact: true }).last()).toBeVisible();
       await expect.element(tool(side, 'Insert row')).toBeDisabled();
       await expect.element(row(side, 1).getByRole('button', { name: 'Choose message 1' })).toBeDisabled();
       await expect.element(row(side, 1).getByRole('button', { name: 'Choose namespace or ID 1' })).toBeDisabled();
@@ -152,7 +159,9 @@ describe('the Signature tab', () => {
     await chooseElement('target', 'nope.xsd', ORDER);
 
     await expect.element(choice('target').getByRole('heading', { name: /The structure could not be loaded/ })).toBeVisible();
-    await expect.element(choice('target').getByRole('list', { name: 'Message diagnostics' })).toMatchTextContent(/error schema-unreadable: the fake API has no structure for mappings\/nope\.xsd/);
+    await expect
+      .element(choice('target').getByRole('list', { name: 'Message diagnostics' }))
+      .toMatchTextContent(/error schema-unreadable: the fake API has no structure for mappings\/nope\.xsd/);
     await choice('target').getByRole('button', { name: 'Cancel' }).click();
     await expect.element(choice('target')).not.toBeInTheDocument();
     await expect.element(button('Save')).toBeDisabled();
@@ -202,7 +211,7 @@ describe('the Signature tab', () => {
     await userEvent.keyboard('{Enter}');
 
     expect(loadStructure).not.toHaveBeenCalled();
-    await choice('source').getByRole('combobox', { name: 'Root' }).selectOptions('json');
+    await chooseOption(choice('source').getByRole('combobox', { name: 'Root' }), 'JSON document');
     await expect.element(apply).toBeEnabled();
   });
 
@@ -216,7 +225,7 @@ describe('the Signature tab', () => {
     await choice('source').getByRole('textbox', { name: 'Bundle' }).fill(ORDER_XSD);
     await choice('source').getByRole('textbox', { name: 'Root element' }).fill(ORDER);
     await userEvent.keyboard('{Enter}');
-    await expect.element(choice('source').getByRole('button', { name: 'Loading... Apply' })).toBeDisabled();
+    await expect.element(choice('source').getByRole('button', { name: 'Apply' })).toBeDisabled();
 
     await userEvent.keyboard('{Enter}');
 
@@ -241,22 +250,22 @@ describe('the Signature tab', () => {
   test('the Type select opens the choice for that kind of root: a WSDL message asks for its interface, operation and fault', async () => {
     renderStudio(fakeApiClient(), 'mappings/order-id-copy', { startEditing: true });
 
-    await row('Source', 1).getByRole('combobox', { name: 'Message type' }).selectOptions('wsdl');
+    await chooseOption(row('Source', 1).getByRole('combobox', { name: 'Message type' }), 'WSDL message');
 
     const dialog = choice('source');
-    await expect.element(dialog.getByRole('combobox', { name: 'Root' })).toHaveValue('wsdl');
+    await expect.element(dialog.getByText('WSDL message', { exact: true })).toBeVisible();
     await expect.element(dialog.getByRole('textbox', { name: 'Bundle' })).toHaveValue(ORDER_XSD);
     await dialog.getByRole('textbox', { name: 'Interface' }).fill('Q{urn:example:orders}OrderPort');
     await dialog.getByRole('textbox', { name: 'Operation' }).fill('PlaceOrder');
     await expect.element(dialog.getByRole('textbox', { name: 'Fault' })).not.toBeInTheDocument();
-    await dialog.getByRole('combobox', { name: 'Direction' }).selectOptions('fault');
+    await chooseOption(dialog.getByRole('combobox', { name: 'Direction' }), 'fault');
     await expect.element(dialog.getByRole('button', { name: 'Apply' })).toBeDisabled();
     await dialog.getByRole('textbox', { name: 'Fault' }).fill('Rejected');
     await dialog.getByRole('button', { name: 'Apply' }).click();
 
     await expect.element(row('Source', 1).getByRole('button', { name: 'Choose message 1' })).toHaveTextContent('PlaceOrder');
     await expect.element(row('Source', 1).getByRole('button', { name: 'Choose namespace or ID 1' })).toHaveTextContent('urn:example:orders');
-    await expect.element(row('Source', 1).getByRole('combobox', { name: 'Message type' })).toHaveValue('wsdl');
+    await expect.element(row('Source', 1).getByText('WSDL message', { exact: true })).toBeVisible();
   });
 });
 
@@ -277,14 +286,16 @@ describe('several source or target messages, a preview feature', () => {
     await expect.element(row('Source', 2).getByText('Preview')).toBeVisible();
     await expect.element(row('Source', 1).getByText('Preview')).not.toBeInTheDocument();
     await row('Source', 2).getByText('Preview').hover();
-    await expect.element(page.getByRole('tooltip')).toHaveTextContent('Several source or target messages: a preview kept in this browser only, never in the mapping file (#168).');
+    await expect
+      .element(page.getByRole('tooltip'))
+      .toHaveTextContent('Several source or target messages: a preview kept in this browser only, never in the mapping file (#168).');
     await row('Source', 2).getByRole('button', { name: 'Choose message 2' }).click();
     await expect.element(choice('source')).toMatchTextContent(/A further message is a preview: it is kept in this browser only, never in the mapping file\./);
     await chooseElement('source', 'extra.xsd', 'Q{urn:example:extra}Extra');
 
     await expect.element(row('Source', 2).getByRole('button', { name: 'Choose message 2' })).toHaveTextContent('Extra');
     await expect.element(messages('Source').getByLabelText('Source messages chosen')).toHaveTextContent('2');
-    await row('Source', 2).getByRole('combobox', { name: 'Occurrence' }).selectOptions('0..unbounded');
+    await chooseOption(row('Source', 2).getByRole('combobox', { name: 'Occurrence' }), '0..unbounded');
     expect(loadStructure).not.toHaveBeenCalled();
     // a preview edit is a draft of the edit session, kept by Save
     expect(browserState.values.has(signatureMockKey('mappings/order-id-copy'))).toBe(false);
@@ -415,7 +426,9 @@ describe('mapping parameters, a preview feature', () => {
     const browserState = memoryBrowserState();
     renderStudio(fakeApiClient(), 'mappings/order-id-copy', { startEditing: true, browserState });
     await parameters().getByText('Preview').hover();
-    await expect.element(page.getByRole('tooltip')).toHaveTextContent('Mapping parameters: a preview kept in this browser only, never in the mapping file (#167).');
+    await expect
+      .element(page.getByRole('tooltip'))
+      .toHaveTextContent('Mapping parameters: a preview kept in this browser only, never in the mapping file (#167).');
 
     await names().nth(0).fill('date');
 
@@ -423,8 +436,8 @@ describe('mapping parameters, a preview feature', () => {
     await expect.element(names().nth(0)).toHaveValue('date');
     await expect.element(names().nth(1)).toHaveAttribute('placeholder', 'New parameter…');
     await expect.element(parameters().getByLabelText('Parameters')).toHaveTextContent('1');
-    await params().getByRole('combobox', { name: 'Parameter type' }).selectOptions('integer');
-    await params().getByRole('combobox', { name: 'Parameter direction' }).selectOptions('Export');
+    await chooseOption(params().getByRole('combobox', { name: 'Parameter type' }), 'xsd:integer');
+    await chooseOption(params().getByRole('combobox', { name: 'Parameter direction' }), 'Export');
     await params().getByRole('textbox', { name: 'Parameter description' }).fill('the order date');
     await names().nth(0).fill('orderDate');
     // a draft until Save
@@ -434,7 +447,7 @@ describe('mapping parameters, a preview feature', () => {
     expect(browserState.values.get(signatureMockKey('mappings/order-id-copy'))).toMatchObject({
       parameters: [{ name: 'orderDate', type: 'integer', direction: 'Export', description: 'the order date' }],
     });
-    await expect.element(params().getByRole('combobox', { name: 'Parameter type' })).toHaveTextContent('xsd:stringxsd:integer');
+    await expectOptions(params().getByRole('combobox', { name: 'Parameter type' }), ['xsd:string', 'xsd:integer']);
   });
 
   test('a parameter of a JSON side has no xsd: prefix; a parameter whose name is cleared stays', async () => {
@@ -446,9 +459,9 @@ describe('mapping parameters, a preview feature', () => {
 
     await expect.element(names()).toHaveLength(2);
     await expect.element(names().nth(0)).toHaveAttribute('placeholder', 'Name');
-    await expect.element(params().getByRole('combobox', { name: 'Parameter type' })).toHaveTextContent('stringinteger');
-    await params().getByRole('combobox', { name: 'Parameter direction' }).selectOptions('Export');
-    await expect.element(params().getByRole('combobox', { name: 'Parameter type' })).toHaveTextContent('xsd:stringxsd:integer');
+    await expectOptions(params().getByRole('combobox', { name: 'Parameter type' }), ['string', 'integer']);
+    await chooseOption(params().getByRole('combobox', { name: 'Parameter direction' }), 'Export');
+    await expectOptions(params().getByRole('combobox', { name: 'Parameter type' }), ['xsd:string', 'xsd:integer']);
   });
 
   test('Add parameter, Where Used, Refresh and Delete parameter', async () => {
@@ -466,7 +479,7 @@ describe('mapping parameters, a preview feature', () => {
     await paramTool('Where Used').click();
     const dialog = page.getByRole('dialog', { name: 'Processing Log' });
     await expect.element(dialog).toMatchTextContent(/Parameter date is not in use/);
-    await dialog.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
     await expect.element(dialog).not.toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: 'Processing Log' })).toBeVisible();
     await expect.element(page.getByRole('button', { name: 'Copy processing log to clipboard' })).toBeVisible();

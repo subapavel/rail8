@@ -1,4 +1,4 @@
-import { Alert, Button, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
+import { Alert, Modal } from 'antd';
 import { useMutation } from '@tanstack/react-query';
 import { useStore } from 'zustand';
 import { describeError } from '../api/client';
@@ -18,25 +18,19 @@ export function SaveConflict({ store }: { store: WorkingCopyStore }) {
   };
 
   return (
-    <Modal variant="small" isOpen={open} onClose={keepEditing} aria-labelledby="save-conflict-title">
-      <ModalHeader title="Save conflict" labelId="save-conflict-title" />
-      <ModalBody>
-        <p>The mapping changed on disk since it was opened, so it was not saved.</p>
-        <p>Reload drops your changes and the undo history and opens the file from disk.</p>
-        {failure && (
-          <Alert variant="danger" isInline title={failure.title}>
-            {failure.detail}
-          </Alert>
-        )}
-      </ModalBody>
-      <ModalFooter>
-        <Button onClick={() => reload.mutate()} isLoading={reload.isPending} isDisabled={reload.isPending}>
-          Reload
-        </Button>
-        <Button variant="secondary" onClick={keepEditing}>
-          Keep editing
-        </Button>
-      </ModalFooter>
+    <Modal
+      title="Save conflict"
+      open={open}
+      onCancel={keepEditing}
+      cancelText="Keep editing"
+      okText="Reload"
+      onOk={() => reload.mutate()}
+      confirmLoading={reload.isPending}
+      okButtonProps={{ disabled: reload.isPending }}
+    >
+      <p>The mapping changed on disk since it was opened, so it was not saved.</p>
+      <p>Reload drops your changes and the undo history and opens the file from disk.</p>
+      {failure && <Alert type="error" showIcon title={<h3>{failure.title}</h3>} description={failure.detail} />}
     </Modal>
   );
 }

@@ -1,47 +1,19 @@
+import { Alert, Button, Card, Col, Divider, Flex, Input, Radio, Row, Select, Tag } from 'antd';
 import {
-  Alert,
-  AlertActionCloseButton,
-  Badge,
-  Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  FormSelect,
-  FormSelectOption,
-  Grid,
-  GridItem,
-  Radio,
-  Split,
-  SplitItem,
-  Stack,
-  StackItem,
-  TextInput,
-  Title,
-  Toolbar,
-  ToolbarContent,
-  ToolbarItem,
-} from '@patternfly/react-core';
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  CodeIcon,
-  CopyIcon,
-  CubeIcon,
-  CutIcon,
-  PasteIcon,
-  PlusIcon,
-  ProjectDiagramIcon,
-  RedoIcon,
-  SearchIcon,
-  TrashIcon,
-} from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  CodeOutlined,
+  CloseOutlined,
+  CopyOutlined,
+  BlockOutlined,
+  ScissorOutlined,
+  SnippetsOutlined,
+  PlusOutlined,
+  PartitionOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  DeleteOutlined,
+} from '@ant-design/icons';
 import { useMutation } from '@tanstack/react-query';
 import { Fragment, useId, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { useStore } from 'zustand';
@@ -82,20 +54,16 @@ interface ToolProps {
 /** A toolbar of tools, in groups split by separators. */
 function Tools({ label, editing, groups }: { label: string; editing: boolean; groups: ToolProps[][] }) {
   return (
-    <Toolbar role="toolbar" aria-label={label}>
-      <ToolbarContent>
-        {groups.map((group, g) => (
-          <Fragment key={g}>
-            {g > 0 && <ToolbarItem variant="separator" />}
-            {group.map(({ label: name, icon: Icon, disabled, onClick }) => (
-              <ToolbarItem key={name}>
-                <Button variant="plain" aria-label={name} title={name} icon={<Icon />} isDisabled={!editing || disabled} onClick={onClick} />
-              </ToolbarItem>
-            ))}
-          </Fragment>
-        ))}
-      </ToolbarContent>
-    </Toolbar>
+    <Flex align="center" gap="small" wrap role="toolbar" aria-label={label}>
+      {groups.map((group, g) => (
+        <Fragment key={g}>
+          {g > 0 && <Divider vertical />}
+          {group.map(({ label: name, icon: Icon, disabled, onClick }) => (
+            <Button key={name} type="text" aria-label={name} title={name} icon={<Icon />} disabled={!editing || disabled} onClick={onClick} />
+          ))}
+        </Fragment>
+      ))}
+    </Flex>
   );
 }
 
@@ -114,33 +82,29 @@ function FieldSelect<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <FormSelect aria-label={label} value={value} isDisabled={disabled} onChange={(_, next) => onChange(next as T)}>
-      {options.map(([option, text]) => (
-        <FormSelectOption key={option} value={option} label={text} />
-      ))}
-    </FormSelect>
+    <Select
+      virtual={false}
+      aria-label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(next) => onChange(next as T)}
+      options={options.map(([option, text]) => ({ value: option, label: text }))}
+    />
   );
 }
 
 /** A section's title with its icon, and its count on the right. */
 function SectionHeader({ icon: Icon, title, count, countLabel }: { icon: ComponentType; title: ReactNode; count: number; countLabel: string }) {
   return (
-    <CardHeader
-      actions={{
-        actions: (
-          <Badge isRead aria-label={countLabel}>
-            {count}
-          </Badge>
-        ),
-        hasNoOffset: true,
-      }}
-    >
-      <CardTitle>
-        <Title headingLevel="h2" size="lg">
-          <Icon /> {title}
-        </Title>
-      </CardTitle>
-    </CardHeader>
+    <Flex align="center" justify="space-between" gap="small">
+      <h2>
+        <span aria-hidden>
+          <Icon />
+        </span>{' '}
+        {title}
+      </h2>
+      <Tag aria-label={countLabel}>{count}</Tag>
+    </Flex>
   );
 }
 
@@ -210,54 +174,55 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
     return null;
   };
 
-  const chosenRow = choosing && (choosing.row === PRIMARY ? store.getState().workingCopy[choosing.side] : mock.getState().value[choosing.side].find((m) => m.id === choosing.row)?.choice);
+  const chosenRow =
+    choosing &&
+    (choosing.row === PRIMARY ? store.getState().workingCopy[choosing.side] : mock.getState().value[choosing.side].find((m) => m.id === choosing.row)?.choice);
 
   return (
-    <Stack hasGutter>
+    <Flex vertical gap="middle">
       {notice !== null && (
-        <StackItem>
+        <div>
           <Alert
-            variant="warning"
-            isInline
+            type="warning"
+            showIcon
             role="status"
-            title={notice}
-            actionClose={<AlertActionCloseButton aria-label="Dismiss signature message" onClose={() => setNotice(null)} />}
+            title={<h3>{notice}</h3>}
+            action={<Button size="small" onClick={() => setNotice(null)} aria-label="Dismiss signature message" type="text" icon={<CloseOutlined />} />}
           />
-        </StackItem>
+        </div>
       )}
-      <StackItem>
-        <Grid hasGutter>
-          {(['source', 'target'] as const).map((side) => (
-            <GridItem key={side} xl2={6}>
-              <Messages
-                side={side}
-                pkg={pkg}
-                editing={editing}
-                store={store}
-                mock={mock}
-                clipboard={clipboard}
-                setClipboard={setClipboard}
-                choose={(row, kind) => setChoosing({ side, row, kind })}
-              />
-            </GridItem>
-          ))}
-        </Grid>
-      </StackItem>
-      <StackItem>
-        <Parameters
-          store={store}
-          mock={mock}
-          editing={editing}
-          onLog={(text) => {
-            setLog(text);
-            setShowLog(true);
-          }}
-        />
-      </StackItem>
+
+      <Row gutter={[16, 16]}>
+        {(['source', 'target'] as const).map((side) => (
+          <Col key={side} xs={24} xxl={12}>
+            <Messages
+              side={side}
+              pkg={pkg}
+              editing={editing}
+              store={store}
+              mock={mock}
+              clipboard={clipboard}
+              setClipboard={setClipboard}
+              choose={(row, kind) => setChoosing({ side, row, kind })}
+            />
+          </Col>
+        ))}
+      </Row>
+
+      <Parameters
+        store={store}
+        mock={mock}
+        editing={editing}
+        onLog={(text) => {
+          setLog(text);
+          setShowLog(true);
+        }}
+      />
+
       {log !== '' && (
-        <StackItem>
+        <div>
           <ProcessingLog log={log} />
-        </StackItem>
+        </div>
       )}
       {showLog && <LogDialog log={log} onClose={() => setShowLog(false)} />}
       {choosing && (
@@ -274,7 +239,7 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
           onClose={() => setChoosing(null)}
         />
       )}
-    </Stack>
+    </Flex>
   );
 }
 
@@ -326,132 +291,140 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
   };
 
   return (
-    <Card component="section" aria-label={`${label} messages`} isFullHeight>
+    <Card role="region" aria-label={`${label} messages`}>
       <SectionHeader
-        icon={CubeIcon}
+        icon={BlockOutlined}
         title={
           <>
             {label} Message(s) <span aria-hidden="true">*</span>
-            <span className="pf-v6-screen-reader">required</span>
+            <span className="studio-sr-only">required</span>
           </>
         }
         count={rows.filter((r) => r.choice).length}
         countLabel={`${label} messages chosen`}
       />
-      <CardBody>
-        <DescriptionList isHorizontal isCompact>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Package</DescriptionListTerm>
-            <DescriptionListDescription>{pkg === '' ? '—' : pkg}</DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
-        <Tools
-          label={`${label} message actions`}
-          editing={editing}
-          groups={[
-            [
-              { label: 'Insert row', icon: PlusIcon, onClick: insert },
-              { label: 'Delete row', icon: TrashIcon, disabled: !row?.preview, onClick: remove },
-            ],
-            [
-              { label: 'Move up', icon: ArrowUpIcon, disabled: at < 1, onClick: () => actions.moveMessage(side, selected, -1) },
-              { label: 'Move down', icon: ArrowDownIcon, disabled: at < 0 || at === previews.length - 1, onClick: () => actions.moveMessage(side, selected, 1) },
-            ],
-            [
-              { label: 'Cut Object', icon: CutIcon, disabled: !row?.preview || !row.choice, onClick: () => copy(true) },
-              { label: 'Copy Object', icon: CopyIcon, disabled: !row?.choice, onClick: () => copy(false) },
-              { label: 'Paste Object', icon: PasteIcon, disabled: !clipboard || !row?.preview, onClick: () => actions.patchMessage(side, selected, { choice: clipboard! }) },
-            ],
-          ]}
-        />
-        {/* PatternFly gives a Table the role grid; this one has no grid keyboard navigation: it is a plain table */}
-        <Table aria-label={`${label} signature`} role="table" variant="compact">
-          <Thead>
-            <Tr>
-              <Th aria-label="Select row">#</Th>
-              <Th>Type</Th>
-              <Th>Name</Th>
-              <Th>Namespace / ID</Th>
-              <Th>Occurrence</Th>
-            </Tr>
-          </Thead>
-          <Tbody>
-            {rows.map((r, i) => (
-              <Tr key={r.id} isRowSelected={selected === r.id} onFocus={() => select(r.id)} onClick={() => select(r.id)}>
-                <Td dataLabel="#">
-                  <Split hasGutter>
-                    <SplitItem>
-                      <Radio
-                        id={`${radios}-${r.id}`}
-                        name={radios}
-                        aria-label={`Select row ${i + 1}`}
-                        isChecked={selected === r.id}
-                        isDisabled={!editing}
-                        onChange={() => select(r.id)}
-                      />
-                    </SplitItem>
-                    <SplitItem>{i + 1}</SplitItem>
-                  </Split>
-                </Td>
-                <Td dataLabel="Type">
-                  <FieldSelect
-                    label="Message type"
-                    value={r.choice ? rootKind(r.choice.root) : 'element'}
-                    options={ROOT_KINDS}
+
+      <dl className="studio-details">
+        <div>
+          <dt>Package</dt>
+          <dd>{pkg || '—'}</dd>
+        </div>
+      </dl>
+      <Tools
+        label={`${label} message actions`}
+        editing={editing}
+        groups={[
+          [
+            { label: 'Insert row', icon: PlusOutlined, onClick: insert },
+            { label: 'Delete row', icon: DeleteOutlined, disabled: !row?.preview, onClick: remove },
+          ],
+          [
+            { label: 'Move up', icon: ArrowUpOutlined, disabled: at < 1, onClick: () => actions.moveMessage(side, selected, -1) },
+            {
+              label: 'Move down',
+              icon: ArrowDownOutlined,
+              disabled: at < 0 || at === previews.length - 1,
+              onClick: () => actions.moveMessage(side, selected, 1),
+            },
+          ],
+          [
+            { label: 'Cut Object', icon: ScissorOutlined, disabled: !row?.preview || !row.choice, onClick: () => copy(true) },
+            { label: 'Copy Object', icon: CopyOutlined, disabled: !row?.choice, onClick: () => copy(false) },
+            {
+              label: 'Paste Object',
+              icon: SnippetsOutlined,
+              disabled: !clipboard || !row?.preview,
+              onClick: () => actions.patchMessage(side, selected, { choice: clipboard! }),
+            },
+          ],
+        ]}
+      />
+
+      <table className="studio-edit-grid" aria-label={`${label} signature`} role="table">
+        <thead>
+          <tr>
+            <th scope="col" aria-label="Select row">
+              #
+            </th>
+            <th scope="col">Type</th>
+            <th scope="col">Name</th>
+            <th scope="col">Namespace / ID</th>
+            <th scope="col">Occurrence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.id} data-selected={selected === r.id} onFocus={() => select(r.id)} onClick={() => select(r.id)}>
+              <td>
+                <Flex align="center" gap="small">
+                  <Radio
+                    id={`${radios}-${r.id}`}
+                    name={radios}
+                    aria-label={`Select row ${i + 1}`}
+                    checked={selected === r.id}
                     disabled={!editing}
-                    onChange={(kind) => choose(r.id, kind)}
+                    onChange={() => select(r.id)}
                   />
-                </Td>
-                <Td dataLabel="Name">
-                  <Button
-                    variant="link"
-                    isInline
-                    icon={<SearchIcon />}
-                    iconPosition="end"
-                    aria-label={`Choose message ${i + 1}`}
-                    title={r.choice ? r.choice.bundle.join(', ') : 'Choose message'}
-                    isDisabled={!editing}
-                    onClick={() => choose(r.id)}
-                  >
-                    {r.choice ? messageName(r.choice) : 'Choose…'}
-                  </Button>{' '}
-                  {r.preview && <PreviewBadge feature="Several source or target messages" issue={SEVERAL_MESSAGES_ISSUE} />}
-                </Td>
-                <Td dataLabel="Namespace / ID">
-                  <Button
-                    variant="link"
-                    isInline
-                    icon={<SearchIcon />}
-                    iconPosition="end"
-                    aria-label={`Choose namespace or ID ${i + 1}`}
-                    isDisabled={!editing}
-                    onClick={() => choose(r.id)}
-                  >
-                    {(r.choice && messageNamespace(r.choice)) ?? '—'}
-                  </Button>
-                </Td>
-                <Td dataLabel="Occurrence">
-                  <FieldSelect
-                    label="Occurrence"
-                    value={r.occurrence}
-                    options={OCCURRENCES.map((o) => [o, o] as const)}
-                    disabled={!editing || !r.preview}
-                    onChange={(occurrence) => actions.patchMessage(side, r.id, { occurrence })}
-                  />
-                </Td>
-              </Tr>
-            ))}
-          </Tbody>
-        </Table>
-        {!primary && (
-          <Content component="p">
-            No {side} message yet.{' '}
-            <Button variant="link" isInline isDisabled={!editing} onClick={() => choose(PRIMARY)}>
-              Add {side} message
-            </Button>
-          </Content>
-        )}
-      </CardBody>
+
+                  <div>{i + 1}</div>
+                </Flex>
+              </td>
+              <td>
+                <FieldSelect
+                  label="Message type"
+                  value={r.choice ? rootKind(r.choice.root) : 'element'}
+                  options={ROOT_KINDS}
+                  disabled={!editing}
+                  onChange={(kind) => choose(r.id, kind)}
+                />
+              </td>
+              <td>
+                <Button
+                  type="link"
+                  icon={<SearchOutlined />}
+                  iconPlacement="end"
+                  aria-label={`Choose message ${i + 1}`}
+                  title={r.choice ? r.choice.bundle.join(', ') : 'Choose message'}
+                  disabled={!editing}
+                  onClick={() => choose(r.id)}
+                >
+                  {r.choice ? messageName(r.choice) : 'Choose…'}
+                </Button>{' '}
+                {r.preview && <PreviewBadge feature="Several source or target messages" issue={SEVERAL_MESSAGES_ISSUE} />}
+              </td>
+              <td>
+                <Button
+                  type="link"
+                  icon={<SearchOutlined />}
+                  iconPlacement="end"
+                  aria-label={`Choose namespace or ID ${i + 1}`}
+                  disabled={!editing}
+                  onClick={() => choose(r.id)}
+                >
+                  {(r.choice && messageNamespace(r.choice)) ?? '—'}
+                </Button>
+              </td>
+              <td>
+                <FieldSelect
+                  label="Occurrence"
+                  value={r.occurrence}
+                  options={OCCURRENCES.map((o) => [o, o] as const)}
+                  disabled={!editing || !r.preview}
+                  onChange={(occurrence) => actions.patchMessage(side, r.id, { occurrence })}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!primary && (
+        <p>
+          No {side} message yet.{' '}
+          <Button type="link" disabled={!editing} onClick={() => choose(PRIMARY)}>
+            Add {side} message
+          </Button>
+        </p>
+      )}
     </Card>
   );
 }
@@ -491,9 +464,9 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
   const rows = editing ? [...parameters, newParameter(blankId)] : parameters;
 
   return (
-    <Card component="section" aria-label="Signature parameters">
+    <Card role="region" aria-label="Signature parameters">
       <SectionHeader
-        icon={CodeIcon}
+        icon={CodeOutlined}
         title={
           <>
             Parameters <PreviewBadge feature="Mapping parameters" issue={PARAMETERS_ISSUE} />
@@ -502,106 +475,113 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
         count={parameters.length}
         countLabel="Parameters"
       />
-      <CardBody>
-        <Tools
-          label="Parameter actions"
-          editing={editing}
-          groups={[
-            [
-              { label: 'Add parameter', icon: PlusIcon, onClick: addAndFocus },
-              {
-                label: 'Delete parameter',
-                icon: TrashIcon,
-                disabled: !parameter,
-                onClick: () => {
-                  actions.removeParameter(selected);
-                  select('');
-                },
+
+      <Tools
+        label="Parameter actions"
+        editing={editing}
+        groups={[
+          [
+            { label: 'Add parameter', icon: PlusOutlined, onClick: addAndFocus },
+            {
+              label: 'Delete parameter',
+              icon: DeleteOutlined,
+              disabled: !parameter,
+              onClick: () => {
+                actions.removeParameter(selected);
+                select('');
               },
-            ],
-            [
-              { label: 'Where Used', icon: ProjectDiagramIcon, disabled: !parameter?.name, onClick: () => onLog(`Parameter ${parameter!.name} is not in use`) },
-              {
-                label: 'Refresh',
-                icon: RedoIcon,
-                onClick: () => {
-                  actions.sortParameters();
-                  select('');
-                },
+            },
+          ],
+          [
+            { label: 'Where Used', icon: PartitionOutlined, disabled: !parameter?.name, onClick: () => onLog(`Parameter ${parameter!.name} is not in use`) },
+            {
+              label: 'Refresh',
+              icon: ReloadOutlined,
+              onClick: () => {
+                actions.sortParameters();
+                select('');
               },
-            ],
-          ]}
-        />
-        <Table ref={table} aria-label="Mapping parameters" role="table" variant="compact">
-          <Thead>
-            <Tr>
-              {['Name', 'Category', 'Type', 'Parameter', 'Description'].map((h) => (
-                <Th key={h}>{h}</Th>
-              ))}
-            </Tr>
-          </Thead>
-          <Tbody>
-            {rows.map((p) => {
-              const blank = p.id === blankId;
-              const prefix = json[p.direction] ? '' : 'xsd:';
-              return (
-                <Tr key={p.id} data-param={p.id} isRowSelected={selected === p.id} onFocus={() => select(p.id)} onClick={() => select(p.id)}>
-                  <Td dataLabel="Name">
-                    <TextInput
-                      aria-label="Parameter name"
-                      placeholder={blank ? 'New parameter…' : 'Name'}
-                      value={p.name}
-                      isDisabled={!editing}
-                      onChange={(_, name) => changeName(p, name)}
-                    />
-                  </Td>
-                  {blank ? (
-                    <Td colSpan={4} />
-                  ) : (
-                    <>
-                      <Td dataLabel="Category">
-                        <FieldSelect label="Parameter category" value="simple" options={[['simple', 'Simple Type']]} disabled={!editing} onChange={() => undefined} />
-                      </Td>
-                      <Td dataLabel="Type">
-                        <FieldSelect
-                          label="Parameter type"
-                          value={p.type}
-                          options={[
-                            ['string', `${prefix}string`],
-                            ['integer', `${prefix}integer`],
-                          ]}
-                          disabled={!editing}
-                          onChange={(type) => actions.patchParameter(p.id, { type })}
-                        />
-                      </Td>
-                      <Td dataLabel="Parameter">
-                        <FieldSelect
-                          label="Parameter direction"
-                          value={p.direction}
-                          options={[
-                            ['Import', 'Import'],
-                            ['Export', 'Export'],
-                          ]}
-                          disabled={!editing}
-                          onChange={(direction) => actions.patchParameter(p.id, { direction })}
-                        />
-                      </Td>
-                      <Td dataLabel="Description">
-                        <TextInput
-                          aria-label="Parameter description"
-                          value={p.description}
-                          isDisabled={!editing}
-                          onChange={(_, description) => actions.patchParameter(p.id, { description })}
-                        />
-                      </Td>
-                    </>
-                  )}
-                </Tr>
-              );
-            })}
-          </Tbody>
-        </Table>
-      </CardBody>
+            },
+          ],
+        ]}
+      />
+      <table className="studio-edit-grid" ref={table} aria-label="Mapping parameters" role="table">
+        <thead>
+          <tr>
+            {['Name', 'Category', 'Type', 'Parameter', 'Description'].map((h) => (
+              <th scope="col" key={h}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((p) => {
+            const blank = p.id === blankId;
+            const prefix = json[p.direction] ? '' : 'xsd:';
+            return (
+              <tr key={p.id} data-param={p.id} data-selected={selected === p.id} onFocus={() => select(p.id)} onClick={() => select(p.id)}>
+                <td>
+                  <Input
+                    aria-label="Parameter name"
+                    placeholder={blank ? 'New parameter…' : 'Name'}
+                    value={p.name}
+                    disabled={!editing}
+                    onChange={({ target: { value: name } }) => changeName(p, name)}
+                  />
+                </td>
+                {blank ? (
+                  <td colSpan={4} />
+                ) : (
+                  <>
+                    <td>
+                      <FieldSelect
+                        label="Parameter category"
+                        value="simple"
+                        options={[['simple', 'Simple Type']]}
+                        disabled={!editing}
+                        onChange={() => undefined}
+                      />
+                    </td>
+                    <td>
+                      <FieldSelect
+                        label="Parameter type"
+                        value={p.type}
+                        options={[
+                          ['string', `${prefix}string`],
+                          ['integer', `${prefix}integer`],
+                        ]}
+                        disabled={!editing}
+                        onChange={(type) => actions.patchParameter(p.id, { type })}
+                      />
+                    </td>
+                    <td>
+                      <FieldSelect
+                        label="Parameter direction"
+                        value={p.direction}
+                        options={[
+                          ['Import', 'Import'],
+                          ['Export', 'Export'],
+                        ]}
+                        disabled={!editing}
+                        onChange={(direction) => actions.patchParameter(p.id, { direction })}
+                      />
+                    </td>
+                    <td>
+                      <Input
+                        aria-label="Parameter description"
+                        value={p.description}
+                        disabled={!editing}
+                        onChange={({ target: { value: description } }) => actions.patchParameter(p.id, { description })}
+                      />
+                    </td>
+                  </>
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </Card>
   );
 }

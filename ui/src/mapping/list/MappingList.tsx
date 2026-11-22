@@ -1,26 +1,12 @@
-import {
-  Alert,
-  Button,
-  EmptyState,
-  EmptyStateActions,
-  EmptyStateBody,
-  EmptyStateFooter,
-  PageSection,
-  SearchInput,
-  Spinner,
-  Toolbar,
-  ToolbarContent,
-  ToolbarItem,
-  Title,
-} from '@patternfly/react-core';
-import { CubesIcon, ExclamationCircleIcon, SearchIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Alert, Button, Empty, Flex, Input, Spin } from 'antd';
+import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useState, type TableHTMLAttributes } from 'react';
 import { describeError, type ApiClient, type MappingSummary } from '../api/client';
 import { NewMappingModal } from './NewMappingModal';
 
-const COLUMNS = ['Name', 'Package', 'Source', 'Target', 'Description'] as const;
+const MappingsTable = (props: TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Mappings" />;
 
 /** What a cell shows for an absent value: a package of the top folder, a message not chosen, no description. */
 const orDash = (value: string | undefined) => (value ? value : '—');
@@ -28,9 +14,7 @@ const orDash = (value: string | undefined) => (value ? value : '—');
 /** Whether a mapping's name, package, messages or description contain `term`, ignoring case. */
 function matches(mapping: MappingSummary, term: string): boolean {
   const lower = term.toLowerCase();
-  return [mapping.name, mapping.package, mapping.source, mapping.target, mapping.description].some((value) =>
-    value?.toLowerCase().includes(lower),
-  );
+  return [mapping.name, mapping.package, mapping.source, mapping.target, mapping.description].some((value) => value?.toLowerCase().includes(lower));
 }
 
 export interface MappingListProps {
@@ -55,98 +39,86 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
   // an empty term is in every name
   const shown = (mappings.data?.mappings ?? []).filter((m) => matches(m, term));
 
-  /** One row across the table holding an empty state: loading, a refusal, an empty workspace or no match. */
-  const stateRow = (state: ReactNode) => (
-    <Tr>
-      <Td colSpan={COLUMNS.length + 1}>{state}</Td>
-    </Tr>
+  const failure = mappings.isError ? describeError(mappings.error) : undefined;
+  const empty = mappings.isPending ? (
+    <div role="status">
+      <Spin />
+      <h2>Loading the mappings</h2>
+    </div>
+  ) : failure ? (
+    <Alert type="error" showIcon title={<h2>{failure.title}</h2>} description={failure.detail} />
+  ) : (
+    <Empty
+      description={
+        mappings.data?.mappings.length ? (
+          <>
+            <h2>No mappings match</h2>
+            <p>No mapping's name, package, messages or description contain "{term}".</p>
+          </>
+        ) : (
+          <>
+            <h2>No mappings yet</h2>
+            <p>Choose New mapping to create one; its messages are chosen in the studio.</p>
+          </>
+        )
+      }
+    >
+      {mappings.data?.mappings.length ? <Button onClick={() => setSearch('')}>Clear search</Button> : null}
+    </Empty>
   );
-
-  const body = () => {
-    if (mappings.isPending) return stateRow(<EmptyState titleText="Loading the mappings" headingLevel="h2" icon={Spinner} variant="sm" />);
-    if (mappings.isError) {
-      const failure = describeError(mappings.error);
-      return stateRow(
-        <EmptyState titleText={failure.title} headingLevel="h2" icon={ExclamationCircleIcon} status="danger" variant="sm">
-          <EmptyStateBody>{failure.detail}</EmptyStateBody>
-        </EmptyState>,
-      );
-    }
-    if (mappings.data.mappings.length === 0) {
-      return stateRow(
-        <EmptyState titleText="No mappings yet" headingLevel="h2" icon={CubesIcon} variant="sm">
-          <EmptyStateBody>Choose New mapping to create one; its messages are chosen in the studio.</EmptyStateBody>
-        </EmptyState>,
-      );
-    }
-    if (shown.length === 0) {
-      return stateRow(
-        <EmptyState titleText="No mappings match" headingLevel="h2" icon={SearchIcon} variant="sm">
-          <EmptyStateBody>No mapping's name, package, messages or description contain "{term}".</EmptyStateBody>
-          <EmptyStateFooter>
-            <EmptyStateActions>
-              <Button variant="link" onClick={() => setSearch('')}>
-                Clear search
-              </Button>
-            </EmptyStateActions>
-          </EmptyStateFooter>
-        </EmptyState>,
-      );
-    }
-    return shown.map((m) => (
-      <Tr key={m.id}>
-        <Td dataLabel="Name">{m.name}</Td>
-        <Td dataLabel="Package">{orDash(m.package)}</Td>
-        <Td dataLabel="Source">{orDash(m.source)}</Td>
-        <Td dataLabel="Target">{orDash(m.target)}</Td>
-        <Td dataLabel="Description" modifier="truncate">
-          {orDash(m.description)}
-        </Td>
-        <Td dataLabel="Actions" modifier="fitContent">
-          <Button variant="link" isInline onClick={() => onOpen(m.id)}>
-            Open in studio
-          </Button>
-        </Td>
-      </Tr>
-    ));
-  };
+  const columns: ProColumns<MappingSummary>[] = [
+    ...(['name', 'package', 'source', 'target', 'description'] as const).map((key) => ({
+      title: key[0]!.toUpperCase() + key.slice(1),
+      dataIndex: key,
+      render: (_: unknown, row: MappingSummary) => orDash(row[key]),
+    })),
+    {
+      title: 'Actions',
+      key: 'open',
+      render: (_, row) => (
+        <Button type="link" onClick={() => onOpen(row.id)}>
+          Open in studio
+        </Button>
+      ),
+    },
+  ];
 
   return (
-    <PageSection>
-      <Title headingLevel="h1">Mappings</Title>
-      {mappings.data?.truncated && (
-        <Alert variant="warning" isInline component="div" title="Only the first 1,000 mapping files of the working folder are listed" />
-      )}
-      <Toolbar>
-        <ToolbarContent>
-          <ToolbarItem>
-            <SearchInput
+    <section className="rail8-page">
+      <h1>Mappings</h1>
+      {mappings.data?.truncated && <Alert type="warning" showIcon title="Only the first 1,000 mapping files of the working folder are listed" />}
+      <ProTable<MappingSummary>
+        rowKey="id"
+        columns={columns}
+        dataSource={shown}
+        pagination={false}
+        search={false}
+        options={false}
+        size="small"
+        components={{ table: MappingsTable }}
+        locale={{ emptyText: empty }}
+        toolBarRender={() => [
+          <Flex key="search" align="center">
+            <Input
               aria-label="Find mappings"
               placeholder="Find mappings"
+              prefix={<SearchOutlined aria-hidden />}
               value={search}
-              onChange={(_, value) => setSearch(value)}
-              onClear={() => setSearch('')}
+              onChange={(event) => setSearch(event.target.value)}
+              suffix={
+                search && (
+                  <Button type="text" size="small" aria-label="Reset" onClick={() => setSearch('')}>
+                    ×
+                  </Button>
+                )
+              }
             />
-          </ToolbarItem>
-          <ToolbarItem>
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              New mapping
-            </Button>
-          </ToolbarItem>
-        </ToolbarContent>
-      </Toolbar>
-      {/* PatternFly gives a Table the role grid; this one has no grid keyboard navigation: it is a plain table */}
-      <Table aria-label="Mappings" role="table" variant="compact">
-        <Thead>
-          <Tr>
-            {COLUMNS.map((column) => (
-              <Th key={column}>{column}</Th>
-            ))}
-            <Th screenReaderText="Actions" />
-          </Tr>
-        </Thead>
-        <Tbody>{body()}</Tbody>
-      </Table>
+          </Flex>,
+          <Button key="new" type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setCreating(true)}>
+            New mapping
+          </Button>,
+        ]}
+      />
       {creating && (
         <NewMappingModal
           api={api}
@@ -158,6 +130,6 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
           }}
         />
       )}
-    </PageSection>
+    </section>
   );
 }

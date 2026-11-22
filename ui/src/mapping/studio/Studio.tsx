@@ -1,4 +1,4 @@
-import { PageSection, Spinner, Content } from '@patternfly/react-core';
+import { Spin } from 'antd';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { ApiClient, StoredMapping } from '../api/client';
@@ -59,15 +59,15 @@ function Loader(props: StudioProps) {
   const mapping = useQuery({ queryKey: ['mapping', mappingId], queryFn: () => api.getMapping(mappingId) });
   if (mapping.isSuccess) return <Opened {...props} opened={mapping.data} />;
   return (
-    <PageSection>
+    <section>
       {mapping.isPending ? (
-        <Content component="p">
-          <Spinner size="md" aria-hidden /> Opening {mappingId}…
-        </Content>
+        <div role="status">
+          <Spin size="small" /> Opening {mappingId}…
+        </div>
       ) : (
         <RefusedMapping error={mapping.error} retrying={mapping.isFetching} onRetry={() => void mapping.refetch()} />
       )}
-    </PageSection>
+    </section>
   );
 }
 

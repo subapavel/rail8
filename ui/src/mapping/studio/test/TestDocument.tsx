@@ -1,35 +1,15 @@
+import { Alert, Button, Card, Empty, Flex, Input, Modal, Spin, Table, Tag } from 'antd';
 import {
-  Alert,
-  Button,
-  Card,
-  CardBody,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  ClipboardCopy,
-  CodeBlock,
-  CodeBlockCode,
-  Content,
-  EmptyState,
-  EmptyStateBody,
-  Flex,
-  Icon,
-  Label,
-  Stack,
-  StackItem,
-  TextArea,
-  TextInput,
-  Title,
-  ToggleGroup,
-  ToggleGroupItem,
-  Toolbar,
-  ToolbarContent,
-  ToolbarGroup,
-  ToolbarItem,
-} from '@patternfly/react-core';
-import { AlignLeftIcon, AngleDoubleDownIcon, AngleDoubleUpIcon, AngleDownIcon, AngleRightIcon, CodeIcon, DownloadIcon, RouteIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
-import { useMemo, useState } from 'react';
+  AlignLeftOutlined,
+  BranchesOutlined,
+  CodeOutlined,
+  DownloadOutlined,
+  DownOutlined,
+  MinusSquareOutlined,
+  PlusSquareOutlined,
+  RightOutlined,
+} from '@ant-design/icons';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { PreviewBadge } from '../mock/PreviewBadge';
 import { PARAMETERS_ISSUE } from '../mock/signature-mock';
 import { zipInstance } from '../mock/test-instances';
@@ -38,6 +18,8 @@ import { documentRows, prettyText, type DocumentFormat } from '../shared/documen
 import { downloadFile } from '../shared/download';
 import { FieldTypeIcon } from '../shared/FieldTypeIcon';
 import { Tool } from '../shared/Tool';
+
+const XmlEditor = lazy(() => import('./XmlEditor'));
 
 /** A pane's view of its document. */
 export const DOCUMENT_MODES = ['Tree', 'Text'] as const;
@@ -77,7 +59,7 @@ export interface TestDocumentProps {
 
 /** A scrolling area that takes the height left in its pane. */
 const SCROLL_AREA = { flex: '1 1 0', minHeight: 0, overflow: 'auto' } as const;
-const MONO = { fontFamily: 'var(--pf-t--global--font--family--mono)' } as const;
+const MONO = { fontFamily: 'var(--ant-font-family-code, monospace)' } as const;
 
 /**
  * A pane of the Test tab, a card: the source document, which the author types, or the result of the last run, each
@@ -105,6 +87,7 @@ export function TestDocument({
   const [section, setSection] = useState<Section>('Document');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const [selection, select] = useState<string | null>(null);
+  const [xmlEditor, setXmlEditor] = useState(false);
   const [fullPath, setFullPath] = useState(false);
   const [formatted, setFormatted] = useState<{ original: string; text: string } | null>(null);
   const [error, setError] = useState('');
@@ -153,217 +136,192 @@ export function TestDocument({
     }
   };
   const download = () => downloadFile('schema.zip', new Blob([zipInstance(displayed, format)], { type: 'application/zip' }));
-  const empty = (
-    <EmptyState variant="xs" icon={CodeIcon}>
-      <EmptyStateBody>{failed ? 'The simulation failed.' : `Run the simulation to display the ${format} result.`}</EmptyStateBody>
-    </EmptyState>
-  );
 
-  let document;
-  if (treeMode && !available) document = <CardBody>{empty}</CardBody>;
-  else if (treeMode && rows === null)
-    document = (
-      <CardBody>
-        <Content component="p" role="status">
-          The {format} cannot be displayed as a tree. Open Text to correct it.
-        </Content>
-      </CardBody>
-    );
-  else if (treeMode)
-    document = (
-      <div style={SCROLL_AREA}>
-        <Table variant="compact" gridBreakPoint="" isStickyHeader role="table" aria-label={`${input ? 'Input' : 'Result'} structure and values`}>
-          <Thead>
-            <Tr>
-              <Th>Structure</Th>
-              <Th>Value</Th>
-            </Tr>
-          </Thead>
-          <Tbody>
-            {visible.map((row) => (
-              <Tr key={row.id} isRowSelected={selection === row.id}>
-                <Td dataLabel="Structure">
-                  <Flex
-                    spaceItems={{ default: 'spaceItemsSm' }}
-                    alignItems={{ default: 'alignItemsCenter' }}
-                    flexWrap={{ default: 'nowrap' }}
-                    style={{ paddingInlineStart: `calc(${row.level} * var(--pf-t--global--spacer--md))` }}
-                  >
-                    {row.branch ? (
-                      <Button
-                        variant="plain"
-                        size="sm"
-                        hasNoPadding
-                        aria-expanded={!closed.has(row.id)}
-                        aria-label={`${closed.has(row.id) ? 'Expand' : 'Collapse'} ${row.name}`}
-                        icon={closed.has(row.id) ? <AngleRightIcon /> : <AngleDownIcon />}
-                        onClick={() => toggleRow(row.id)}
-                      />
-                    ) : (
-                      <Icon size="md" aria-hidden="true" />
-                    )}
-                    <Button
-                      variant="link"
-                      isInline
-                      icon={<FieldTypeIcon type={format === 'XML' && row.branch ? 'structure' : row.kind} />}
-                      aria-pressed={selection === row.id}
-                      onClick={() => select(row.id)}
-                    >
-                      {row.name}
-                    </Button>
-                  </Flex>
-                </Td>
-                <Td dataLabel="Value">{row.value}</Td>
-              </Tr>
-            ))}
-          </Tbody>
-        </Table>
-      </div>
-    );
-  else if (input)
-    document = (
-      // a grid stretches the text area to the height left in the pane, the copy button beside it
-      <CardBody style={{ display: 'grid', gridTemplateColumns: '1fr auto', flex: '1 1 0', minHeight: 0 }}>
-        <TextArea
-          aria-label={`Input ${format}`}
-          spellCheck={false}
-          resizeOrientation="none"
-          readOnlyVariant={readOnly ? 'default' : undefined}
-          value={displayed}
-          onChange={(_event, value) => edit!(value)}
-          style={{ ...MONO, height: '100%' }}
-        />
-        <div style={{ alignSelf: 'start' }}>
-          <CopyTextButton label={`input ${format}`} text={displayed} />
-        </div>
-      </CardBody>
-    );
-  else
-    document = available ? (
-      <CardBody style={SCROLL_AREA}>
-        <CodeBlock actions={<CopyTextButton label={`result ${format}`} text={displayed} />}>
-          <CodeBlockCode>{displayed}</CodeBlockCode>
-        </CodeBlock>
-      </CardBody>
-    ) : (
-      <CardBody>{empty}</CardBody>
-    );
-
-  return (
-    <Card isFullHeight isCompact component="section" id={input ? 'test-input-pane' : 'test-result-pane'} aria-label={title} style={{ minHeight: 0 }}>
-      <CardHeader
-        actions={{
-          actions: (
-            <>
-              {stale && (
-                <Label isCompact color="orange" title="The working copy changed since this run.">
-                  stale
-                </Label>
+  const empty = <Empty description={failed ? 'The simulation failed.' : `Run the simulation to display the ${format} result.`} />;
+  const tree = !available ? (
+    empty
+  ) : rows === null ? (
+    <p role="status">The {format} cannot be displayed as a tree. Open Text to correct it.</p>
+  ) : (
+    <Table
+      aria-label={`${input ? 'Input' : 'Result'} structure and values`}
+      size="small"
+      pagination={false}
+      rowKey="id"
+      rowClassName={(row) => (row.id === selection ? 'studio-chosen' : '')}
+      dataSource={visible}
+      columns={[
+        {
+          title: 'Structure',
+          key: 'structure',
+          render: (_, row) => (
+            <Flex align="center" gap="small" style={{ paddingInlineStart: `calc(${row.level} * var(--ant-padding, 16px))` }}>
+              {row.branch ? (
+                <Button
+                  size="small"
+                  type="text"
+                  aria-expanded={!closed.has(row.id)}
+                  aria-label={`${closed.has(row.id) ? 'Expand' : 'Collapse'} ${row.name}`}
+                  icon={closed.has(row.id) ? <RightOutlined /> : <DownOutlined />}
+                  onClick={() => toggleRow(row.id)}
+                />
+              ) : (
+                <span className="studio-tree-indent" />
               )}
-              <Label isCompact>{format}</Label>
-            </>
+              <Button
+                type="link"
+                size="small"
+                aria-pressed={selection === row.id}
+                icon={<FieldTypeIcon type={format === 'XML' && row.branch ? 'structure' : row.kind} />}
+                onClick={() => select(row.id)}
+              >
+                {row.name}
+              </Button>
+            </Flex>
           ),
-          hasNoOffset: true,
-        }}
-      >
-        <CardTitle>
-          <Title headingLevel="h2" size="md">
-            <CodeIcon /> {title}
-          </Title>
-        </CardTitle>
-      </CardHeader>
+        },
+        { title: 'Value', dataIndex: 'value' },
+      ]}
+    />
+  );
+  const toggles = <T extends string>(label: string, names: readonly T[], chosen: T, change: (name: T) => void) => (
+    <Flex role="group" aria-label={label} gap={0}>
+      {names.map((name) => (
+        <Button size="small" key={name} aria-pressed={chosen === name} type={chosen === name ? 'primary' : 'default'} onClick={() => change(name)}>
+          {name}
+        </Button>
+      ))}
+    </Flex>
+  );
+  return (
+    <Card
+      className="studio-document"
+      id={input ? 'test-input-pane' : 'test-result-pane'}
+      size="small"
+      role="region"
+      aria-label={title}
+      title={
+        <h2>
+          <CodeOutlined aria-hidden /> {title}
+        </h2>
+      }
+      extra={
+        <>
+          {stale && (
+            <Tag color="orange" title="The working copy changed since this run.">
+              stale
+            </Tag>
+          )}
+          <Tag>{format}</Tag>
+        </>
+      }
+    >
       {section === 'Document' ? (
         <>
-          <CardBody isFilled={false}>
-            <Toolbar hasNoPadding>
-              <ToolbarContent>
-                <ToolbarItem>
-                  <ToggleGroup isCompact aria-label={`${side} document view`}>
-                    {DOCUMENT_MODES.map((name) => (
-                      <ToggleGroupItem key={name} text={name} isSelected={mode === name} onChange={() => switchMode(name)} />
-                    ))}
-                  </ToggleGroup>
-                </ToolbarItem>
-                <ToolbarGroup variant="action-group-plain" role="toolbar" aria-label={`${side} document tools`}>
-                  {treeMode ? (
-                    <>
-                      <Tool
-                        label={closed.size > 0 ? 'Expand Tree' : 'Collapse Tree'}
-                        icon={closed.size > 0 ? AngleDoubleDownIcon : AngleDoubleUpIcon}
-                        disabled={!rows?.length}
-                        onClick={toggleExpand}
-                      />
-                      <Tool label="Show Full Path" icon={RouteIcon} pressed={fullPath} onClick={() => setFullPath((v) => !v)} />
-                    </>
-                  ) : (
-                    <Tool label="Pretty Print" icon={AlignLeftIcon} disabled={!available || readOnly} onClick={prettyPrint} />
+          <Flex gap="small" align="center" wrap>
+            {toggles(`${side} document view`, DOCUMENT_MODES, mode, switchMode)}
+            <Flex role="toolbar" aria-label={`${side} document tools`}>
+              {treeMode ? (
+                <>
+                  <Tool
+                    label={closed.size > 0 ? 'Expand Tree' : 'Collapse Tree'}
+                    icon={closed.size > 0 ? PlusSquareOutlined : MinusSquareOutlined}
+                    disabled={!rows?.length}
+                    onClick={toggleExpand}
+                  />
+                  <Tool label="Show Full Path" icon={BranchesOutlined} pressed={fullPath} onClick={() => setFullPath((v) => !v)} />
+                </>
+              ) : (
+                <>
+                  <Tool label="Pretty Print" icon={AlignLeftOutlined} disabled={!available || readOnly} onClick={prettyPrint} />
+                  {format === 'XML' && (
+                    <Tool label={input ? 'Open XML editor' : 'Open XML viewer'} icon={CodeOutlined} disabled={!available} onClick={() => setXmlEditor(true)} />
                   )}
-                  <Tool label="Save Document Source" icon={DownloadIcon} disabled={!available} onClick={download} />
-                </ToolbarGroup>
-              </ToolbarContent>
-            </Toolbar>
-            {error && <Alert variant="danger" isInline isPlain role="alert" title={error} />}
-          </CardBody>
-          {document}
+                </>
+              )}
+              <Tool label="Save Document Source" icon={DownloadOutlined} disabled={!available} onClick={download} />
+            </Flex>
+          </Flex>
+          {error && <Alert type="error" showIcon title={error} />}
+          {treeMode ? (
+            <div style={SCROLL_AREA}>{tree}</div>
+          ) : input ? (
+            <Flex gap="small" style={SCROLL_AREA}>
+              <Input.TextArea
+                aria-label={`Input ${format}`}
+                spellCheck={false}
+                readOnly={readOnly}
+                value={displayed}
+                onChange={(e) => edit?.(e.target.value)}
+                style={{ ...MONO, resize: 'none' }}
+              />
+              <CopyTextButton label={`input ${format}`} text={displayed} />
+            </Flex>
+          ) : available ? (
+            <div style={SCROLL_AREA}>
+              <CopyTextButton label={`result ${format}`} text={displayed} />
+              <pre>{displayed}</pre>
+            </div>
+          ) : (
+            <div style={SCROLL_AREA}>{empty}</div>
+          )}
           {treeMode && fullPath && (
-            <CardFooter>
-              <ClipboardCopy isReadOnly isCode variant="inline-compact" hoverTip={`Copy ${side.toLowerCase()} path`} clickTip="Copied">
-                {selectedPath}
-              </ClipboardCopy>
-            </CardFooter>
+            <div>
+              <code>{selectedPath}</code>
+              <CopyTextButton label={`${side.toLowerCase()} path`} text={selectedPath} />
+            </div>
           )}
         </>
       ) : (
-        <CardBody style={SCROLL_AREA}>
-          <Stack hasGutter>
-            <StackItem>
-              <Content component="p">
-                Parameters of the test run <PreviewBadge feature="Mapping parameters and message headers" issue={PARAMETERS_ISSUE} />
-              </Content>
-            </StackItem>
-            {parameters.map(({ title: group, rows: entries }) => (
-              <StackItem key={group}>
-                <Title headingLevel="h3" size="md">
-                  {group}
-                </Title>
-                <Table variant="compact" gridBreakPoint="" role="table" aria-label={group}>
-                  <Thead>
-                    <Tr>
-                      <Th>Name</Th>
-                      <Th>Value</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {entries.map(({ id, label, initial }) => (
-                      <Tr key={id}>
-                        <Td dataLabel="Name">{label}</Td>
-                        <Td dataLabel="Value">
-                          {onParameter && (
-                            <TextInput
-                              aria-label={label}
-                              readOnlyVariant={valuesReadOnly ? 'default' : undefined}
-                              value={values[id] ?? initial}
-                              onChange={(_event, value) => onParameter(id, value)}
-                            />
-                          )}
-                        </Td>
-                      </Tr>
-                    ))}
-                  </Tbody>
-                </Table>
-                {entries.length === 0 && <Content component="p">No {input ? 'import' : 'export'} parameters defined.</Content>}
-              </StackItem>
-            ))}
-          </Stack>
-        </CardBody>
-      )}
-      <CardFooter>
-        <ToggleGroup isCompact aria-label={`${side} panel`}>
-          {SECTIONS.map((name) => (
-            <ToggleGroupItem key={name} text={name} isSelected={section === name} onChange={() => setSection(name)} />
+        <div style={SCROLL_AREA}>
+          <p>
+            Parameters of the test run <PreviewBadge feature="Mapping parameters and message headers" issue={PARAMETERS_ISSUE} />
+          </p>
+          {parameters.map(({ title: group, rows: entries }) => (
+            <div key={group}>
+              <h3>{group}</h3>
+              <Table
+                aria-label={group}
+                size="small"
+                rowKey="id"
+                pagination={false}
+                dataSource={entries}
+                locale={{ emptyText: `No ${input ? 'import' : 'export'} parameters defined.` }}
+                columns={[
+                  { title: 'Name', dataIndex: 'label' },
+                  {
+                    title: 'Value',
+                    key: 'value',
+                    render: (_, r) =>
+                      onParameter && (
+                        <Input
+                          aria-label={r.label}
+                          readOnly={valuesReadOnly}
+                          value={values[r.id] ?? r.initial}
+                          onChange={(e) => onParameter(r.id, e.target.value)}
+                        />
+                      ),
+                  },
+                ]}
+              />
+            </div>
           ))}
-        </ToggleGroup>
-      </CardFooter>
+        </div>
+      )}
+      {toggles(`${side} panel`, SECTIONS, section, setSection)}
+      {xmlEditor && (
+        <Modal
+          open
+          title={input ? 'XML editor' : 'XML viewer'}
+          width="min(90vw, 1000px)"
+          onCancel={() => setXmlEditor(false)}
+          footer={<Button onClick={() => setXmlEditor(false)}>Close</Button>}
+        >
+          <Suspense fallback={<Spin aria-label="Loading XML editor" />}>
+            <XmlEditor value={displayed} readOnly={!input || readOnly} onChange={edit} label={input ? 'XML source document' : 'XML result document'} />
+          </Suspense>
+        </Modal>
+      )}
     </Card>
   );
 }

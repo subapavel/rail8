@@ -1,17 +1,4 @@
-import {
-  Card,
-  CardBody,
-  CardTitle,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  FormGroup,
-  Grid,
-  GridItem,
-  TextArea,
-  Title,
-} from '@patternfly/react-core';
+import { Card, Col, Form, Input, Row } from 'antd';
 import { useId, type ReactNode } from 'react';
 import { useStore } from 'zustand';
 import type { StructureRef } from '../../generated/mapping-model';
@@ -50,42 +37,37 @@ export function MappingOverview({ mappingId, store }: MappingOverviewProps) {
   ];
 
   return (
-    <Grid hasGutter component="section" aria-label="Overview">
-      <GridItem lg={5}>
-        <Card isFullHeight>
-          <CardTitle>
-            <Title headingLevel="h2" size="lg">
-              Mapping details
-            </Title>
-          </CardTitle>
-          <CardBody>
-            <DescriptionList isHorizontal isCompact>
+    <section aria-label="Overview">
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={10}>
+          <Card title={<h2>Mapping details</h2>}>
+            <dl className="studio-details">
               {fields.map(([term, value]) => (
-                <DescriptionListGroup key={term}>
-                  <DescriptionListTerm>{term}</DescriptionListTerm>
-                  <DescriptionListDescription>{value}</DescriptionListDescription>
-                </DescriptionListGroup>
+                <div key={term}>
+                  <dt>{term}</dt>
+                  <dd>{value}</dd>
+                </div>
               ))}
-            </DescriptionList>
-          </CardBody>
-        </Card>
-      </GridItem>
-      <GridItem lg={7}>
-        <Card isFullHeight>
-          <CardBody>
-            <FormGroup label="Description" fieldId={descriptionId}>
-              <TextArea
-                id={descriptionId}
-                readOnlyVariant={editing ? undefined : 'default'}
-                rows={8}
-                resizeOrientation="vertical"
-                value={description}
-                onChange={(_, value) => store.getState().setDescription(value)}
-              />
-            </FormGroup>
-          </CardBody>
-        </Card>
-      </GridItem>
-    </Grid>
+            </dl>
+          </Card>
+        </Col>
+        <Col xs={24} lg={14}>
+          <Card>
+            <Form layout="vertical" component="div">
+              <Form.Item label="Description" htmlFor={descriptionId}>
+                <Input.TextArea
+                  aria-label="Description"
+                  id={descriptionId}
+                  readOnly={!editing}
+                  rows={8}
+                  value={description}
+                  onChange={(event) => store.getState().setDescription(event.target.value)}
+                />
+              </Form.Item>
+            </Form>
+          </Card>
+        </Col>
+      </Row>
+    </section>
   );
 }
