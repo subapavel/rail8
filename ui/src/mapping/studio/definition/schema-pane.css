@@ -23,4 +23,20 @@
 .schema-fields tr[data-selected], .schema-selected-line { background: var(--ant-control-item-bg-active); }
 .schema-fields .schema-caret { flex: 0 0 var(--ant-control-height-sm); }
 .schema-fields button { font-size: inherit; }
+.schema-field-content, .schema-field-name {
+  display: flex;
+  align-items: center;
+  gap: var(--ant-size-xxs);
+}
+.schema-field-name {
+  min-height: var(--ant-control-height);
+  padding-inline: var(--ant-padding-sm);
+  border: 0;
+  border-radius: var(--ant-border-radius);
+  background: transparent;
+  color: var(--ant-color-link);
+  cursor: pointer;
+}
+.schema-field-name:hover { color: var(--ant-color-link-hover); }
+.schema-field-name:focus-visible { outline: var(--ant-line-width-focus) solid var(--ant-color-primary-border); }
 .queue-table thead { position: sticky; top: 0; z-index: 1; }
