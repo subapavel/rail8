@@ -306,6 +306,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
     const cx = (position && parent ? parent.x + position.x : n.x) + n.width / 2;
     const cy = (position && parent ? parent.y + position.y : n.y) + n.height / 2;
     if (x + cx * zoom < 40 || x + cx * zoom > box.width - 40 || y + cy * zoom < 32 || y + cy * zoom > box.height - 32) {
+      if (requested) manual.current = true;
       void setCenter(cx, cy, { zoom });
     }
   }, [ready, selected, structure, inspectSequence, inspectTarget, byId, box, getViewport, setCenter, positions]);

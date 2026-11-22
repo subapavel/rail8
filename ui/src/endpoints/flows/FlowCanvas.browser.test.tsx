@@ -103,6 +103,11 @@ it('reveals the exact external receiver found outside a long diagram at its mini
     expect(right()).toBeGreaterThan(host.getBoundingClientRect().right);
     draw(1);
     await expect.poll(right).toBeLessThan(host.getBoundingClientRect().right);
+    host.style.height = '220px';
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const bounds = receiver.element().getBoundingClientRect();
+    expect(bounds.right).toBeLessThan(host.getBoundingClientRect().right);
+    expect(bounds.bottom).toBeLessThan(host.getBoundingClientRect().bottom);
   } finally {
     root.unmount();
     host.remove();
