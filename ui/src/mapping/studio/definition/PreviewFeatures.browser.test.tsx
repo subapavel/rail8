@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { Rail8Theme } from '../../../theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -58,9 +58,13 @@ async function renderDefinition(overrides: Partial<ApiClient> = {}): Promise<Ren
   document.body.append(host);
   root = createRoot(host);
   root.render(
-    <QueryClientProvider client={queryClient}>
-      <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={browserState} />
-    </QueryClientProvider>,
+    <Rail8Theme>
+      {() => (
+        <QueryClientProvider client={queryClient}>
+          <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={browserState} />
+        </QueryClientProvider>
+      )}
+    </Rail8Theme>,
   );
   return { store, browserState, sent: () => JSON.stringify(calls), original };
 }
@@ -71,7 +75,7 @@ const canvas = () => page.getByRole('group', { name: 'Mapping canvas' });
 const node = (name: string | RegExp) => canvas().getByRole('group', { name });
 const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
 /** A menu item that opens a flyout. */
-const flyoutItem = (name: string) => page.getByRole('menu').getByRole('button', { name, exact: true });
+const flyoutItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
 const catalogue = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByRole('region', { name: 'Function catalogue' });
 const tool = (name: string) => page.getByRole('toolbar', { name: 'Mapping tools' }).getByRole('button', { name, exact: true });
 const studioButton = (name: string) => page.getByRole('button', { name, exact: true });

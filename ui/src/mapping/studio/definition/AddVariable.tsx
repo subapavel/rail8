@@ -1,4 +1,4 @@
-import { Button, Content, Form, FormGroup, FormHelperText, HelperText, HelperTextItem, Modal, ModalBody, ModalFooter, ModalHeader, TextInput } from '@patternfly/react-core';
+import { Form, Input, Modal } from 'antd';
 import { useId, useState } from 'react';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
@@ -25,37 +25,35 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
   const valid = NAME.test(value) && value.length <= 90;
   const used = valid && taken(`${parent}/$${value}`);
   return (
-    <Modal isOpen variant="small" aria-label="Add Variable" onClose={close}>
-      <ModalHeader title="Add Variable" description={`/${localPath(parent)}`} />
-      <ModalBody>
-        <Form
-          id={formId}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (valid && !used) create(value);
-          }}
+    <Modal open title="Add Variable" onCancel={close} okText="Create" okButtonProps={{ htmlType: 'submit', form: formId, disabled: !valid || used }}>
+      <p>/{localPath(parent)}</p>
+      <Form
+        layout="vertical"
+        id={formId}
+        onFinish={() => {
+          if (valid && !used) create(value);
+        }}
+      >
+        <Form.Item
+          label="Variable name"
+          htmlFor={`${formId}-name`}
+          required
+          validateStatus={value && (!valid || used) ? 'error' : undefined}
+          help={<span id={`${formId}-help`}>{used ? 'This field already has a variable or a child of that name.' : 'A letter or _, then letters, digits or _.'}</span>}
         >
-          <FormGroup label="Variable name" isRequired fieldId={`${formId}-name`}>
-            <TextInput id={`${formId}-name`} isRequired maxLength={90} value={name} validated={value && (!valid || used) ? 'error' : 'default'} onChange={(_event, text) => setName(text)} />
-            <FormHelperText>
-              <HelperText>
-                <HelperTextItem variant={value && (!valid || used) ? 'error' : 'default'}>
-                  {used ? 'This field already has a variable or a child of that name.' : 'A letter or _, then letters, digits or _.'}
-                </HelperTextItem>
-              </HelperText>
-            </FormHelperText>
-          </FormGroup>
-        </Form>
-        <Content component="small">A preview: the variable is kept in this browser only, never in the mapping file.</Content>
-      </ModalBody>
-      <ModalFooter>
-        <Button type="submit" form={formId} isDisabled={!valid || used}>
-          Create
-        </Button>
-        <Button variant="link" onClick={close}>
-          Cancel
-        </Button>
-      </ModalFooter>
+          <Input
+            id={`${formId}-name`}
+            aria-label="Variable name"
+            required
+            maxLength={90}
+            value={name}
+            aria-describedby={`${formId}-help`}
+            aria-invalid={Boolean(value && (!valid || used))}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Form.Item>
+      </Form>
+      <small>A preview: the variable is kept in this browser only, never in the mapping file.</small>
     </Modal>
   );
 }

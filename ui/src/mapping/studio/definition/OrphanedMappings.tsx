@@ -1,6 +1,5 @@
-import { Button, CardBody, Content, DataList, DataListAction, DataListCell, DataListItem, DataListItemCells, DataListItemRow, Icon, Title } from '@patternfly/react-core';
-import { ExclamationTriangleIcon, TrashIcon } from '@patternfly/react-icons';
-import { useId } from 'react';
+import { Button, Flex } from 'antd';
+import { WarningOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
 
@@ -22,44 +21,38 @@ export interface OrphanedMappingsProps {
  * only.
  */
 export function OrphanedMappings({ paths, selected, editing, onOpen, onDelete }: OrphanedMappingsProps) {
-  const listId = useId();
   return (
-    <CardBody isFilled={false} component="section" aria-label="Orphaned target field mappings">
-      <Title headingLevel="h3" size="md">
-        <Icon status="warning" isInline>
-          <ExclamationTriangleIcon />
-        </Icon>{' '}
-        Orphaned target field mappings ({paths.length})
-      </Title>
-      <Content component="p">The target structure has no such fields. Open one to see its expression, or delete it in edit mode.</Content>
-      <DataList isCompact aria-label="Orphaned target field mappings list">
+    <section aria-label="Orphaned target field mappings">
+      <h3>
+        <WarningOutlined aria-hidden style={{ color: 'var(--ant-color-warning)' }} /> Orphaned target field mappings ({paths.length})
+      </h3>
+      <p>The target structure has no such fields. Open one to see its expression, or delete it in edit mode.</p>
+      <ul aria-label="Orphaned target field mappings list">
         {paths.map((path) => {
           const shown = `/${localPath(path)}`;
-          const open = selected === path;
-          const itemId = `${listId}-${path}`;
           return (
-            <DataListItem key={path} aria-label={shown}>
-              <DataListItemRow>
-                <DataListItemCells
-                  dataListCells={[
-                    <DataListCell key="path" id={`${itemId}-path`}>
-                      <code title={path}>{shown}</code>
-                    </DataListCell>,
-                  ]}
-                />
-                <DataListAction aria-label={`Actions for ${shown}`} id={`${itemId}-actions`} aria-labelledby={`${itemId}-path`}>
-                  <Button variant="link" isInline size="sm" aria-label={`Open ${shown}`} aria-pressed={open} isClicked={open} onClick={() => onOpen(path)}>
-                    Open
-                  </Button>
-                  <Button variant="link" isInline isDanger size="sm" icon={<TrashIcon />} aria-label={`Delete ${shown}`} isDisabled={!editing} onClick={() => onDelete(path)}>
-                    Delete
-                  </Button>
-                </DataListAction>
-              </DataListItemRow>
-            </DataListItem>
+            <li key={path} aria-label={shown}>
+              <Flex align="center" gap="small">
+                <code title={path}>{shown}</code>
+                <Button type="link" size="small" aria-label={`Open ${shown}`} aria-pressed={selected === path} onClick={() => onOpen(path)}>
+                  Open
+                </Button>
+                <Button
+                  type="link"
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined aria-hidden />}
+                  aria-label={`Delete ${shown}`}
+                  disabled={!editing}
+                  onClick={() => onDelete(path)}
+                >
+                  Delete
+                </Button>
+              </Flex>
+            </li>
           );
         })}
-      </DataList>
-    </CardBody>
+      </ul>
+    </section>
   );
 }

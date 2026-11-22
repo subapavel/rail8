@@ -1,9 +1,12 @@
-import { Tooltip } from '@patternfly/react-core';
+import { Tooltip } from 'antd';
+import { createPortal } from 'react-dom';
 import { useEffect, useLayoutEffect, useState, type RefObject } from 'react';
 
 /** The element a hint is about: the nearest one with a `data-mapping-hint`, or a node's card. */
 const find = (target: EventTarget | null): Element | null =>
-  target instanceof Element ? (target.closest('[data-mapping-hint]') ?? (target.matches('.react-flow__node') ? target.querySelector('[data-mapping-hint]') : null)) : null;
+  target instanceof Element
+    ? (target.closest('[data-mapping-hint]') ?? (target.matches('.react-flow__node') ? target.querySelector('[data-mapping-hint]') : null))
+    : null;
 
 /**
  * The canvas's one tooltip: it shows the `data-mapping-hint` of what the pointer is over or the focus is on, ports and
@@ -28,18 +31,30 @@ export function MappingHint({ host }: { host: RefObject<HTMLElement | null> }) {
   useEffect(() => {
     const el = host.current!;
     const enter = (e: Event) => setAnchor((!(e as PointerEvent).buttons && find(e.target)) || null);
-    const leave = (e: Event) =>
-      setAnchor((current) => (current === find(e.target) && current !== find((e as FocusEvent | PointerEvent).relatedTarget) ? null : current));
+    const leave = (e: Event) => setAnchor((current) => (current === find(e.target) && current !== find((e as FocusEvent | PointerEvent).relatedTarget) ? null : current));
     const clear = () => setAnchor(null);
     const escape = (e: Event) => {
       if ((e as KeyboardEvent).key === 'Escape') clear();
     };
-    const events: Record<string, (e: Event) => void> = { pointerover: enter, pointerout: leave, focusin: enter, focusout: leave, pointerdown: clear, contextmenu: clear, keydown: escape };
+    const events: Record<string, (e: Event) => void> = {
+      pointerover: enter,
+      pointerout: leave,
+      focusin: enter,
+      focusout: leave,
+      pointerdown: clear,
+      contextmenu: clear,
+      keydown: escape,
+    };
     for (const [event, handler] of Object.entries(events)) el.addEventListener(event, handler, true);
     return () => {
       for (const [event, handler] of Object.entries(events)) el.removeEventListener(event, handler, true);
     };
   }, [host]);
   if (!anchor?.isConnected) return null;
-  return <Tooltip triggerRef={() => anchor as HTMLElement} trigger="manual" isVisible content={<div style={{ whiteSpace: 'pre-line' }}>{content}</div>} animationDuration={0} />;
+  return createPortal(
+    <Tooltip trigger={[]} open styles={{ root: { pointerEvents: 'none' } }} title={<span style={{ whiteSpace: 'pre-line' }}>{content}</span>}>
+      <span aria-hidden style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+    </Tooltip>,
+    anchor,
+  );
 }

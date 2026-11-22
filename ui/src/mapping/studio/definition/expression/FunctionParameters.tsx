@@ -1,23 +1,6 @@
-import {
-  Alert,
-  Button,
-  Form,
-  FormGroup,
-  FormSelect,
-  FormSelectOption,
-  InputGroup,
-  InputGroupItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  Radio,
-  Switch,
-  TextInput,
-} from '@patternfly/react-core';
-import { PlusCircleIcon, TrashIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
-import { useState, type FormEvent } from 'react';
+import { Alert, Button, Form, Input, Modal, Radio, Select, Space, Switch, Table } from 'antd';
+import { PlusCircleOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useState } from 'react';
 import type { CatalogueParam } from '../../../generated/function-catalogue';
 import type { ParamValue, Params } from '../../../generated/mapping-model';
 import { Tool } from '../../shared/Tool';
@@ -80,7 +63,11 @@ const SELECTS = new Set(['splitByValue.mode']);
 
 /** A parameter's label: its entry in `LABELS`, else its name in words (`defaultValue` is "Default value"). */
 export const paramLabel = (fn: string, name: string) =>
-  LABELS[`${fn}.${name}`] ?? name.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).replace(/ (\w)/g, (_, c: string) => ` ${c.toLowerCase()}`);
+  LABELS[`${fn}.${name}`] ??
+  name
+    .replace(/([A-Z])/g, ' $1')
+    .replace(/^./, (c) => c.toUpperCase())
+    .replace(/ (\w)/g, (_, c: string) => ` ${c.toLowerCase()}`);
 
 type Row = { key: string; value: string };
 type Draft = Record<string, string | Row[]>;
@@ -99,34 +86,34 @@ const toParams = (draft: Draft): Record<string, ParamValue> =>
 function FixedValues({ value, change, label, disabled }: { value: Row[]; change: (rows: Row[]) => void; label: string; disabled: boolean }) {
   const cell = (index: number, column: keyof Row, next: string) => change(value.map((row, i) => (i === index ? { ...row, [column]: next } : row)));
   return (
-    <FormGroup label={label} role="group" fieldId="param-table">
-      <Button variant="link" isInline icon={<PlusCircleIcon />} isDisabled={disabled} onClick={() => change([...value, { key: '', value: '' }])}>
+    <Form.Item label={label} htmlFor="param-table">
+      <Button type="link" icon={<PlusCircleOutlined aria-hidden />} disabled={disabled} onClick={() => change([...value, { key: '', value: '' }])}>
         Add pair
       </Button>
-      <Table aria-label={label} variant="compact" role="table">
-        <Thead>
-          <Tr>
-            <Th>key</Th>
-            <Th>value</Th>
-            <Th screenReaderText="Row actions" />
-          </Tr>
-        </Thead>
-        <Tbody>
-          {value.map((row, i) => (
-            <Tr key={i}>
-              {(['key', 'value'] as const).map((k) => (
-                <Td key={k} dataLabel={k}>
-                  <TextInput aria-label={`${k} ${i + 1}`} value={row[k]} isDisabled={disabled} onChange={(_, next) => cell(i, k, next)} />
-                </Td>
-              ))}
-              <Td isActionCell>
-                <Tool label={`Remove pair ${i + 1}`} icon={TrashIcon} disabled={disabled} onClick={() => change(value.filter((_, j) => j !== i))} />
-              </Td>
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
-    </FormGroup>
+      <Table
+        size="small"
+        aria-label={label}
+        pagination={false}
+        rowKey="index"
+        dataSource={value.map((row, index) => ({ ...row, index }))}
+        columns={[
+          ...(['key', 'value'] as const).map((col) => ({
+            key: col,
+            title: col,
+            render: (_: unknown, row: Row & { index: number }) => (
+              <Input aria-label={`${col} ${row.index + 1}`} value={row[col]} disabled={disabled} onChange={(event) => cell(row.index, col, event.target.value)} />
+            ),
+          })),
+          {
+            key: 'actions',
+            title: 'Row actions',
+            render: (_, row) => (
+              <Tool label={`Remove pair ${row.index + 1}`} icon={DeleteOutlined} disabled={disabled} onClick={() => change(value.filter((_, i) => i !== row.index))} />
+            ),
+          },
+        ]}
+      />
+    </Form.Item>
   );
 }
 
@@ -145,49 +132,65 @@ function Field({ fn, param, value, change, chooseFormat, disabled }: FieldProps)
   if (param.type === 'table') return <FixedValues label={label} value={value as Row[]} change={change} disabled={disabled} />;
   const text = value as string;
   if (param.values?.length === 2 && param.values.includes('true') && param.values.includes('false')) {
-    return <Switch id={id} label={label} isChecked={text === 'true'} isDisabled={disabled} onChange={(_, checked) => change(String(checked))} />;
+    return (
+      <Form.Item label={label} htmlFor={id}>
+        <Switch id={id} aria-label={label} checked={text === 'true'} disabled={disabled} onChange={(checked) => change(String(checked))} />
+      </Form.Item>
+    );
   }
   if (param.values && SELECTS.has(`${fn}.${param.name}`)) {
     return (
-      <FormGroup label={label} fieldId={id}>
-        <FormSelect id={id} value={text} isDisabled={disabled} onChange={(_, next) => change(next)}>
-          {param.values.map((v) => (
-            <FormSelectOption key={v} value={v} label={VALUE_LABELS[v] ?? v} />
-          ))}
-        </FormSelect>
-      </FormGroup>
+      <Form.Item label={label} htmlFor={id}>
+        <Select
+          id={id}
+          aria-label={label}
+          value={text}
+          disabled={disabled}
+          onChange={change}
+          options={param.values.map((v) => ({ value: v, label: VALUE_LABELS[v] ?? v }))}
+        />
+      </Form.Item>
     );
   }
   if (param.values) {
     return (
-      <FormGroup label={label} role="radiogroup" isStack fieldId={id}>
-        {param.values.map((v) => (
-          <Radio key={v} id={`${id}-${v}`} name={id} label={VALUE_LABELS[v] ?? v} isChecked={text === v} isDisabled={disabled} onChange={() => change(v)} />
-        ))}
-      </FormGroup>
+      <Form.Item label={label}>
+        <Radio.Group
+          aria-label={label}
+          name={id}
+          value={text}
+          disabled={disabled}
+          onChange={(event) => change(event.target.value)}
+          options={param.values.map((v) => ({ value: v, label: VALUE_LABELS[v] ?? v }))}
+        />
+      </Form.Item>
     );
   }
   if (param.syntax === 'datePattern') {
     return (
-      <FormGroup label={label} fieldId={id}>
-        <InputGroup>
-          <InputGroupItem isFill>
-            <TextInput id={id} value={text} isDisabled={disabled} onChange={(_, next) => change(next)} />
-          </InputGroupItem>
-          <InputGroupItem>
-            <Button variant="control" aria-label={`Choose ${label}`} isDisabled={disabled} onClick={chooseFormat}>
-              Choose format…
-            </Button>
-          </InputGroupItem>
-        </InputGroup>
-      </FormGroup>
+      <Form.Item label={label} htmlFor={id}>
+        <Space.Compact block>
+          <Input id={id} value={text} disabled={disabled} onChange={(event) => change(event.target.value)} />
+
+          <Button type="default" aria-label={`Choose ${label}`} disabled={disabled} onClick={chooseFormat}>
+            Choose format…
+          </Button>
+        </Space.Compact>
+      </Form.Item>
     );
   }
   const integer = INTEGERS.has(`${fn}.${param.name}`);
   return (
-    <FormGroup label={label} fieldId={id}>
-      <TextInput id={id} type={integer ? 'number' : 'text'} step={integer ? 1 : undefined} value={text} isDisabled={disabled} onChange={(_, next) => change(next)} />
-    </FormGroup>
+    <Form.Item label={label} htmlFor={id}>
+      <Input
+        id={id}
+        type={integer ? 'number' : 'text'}
+        step={integer ? 1 : undefined}
+        value={text}
+        disabled={disabled}
+        onChange={(event) => change(event.target.value)}
+      />
+    </Form.Item>
   );
 }
 
@@ -227,8 +230,7 @@ export function FunctionParameters({ fn, params, values, readOnly, save, close }
       />
     );
   }
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     for (const p of params) {
       const value = draft[p.name]!;
       if (INTEGERS.has(`${fn}.${p.name}`) && !/^-?\d+$/.test(value as string)) {
@@ -244,26 +246,21 @@ export function FunctionParameters({ fn, params, values, readOnly, save, close }
   };
   const title = fn === 'fixValues' ? 'Fixed-Values Table' : `Function parameters · ${fn}`;
   return (
-    <Modal isOpen onClose={close} variant={fn === 'fixValues' ? 'medium' : 'small'} aria-label={title}>
-      <ModalHeader title={title} />
-      <ModalBody>
-        <Form id="function-parameters" onSubmit={submit}>
-          {params.map((p) => (
-            <Field key={p.name} fn={fn} param={p} value={draft[p.name]!} change={(v) => change(p.name, v)} chooseFormat={() => setHelper(p.name)} disabled={readOnly} />
-          ))}
-          {error && <Alert variant="danger" isInline isPlain role="alert" title={error} />}
-        </Form>
-      </ModalBody>
-      <ModalFooter>
-        {!readOnly && (
-          <Button type="submit" form="function-parameters">
-            Apply
-          </Button>
-        )}
-        <Button variant="link" onClick={close}>
-          {readOnly ? 'Close' : 'Cancel'}
-        </Button>
-      </ModalFooter>
+    <Modal
+      open
+      title={title}
+      onCancel={close}
+      width={fn === 'fixValues' ? 720 : undefined}
+      okText="Apply"
+      okButtonProps={{ htmlType: 'submit', form: 'function-parameters' }}
+      footer={readOnly ? <Button onClick={close}>Close</Button> : undefined}
+    >
+      <Form layout="vertical" id="function-parameters" onFinish={submit}>
+        {params.map((p) => (
+          <Field key={p.name} fn={fn} param={p} value={draft[p.name]!} change={(v) => change(p.name, v)} chooseFormat={() => setHelper(p.name)} disabled={readOnly} />
+        ))}
+        {error && <Alert type="error" showIcon role="alert" title={error} />}
+      </Form>
     </Modal>
   );
 }

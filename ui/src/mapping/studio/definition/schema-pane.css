@@ -1,0 +1,26 @@
+.schema-pane, .schema-pane-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+.schema-pane h2 { margin: 0; font-size: var(--ant-font-size-lg); }
+.schema-pane-content { padding: var(--ant-padding-xs); }
+.schema-fields { width: 100%; border-spacing: 0; font-size: var(--ant-font-size-sm); }
+.schema-fields th, .schema-fields td {
+  padding: var(--ant-padding-xxs) var(--ant-padding-xs);
+  border-bottom: var(--ant-line-width) solid var(--ant-color-border-secondary);
+  text-align: start;
+  white-space: nowrap;
+}
+.schema-fields th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--ant-color-bg-layout);
+}
+.schema-fields tr[data-selected], .schema-selected-line { background: var(--ant-control-item-bg-active); }
+.schema-fields .schema-caret { flex: 0 0 var(--ant-control-height-sm); }
+.schema-fields button { font-size: inherit; }
+.queue-table thead { position: sticky; top: 0; z-index: 1; }

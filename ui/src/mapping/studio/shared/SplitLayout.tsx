@@ -1,4 +1,4 @@
-import { Divider } from '@patternfly/react-core';
+import { Divider } from 'antd';
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import { isShare, readPanelPreference, savePanelPreference } from './panel-preferences';
@@ -61,7 +61,7 @@ interface SplitDividerProps {
 }
 
 /**
- * The divider, a PatternFly divider in a separator: dragged with the primary pointer, or moved by 5 % with the arrow
+ * The divider is dragged with the primary pointer, or moved by 5 % with the arrow
  * keys, Home and End. The share changes while it moves and is kept when it stops.
  */
 function SplitDivider({ vertical = false, label, controls, share, onChange, onCommit, getTravel }: SplitDividerProps) {
@@ -114,7 +114,7 @@ function SplitDivider({ vertical = false, label, controls, share, onChange, onCo
       style={{
         display: 'flex',
         flex: '0 0 auto',
-        padding: vertical ? '0 var(--pf-t--global--spacer--sm)' : 'var(--pf-t--global--spacer--sm) 0',
+        padding: vertical ? '0 var(--ant-size-xs)' : 'var(--ant-size-xs) 0',
         cursor: vertical ? 'col-resize' : 'row-resize',
         touchAction: 'none',
         userSelect: 'none',
@@ -124,7 +124,7 @@ function SplitDivider({ vertical = false, label, controls, share, onChange, onCo
       onPointerMove={moveDrag}
       onLostPointerCapture={finishDrag}
     >
-      <Divider component="div" aria-hidden orientation={vertical ? { default: 'vertical' } : undefined} />
+      <Divider aria-hidden orientation={vertical ? 'vertical' : 'horizontal'} style={{ margin: 0, height: vertical ? '100%' : undefined }} />
     </div>
   );
 }

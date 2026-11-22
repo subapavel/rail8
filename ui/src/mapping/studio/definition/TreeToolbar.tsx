@@ -1,15 +1,15 @@
-import { ToggleGroup, ToggleGroupItem, Toolbar, ToolbarContent, ToolbarGroup, ToolbarItem } from '@patternfly/react-core';
+import { Button, Flex, Space } from 'antd';
 import {
-  AngleDoubleDownIcon,
-  AngleDoubleUpIcon,
-  ColumnsIcon,
-  DownloadIcon,
-  FilterIcon,
-  RouteIcon,
-  SearchIcon,
-  ToggleOffIcon,
-  ToggleOnIcon,
-} from '@patternfly/react-icons';
+  DownOutlined,
+  UpOutlined,
+  TableOutlined,
+  DownloadOutlined,
+  FilterOutlined,
+  NodeIndexOutlined,
+  SearchOutlined,
+  BorderOutlined,
+  CheckSquareOutlined,
+} from '@ant-design/icons';
 import { FILTERS, type Side } from './definition-model';
 import { Tool, ToolMenu, type ToolMenuItem } from '../shared/Tool';
 
@@ -67,40 +67,38 @@ export function TreeToolbar(props: TreeToolbarProps) {
     ...(['Select All', 'Select None', 'Inverse Selection'] as const).map((change) => ({ label: change, run: () => onSelectionChange(change) })),
   ];
   return (
-    <Toolbar hasNoPadding>
-      <ToolbarContent>
-        <ToolbarItem>
-          <ToggleGroup isCompact aria-label={`${title} message view`}>
-            {VIEW_MODES.map((name) => (
-              <ToggleGroupItem key={name} text={name} isSelected={mode === name} onChange={() => onMode(name)} />
-            ))}
-          </ToggleGroup>
-        </ToolbarItem>
-        <ToolbarGroup variant="action-group-plain" role="toolbar" aria-label={`${side} tree tools`}>
-          {mode !== 'Text' && (
-            <>
-              <Tool label={collapseNext ? 'Collapse Tree' : 'Expand Tree'} icon={collapseNext ? AngleDoubleUpIcon : AngleDoubleDownIcon} onClick={expand} />
-              <Tool label="Show Full Path" icon={RouteIcon} pressed={fullPath} onClick={onPath} />
-              <Tool label="Filter Tree" icon={FilterIcon} pressed={filter.active} onClick={onToggleFilter} />
-              <ToolMenu label="Filter Tree options" items={filterItems} />
-              {target && (
-                <>
-                  <Tool label="Show Mapping Column" icon={ColumnsIcon} pressed={mappingColumn} onClick={onMapping} />
-                  <Tool
-                    label="Show Selection Column"
-                    icon={selectionColumn ? ToggleOnIcon : ToggleOffIcon}
-                    pressed={selectionColumn}
-                    onClick={() => onSelection(!selectionColumn)}
-                  />
-                  <ToolMenu label="Selection column options" items={selectionItems} />
-                </>
-              )}
-            </>
-          )}
-          <Tool label={searchOpen ? 'Close Search' : 'Open Search'} icon={SearchIcon} pressed={searchOpen} onClick={onSearch} />
-          <Tool label="Save Document Source" icon={DownloadIcon} onClick={onDownload} />
-        </ToolbarGroup>
-      </ToolbarContent>
-    </Toolbar>
+    <Flex wrap align="center" gap="small">
+      <Space.Compact role="group" aria-label={`${title} message view`}>
+        {VIEW_MODES.map((name) => (
+          <Button key={name} size="small" type={mode === name ? 'primary' : 'default'} aria-pressed={mode === name} onClick={() => onMode(name)}>
+            {name}
+          </Button>
+        ))}
+      </Space.Compact>
+      <Flex wrap align="center" role="toolbar" aria-label={`${side} tree tools`}>
+        {mode !== 'Text' && (
+          <>
+            <Tool label={collapseNext ? 'Collapse Tree' : 'Expand Tree'} icon={collapseNext ? UpOutlined : DownOutlined} onClick={expand} />
+            <Tool label="Show Full Path" icon={NodeIndexOutlined} pressed={fullPath} onClick={onPath} />
+            <Tool label="Filter Tree" icon={FilterOutlined} pressed={filter.active} onClick={onToggleFilter} />
+            <ToolMenu label="Filter Tree options" items={filterItems} />
+            {target && (
+              <>
+                <Tool label="Show Mapping Column" icon={TableOutlined} pressed={mappingColumn} onClick={onMapping} />
+                <Tool
+                  label="Show Selection Column"
+                  icon={selectionColumn ? CheckSquareOutlined : BorderOutlined}
+                  pressed={selectionColumn}
+                  onClick={() => onSelection(!selectionColumn)}
+                />
+                <ToolMenu label="Selection column options" items={selectionItems} />
+              </>
+            )}
+          </>
+        )}
+        <Tool label={searchOpen ? 'Close Search' : 'Open Search'} icon={SearchOutlined} pressed={searchOpen} onClick={onSearch} />
+        <Tool label="Save Document Source" icon={DownloadOutlined} onClick={onDownload} />
+      </Flex>
+    </Flex>
   );
 }

@@ -1,24 +1,5 @@
-import {
-  Button,
-  Card,
-  CardBody,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  ClipboardCopy,
-  Content,
-  Flex,
-  FlexItem,
-  Icon,
-  List,
-  ListItem,
-  SearchInput,
-  Spinner,
-  Switch,
-  Title,
-} from '@patternfly/react-core';
-import { AngleDownIcon, AngleRightIcon, CheckIcon, CubeIcon, ExclamationTriangleIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Button, Card, Flex, Input, Spin, Switch, type InputRef } from 'antd';
+import { DownOutlined, RightOutlined, CheckOutlined, BlockOutlined, WarningOutlined } from '@ant-design/icons';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import type { ApiClient, FieldDto, StructureLoaded } from '../../api/client';
@@ -26,6 +7,8 @@ import type { FieldPath, StructureRef, TargetFieldMappings } from '../../generat
 import { localPath, stepName } from '../../model/field-path';
 import { variableName, VARIABLES_ISSUE } from '../mock/definition-preview';
 import { PreviewBadge } from '../mock/PreviewBadge';
+import './schema-pane.css';
+import { CopyTextButton } from '../shared/CopyTextButton';
 import { FieldTypeIcon } from '../shared/FieldTypeIcon';
 import { useStructure } from '../shared/structure-query';
 import { SOURCE_FIELD_DRAG } from '../store/drag';
@@ -107,63 +90,57 @@ export function SchemaPane(props: SchemaPaneProps) {
   let body;
   if (query.isPending)
     body = (
-      <CardBody>
-        <Spinner size="md" aria-hidden /> Loading the {side} structure…
-      </CardBody>
+      <div className="schema-pane-content">
+        <Spin size="small" aria-hidden /> Loading the {side} structure…
+      </div>
     );
   else if (query.isError)
     body = (
-      <CardBody role="alert">
-        <Content component="p">{query.error.message}</Content>
-      </CardBody>
+      <div className="schema-pane-content" role="alert">
+        <p>{query.error.message}</p>
+      </div>
     );
   else if (query.data.kind === 'refused')
     body = (
-      <CardBody>
-        <List aria-label={`${title} message diagnostics`}>
+      <div className="schema-pane-content">
+        <ul aria-label={`${title} message diagnostics`}>
           {query.data.diagnostics.map((d, i) => (
-            <ListItem key={i}>
+            <li key={i}>
               {d.severity} <code>{d.code}</code>: {d.message}
-            </ListItem>
+            </li>
           ))}
-        </List>
-      </CardBody>
+        </ul>
+      </div>
     );
   else body = <LoadedPane {...props} structure={query.data} format={format} fileName={fileName} />;
 
   return (
-    <Card isFullHeight isCompact component="section" id={`${side}-message-pane`} aria-label={`${side} message`} data-message-pane style={{ minHeight: 0 }}>
-      <CardHeader
-        actions={{
-          actions: (
-            <>
-              <Content component="small">{fileName}</Content>
-              <Button size="sm" variant="secondary" isDisabled={!editing} aria-label={`Change ${side} message`} title={`Choose ${side} message format`} onClick={onAssign}>
-                {format}
-              </Button>
-            </>
-          ),
-          hasNoOffset: true,
-        }}
+    <section className="schema-pane" id={`${side}-message-pane`} aria-label={`${side} message`} data-message-pane>
+      <Card
+        size="small"
+        className="schema-pane-card"
+        styles={{ body: { display: 'flex', flexDirection: 'column', flex: '1 1 0', minHeight: 0, padding: 0 } }}
+        title={
+          <Flex align="center" gap="small">
+            <BlockOutlined aria-hidden />
+            <div>
+              <small>{title} message</small>
+              <h2>{structure ? stepName(structure.root.step) : fileName}</h2>
+            </div>
+          </Flex>
+        }
+        extra={
+          <Flex align="center" gap="small">
+            <small>{fileName}</small>
+            <Button size="small" disabled={!editing} aria-label={`Change ${side} message`} title={`Choose ${side} message format`} onClick={onAssign}>
+              {format}
+            </Button>
+          </Flex>
+        }
       >
-        <Flex alignItems={{ default: 'alignItemsCenter' }} flexWrap={{ default: 'nowrap' }}>
-          <FlexItem>
-            <Icon size="lg" status={side === 'source' ? 'info' : 'custom'}>
-              <CubeIcon />
-            </Icon>
-          </FlexItem>
-          <FlexItem>
-            <Content component="small">{title} message</Content>
-            <CardTitle>
-              <Title headingLevel="h2" size="md">
-                {structure ? stepName(structure.root.step) : fileName}
-              </Title>
-            </CardTitle>
-          </FlexItem>
-        </Flex>
-      </CardHeader>
-      {body}
-    </Card>
+        {body}
+      </Card>
+    </section>
   );
 }
 
@@ -197,7 +174,7 @@ function LoadedPane({
   const [search, setSearch] = useState('');
   // the expanded structure fields; null while every one is, as a pane opens
   const [expanded, setExpanded] = useState<ReadonlySet<FieldPath> | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<InputRef>(null);
 
   const term = search.trim().toLowerCase();
   const all = useMemo(() => new Set(expandAllPaths(structure)), [structure]);
@@ -303,7 +280,7 @@ function LoadedPane({
 
   return (
     <>
-      <CardBody isFilled={false}>
+      <div className="schema-pane-content">
         <TreeToolbar
           side={side}
           mode={mode}
@@ -340,17 +317,17 @@ function LoadedPane({
           onSelectionChange={changeSelection}
         />
         {searchOpen && (
-          <SearchInput
+          <Input
+            allowClear
             ref={searchRef}
             aria-label={`Filter ${side} fields`}
             placeholder={mode === 'Text' ? 'Find in XSD' : 'Find a field'}
             value={search}
             onKeyDown={searchKeys}
-            onChange={(_event, value) => setSearch(value)}
-            onClear={() => setSearch('')}
+            onChange={(event) => setSearch(event.target.value)}
           />
         )}
-      </CardBody>
+      </div>
       {mode === 'Text' ? (
         <SchemaText side={side} lines={lines} term={term} selected={selected} fieldActions={fieldActions} rowActions={rowActions} />
       ) : (
@@ -373,11 +350,10 @@ function LoadedPane({
         />
       )}
       {fullPath && mode !== 'Text' && (
-        <CardFooter>
-          <ClipboardCopy isReadOnly isCode variant="inline-compact" hoverTip="Copy field path" clickTip="Copied">
-            {`/${selected === null ? '' : localPath(selected)}`}
-          </ClipboardCopy>
-        </CardFooter>
+        <Flex align="center" className="schema-pane-content">
+          <code>{`/${selected === null ? '' : localPath(selected)}`}</code>
+          <CopyTextButton label="field path" text={`/${selected === null ? '' : localPath(selected)}`} />
+        </Flex>
       )}
       {footer}
     </>
@@ -410,8 +386,23 @@ interface FieldRowsProps {
   rowActions: RowActions;
 }
 
-/** The tree or the table of a pane, one PatternFly table row per visible row, only those near the scrolled view rendered. */
-function FieldRows({ side, rows, table, toggleable, onToggle, format, connected, orphaned, selected, mapping, selection, variables, fieldActions, rowActions }: FieldRowsProps) {
+/** The tree or the table of a pane, one measured table row per visible row, only those near the scrolled view rendered. */
+function FieldRows({
+  side,
+  rows,
+  table,
+  toggleable,
+  onToggle,
+  format,
+  connected,
+  orphaned,
+  selected,
+  mapping,
+  selection,
+  variables,
+  fieldActions,
+  rowActions,
+}: FieldRowsProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Same-step siblings share a field path: the second and later rows of a path get `#n` as their key.
   const keys = useMemo(() => {
@@ -447,29 +438,29 @@ function FieldRows({ side, rows, table, toggleable, onToggle, format, connected,
   const columns = 1 + (selection ? 1 : 0) + (mapping ? 1 : 0) + (table ? 3 : 0);
   const spacer = (px: number) =>
     px > 0 && (
-      <Tr aria-hidden="true">
-        <Td colSpan={columns} style={{ height: px, padding: 0 }} />
-      </Tr>
+      <tr aria-hidden="true">
+        <td colSpan={columns} style={{ height: px, padding: 0 }} />
+      </tr>
     );
 
   return (
     <div ref={scrollRef} data-fields-scroll style={SCROLL_AREA}>
-      <Table variant="compact" gridBreakPoint="" isStickyHeader role="table" aria-label={`${side} fields`}>
-        <Thead>
-          <Tr>
-            <Th>Structure</Th>
-            {selection && <Th>Selection</Th>}
-            {mapping && <Th>Mapping</Th>}
+      <table className="schema-fields" aria-label={`${side} fields`}>
+        <thead>
+          <tr>
+            <th scope="col">Structure</th>
+            {selection && <th scope="col">Selection</th>}
+            {mapping && <th scope="col">Mapping</th>}
             {table && (
               <>
-                <Th>Occurrences</Th>
-                <Th>Type</Th>
-                <Th>Description</Th>
+                <th scope="col">Occurrences</th>
+                <th scope="col">Type</th>
+                <th scope="col">Description</th>
               </>
             )}
-          </Tr>
-        </Thead>
-        <Tbody>
+          </tr>
+        </thead>
+        <tbody>
           {spacer(top)}
           {items.map((item) => {
             const { path, depth, field, expandable, expanded } = rows[item.index]!;
@@ -478,32 +469,39 @@ function FieldRows({ side, rows, table, toggleable, onToggle, format, connected,
             const typeLabel = format === 'XML' ? xsdType(field.valueType ?? '') : (field.valueType ?? '');
             const name = variable ? variableName(path) : stepName(path);
             return (
-              <Tr key={item.key} ref={virtualizer.measureElement} data-index={item.index} data-field-path={path} isRowSelected={selected === path} {...rowActions(path)}>
-                <Td dataLabel="Structure">
+              <tr
+                key={item.key}
+                ref={virtualizer.measureElement}
+                data-index={item.index}
+                data-field-path={path}
+                data-selected={selected === path || undefined}
+                {...rowActions(path)}
+              >
+                <td>
                   <Flex
-                    spaceItems={{ default: 'spaceItemsSm' }}
-                    alignItems={{ default: 'alignItemsCenter' }}
-                    flexWrap={{ default: 'nowrap' }}
-                    style={{ paddingInlineStart: `calc(${depth} * var(--pf-t--global--spacer--md))` }}
+                    gap="var(--ant-size-xxs)"
+                    align="center"
+
+                    style={{ paddingInlineStart: `calc(${depth} * var(--ant-size))` }}
                   >
                     {expandable && toggleable ? (
                       <Button
-                        variant="plain"
-                        size="sm"
-                        hasNoPadding
+                        type="text"
+                        size="small"
+                        className="schema-caret"
                         aria-label={`${expanded ? 'Collapse' : 'Expand'} ${localPath(path)}`}
                         aria-expanded={expanded}
-                        icon={expanded ? <AngleDownIcon /> : <AngleRightIcon />}
+                        icon={expanded ? <DownOutlined aria-hidden /> : <RightOutlined aria-hidden />}
                         onClick={() => onToggle(path)}
                       />
                     ) : (
-                      <Icon size="md" aria-hidden="true">
-                        {expandable && <AngleDownIcon />}
-                      </Icon>
+                      <span className="schema-caret" aria-hidden>
+                        {expandable && <DownOutlined aria-hidden />}
+                      </span>
                     )}
                     <Button
-                      variant="link"
-                      isInline
+                      type="link"
+
                       icon={<FieldTypeIcon type={type} />}
                       aria-label={variable ? `Variable ${name}` : undefined}
                       title={`${localPath(path)} · ${variable ? 'Variable' : type} · ${occurrenceText(field)}`}
@@ -514,55 +512,48 @@ function FieldRows({ side, rows, table, toggleable, onToggle, format, connected,
                     {variable && <PreviewBadge feature="Variables" issue={VARIABLES_ISSUE} />}
                     {/* a row shows its most urgent field status: orphaned before connected */}
                     {orphaned.has(path) ? (
-                      <Icon
-                        status="warning"
-                        role="img"
+                      <WarningOutlined
+                        style={{ color: 'var(--ant-color-warning)' }}
                         title="Orphaned reference: this mapping reads a source field the source structure no longer has. Drop a source field on its box, or remap it from the node menu."
                         aria-label="Orphaned reference"
-                      >
-                        <ExclamationTriangleIcon />
-                      </Icon>
+                      />
                     ) : (
-                      connected.has(path) && (
-                        <Icon status="success" role="img" title="Connected" aria-label="Connected">
-                          <CheckIcon />
-                        </Icon>
-                      )
+                      connected.has(path) && <CheckOutlined style={{ color: 'var(--ant-color-success)' }} title="Connected" aria-label="Connected" />
                     )}
                   </Flex>
-                </Td>
+                </td>
                 {selection && (
-                  <Td dataLabel="Selection">
+                  <td>
                     <Switch
                       aria-label={`Select /${localPath(path)}`}
-                      isChecked={selection.marked.includes(path)}
-                      onChange={(_event, checked) => selection.setMarked(checked ? [...selection.marked, path] : selection.marked.filter((p) => p !== path))}
+                      checked={selection.marked.includes(path)}
+                      onChange={(checked) => selection.setMarked(checked ? [...selection.marked, path] : selection.marked.filter((p) => p !== path))}
                     />
-                  </Td>
+                  </td>
                 )}
                 {mapping && (
-                  <Td dataLabel="Mapping">
+                  <td>
                     <code>{expressionText(mapping[path]) || `No mapping for /${localPath(path)}`}</code>
-                  </Td>
+                  </td>
                 )}
                 {table && (
                   <>
-                    <Td dataLabel="Occurrences">{occurrenceText(field)}</Td>
+                    <td>{occurrenceText(field)}</td>
                     {/* a structure field has a value type only with simple content, as a leaf with attributes */}
-                    <Td dataLabel="Type">{typeLabel}</Td>
-                    <Td dataLabel="Description" />
+                    <td>{typeLabel}</td>
+                    <td />
                   </>
                 )}
-              </Tr>
+              </tr>
             );
           })}
           {spacer(bottom)}
-        </Tbody>
-      </Table>
+        </tbody>
+      </table>
       {rows.length === 0 && (
-        <CardBody>
-          <Content component="p">No matching fields.</Content>
-        </CardBody>
+        <div className="schema-pane-content">
+          <p>No matching fields.</p>
+        </div>
       )}
     </div>
   );
@@ -597,9 +588,10 @@ function SchemaText({ side, lines, term, selected, fieldActions, rowActions }: S
   const bottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);
   return (
     <div ref={scrollRef} style={SCROLL_AREA}>
-      <CardBody
+      <div
+        className="schema-pane-content"
         aria-label={`${side === 'source' ? 'Source' : 'Target'} XSD source`}
-        style={{ fontFamily: 'var(--pf-t--global--font--family--mono)', fontSize: 'var(--pf-t--global--font--size--body--sm)', whiteSpace: 'pre' }}
+        style={{ fontFamily: 'var(--ant-font-family-code)', fontSize: 'var(--ant-font-size-sm)', whiteSpace: 'pre' }}
       >
         <div style={{ height: top }} />
         {items.map((item) => {
@@ -610,7 +602,13 @@ function SchemaText({ side, lines, term, selected, fieldActions, rowActions }: S
             path === undefined ? (
               text
             ) : (
-              <Button variant="link" isInline isClicked={path === selected} title={`/${localPath(path)}`} style={{ fontFamily: 'inherit', fontSize: 'inherit' }} {...fieldActions(path)}>
+              <Button
+                type="link"
+                className={path === selected ? 'schema-selected-line' : undefined}
+                title={`/${localPath(path)}`}
+                style={{ fontFamily: 'inherit', fontSize: 'inherit' }}
+                {...fieldActions(path)}
+              >
                 {text}
               </Button>
             );
@@ -622,7 +620,7 @@ function SchemaText({ side, lines, term, selected, fieldActions, rowActions }: S
           );
         })}
         <div style={{ height: bottom }} />
-      </CardBody>
+      </div>
     </div>
   );
 }

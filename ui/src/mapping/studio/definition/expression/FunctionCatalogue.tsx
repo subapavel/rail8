@@ -1,5 +1,5 @@
-import { Badge, Button, Content, ExpandableSection, Label, List, ListItem, SearchInput, Stack, StackItem } from '@patternfly/react-core';
-import { CogIcon } from '@patternfly/react-icons';
+import { Badge, Button, Flex, Input, Tag } from 'antd';
+import { SettingOutlined } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
 import type { FunctionCatalogue as Catalogue } from '../../../api/client';
 import { deviationNote } from './fidelity';
@@ -34,93 +34,94 @@ export function FunctionCatalogue({
   const [collapsedResults, setCollapsedResults] = useState<Record<string, boolean>>({});
   const groups = useMemo(() => drilldown(catalogue), [catalogue]);
   const filter = query.trim().toLowerCase();
-  const shown = groups.map(({ group, functions }) => ({ group, entries: functions.filter((fn) => [group, fn.name].some((value) => value.toLowerCase().includes(filter))) }));
+  const shown = groups.map(({ group, functions }) => ({
+    group,
+    entries: functions.filter((fn) => [group, fn.name].some((value) => value.toLowerCase().includes(filter))),
+  }));
   return (
-    <Stack hasGutter role="region" aria-label="Function catalogue">
-      <StackItem>
-        <SearchInput
+    <Flex vertical gap="small" role="region" aria-label="Function catalogue">
+      <div>
+        <Input
+          allowClear
           aria-label="Search functions"
           placeholder="Search functions"
           value={query}
-          onChange={(_, value) => {
-            setQuery(value);
+          onChange={(event) => {
+            setQuery(event.target.value);
             setCollapsedResults({});
           }}
-          onClear={() => setQuery('')}
         />
-      </StackItem>
-      <StackItem>
+      </div>
+      <div>
         {shown.map(({ group, entries }) => {
           if (entries.length === 0) return null;
           const open = filter ? !collapsedResults[group] : Boolean(expanded[group]);
           return (
-            <ExpandableSection
-              key={group}
-              isExpanded={open}
-              onToggle={() => {
-                if (filter) setCollapsedResults((old) => ({ ...old, [group]: open }));
-                else setExpanded((old) => ({ ...old, [group]: !open }));
-              }}
-              toggleContent={
-                <>
-                  {group} <Badge isRead>{entries.length}</Badge>
-                </>
-              }
-            >
-              <List isPlain>
-                {entries.map((fn) => {
-                  const preview = fn.preview !== undefined && addPreview !== undefined;
-                  const lacking = fn.fn === undefined && !preview;
-                  const off = disabled || lacking;
-                  // a catalogue function is described by its deviation note, if any; one the catalogue lacks by why it is not there
-                  const description = fn.fn === undefined ? unavailable(fn) : deviationNote(catalogue[fn.fn]!.fidelity);
-                  return (
-                    <ListItem key={fn.key}>
-                      <Button
-                        variant="link"
-                        isInline
-                        isAriaDisabled={lacking}
-                        isDisabled={disabled && !lacking}
-                        title={description}
-                        aria-description={description}
-                        icon={<span aria-hidden="true">ƒ</span>}
-                        draggable={!off && !preview}
-                        onDragStart={(event) => {
-                          event.dataTransfer.setData(functionDragType, fn.fn!);
-                          event.dataTransfer.effectAllowed = 'copy';
-                        }}
-                        onClick={() => {
-                          if (off) return;
-                          if (preview) addPreview(fn.preview!);
-                          else add(fn.fn!);
-                        }}
-                      >
-                        {fn.name}
-                        {fn.overload !== undefined && <Content component="small"> {fn.overload} inputs</Content>}
-                        {(fn.configurable || preview) && (
-                          <>
-                            {' '}
-                            <CogIcon aria-label="Configurable" />
-                          </>
-                        )}
-                        {preview && (
-                          <>
-                            {' '}
-                            <Label isCompact color="purple">
-                              Preview
-                            </Label>
-                          </>
-                        )}
-                      </Button>
-                    </ListItem>
-                  );
-                })}
-              </List>
-            </ExpandableSection>
+            <section key={group}>
+              <Button
+                type="text"
+                aria-expanded={open}
+                onClick={() => {
+                  if (filter) setCollapsedResults((old) => ({ ...old, [group]: open }));
+                  else setExpanded((old) => ({ ...old, [group]: !open }));
+                }}
+              >
+                {group} <Badge count={entries.length} overflowCount={Infinity} color="var(--ant-color-text-secondary)" />
+              </Button>
+              {open && (
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {entries.map((fn) => {
+                    const preview = fn.preview !== undefined && addPreview !== undefined;
+                    const lacking = fn.fn === undefined && !preview;
+                    const off = disabled || lacking;
+                    // a catalogue function is described by its deviation note, if any; one the catalogue lacks by why it is not there
+                    const description = fn.fn === undefined ? unavailable(fn) : deviationNote(catalogue[fn.fn]!.fidelity);
+                    return (
+                      <li key={fn.key}>
+                        <Button
+                          type="link"
+                          style={lacking ? { color: 'var(--ant-color-text-disabled)', cursor: 'not-allowed' } : undefined}
+                          aria-disabled={lacking || undefined}
+                          disabled={disabled && !lacking}
+                          title={description}
+                          aria-description={description}
+                          icon={<span aria-hidden="true">ƒ</span>}
+                          draggable={!off && !preview}
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData(functionDragType, fn.fn!);
+                            event.dataTransfer.effectAllowed = 'copy';
+                          }}
+                          onClick={() => {
+                            if (off) return;
+                            if (preview) addPreview(fn.preview!);
+                            else add(fn.fn!);
+                          }}
+                        >
+                          {fn.name}
+                          {fn.overload !== undefined && <small> {fn.overload} inputs</small>}
+                          {(fn.configurable || preview) && (
+                            <>
+                              {' '}
+                              <SettingOutlined aria-label="Configurable" />
+                            </>
+                          )}
+                          {preview && (
+                            <>
+                              {' '}
+                              <Tag color="purple">Preview</Tag>
+                            </>
+                          )}
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
           );
         })}
-        {shown.every(({ entries }) => entries.length === 0) && <Content component="p">No matching functions.</Content>}
-      </StackItem>
-    </Stack>
+        {shown.every(({ entries }) => entries.length === 0) && <p>No matching functions.</p>}
+      </div>
+    </Flex>
   );
 }

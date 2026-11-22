@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem } from '@patternfly/react-core';
+import { Flex } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useStore } from 'zustand';
@@ -46,7 +46,7 @@ const VARIABLE_STEP = /\/\$[A-Za-z_][A-Za-z0-9_]*$/;
  * The height of the tab's split, the message panes above the mapping expression: under the shell, the studio's header
  * and the Definition bar it fits a 1440 x 900 window, the canvas's footer included.
  */
-const SPLIT_HEIGHT = '40rem';
+const SPLIT_HEIGHT = 'clamp(28rem, calc(100dvh - 19rem), 40rem)';
 
 /**
  * The Definition tab: the source and target message panes above the mapping expression of the selected target field,
@@ -186,7 +186,13 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
       footer={
         side === 'target' &&
         orphanedTargets.length > 0 && (
-          <OrphanedMappings paths={orphanedTargets} selected={selectedTarget} editing={editing} onOpen={(path) => store.getState().selectTarget(path)} onDelete={deleteOrphan} />
+          <OrphanedMappings
+            paths={orphanedTargets}
+            selected={selectedTarget}
+            editing={editing}
+            onOpen={(path) => store.getState().selectTarget(path)}
+            onDelete={deleteOrphan}
+          />
         )
       }
     />
@@ -197,7 +203,8 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
 
   return (
     <>
-      <Stack
+      <Flex
+        vertical
         component="section"
         aria-label="Mapping definition"
         onKeyDown={(e) => {
@@ -206,7 +213,7 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
           layout.setView('split');
         }}
       >
-        <StackItem>
+        <div>
           <DefinitionBar
             editing={editing}
             dataFlow={dataFlow}
@@ -218,8 +225,8 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
             onDependencies={() => dependencies.change(true, selectedDependencies)}
             dependencyItems={dependencies.items(selectedDependencies)}
           />
-        </StackItem>
-        <StackItem style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
           <VerticalSplitLayout
             label="Resize mapping area"
             lowerId={`${mappingId}-mapping-area`}
@@ -258,8 +265,8 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
           >
             {dataFlow ? (
               selectedTarget === null || !catalogue.data ? (
-                <section aria-label="Field mapping canvas" style={{ padding: 'var(--pf-t--global--spacer--md)' }}>
-                  <Content component="p">{selectedTarget === null ? 'Select a target field to see its mapping expression.' : 'Loading the function catalogue…'}</Content>
+                <section aria-label="Field mapping canvas" style={{ padding: 'var(--ant-size)' }}>
+                  <p>{selectedTarget === null ? 'Select a target field to see its mapping expression.' : 'Loading the function catalogue…'}</p>
                 </section>
               ) : (
                 <Canvas
@@ -288,8 +295,8 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
               />
             )}
           </VerticalSplitLayout>
-        </StackItem>
-      </Stack>
+        </div>
+      </Flex>
       {clearing && (
         <ClearMapping
           onClose={() => setClearing(false)}

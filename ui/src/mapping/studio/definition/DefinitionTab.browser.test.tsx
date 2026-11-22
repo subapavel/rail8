@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { Rail8Theme } from '../../../theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -46,9 +46,13 @@ async function renderDefinition(
   if (options.editing) store.getState().startEditing();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   render(
-    <QueryClientProvider client={queryClient}>
-      <StudioFrame mappingId={mappingId} api={api} store={store} browserState={options.browserState ?? memoryBrowserState()} />
-    </QueryClientProvider>,
+    <Rail8Theme>
+      {() => (
+        <QueryClientProvider client={queryClient}>
+          <StudioFrame mappingId={mappingId} api={api} store={store} browserState={options.browserState ?? memoryBrowserState()} />
+        </QueryClientProvider>
+      )}
+    </Rail8Theme>,
   );
   return store;
 }
@@ -61,6 +65,7 @@ const row = (side: Side, name: string) => fields(side).getByRole('row').filter({
 const viewButton = (side: Side, mode: string) => pane(side).getByRole('group', { name: `${side === 'source' ? 'Source' : 'Target'} message view` }).getByRole('button', { name: mode });
 const tool = (side: Side, name: string) => pane(side).getByRole('toolbar', { name: `${side} tree tools` }).getByRole('button', { name, exact: true });
 const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
+const filterChoice = (name: string) => page.getByRole('menuitemradio', { name, exact: true });
 const canvasPanel = () => page.getByRole('region', { name: 'Field mapping canvas' });
 const node = (name: RegExp) => canvasPanel().getByRole('group', { name: 'Mapping canvas' }).getByRole('group', { name });
 const footer = () => canvasPanel().getByText(/nodes · /);
@@ -326,16 +331,16 @@ describe('the Definition tab panes', () => {
     await expect.element(field('target', 'Note')).not.toBeInTheDocument();
 
     await tool('target', 'Filter Tree options').click();
-    await menuItem('Show Unmapped Fields Only').click();
+    await filterChoice('Show Unmapped Fields Only').click();
     await expect.element(field('target', 'Note')).toBeVisible();
     await expect.element(field('target', 'OrderId')).not.toBeInTheDocument();
 
     await tool('target', 'Filter Tree options').click();
-    await menuItem('Show Fields Mapped Directly Only').click();
+    await filterChoice('Show Fields Mapped Directly Only').click();
     await expect.element(field('target', 'OrderId')).toBeVisible();
 
     await tool('target', 'Filter Tree options').click();
-    await menuItem('Show Fields Mapped Indirectly Only').click();
+    await filterChoice('Show Fields Mapped Indirectly Only').click();
     await expect.element(pane('target').getByText('No matching fields.')).toBeVisible();
 
     await tool('target', 'Filter Tree options').click();
@@ -349,8 +354,8 @@ describe('the Definition tab panes', () => {
 
     await tool('source', 'Filter Tree options').click();
 
-    await expect.element(menuItem('Show Unmapped Fields Only')).toBeVisible();
-    await expect.element(menuItem('Show Fields Mapped Directly Only')).not.toBeInTheDocument();
+    await expect.element(filterChoice('Show Unmapped Fields Only')).toBeVisible();
+    await expect.element(filterChoice('Show Fields Mapped Directly Only')).not.toBeInTheDocument();
     await menuItem('Switch On').click();
     await expect.element(field('source', 'OrderId')).toBeVisible();
     await expect.element(field('source', 'Note')).not.toBeInTheDocument();
@@ -386,7 +391,7 @@ describe('the Definition tab panes', () => {
     // the switch's toggle covers its input, which takes the click
     await row('target', 'Note').getByRole('switch', { name: 'Select /Order/Note' }).click({ force: true });
     await tool('target', 'Filter Tree options').click();
-    await menuItem('Show Selected Fields').click();
+    await filterChoice('Show Selected Fields').click();
 
     await expect.element(field('target', 'Note')).toBeVisible();
     await expect.element(field('target', 'OrderId')).not.toBeInTheDocument();
@@ -728,10 +733,10 @@ describe('the definition bar, the expression header and the field menus', () => 
     const store = await renderDefinition();
 
     await field('source', 'OrderId').click({ button: 'right' });
-    await expect.element(page.getByRole('menu', { name: 'Where Used' })).toBeVisible();
+    await expect.element(page.getByRole('group', { name: 'Where Used' })).toBeVisible();
     await menuItem('/Order/OrderId').click();
     expect(store.getState().selectedTarget).toBe(ORDER_ID);
-    await expect.element(page.getByRole('menu', { name: 'Where Used' })).not.toBeInTheDocument();
+    await expect.element(page.getByRole('group', { name: 'Where Used' })).not.toBeInTheDocument();
     await expect.element(field('source', 'OrderId')).toHaveFocus();
 
     // a connection is drawn between rows in view: this comes before Note scrolls the source rows
@@ -743,7 +748,7 @@ describe('the definition bar, the expression header and the field menus', () => 
     await field('source', 'Note').click({ button: 'right' });
     await expect.element(menuItem('No target field reads it')).toBeDisabled();
     await userEvent.keyboard('{Escape}');
-    await expect.element(page.getByRole('menu', { name: 'Where Used' })).not.toBeInTheDocument();
+    await expect.element(page.getByRole('group', { name: 'Where Used' })).not.toBeInTheDocument();
   });
 
   test('a field menu opens below its field', async () => {
@@ -754,7 +759,7 @@ describe('the definition bar, the expression header and the field menus', () => 
     const menu = page.getByRole('menu', { name: 'Field actions for Note' });
     await expect.element(menu).toBeVisible();
     const at = field('target', 'Note').element().getBoundingClientRect();
-    const opened = menu.element().closest('.pf-v6-c-menu')!.getBoundingClientRect();
+    const opened = menu.element().getBoundingClientRect();
     expect(Math.abs(opened.left - at.left)).toBeLessThan(2);
     expect(Math.abs(opened.top - at.bottom)).toBeLessThan(2);
   });

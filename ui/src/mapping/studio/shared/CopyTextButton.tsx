@@ -1,6 +1,6 @@
-import { Button, Tooltip } from '@patternfly/react-core';
-import { CheckIcon, CopyIcon, ExclamationCircleIcon } from '@patternfly/react-icons';
-import { useEffect, useRef, useState } from 'react';
+import { Button, Tooltip } from 'antd';
+import { CheckOutlined, CopyOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
 
 const COPIED = 'Copied!';
 /** How long the receipt shows. */
@@ -13,7 +13,6 @@ const RECEIPT_MS = 2400;
  * supports all have the asynchronous clipboard.
  */
 export function CopyTextButton({ label, text }: { label: string; text: string }) {
-  const trigger = useRef<HTMLButtonElement>(null);
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
   const [receipt, setReceipt] = useState<string | null>(null);
@@ -31,39 +30,28 @@ export function CopyTextButton({ label, text }: { label: string; text: string })
       setReceipt('Could not copy. Select the text and copy it manually.');
     }
   };
-  const icon = receipt === null ? <CopyIcon /> : receipt === COPIED ? <CheckIcon /> : <ExclamationCircleIcon />;
+  const icon = receipt === null ? <CopyOutlined aria-hidden /> : receipt === COPIED ? <CheckOutlined aria-hidden /> : <ExclamationCircleOutlined aria-hidden />;
   return (
     <>
-      <Button
-        ref={trigger}
-        variant="plain"
-        aria-label={`Copy ${label} to clipboard`}
-        onClick={() => void copy()}
-        icon={icon}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onFocus={() => setFocus(true)}
-        onBlur={() => setFocus(false)}
-        onKeyDown={(event) => {
-          if (event.key !== 'Escape') return;
-          setFocus(false);
-          setHover(false);
-          setReceipt(null);
-        }}
-      />
-      {(hover || focus || receipt !== null) && (
-        <Tooltip
-          aria="none"
-          aria-live="off"
-          triggerRef={trigger}
-          trigger="manual"
-          isVisible
-          position="top-end"
-          maxWidth="16rem"
-          content={receipt ?? 'Copy to clipboard'}
+      <Tooltip trigger={[]} open={hover || focus || receipt !== null} placement="topRight" title={receipt ?? 'Copy to clipboard'}>
+        <Button
+          type="text"
+          aria-label={`Copy ${label} to clipboard`}
+          onClick={() => void copy()}
+          icon={icon}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          onFocus={() => setFocus(true)}
+          onBlur={() => setFocus(false)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return;
+            setFocus(false);
+            setHover(false);
+            setReceipt(null);
+          }}
         />
-      )}
-      <span className="pf-v6-screen-reader" role="status">
+      </Tooltip>
+      <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }} role="status">
         {receipt}
       </span>
     </>
