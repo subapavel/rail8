@@ -486,18 +486,6 @@ its drain.
 **Planned**
 - A node that restarts builds the drain of a retired flow from its mark's copy of the record. Today
   it builds none, and what the flow left in the work queue waits there.
-- A graphical flow editor (React Flow). The flow file and the editor are two views of the same
-  thing: an edit in either shows in the other. The flow file holds no layout. The editor shows a
-  step's default name but never writes it, and an edit changes only the step edited, keeping the
-  file's comments and order as written. Its design is agreed (`docs/FLOW-EDITOR.md`):
-  - the editor's state is the file's text;
-  - it lays the flow out on its own, top to bottom, as one line that fans out only at a `to` by prop,
-    with each process in a lane of its own, and already holds steps inside a step for when such a step
-    comes;
-  - an edit replaces only the text of what it changes, within stated YAML forms, and must read back as
-    intended; the whole flow is checked after every edit;
-  - every step's settings form is drawn from a settings description; a module's or plugin's step is
-    described by the JSON Schema of its options, which the admin API serves (`GET /admin/steps`).
 - An authentication, authorization and secret store comes in step 2; today secrets are environment
   variables.
 
@@ -972,10 +960,10 @@ where `-am` builds the engine in the same build; the engine's own tests run in `
 
 The Rail8 web application in `ui/` uses React, Ant Design 6 and ProComponents v3. The theme
 provider applies compact sizing and the light or dark algorithm to both the workspace and its dialogs.
-The screen registry supplies navigation groups and the Home screen's shortcuts. Its shell has a masthead, a navigation listing every screen and the tabs of
-the open screens: choosing a screen opens it in a tab, or shows the tab it already has, and each tab
-closes on its own, and a screen may open tabs of its own. The tabs live in the page's memory; a
-reload starts again with the Home screen.
+The screen registry supplies navigation groups and the Home screen's shortcuts. The Open Canvas shell puts tabs
+and workspace actions in the top bar. The navigation opens over the editor from the left edge. Quick navigation
+(Ctrl+K or Cmd+K) finds screens and open tabs. Opening a screen again selects its existing tab. A screen can open
+additional tabs and ask for confirmation when a user closes a dirty editor. Reloading starts again with Home.
 
 Each folder of `ui/src/` is a module of the UI. Its `module.tsx` names its screens and its place in the
 navigation, after Home, and `main.tsx` finds every module as the build runs; the application refuses to start,
@@ -1033,16 +1021,17 @@ file with its text, its `ETag` and its context: the endpoints of its package (th
 `package.yaml`) and the flows of the working folder with the `direct` address each one serves; it shares the walk, the
 path check and the `ETag` with the endpoint files. The browser reads the text with the `yaml` library and draws it in
 its own block layout, which keeps the file's order and gives the same picture for the same file: where messages arrive,
-the steps of each list (the flow's own, each process's in a lane of its own to the right), the fork of a `to` by prop
+the steps of each list (the flow's own and each process in its own lane), the fork of a `to` by prop
 into its endpoints, a filter's end, a frame around what a split repeats, a call of another flow beside the `to` that
 makes it, and an end at the end of every list. Where messages arrive shows a `direct` address, or for an endpoint of a
 component with an HTTP prefix the same preview of the URL senders call as its form. Node ids are the paths of what they draw. It finds the problems the
 node would refuse the flow for (step names, process calls and their nesting, judged by one file of cases that the
 node's tests run too), references to endpoints and processes, and what the browser would read otherwise than the node,
-and locks the parts of the file an editor could not change line by line. Choosing a node shows its settings in a drawer:
+and locks the parts of the file an editor could not change line by line. React Flow draws the steps inside a collapsible
+flow frame and shows calling and receiving endpoints outside it. Choosing a node opens its settings below the canvas:
 the built-in steps as the UI describes them, a module's or plugin's from its `configSchema` (`GET /admin/steps`), the
 platform's keys on a "Step" tab, an endpoint in its component's form, and the flow's own settings when nothing is
-chosen. A file that cannot be drawn shows its text with its problems.
+chosen. The properties panel can be resized, minimized and maximized. A file that cannot be drawn shows its diagnostics.
 
 The picture opens read-only; Edit, Cancel, Check and Save as in the endpoint form. The working copy is the file's text,
 and each change is a new text: `edit(text, ...ops)` adds, replaces, removes and moves values by their paths, splicing
@@ -1051,7 +1040,7 @@ key, a plain value only where YAML 1.1 and 1.2 read it alike, text of several li
 reason and changing nothing, an operation on a locked part of the file, one that would leave a list of steps empty, or a
 result that does not read back as the value patched with its keys in order. Functions build the operations of the
 screen: adding a step with its keys in order and a free default name, moving and deleting a step, and setting a field,
-where emptying an optional one removes its key. The button on an edge adds a step there; the drawer moves and deletes
+where emptying an optional one removes its key. The action on an edge adds a step there; the properties panel moves and deletes
 the step chosen and edits the fields of its forms that hold one value, with the canvas's keys (Delete, the arrows, undo)
 while it has the focus. Undo keeps the last 100 texts, and the selection follows its step through every change. The
 problems are found again after every change and do not block Save. A flow whose `schemaVersion` is not 1, or whose list

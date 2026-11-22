@@ -1,6 +1,6 @@
 # Rail8 web application
 
-The shell discovers each module through its `module.tsx`. Home, navigation and workspace tabs all open the registered screens. A second open focuses the existing tab. Each editor owns its working copy until its tab closes. A dirty editor can defer the close through `beforeClose`.
+Open Canvas keeps workspace tabs in the top bar. Use the left-edge navigation or press Ctrl+K (Cmd+K on macOS) to open a screen or switch to an open tab. The shell discovers each module through its `module.tsx`. Each editor owns its working copy until its tab closes. A dirty editor can defer the close through `beforeClose`.
 
 ## Development
 
@@ -26,7 +26,7 @@ Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. P
 | Shell and Home | Responsive sidebar, registered shortcuts, workspace tabs | Navigation order, focus, close guards, child tabs and empty workspace |
 | Monitoring | Cursor-paged message list, status filters, attempt timeline and payload dialog | Admin reads, counts, retained payload limits and restart |
 | Endpoints | File list, schema-driven settings and raw JSON controls | Read-only access, validation, environments and conditional YAML writes |
-| Flows | File list, canvas toolbar, step inspector and graph controls | Selection, process calls, edits, undo, validation and save conflicts |
+| Flows | File list, framed React Flow diagram, connection actions and resizable bottom properties | Selection, process calls, edits, undo, validation and save conflicts |
 | Mappings | List and creation, Overview, Definition, Signature, Functions and Test | Working copies, ETags, structure selection, compile diagnostics and engine runs |
 
 The migration introduces the theme first, then converts the shell and lists, the editors and finally their browser checks. Domain operations stay in the existing API clients, working-copy stores and file middleware. A future monitoring chart can consume a supported aggregate from the admin API. The current screen displays its actual status counts directly.

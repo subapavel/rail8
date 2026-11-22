@@ -318,7 +318,7 @@ function MapTable({
 /** The fields of a form, each with its value from `values` and its problem, and editable with `edit`; lists and maps are tables. */
 function Fields({ fields, values, at, problems, edit }: { fields: StepField[]; values: Record<string, unknown>; at: Path; problems: FlowProblem[]; edit?: PanelEdit }) {
   return (
-    <Form layout="vertical">
+    <Form className="rail8-property-form" size="small" labelAlign="start" labelWrap colon={false}>
       {fields.map((f) => {
         const path = [...at, ...f.name.split('.')];
         const value = f.name.split('.').reduce<unknown>((v, k) => (typeof v === 'object' && v !== null ? (v as Record<string, unknown>)[k] : undefined), values);
@@ -510,7 +510,7 @@ export interface FlowPanelProps {
 }
 
 /**
- * What the drawer beside the canvas shows of the selection: a step's form with its "Step" tab, an endpoint in its
+ * What the properties below the canvas show of the selection: a step's form with its "Step" tab, an endpoint in its
  * component's form, a link to a flow called, a process's lane, or, when nothing is selected or the arrival is, the flow's
  * own settings. While the flow is edited, a step that is not locked can be moved within its list or to another, and
  * deleted, and its fields changed; a process renamed, deleted while no step calls it, and added; and the flow's own
