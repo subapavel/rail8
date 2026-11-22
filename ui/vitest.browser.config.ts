@@ -15,7 +15,6 @@ export default mergeConfig(
       browser: {
         enabled: true,
         headless: true,
-        // a desktop window, where the navigation is shown from the start
         viewport: { width: 1280, height: 800 },
         provider: playwright(),
         instances: [{ browser: 'chromium' }],
