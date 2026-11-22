@@ -1,17 +1,12 @@
+import { CloseOutlined, FileTextOutlined, MoonOutlined, SearchOutlined, SunOutlined } from '@ant-design/icons';
+import { Breadcrumb, Button, Empty, Flex, Layout, Tabs } from 'antd';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import { ReadSpinner } from './ReadSpinner';
-import {
-  AppstoreOutlined,
-  CloseOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  MoonOutlined,
-  SunOutlined,
-} from '@ant-design/icons';
-import { Breadcrumb, Button, Drawer, Empty, Flex, Grid, Layout, Tabs, Typography } from 'antd';
-import { Suspense, useCallback, useState } from 'react';
-import { groupedScreens, RegisteredScreens, type Screen } from './screens';
-import { Rail8Theme } from './theme';
+import { RegisteredScreens, type Screen } from './screens';
 import { closeTab, noTabs, openTab } from './tabs';
+import { Rail8Theme } from './theme';
+import { WorkspaceNavigation } from './WorkspaceNavigation';
+import { WorkspaceQuickOpen } from './WorkspaceQuickOpen';
 
 export interface ShellProps {
   /** The screens the navigation lists, in its order. */
@@ -20,21 +15,25 @@ export interface ShellProps {
   start?: string;
 }
 
-/**
- * The application's shell: a masthead with the brand and the button that shows or hides the navigation, the
- * navigation listing every screen, and the tabs of the open screens. Choosing a screen in the navigation opens it in a
- * new tab, or shows the tab it already has; each tab closes with its close button, once its screen agrees. A screen may
- * open tabs of its own, such as one for each message it found, through the function its `render` is given. With no
- * tab open the main area says so.
- */
+/** The workspace keeps open screens mounted. A registered screen or an open document can be reached from Quick open. */
 export function Shell({ screens, start }: ShellProps) {
-  const desktop = Grid.useBreakpoint().md ?? window.matchMedia('(min-width: 768px)').matches;
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [quickOpen, setQuickOpen] = useState(false);
   const [tabs, setTabs] = useState(() => (start === undefined ? noTabs : openTab(noTabs, start)));
-  // the tabs screens opened, by id; the navigation's screens are looked up in `screens`
   const [opened, setOpened] = useState<ReadonlyMap<string, Screen>>(() => new Map());
   const byId = new Map(screens.map((screen) => [screen.id, screen]));
+  const active = tabs.active ? (opened.get(tabs.active) ?? byId.get(tabs.active)) : undefined;
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'k') return;
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (event.defaultPrevented || Array.from(dialogs).some((dialog) => dialog.checkVisibility())) return;
+      event.preventDefault();
+      setQuickOpen(true);
+    };
+    document.addEventListener('keydown', shortcut);
+    return () => document.removeEventListener('keydown', shortcut);
+  }, []);
 
   const open = useCallback((screen: Screen) => {
     setOpened((current) => (current.has(screen.id) ? current : new Map(current).set(screen.id, screen)));
@@ -56,130 +55,92 @@ export function Shell({ screens, start }: ShellProps) {
     else remove(id);
   };
 
-  const active = tabs.active ? (opened.get(tabs.active) ?? byId.get(tabs.active)) : undefined;
-  const groups = groupedScreens(screens);
-  const navigation = (
-    <nav aria-label="Screens" className="rail8-nav">
-      {Array.from(groups, ([group, entries]) => (
-        <section key={group} aria-label={group}>
-          <Typography.Text type="secondary" className="rail8-nav-group">
-            {group}
-          </Typography.Text>
-          {entries.map((entry) => (
-            <Button
-              key={entry.id}
-              block
-              type="text"
-              aria-label={entry.title}
-              icon={entry.icon ?? <AppstoreOutlined />}
-              aria-current={tabs.active === entry.id ? 'page' : undefined}
-              onClick={() => {
-                open(entry);
-                setMobileOpen(false);
-              }}
-            >
-              {entry.title}
-            </Button>
-          ))}
-        </section>
-      ))}
-    </nav>
-  );
   return (
     <Rail8Theme>
       {(dark, toggle) => (
         <RegisteredScreens.Provider value={screens}>
-          <Layout className="rail8-layout">
+          <Layout className="rail8-layout" hasSider={false}>
+            <WorkspaceNavigation screens={screens} active={tabs.active} open={open} />
             <Layout.Header className="rail8-header">
-              <Flex align="center" gap="middle">
-                <Button
-                  type="text"
-                  aria-label="Navigation"
-                  aria-expanded={desktop ? !collapsed : mobileOpen}
-                  icon={(desktop ? !collapsed : mobileOpen) ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
-                  onClick={() => (desktop ? setCollapsed(!collapsed) : setMobileOpen(!mobileOpen))}
-                />
-                <span className="rail8-brand">
-                  <img src={`${import.meta.env.BASE_URL}rail8.svg`} alt="" />
-                  Rail8
-                </span>
-              </Flex>
-              <Button
-                type="text"
-                icon={dark ? <SunOutlined /> : <MoonOutlined />}
-                aria-label={dark ? 'Use light theme' : 'Use dark theme'}
-                onClick={toggle}
-              />
-            </Layout.Header>
-            <Layout hasSider={desktop && !collapsed}>
-              {desktop && !collapsed && (
-                <Layout.Sider theme="light" width={200} className="rail8-sidebar">
-                  {navigation}
-                </Layout.Sider>
-              )}
-              {!desktop && (
-                <Drawer
-                  placement="left"
-                  title="Navigation"
-                  size={240}
-                  open={mobileOpen}
-                  onClose={() => setMobileOpen(false)}
-                >
-                  {navigation}
-                </Drawer>
-              )}
-              <Layout.Content className="rail8-workspace">
+              <Flex align="center" gap="small" className="rail8-location">
+                <img src={`${import.meta.env.BASE_URL}${dark ? 'rail8-mark-dark.svg' : 'rail8.svg'}`} alt="Rail8" />
                 <Breadcrumb
                   aria-label="Workspace location"
-                  items={[{ title: active?.group ?? 'Workspace' }, ...(active ? [{ title: active.title }] : [])]}
+                  items={[{ title: 'Workspace' }, ...(active?.group ? [{ title: active.group }] : [])]}
                 />
-                {tabs.active === null ? (
-                  <Empty
-                    className="rail8-empty"
-                    description={
-                      <>
-                        <h1>No screen open</h1>Choose a screen in the navigation.
-                      </>
-                    }
-                  />
-                ) : (
-                  <Tabs
-                    id="workspace"
-                    className="rail8-tabs"
-                    type="editable-card"
-                    hideAdd
-                    animated={false}
-                    activeKey={tabs.active}
-                    onChange={(id) => setTabs((current) => openTab(current, id))}
-                    onEdit={(key, action) => {
-                      if (action === 'remove' && typeof key === 'string') close(key);
-                    }}
-                    items={tabs.open.map((id) => {
-                      const screen = opened.get(id) ?? byId.get(id);
-                      const title = screen?.title ?? id;
-                      return {
-                        key: id,
-                        label: title,
-                        // Ant provides one remove label for the whole bar. Identify each workspace tab to assistive technology.
-                        closeIcon: (
-                          <CloseOutlined
-                            ref={(icon) => {
-                              icon?.closest('button')?.setAttribute('aria-label', `Close ${title}`);
-                            }}
-                          />
-                        ),
-                        children: (
-                          <div className="rail8-panel">
-                            <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
-                          </div>
-                        ),
-                      };
-                    })}
-                  />
-                )}
-              </Layout.Content>
-            </Layout>
+              </Flex>
+              <Flex align="center" gap={4}>
+                <Button
+                  size="small"
+                  aria-label="Quick open"
+                  aria-keyshortcuts="Control+K Meta+K"
+                  title="Quick open (Ctrl+K or ⌘K)"
+                  icon={<SearchOutlined />}
+                  onClick={() => setQuickOpen(true)}
+                >
+                  Quick open
+                </Button>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={dark ? <SunOutlined /> : <MoonOutlined />}
+                  aria-label={dark ? 'Use light theme' : 'Use dark theme'}
+                  onClick={toggle}
+                />
+              </Flex>
+            </Layout.Header>
+            {tabs.active === null ? (
+              <main className="rail8-empty">
+                <Empty description={<><h1>No screen open</h1>Choose a screen in the navigation.</>} />
+              </main>
+            ) : (
+              <Tabs
+                id="workspace"
+                className="rail8-tabs"
+                classNames={{ header: 'rail8-tab-bar', body: 'rail8-tab-body', content: 'rail8-tab-page' }}
+                type="editable-card"
+                size="small"
+                aria-label="Open workspace tabs"
+                animated={false}
+                activeKey={tabs.active}
+                onChange={(id) => setTabs((current) => openTab(current, id))}
+                onEdit={(key, action) => {
+                  if (action === 'add') setQuickOpen(true);
+                  else if (typeof key === 'string') close(key);
+                }}
+                items={tabs.open.map((id) => {
+                  const screen = opened.get(id) ?? byId.get(id);
+                  const title = screen?.title ?? id;
+                  return {
+                    key: id,
+                    label: title,
+                    icon: <span aria-hidden>{screen?.icon ?? <FileTextOutlined />}</span>,
+                    // Ant supplies one remove label for the bar. Identify each tab for assistive technology.
+                    closeIcon: (
+                      <CloseOutlined ref={(icon) => {
+                        icon?.closest('button')?.setAttribute('aria-label', `Close ${title}`);
+                      }} />
+                    ),
+                    children: (
+                      <main className="rail8-panel">
+                        <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
+                      </main>
+                    ),
+                  };
+                })}
+              />
+            )}
           </Layout>
+          {quickOpen && (
+            <WorkspaceQuickOpen
+              screens={[...screens, ...Array.from(opened.values()).filter((screen) => !byId.has(screen.id))]}
+              dismiss={() => setQuickOpen(false)}
+              choose={(screen) => {
+                open(screen);
+                setQuickOpen(false);
+              }}
+            />
+          )}
         </RegisteredScreens.Provider>
       )}
     </Rail8Theme>

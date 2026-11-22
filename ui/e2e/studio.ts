@@ -9,7 +9,8 @@ export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Ma
 /** Loads the application and opens its Mappings screen from the navigation. */
 export async function openMappings(page: Page) {
   await page.goto('/');
-  await page.getByRole('navigation', { name: 'Screens' }).getByRole('button', { name: 'Mappings', exact: true }).click();
+  await page.getByRole('button', { name: 'Expand navigation', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Mappings', exact: true }).click();
   await expect(mappingsTable(page).getByRole('button', { name: 'Open in studio' }).first()).toBeVisible();
 }
 
