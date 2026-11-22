@@ -1,4 +1,5 @@
-import { Button, Card, Modal, Typography } from 'antd';
+import { Button, Card, Typography } from 'antd';
+import { MountedModal } from '../../../MountedModal';
 import { CopyTextButton } from './CopyTextButton';
 
 /** The processing log of a tab's last action, with a copy button. */
@@ -13,8 +14,7 @@ export function ProcessingLog({ log }: { log: string }) {
 /** The Processing Log dialog an action opens with its log. */
 export function LogDialog({ log, onClose }: { log: string; onClose: () => void }) {
   return (
-    <Modal
-      open
+    <MountedModal
       title="Processing Log"
       onCancel={onClose}
       footer={
@@ -24,6 +24,6 @@ export function LogDialog({ log, onClose }: { log: string; onClose: () => void }
       }
     >
       <Typography.Paragraph>{log}</Typography.Paragraph>
-    </Modal>
+    </MountedModal>
   );
 }

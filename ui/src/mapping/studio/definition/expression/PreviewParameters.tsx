@@ -1,4 +1,5 @@
-import { Button, Col, Descriptions, Empty, Flex, Form, Input, Modal, Radio, Row, Select, Switch, Table } from 'antd';
+import { Button, Col, Descriptions, Empty, Flex, Form, Input, Radio, Row, Select, Switch, Table } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import type { PreviewParam } from '../../mock/definition-preview';
@@ -94,7 +95,7 @@ function LookupPicker({ rfc, current, apply, close }: { rfc: boolean; current: s
   const rows = entries.filter((n) => n.toLowerCase().includes(query.trim().toLowerCase()));
   const title = rfc ? 'Choose Function Module' : 'Choose External Definition';
   return (
-    <Modal open width={720} title={title} onCancel={close} onOk={() => apply(selected)} okText="Apply" okButtonProps={{ disabled: !rows.includes(selected) }}>
+    <MountedModal width={720} title={title} onCancel={close} onOk={() => apply(selected)} okText="Apply" okButtonProps={{ disabled: !rows.includes(selected) }}>
       <h3>Search Criteria</h3>
       <Descriptions size="small" items={[{ key: 'category', label: 'Category', children: rfc ? 'rfc' : 'dbtab' }]} />
       <h3>Search Result</h3>
@@ -120,7 +121,7 @@ function LookupPicker({ rfc, current, apply, close }: { rfc: boolean; current: s
           { title: 'Namespace', key: 'namespace', render: (_, name) => (name === RFC_MODULE ? RFC_NAMESPACE : '—') },
         ]}
       />
-    </Modal>
+    </MountedModal>
   );
 }
 
@@ -226,8 +227,7 @@ export function PreviewParameters({ fn, values, readOnly, save, close }: Preview
     save(Object.fromEntries(Object.entries(draft).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(initial[key]))));
   };
   return (
-    <Modal
-      open
+    <MountedModal
       width={lookup ? 720 : undefined}
       title={TITLES[fn.key]}
       onCancel={close}
@@ -242,6 +242,6 @@ export function PreviewParameters({ fn, values, readOnly, save, close }: Preview
           fn.parameters.map((p) => <Field key={p.key} param={p} value={draft[p.key] as string} change={(v) => change(p.key, v)} disabled={readOnly} />)
         )}
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }

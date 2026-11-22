@@ -1,4 +1,5 @@
-import { Button, Flex, Modal } from 'antd';
+import { Button, Flex } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { CopyOutlined, BlockOutlined, AppstoreOutlined, UnorderedListOutlined, SnippetsOutlined, ApartmentOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
   Background,
@@ -652,7 +653,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
         />
       )}
       {dialog?.kind === 'add' && (
-        <Modal open title="Add node" onCancel={closeDialog} footer={null}>
+        <MountedModal title="Add node" onCancel={closeDialog} footer={null}>
           <Flex vertical gap="small">
             <div>
               <FunctionCatalogue
@@ -697,7 +698,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
               )}
             </section>
           </Flex>
-        </Modal>
+        </MountedModal>
       )}
       {remappingNode && (
         <RemapDialog

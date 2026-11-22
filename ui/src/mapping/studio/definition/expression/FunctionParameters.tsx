@@ -1,4 +1,5 @@
-import { Alert, Button, Form, Input, Modal, Radio, Select, Space, Switch, Table } from 'antd';
+import { Alert, Button, Form, Input, Radio, Select, Space, Switch, Table } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { PlusCircleOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import type { CatalogueParam } from '../../../generated/function-catalogue';
@@ -246,8 +247,7 @@ export function FunctionParameters({ fn, params, values, readOnly, save, close }
   };
   const title = fn === 'fixValues' ? 'Fixed-Values Table' : `Function parameters · ${fn}`;
   return (
-    <Modal
-      open
+    <MountedModal
       title={title}
       onCancel={close}
       width={fn === 'fixValues' ? 720 : undefined}
@@ -261,6 +261,6 @@ export function FunctionParameters({ fn, params, values, readOnly, save, close }
         ))}
         {error && <Alert type="error" showIcon role="alert" title={error} />}
       </Form>
-    </Modal>
+    </MountedModal>
   );
 }

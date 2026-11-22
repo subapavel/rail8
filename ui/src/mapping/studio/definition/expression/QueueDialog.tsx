@@ -1,4 +1,5 @@
-import { Alert, Button, Flex, Modal, Switch, Table, Tag } from 'antd';
+import { Alert, Button, Flex, Switch, Table, Tag } from 'antd';
+import { MountedModal } from '../../../../MountedModal';
 import { ImportOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
@@ -166,7 +167,7 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
   };
 
   return (
-    <Modal open title="Display Queue" onCancel={onClose} width={760} footer={null}>
+    <MountedModal title="Display Queue" onCancel={onClose} width={760} footer={null}>
       <p>{trace === undefined ? 'No test run yet' : 'Traced queue · last test run'}</p>
       <Flex vertical gap="small">
         <div>
@@ -273,6 +274,6 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
           </>
         )}
       </Flex>
-    </Modal>
+    </MountedModal>
   );
 }
