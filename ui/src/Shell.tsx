@@ -6,8 +6,8 @@ import {
   MoonOutlined,
   SunOutlined,
 } from '@ant-design/icons';
-import { Breadcrumb, Button, Drawer, Empty, Flex, Grid, Layout, Tabs, Typography } from 'antd';
-import { useCallback, useState } from 'react';
+import { Breadcrumb, Button, Drawer, Empty, Flex, Grid, Layout, Spin, Tabs, Typography } from 'antd';
+import { Suspense, useCallback, useState } from 'react';
 import { groupedScreens, RegisteredScreens, type Screen } from './screens';
 import { Rail8Theme } from './theme';
 import { closeTab, noTabs, openTab } from './tabs';
@@ -167,7 +167,11 @@ export function Shell({ screens, start }: ShellProps) {
                             }}
                           />
                         ),
-                        children: <div className="rail8-panel">{screen?.render(open)}</div>,
+                        children: (
+                          <div className="rail8-panel">
+                            <Suspense fallback={<Spin aria-label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
+                          </div>
+                        ),
                       };
                     })}
                   />
