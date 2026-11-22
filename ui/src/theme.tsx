@@ -36,11 +36,11 @@ export function Rail8Theme({ children }: { children: (dark: boolean, toggle: () 
   return (
     <ConfigProvider
       locale={enUS}
-      componentSize="small"
+      componentSize="middle"
       theme={{
         algorithm: [dark ? theme.darkAlgorithm : theme.defaultAlgorithm, theme.compactAlgorithm],
         cssVar: { key: 'rail8' },
-        token: { fontFamily: 'Inter, "Segoe UI", sans-serif', fontSize: 14, borderRadius: 5 },
+        token: { fontFamily: 'Inter, "Segoe UI", sans-serif', fontSize: 16, borderRadius: 5 },
         components: { Typography: { titleMarginTop: 0 }, Layout: { headerHeight: 52 } },
       }}
     >

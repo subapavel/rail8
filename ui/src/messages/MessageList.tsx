@@ -1,6 +1,6 @@
-import { Alert, Badge, Button, Empty, Flex, Form, Input, Select, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Flex, Form, Input, Select, Spin, Tag, Typography } from 'antd';
 import { ProTable } from '@ant-design/pro-components';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type TableHTMLAttributes } from 'react';
 import type { AdminApi, Counts, Listed, ListQuery, Status } from './admin';
 import { duration } from './progress';
 
@@ -252,7 +252,7 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
               type={filters.status === value ? 'primary' : 'default'}
               onClick={() => choose({ status: filters.status === value ? '' : value })}
             >
-              {label} <Badge count={counted.counts[value]} showZero overflowCount={Number.MAX_SAFE_INTEGER} />
+              {label} <strong>{counted.counts[value]}</strong>
             </Button>
           ))}
         </Flex>
@@ -265,6 +265,8 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
     </Flex>
   );
 }
+
+const MessagesTable = (props: TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Messages" />;
 
 function MessageResults({
   shown,
@@ -298,9 +300,7 @@ function MessageResults({
         dataSource={shown.items}
         scroll={{ x: 'max-content' }}
         cardBordered={false}
-        components={{
-          table: (props: React.TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Messages" />,
-        }}
+        components={{ table: MessagesTable }}
         columns={[
           { title: 'Started at', dataIndex: 'startedAt' },
           { title: 'Flow', dataIndex: 'flow' },

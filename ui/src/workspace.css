@@ -82,7 +82,7 @@ body {
 }
 .rail8-launch-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
   gap: var(--ant-margin-sm);
 }
 .rail8-launch.ant-btn {
@@ -110,6 +110,7 @@ body {
 }
 .rail8-document-table {
   width: 100%;
+  min-width: 640px;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
 }

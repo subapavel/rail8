@@ -9,21 +9,23 @@ import {
   MarkerType,
   Position,
   ReactFlow,
+  useReactFlow,
   type Edge,
   type EdgeProps,
   type Node,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { memo, useMemo, type CSSProperties } from 'react';
+import { memo, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { placeOf } from './edit';
+import { GAP_X, GAP_Y } from './layout';
 import type { FlowEdge, FlowNode, FlowProblem, FlowView, Path } from './types';
 import { pointer } from './view';
 
 /** React Flow's look in Ant Design's tokens. */
 const FLOW_STYLE = {
   '--xy-background-color': 'var(--ant-color-bg-layout)',
-  '--xy-edge-stroke': 'var(--ant-color-border)',
+  '--xy-edge-stroke': 'var(--ant-color-text-secondary)',
   '--xy-edge-stroke-selected': 'var(--ant-color-primary)',
   '--xy-edge-label-color': 'var(--ant-color-text)',
   '--xy-edge-label-background-color': 'var(--ant-color-bg-container)',
@@ -182,6 +184,24 @@ export interface FlowCanvasProps {
 /** The picture of a flow: its view's nodes where the layout put them, and its edges, labelled. It changes nothing itself. */
 export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasProps) {
   const byId = useMemo(() => new Map(view.nodes.map((n) => [n.id, n])), [view]);
+  const canvas = useRef<HTMLDivElement>(null);
+  const previousCount = useRef(view.nodes.length);
+  const { getViewport, setCenter } = useReactFlow();
+  useEffect(() => {
+    const grew = view.nodes.length > previousCount.current;
+    previousCount.current = view.nodes.length;
+    const step = selected === null ? undefined : byId.get(selected);
+    if (!grew || !step || !canvas.current) return;
+    // Keep a newly added step and the insertion buttons on its edges inside the canvas at the author's zoom.
+    const { x, y, zoom } = getViewport();
+    const left = x + (step.x - GAP_X) * zoom;
+    const top = y + (step.y - GAP_Y) * zoom;
+    const right = x + (step.x + step.width + GAP_X) * zoom;
+    const bottom = y + (step.y + step.height + GAP_Y) * zoom;
+    if (left < 0 || top < 0 || right > canvas.current.clientWidth || bottom > canvas.current.clientHeight) {
+      void setCenter(step.x + step.width / 2, step.y + step.height / 2, { zoom });
+    }
+  }, [byId, getViewport, selected, setCenter, view.nodes.length]);
   const nodes = useMemo<CanvasNode[]>(
     () =>
       view.nodes.map((n) => {
@@ -219,7 +239,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
         ...(side ? { sourceHandle: 'side', targetHandle: 'side' } : {}),
         // the flow node beside a call says what it calls; a label would cover the short edge to it
         ...(e.label === undefined || e.kind === 'calls' ? {} : { label: e.label }),
-        markerEnd: { type: MarkerType.ArrowClosed },
+        markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--ant-color-text-secondary)' },
         ...(dash === undefined ? {} : { style: { strokeDasharray: dash } }),
         selectable: false,
       };
@@ -228,6 +248,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
 
   return (
     <ReactFlow
+      ref={canvas}
       style={FLOW_STYLE}
       nodes={nodes}
       edges={edges}

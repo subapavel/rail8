@@ -555,7 +555,13 @@ describe('Editing the rest of a flow', () => {
     await page.getByRole('menuitem', { name: /^order/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to', level: 2 })).toBeVisible();
     expect(endpoints.create).not.toHaveBeenCalled();
-    await button('Add a step at steps[5]').click();
+    const append = button('Add a step at steps[5]');
+    await expect.poll(() => {
+      const action = append.element().getBoundingClientRect();
+      const picture = canvas().element().getBoundingClientRect();
+      return action.top >= picture.top && action.bottom <= picture.bottom && action.left >= picture.left && action.right <= picture.right;
+    }).toBe(true);
+    await append.click();
     await page.getByRole('menuitem', { name: /^payment/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to-2', level: 2 })).toBeVisible();
     expect(endpoints.create).toHaveBeenCalledWith(

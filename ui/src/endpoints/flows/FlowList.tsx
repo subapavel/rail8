@@ -224,7 +224,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
         title="New flow"
         okText="Create"
         confirmLoading={creating}
-        okButtonProps={{ htmlType: 'submit', form: `${ids}-form`, disabled: creating || draft === null || Object.keys(wrong).length > 0 }}
+        okButtonProps={{ 'aria-label': 'Create', 'aria-busy': creating, htmlType: 'submit', form: `${ids}-form`, disabled: creating || draft === null || Object.keys(wrong).length > 0 }}
         cancelButtonProps={{ disabled: creating }}
         onCancel={() => !creating && setDraft(null)}
       >
