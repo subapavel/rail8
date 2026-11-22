@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { collectProblems } from './problems';
-import { edit, fieldRow, openStudio, processingLog, result, runTest, type Side } from './studio';
+import { edit, fieldRow, fields, openStudio, processingLog, result, runTest, type Side } from './studio';
 
 // a tall window: the message panes, maximised, show the gate structures without scrolling their virtualised rows
 test.use({ viewport: { width: 1440, height: 1800 } });
@@ -34,8 +34,11 @@ async function open(page: Page, mapping: string) {
  */
 async function expectField(page: Page, side: Side, path: string, valueType: string, occurrence: string) {
   const row = await fieldRow(page, side, path);
-  await expect(row.locator('td[data-label="Type"]')).toHaveText(valueType);
-  await expect(row.locator('td[data-label="Occurrences"]')).toHaveText(occurrence);
+  for (const [column, value] of [['Type', valueType], ['Occurrences', occurrence]] as const) {
+    const header = fields(page, side).getByRole('columnheader', { name: column, exact: true });
+    const index = await header.evaluate((cell) => (cell as HTMLTableCellElement).cellIndex);
+    await expect(row.getByRole('cell').nth(index)).toHaveText(value);
+  }
 }
 
 /** Opens a collapsed row: a recursive type stays closed below its first level as the pane opens. */

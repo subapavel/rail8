@@ -16,6 +16,7 @@ To write an adapter and run it with the UI: `docs/ADAPTERS.md`.
 Where to look:
 
 - `docs/ARCHITECTURE.md` — what the code does today, and what is planned
+- `ui/README.md` — developing, theming and testing the web application
 - GitHub Issues — the open work
 - `AGENTS.md` — how the work is done (one issue, one session, one pull request, one review)
 - `docs/DECISIONS.md` — what was decided

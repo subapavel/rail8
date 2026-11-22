@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # References to tasks or decisions in comments, and colours written by hand instead of PatternFly tokens, on
+      # References to tasks or decisions in comments, and colours written by hand instead of Ant Design tokens, on
       # the lines this change adds or modifies: compared with the pull request's base, with the previous main for
       # a push, else with the parent commit. In the folders whose comments have been cleaned (CLEANED in
       # ci/change_guard.py) every comment is checked for references, changed or not.

@@ -200,22 +200,22 @@ class ChangeGuardTest(unittest.TestCase):
             "  color: rgb(0 0 0);",
             "  background: hsla(0, 0%, 100%, 0.5);",
             "  outline-color: white;",
-            "  color: var(--pf-t--global--text--color--regular);",
-            "  background: var(--pf-v6-global--BackgroundColor--100);",
+            "  color: var(--ant-color-text);",
+            "  background: var(--ant-color-bg-container);",
             "  border-color: transparent currentColor;",
             "}",
             ".red:hover, #root { color: inherit; }",
             "/* #fff in a comment is not a colour */",
         ]) + "\n"})
         self.assertEqual([
-            "ui/src/a.css:2: a hard-coded colour (#c2cbd4): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
-            "ui/src/a.css:3: a hard-coded colour (rgb()): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
-            "ui/src/a.css:4: a hard-coded colour (hsla()): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
-            "ui/src/a.css:5: a hard-coded colour (white): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
+            "ui/src/a.css:2: a hard-coded colour (#c2cbd4): use an Ant Design token, "
+            "var(--ant-...)",
+            "ui/src/a.css:3: a hard-coded colour (rgb()): use an Ant Design token, "
+            "var(--ant-...)",
+            "ui/src/a.css:4: a hard-coded colour (hsla()): use an Ant Design token, "
+            "var(--ant-...)",
+            "ui/src/a.css:5: a hard-coded colour (white): use an Ant Design token, "
+            "var(--ant-...)",
         ], self.findings(repo, 4))
 
     def test_hard_coded_colours_in_tsx_strings_are_findings(self):
@@ -225,17 +225,17 @@ class ChangeGuardTest(unittest.TestCase):
             "const s = { stroke: on ? 'rgba(0,0,0,.5)' : EDGE, color: 'red' };",
             "const t = <svg><path fill=\"white\" /></svg>;",
             "const l = <Label color=\"grey\">grey</Label>;",
-            "const v = { color: 'var(--pf-t--global--color--brand--default)' };",
+            "const v = { color: 'var(--ant-color-primary)' };",
             "const name = 'red';",
             "const ok = `${'#/definitions'}`;",
         ]) + "\n"})
         self.assertEqual([
-            "ui/src/a.tsx:1: a hard-coded colour (#567187): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
-            "ui/src/a.tsx:2: a hard-coded colour (rgba(), red): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
-            "ui/src/a.tsx:3: a hard-coded colour (white): use a PatternFly token, "
-            "var(--pf-t--...) or var(--pf-v6-...)",
+            "ui/src/a.tsx:1: a hard-coded colour (#567187): use an Ant Design token, "
+            "var(--ant-...)",
+            "ui/src/a.tsx:2: a hard-coded colour (rgba(), red): use an Ant Design token, "
+            "var(--ant-...)",
+            "ui/src/a.tsx:3: a hard-coded colour (white): use an Ant Design token, "
+            "var(--ant-...)",
         ], self.findings(repo, 3))
 
     def test_colours_in_the_site_tests_and_generated_code_are_not_findings(self):

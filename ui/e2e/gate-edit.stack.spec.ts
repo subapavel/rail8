@@ -101,7 +101,9 @@ test('@stack a schema changed on disk: opening the mapping refreshes it, marks t
   // Remap in the node menu points the box at OrderNumber: it keeps its id and its wire into the target
   await nodeMenu(page, /^Source field OrderId/, 'Remap');
   const dialog = page.getByRole('dialog', { name: 'Remap · OrderId' });
-  await dialog.getByLabel('Source field', { exact: true }).selectOption(`${ORDER}/OrderNumber`);
+  const sourceField = dialog.getByRole('combobox', { name: 'Source field' });
+  await sourceField.fill('/Order/OrderNumber');
+  await sourceField.press('Enter');
   await dialog.getByRole('button', { name: 'Remap', exact: true }).click();
   await expect(dialog).toBeHidden();
   await expect(node(page, /^Source field OrderNumber\. Complete/)).toBeVisible();
