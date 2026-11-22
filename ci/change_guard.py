@@ -11,10 +11,10 @@ every line, whether the change touches it or not.
    or a `#` followed by a number, such as #123. Names of standards (UTF-8, SHA-256, ISO-8601 and the like) are not
    references.
 2. Hard-coded colours. In CSS, SCSS, TypeScript and JavaScript files (TSX and JSX included) a colour is written
-   as a PatternFly token, `var(--pf-t--...)` or `var(--pf-v6-...)`. A hex colour, rgb(), rgba(), hsl(), hsla()
+   as an Ant Design token, `var(--ant-...)`. A hex colour, rgb(), rgba(), hsl(), hsla()
    or a CSS named colour is a finding: in CSS anywhere outside comments, in script files inside string literals
    (a named colour only as the value of a style key such as `color:` or of an SVG `fill=` or `stroke=`).
-   Not checked: site/ (the project site does not load PatternFly), test files and e2e/ (tests compare the colours
+   Not checked: site/ (the project site has its own styles), test files and e2e/ (tests compare the colours
    the browser computes) and generated code.
 
 The base is `--base <commit>`; the change is the commit `--head` (default HEAD), read from git, so the working
@@ -82,7 +82,7 @@ WORD = re.compile(r"(?<![\w.#-])[A-Za-z]+(?![\w(-])")
 # the code before a string literal that makes the string a colour value: a style key or an SVG colour attribute
 STYLE_KEY = re.compile(r"(?:(?:[cC]olor|background|fill|stroke|border\w*|outline\w*|[sS]hadow)\s*:"
                        r"|(?:fill|stroke|stopColor|stop-color)\s*=\s*\{?)\s*$")
-TOKEN = "var(--pf-t--...) or var(--pf-v6-...)"
+TOKEN = "var(--ant-...)"
 
 
 def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
@@ -234,7 +234,7 @@ def check(path: str, text: str, changed: set[int], whole: bool = False) -> list[
             findings.append(f"{path}:{number}: a reference in a comment ({', '.join(refs)}): "
                             f"say what the code does and why instead")
         if cols:
-            findings.append(f"{path}:{number}: a hard-coded colour ({', '.join(cols)}): use a PatternFly token, "
+            findings.append(f"{path}:{number}: a hard-coded colour ({', '.join(cols)}): use an Ant Design token, "
                             f"{TOKEN}")
     return findings
 

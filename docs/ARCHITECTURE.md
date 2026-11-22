@@ -970,8 +970,9 @@ where `-am` builds the engine in the same build; the engine's own tests run in `
 
 ## 9. UI
 
-The Rail8 web application in `ui/` is React with PatternFly 6, built from PatternFly components
-and design tokens only. Its shell has a masthead, a navigation listing every screen and the tabs of
+The Rail8 web application in `ui/` uses React, Ant Design 6 and ProComponents v3. The theme
+provider applies compact sizing and the light or dark algorithm to both the workspace and its dialogs.
+The screen registry supplies navigation groups and the Home screen's shortcuts. Its shell has a masthead, a navigation listing every screen and the tabs of
 the open screens: choosing a screen opens it in a tab, or shows the tab it already has, and each tab
 closes on its own, and a screen may open tabs of its own. The tabs live in the page's memory; a
 reload starts again with the Home screen.

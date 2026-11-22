@@ -4,7 +4,7 @@ Open-source mapping engine and editor for enterprise integration. Draw a mapping
 message structures the way SAP PO graphical mappings work — queues, contexts, standard functions,
 Java UDFs — and run it compiled on Java 25. One intermediate representation will also carry
 XSLT 3.0 / XPath 3.1, so a drawn mapping exports to readable XSLT and a stylesheet runs on the
-same engine. The editor is React + PatternFly.
+same engine. The editor is React + Ant Design.
 
 Imported from `github.com/subapavel/flottila-mapping` with its history on 2026-11-15 (D-150). `#N` in a
 commit, an ADR or a finding of the mapping means that repository's issue or pull request; `F-n` up to F-53

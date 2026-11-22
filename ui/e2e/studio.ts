@@ -92,17 +92,10 @@ export async function nodeId(page: Page, name: RegExp): Promise<string> {
   return (await node(page, name).getAttribute('data-id'))!;
 }
 
-/**
- * Chooses `items` in turn from the context menu of a node, as a right click opens it. An item that opens a flyout, such
- * as Connect to, is a button of the menu; the others are menu items.
- */
+/** Opens a node's context menu and follows its items, including items in a submenu. */
 export async function nodeMenu(page: Page, name: RegExp, ...items: string[]) {
   await node(page, name).click({ button: 'right' });
-  for (const [i, item] of items.entries()) {
-    const menu = page.getByRole('menu');
-    if (i < items.length - 1) await menu.getByRole('button', { name: item, exact: true }).click();
-    else await menu.getByRole('menuitem', { name: item, exact: true }).click();
-  }
+  for (const item of items) await page.getByRole('menuitem', { name: item, exact: true }).click();
 }
 
 /** Opens the Display Queue of a node; the dialog is returned. */

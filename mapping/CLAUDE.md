@@ -5,7 +5,7 @@ engine's own and hold inside `mapping/`.
 
 Open-source mapping engine and editor: graphical message mappings (SAP PO style queues and
 contexts) and, later, XSLT 3.0 / XPath 3.1, all compiled to one IR and run on Java 25. UI in
-React + PatternFly.
+React + Ant Design.
 
 ## Read before work
 

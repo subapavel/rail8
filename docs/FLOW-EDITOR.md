@@ -506,7 +506,7 @@ listed. It is behind the same browser rule and token as every other `/admin` rou
 ## Where it lives
 
 - **The screen.** The flow screen sits with the Endpoints screen in the UI, and both screens edit files
-  of the working folder. A flow's tab is the canvas (React Flow, in PatternFly's tokens, as the mapping
+  of the working folder. A flow's tab is the canvas (React Flow, with Ant Design tokens, as the mapping
   studio's) with a drawer for the settings. It opens read-only: Edit, then Cancel, Check and Save, as
   the endpoint form does. Save sends the text with `If-Match`; a refusal with 412 opens the dialog that
   says the file changed on disk. Closing a tab with unsaved changes asks first. The canvas's keys

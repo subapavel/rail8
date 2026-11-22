@@ -1,0 +1,60 @@
+# Rail8 web application
+
+The shell discovers each module through its `module.tsx`. Home, navigation and workspace tabs all open the registered screens. A second open focuses the existing tab. Each editor owns its working copy until its tab closes. A dirty editor can defer the close through `beforeClose`.
+
+## Development
+
+Use Node 22.12 or newer and run these commands from `ui/`.
+
+```sh
+npm ci
+npm run dev
+```
+
+Open `http://localhost:5173`. Set `RAIL8_WORKSPACE` to the directory of packages to inspect or edit. Set `RAIL8_ADMIN_URL` to the node's admin origin (default `http://127.0.0.1:8081`) and `RAIL8_ADMIN_TOKEN` in the environment of the Vite server. Setting `RAIL8_READ_ONLY=true` makes the file editors read-only. The quickstart instructions cover starting a node. The production build produces static assets under `dist/`; serving those assets also requires the application's HTTP routes.
+
+## Presentation
+
+Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. ProTable fits file listings and monitor results. The owner approved the exact ProComponents v3 prerelease pinned in the lockfile for its Ant Design 6 peer support. The workspace uses Ant Layout with Rail8's own tab lifecycle.
+
+`Rail8Theme` configures the Ant application context, English locale, compact theme and component size. The theme initially follows the OS preference. The switch stores the chosen mode in `rail8.theme`. Use `theme.useToken()` in components and `var(--ant-...)` in CSS. Both graph editors keep their React Flow layouts. The mapping Test view loads Monaco and its worker locally when the XML editor opens.
+
+### Migration inventory and sequence
+
+| Area | Presentation | Behavior under test |
+| --- | --- | --- |
+| Shell and Home | Responsive sidebar, registered shortcuts, workspace tabs | Navigation order, focus, close guards, child tabs and empty workspace |
+| Monitoring | Cursor-paged message list, status filters, attempt timeline and payload dialog | Admin reads, counts, retained payload limits and restart |
+| Endpoints | File list, schema-driven settings and raw JSON controls | Read-only access, validation, environments and conditional YAML writes |
+| Flows | File list, canvas toolbar, step inspector and graph controls | Selection, process calls, edits, undo, validation and save conflicts |
+| Mappings | List and creation, Overview, Definition, Signature, Functions and Test | Working copies, ETags, structure selection, compile diagnostics and engine runs |
+
+The migration introduces the theme first, then converts the shell and lists, the editors and finally their browser checks. Domain operations stay in the existing API clients, working-copy stores and file middleware. A future monitoring chart can consume a supported aggregate from the admin API. The current screen displays its actual status counts directly.
+
+### Ant Design tooling
+
+The official CLI includes the Ant Design skill and MCP server. From the repository root, verify the project skill with `npx --yes @ant-design/cli@6.7.1 setup --client codex --check`. The skill is checked in under `.agents/skills/antd`. The CLI's Codex setup supports skill installation. Register its stdio server once in Codex if needed:
+
+```sh
+codex mcp add antd -- npx --yes @ant-design/cli@6.7.1 mcp --version 6.7.1
+codex mcp get antd
+```
+
+On Windows use `codex mcp add antd -- cmd.exe /d /c npx.cmd --yes @ant-design/cli@6.7.1 mcp --version 6.7.1`. The repository's `.mcp.json` supplies the equivalent configuration for clients that read it. Use `antd_info`, `antd_demo` and `antd_token` for the installed version. From `ui/`, check for obsolete properties with `npx --yes @ant-design/cli@6.7.1 lint ./src --only deprecated --format json`.
+
+## Verification
+
+```sh
+npx playwright install chromium
+npm run licences
+npm run gen:types
+git diff --exit-code -- src/mapping/generated
+npm run typecheck
+npm run lint
+npm test
+npm run test:browser
+npm run e2e
+npm run build
+```
+
+Run `npm run e2e:stack` on Linux or WSL with the quickstart node running and the matching admin token in the environment. Its Vite server uses a temporary working copy of the mapping corpus. The file middleware unit tests exercise POSIX symlinks, permissions and paths. CI runs these tests on Linux. From the repository root, run `python3 ci/change_guard.py --base origin/main` for the committed diff.
