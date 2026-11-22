@@ -1,4 +1,4 @@
-import { Button, Form, FormGroup, FormSelect, FormSelectOption, Grid, GridItem, Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core';
+import { Col, Form, Modal, Row, Select } from 'antd';
 import { useState } from 'react';
 
 const datePatterns = ['ddMMyyyy', 'MMddyyyy', 'yyyyMMdd', 'MMyyyydd', 'ddyyyyMM', 'yyyyddMM', 'yyddMM', 'ddMMyy', 'MMddyy', ''];
@@ -23,37 +23,34 @@ export function DateFormatHelp({ apply, close }: { apply: (format: string) => vo
   const [parts, setParts] = useState<Parts>({ date: datePatterns[0]!, time: '', ds: '/', ts: '/', join: ' ' });
   const result = [joinPattern(parts.date, parts.ds), joinPattern(parts.time, parts.ts)].filter(Boolean).join(parts.join);
   const select = (key: keyof Parts, label: string, choices: string[]) => (
-    <FormGroup label={label} fieldId={`date-format-${key}`}>
-      <FormSelect id={`date-format-${key}`} aria-label={label} value={parts[key]} onChange={(_, value) => setParts({ ...parts, [key]: value })}>
-        {choices.map((v) => (
-          <FormSelectOption key={v} value={v} label={v === ' ' ? 'Space' : v || 'None'} />
-        ))}
-      </FormSelect>
-    </FormGroup>
+    <Form.Item label={label} htmlFor={`date-format-${key}`}>
+      <Select
+        id={`date-format-${key}`}
+        aria-label={label}
+        value={parts[key]}
+        onChange={(value) => setParts({ ...parts, [key]: value })}
+        options={choices.map((v) => ({ value: v, label: v === ' ' ? 'Space' : v || 'None' }))}
+      />
+    </Form.Item>
   );
   return (
-    <Modal isOpen onClose={close} variant="small" aria-label="SimpleDateFormat">
-      <ModalHeader title="SimpleDateFormat" />
-      <ModalBody>
-        <Form>
-          <Grid hasGutter md={6}>
-            <GridItem>{select('date', 'Date format', datePatterns)}</GridItem>
-            <GridItem>{select('time', 'Time format', ['', 'HHmmss', 'HHmm'])}</GridItem>
-          </Grid>
-          {select('ds', 'Date Separator', separators)}
-          {select('ts', 'Time Separator', separators)}
-          {select('join', 'Date/Time Separator', [' ', ','])}
-          <FormGroup label="Format preview" fieldId="date-format-preview">
-            <output id="date-format-preview">{result || '—'}</output>
-          </FormGroup>
-        </Form>
-      </ModalBody>
-      <ModalFooter>
-        <Button onClick={() => apply(result)}>Apply format</Button>
-        <Button variant="link" onClick={close}>
-          Cancel
-        </Button>
-      </ModalFooter>
+    <Modal open title="SimpleDateFormat" onCancel={close} okText="Apply format" onOk={() => apply(result)}>
+      <Form layout="vertical">
+        <Row gutter={16}>
+          <Col xs={24} sm={12}>
+            {select('date', 'Date format', datePatterns)}
+          </Col>
+          <Col xs={24} sm={12}>
+            {select('time', 'Time format', ['', 'HHmmss', 'HHmm'])}
+          </Col>
+        </Row>
+        {select('ds', 'Date Separator', separators)}
+        {select('ts', 'Time Separator', separators)}
+        {select('join', 'Date/Time Separator', [' ', ','])}
+        <Form.Item label="Format preview" htmlFor="date-format-preview">
+          <output id="date-format-preview">{result || '—'}</output>
+        </Form.Item>
+      </Form>
     </Modal>
   );
 }

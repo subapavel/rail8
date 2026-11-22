@@ -1,5 +1,5 @@
-import { Button, Content, Flex, FlexItem, Icon, List, ListItem, Modal, ModalBody, ModalHeader, Stack, StackItem, Title } from '@patternfly/react-core';
-import { CopyIcon, CubeIcon, LayerGroupIcon, ListIcon, PasteIcon, ProjectDiagramIcon, TrashIcon } from '@patternfly/react-icons';
+import { Button, Flex, Modal } from 'antd';
+import { CopyOutlined, BlockOutlined, AppstoreOutlined, UnorderedListOutlined, SnippetsOutlined, ApartmentOutlined, DeleteOutlined } from '@ant-design/icons';
 import {
   Background,
   MarkerType,
@@ -70,20 +70,20 @@ import { RemapDialog } from './RemapDialog';
 
 const types = { mapping: MappingNode };
 const fixedView = { minZoom: 1, maxZoom: 1, padding: 0 };
-const WIRE = 'var(--pf-t--global--border--color--default)';
-const SELECTED_WIRE = 'var(--pf-t--global--border--color--clicked)';
+const WIRE = 'var(--ant-color-text-secondary)';
+const SELECTED_WIRE = 'var(--ant-color-primary)';
 
-/** React Flow's look in PatternFly's tokens. */
+/** The expression canvas uses the workspace theme for its nodes, edges and selection. */
 const FLOW_STYLE = {
-  '--xy-background-color': 'var(--pf-t--global--background--color--secondary--default)',
+  '--xy-background-color': 'var(--ant-color-bg-layout)',
   '--xy-edge-stroke': WIRE,
   '--xy-edge-stroke-selected': SELECTED_WIRE,
   '--xy-connectionline-stroke': SELECTED_WIRE,
-  '--xy-handle-background-color': 'var(--pf-t--global--icon--color--subtle)',
-  '--xy-handle-border-color': 'var(--pf-t--global--background--color--primary--default)',
-  '--xy-selection-background-color': 'var(--pf-t--global--background--color--action--plain--hover)',
-  '--xy-selection-border': 'var(--pf-t--global--border--width--regular) dashed var(--pf-t--global--border--color--clicked)',
-  '--xy-node-border-radius': 'var(--pf-t--global--border--radius--small)',
+  '--xy-handle-background-color': 'var(--ant-color-text-secondary)',
+  '--xy-handle-border-color': 'var(--ant-color-bg-container)',
+  '--xy-selection-background-color': 'var(--ant-color-fill-secondary)',
+  '--xy-selection-border': 'var(--ant-line-width) dashed var(--ant-color-primary)',
+  '--xy-node-border-radius': 'var(--ant-border-radius-sm)',
   '--xy-node-boxshadow-selected': 'none',
 } as CSSProperties;
 
@@ -145,7 +145,7 @@ function RailTool({ label, title = label, icon, disabled, onClick, ...aria }: { 
   AriaAttributes,
   'aria-controls' | 'aria-expanded'
 >) {
-  return <Button variant="plain" size="sm" aria-label={label} title={title} icon={icon} isDisabled={disabled} onClick={onClick} {...aria} />;
+  return <Button type="text" size="small" aria-label={label} title={title} icon={icon} disabled={disabled} onClick={onClick} {...aria} />;
 }
 
 export interface CanvasProps {
@@ -194,7 +194,10 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
     return { ...g, nodes: g.nodes.map((n) => (n.id === TARGET ? { ...n, name: variableName(targetField), role: VARIABLE_ROLE, preview: VARIABLES } : n)) };
   }, [targetField, mapping, catalogue, model.udfs, variable]);
   const graph = useMemo(() => withPreview(modelGraph, canvasData, catalogue), [modelGraph, canvasData, catalogue]);
-  const layout = useMemo(() => (variable ? canvasData.target && { target: canvasData.target, boxes: {} } : mapping?.layout), [variable, canvasData.target, mapping?.layout]);
+  const layout = useMemo(
+    () => (variable ? canvasData.target && { target: canvasData.target, boxes: {} } : mapping?.layout),
+    [variable, canvasData.target, mapping?.layout],
+  );
   const shown = useMemo(() => previewPositions(graph, shownPositions(modelGraph, layout), canvasData), [graph, modelGraph, layout, canvasData]);
   const { states, floating } = useMemo(() => inspectExpression(graph), [graph]);
   const edgeById = useMemo(() => new Map(graph.edges.map((e) => [e.id, e])), [graph]);
@@ -280,7 +283,11 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
     else actions.insertBox(targetField, fn, at, layoutOf(modelOnly(shown)));
   };
   const addPreview = (key: string) => addPreviewNode({ kind: 'function', ref: key, position: freeSpot() });
-  const layOut = () => place(arrange(graph), graph.nodes.map((n) => n.id));
+  const layOut = () =>
+    place(
+      arrange(graph),
+      graph.nodes.map((n) => n.id),
+    );
   const deleteFloatingObjects = () => remove(floating);
   const copyBranch = (id: string) => {
     // the model's branch: a box copies no preview node that feeds it
@@ -393,7 +400,10 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
     const ended = moves.filter((c) => !c.dragging);
     if (ended.length) {
       setMoving({});
-      place({ ...shown, ...Object.fromEntries(ended.map((c) => [c.id, c.position!])) }, ended.map((c) => c.id));
+      place(
+        { ...shown, ...Object.fromEntries(ended.map((c) => [c.id, c.position!])) },
+        ended.map((c) => c.id),
+      );
     }
   };
   const onEdgesChange = (changes: EdgeChange[]) => {
@@ -470,20 +480,21 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
         flexDirection: 'column',
         flex: '1 1 0',
         minHeight: 0,
-        border: 'var(--pf-t--global--border--width--regular) solid var(--pf-t--global--border--color--default)',
-        borderRadius: 'var(--pf-t--global--border--radius--small)',
-        background: 'var(--pf-t--global--background--color--primary--default)',
+        border: 'var(--ant-line-width) solid var(--ant-color-border)',
+        borderRadius: 'var(--ant-border-radius-sm)',
+        background: 'var(--ant-color-bg-container)',
       }}
     >
-      <SideBySide label="Resize functions panel" leftId="mapping-functions" browserState={browserState} widthKey="definition.functions.width" initialShare={0.1} leftHidden={!paletteOpen}>
-        <aside
-          id="mapping-functions"
-          aria-label="Functions"
-          style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', padding: 'var(--pf-t--global--spacer--sm)' }}
-        >
-          <Title headingLevel="h3" size="md" style={{ marginBlockEnd: 'var(--pf-t--global--spacer--sm)' }}>
-            Functions
-          </Title>
+      <SideBySide
+        label="Resize functions panel"
+        leftId="mapping-functions"
+        browserState={browserState}
+        widthKey="definition.functions.width"
+        initialShare={0.1}
+        leftHidden={!paletteOpen}
+      >
+        <aside id="mapping-functions" aria-label="Functions" style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', padding: 'var(--ant-size-xs)' }}>
+          <h3 style={{ marginBlockEnd: 'var(--ant-size-xs)' }}>Functions</h3>
           {paletteOpen && <FunctionCatalogue catalogue={catalogue} disabled={!editing} add={(fn) => addFunction(fn)} addPreview={addPreview} />}
         </aside>
         <div style={{ display: 'flex', flex: '1 1 0', minHeight: 0 }}>
@@ -494,42 +505,42 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
             style={{
               display: 'flex',
               flexDirection: 'column',
-              gap: 'var(--pf-t--global--spacer--xs)',
-              padding: 'var(--pf-t--global--spacer--xs)',
+              gap: 'var(--ant-size-xxs)',
+              padding: 'var(--ant-size-xxs)',
               overflowY: 'auto',
-              borderInline: 'var(--pf-t--global--border--width--regular) solid var(--pf-t--global--border--color--default)',
+              borderInline: 'var(--ant-line-width) solid var(--ant-color-border)',
             }}
           >
             <RailTool
               label={paletteOpen ? 'Hide functions' : 'Show functions'}
               aria-controls="mapping-functions"
               aria-expanded={paletteOpen}
-              icon={<LayerGroupIcon />}
+              icon={<AppstoreOutlined aria-hidden />}
               onClick={() => setPaletteOpen(!paletteOpen)}
             />
-            <RailTool label="Add node" icon={<CubeIcon />} disabled={!editing} onClick={() => actions.openCanvasDialog({ kind: 'add' })} />
+            <RailTool label="Add node" icon={<BlockOutlined aria-hidden />} disabled={!editing} onClick={() => actions.openCanvasDialog({ kind: 'add' })} />
             <RailTool
               label="Display Queue"
               title="Display Queue: the queue of the selected node in the last test run"
-              icon={<ListIcon />}
+              icon={<UnorderedListOutlined aria-hidden />}
               disabled={!selectedNode}
               onClick={() => openDialog('queue', selectedNode!.id)}
             />
             <RailTool
               label="Delete Floating Objects"
               title="Delete Floating Objects: remove all objects with no path to the target"
-              icon={<TrashIcon />}
+              icon={<DeleteOutlined aria-hidden />}
               disabled={!editing || floating.length === 0}
               onClick={deleteFloatingObjects}
             />
-            <RailTool label="Layout mapping" title="Lay Out Mapping" icon={<ProjectDiagramIcon />} disabled={!editing} onClick={layOut} />
+            <RailTool label="Layout mapping" title="Lay Out Mapping" icon={<ApartmentOutlined aria-hidden />} disabled={!editing} onClick={layOut} />
             <RailTool
               label="Copy"
-              icon={<CopyIcon />}
+              icon={<CopyOutlined aria-hidden />}
               disabled={!selectedNode || selectedNode.kind === 'target' || isPreviewId(selectedNode.id)}
               onClick={() => copyBranch(selectedNode!.id)}
             />
-            <RailTool label="Paste" icon={<PasteIcon />} disabled={!editing || !canPaste || variable} onClick={paste} />
+            <RailTool label="Paste" icon={<SnippetsOutlined aria-hidden />} disabled={!editing || !canPaste || variable} onClick={paste} />
           </div>
           <div
             ref={host}
@@ -586,7 +597,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
               fitView
               fitViewOptions={fixedView}
             >
-              <Background gap={18} size={1} color="var(--pf-t--global--border--color--default)" />
+              <Background gap={18} size={1} color="var(--ant-color-border)" />
               <ViewFit nodeIds={JSON.stringify(nodes.map((n) => n.id))} host={host} />
             </ReactFlow>
             <MappingHint host={host} />
@@ -595,25 +606,22 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
       </SideBySide>
       <Flex
         component="footer"
-        justifyContent={{ default: 'justifyContentSpaceBetween' }}
+        justify="space-between"
         style={{
-          padding: 'var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)',
-          borderBlockStart: 'var(--pf-t--global--border--width--regular) solid var(--pf-t--global--border--color--default)',
+          padding: 'var(--ant-size-xxs) var(--ant-size-xs)',
+          borderBlockStart: 'var(--ant-line-width) solid var(--ant-color-border)',
         }}
       >
-        <Content component="small">
+        <small>
           {nodes.length} nodes · {edges.length} connections
-        </Content>
-        <Flex component="ul" aria-label="Mapping status key" gap={{ default: 'gapMd' }} style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {Object.values(STATE_MARKS).map(({ icon: Mark, status, label }) => (
-            <FlexItem component="li" key={label}>
-              <Content component="small">
-                <Icon size="sm" status={status} isInline>
-                  <Mark aria-hidden />
-                </Icon>{' '}
-                {label}
-              </Content>
-            </FlexItem>
+        </small>
+        <Flex component="ul" aria-label="Mapping status key" gap="middle" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {Object.values(STATE_MARKS).map(({ icon: Mark, color, label }) => (
+            <li key={label}>
+              <small>
+                <Mark aria-hidden style={{ color }} /> {label}
+              </small>
+            </li>
           ))}
         </Flex>
       </Flex>
@@ -644,54 +652,51 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
         />
       )}
       {dialog?.kind === 'add' && (
-        <Modal isOpen variant="small" aria-labelledby="add-node-title" onClose={closeDialog}>
-          <ModalHeader title="Add node" labelId="add-node-title" />
-          <ModalBody>
-            <Stack hasGutter>
-              <StackItem>
-                <FunctionCatalogue
-                  catalogue={catalogue}
-                  add={(fn) => {
-                    addFunction(fn);
-                    closeDialog();
-                  }}
-                  addPreview={(key) => {
-                    addPreview(key);
-                    closeDialog();
-                  }}
-                />
-              </StackItem>
-              <StackItem component="section" aria-label="Variables">
-                <Title headingLevel="h3" size="md">
-                  Variables <PreviewBadge feature="Variables" issue={VARIABLES_ISSUE} />
-                </Title>
-                {scope.length === 0 ? (
-                  <Content component="p">
-                    No variables are available for this target. Choose Add Variable on a parent in the target tree, or open a target that follows an existing variable in the same
-                    branch.
-                  </Content>
-                ) : (
-                  <List isPlain>
-                    {scope.map((v) => (
-                      <ListItem key={v}>
-                        <Button
-                          variant="link"
-                          isInline
-                          icon={<FieldTypeIcon type="variable" />}
-                          onClick={() => {
-                            addPreviewNode({ kind: 'variable', ref: v });
-                            closeDialog();
-                          }}
-                        >
-                          <strong>{variableName(v)}</strong> <Content component="small">/{localPath(v)}</Content>
-                        </Button>
-                      </ListItem>
-                    ))}
-                  </List>
-                )}
-              </StackItem>
-            </Stack>
-          </ModalBody>
+        <Modal open title="Add node" onCancel={closeDialog} footer={null}>
+          <Flex vertical gap="small">
+            <div>
+              <FunctionCatalogue
+                catalogue={catalogue}
+                add={(fn) => {
+                  addFunction(fn);
+                  closeDialog();
+                }}
+                addPreview={(key) => {
+                  addPreview(key);
+                  closeDialog();
+                }}
+              />
+            </div>
+            <section aria-label="Variables">
+              <h3>
+                Variables <PreviewBadge feature="Variables" issue={VARIABLES_ISSUE} />
+              </h3>
+              {scope.length === 0 ? (
+                <p>
+                  No variables are available for this target. Choose Add Variable on a parent in the target tree, or open a target that follows an existing variable in
+                  the same branch.
+                </p>
+              ) : (
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {scope.map((v) => (
+                    <li key={v}>
+                      <Button
+                        type="link"
+
+                        icon={<FieldTypeIcon type="variable" />}
+                        onClick={() => {
+                          addPreviewNode({ kind: 'variable', ref: v });
+                          closeDialog();
+                        }}
+                      >
+                        <strong>{variableName(v)}</strong> <small>/{localPath(v)}</small>
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </Flex>
         </Modal>
       )}
       {remappingNode && (

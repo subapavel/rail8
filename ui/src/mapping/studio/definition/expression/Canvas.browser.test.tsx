@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { Rail8Theme } from '../../../../theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -39,9 +39,13 @@ async function renderCanvas(options: { api?: ApiClient; editing?: boolean; targe
   document.body.append(host);
   root = createRoot(host);
   root.render(
-    <QueryClientProvider client={queryClient}>
-      <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={memoryBrowserState()} />
-    </QueryClientProvider>,
+    <Rail8Theme>
+      {() => (
+        <QueryClientProvider client={queryClient}>
+          <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={memoryBrowserState()} />
+        </QueryClientProvider>
+      )}
+    </Rail8Theme>,
   );
   return store;
 }
@@ -55,7 +59,7 @@ const rail = (name: string) => page.getByRole('toolbar', { name: 'Mapping tools'
 const catalogue = () => page.getByRole('region', { name: 'Function catalogue' });
 const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
 /** A menu item that opens a flyout. */
-const flyoutItem = (name: string) => page.getByRole('menu').getByRole('button', { name, exact: true });
+const flyoutItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
 const targetRow = (name: string) =>
   page.getByRole('table', { name: 'target fields' }).getByRole('row').filter({ has: page.getByRole('button', { name, exact: true }) });
 const footer = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByText(/nodes · /);
@@ -99,7 +103,7 @@ describe('the mapping expression canvas', () => {
   test('a menu opened elsewhere closes the open one: a field menu gives way to a node menu', async () => {
     await renderCanvas();
     await expect.element(node(/^Source field OrderId/)).toBeVisible();
-    await targetRow('Note').getByRole('button', { name: 'Note', exact: true }).click({ button: 'right' });
+    await page.getByRole('table', { name: 'source fields' }).getByRole('button', { name: 'Note', exact: true }).click({ button: 'right' });
     await expect.element(page.getByRole('menu', { name: 'Field actions for Note' })).toBeVisible();
 
     await node(/^Source field OrderId/).click({ button: 'right' });
@@ -118,7 +122,7 @@ describe('the mapping expression canvas', () => {
     const menu = page.getByRole('menu', { name: 'Node actions for OrderId' });
     await expect.element(menu).toBeVisible();
     const at = box.element().getBoundingClientRect();
-    const opened = menu.element().closest('.pf-v6-c-menu')!.getBoundingClientRect();
+    const opened = menu.element().getBoundingClientRect();
     expect(Math.abs(opened.left - (at.left + 30))).toBeLessThan(2);
     expect(Math.abs(opened.top - (at.top + 12))).toBeLessThan(2);
   });
@@ -259,7 +263,7 @@ describe('the mapping expression canvas', () => {
     const dialog = page.getByRole('dialog', { name: 'Function parameters · substring' });
     await dialog.getByLabelText('Start Position').fill('1.5');
     await dialog.getByRole('button', { name: 'Apply' }).click();
-    await expect.element(dialog.getByRole('alert')).toHaveTextContent('Danger alert:Start Position must be an integer.');
+    await expect.element(dialog.getByRole('alert')).toHaveTextContent('Start Position must be an integer.');
     await dialog.getByLabelText('Start Position').fill('2');
     await dialog.getByLabelText('Character Count').fill('3');
     await dialog.getByRole('button', { name: 'Apply' }).click();
@@ -397,8 +401,8 @@ describe('the mapping expression canvas', () => {
 
     await node(/^Source field OrderId/).click({ button: 'right' });
     await flyoutItem('Context').click();
-    const parent = page.getByRole('option', { name: 'Order' });
-    await expect.element(parent).toHaveAttribute('aria-selected', 'true');
+    const parent = page.getByRole('menuitemradio', { name: 'Order' });
+    await expect.element(parent).toHaveAttribute('aria-checked', 'true');
     await parent.click();
 
     // a context equal to the parent is left out: the model stays as it is
@@ -483,7 +487,7 @@ describe("a function's deviation as a neutral note, its fidelity level otherwise
       expect(hint(name)).not.toMatch(/fidelity|assumed|exact|deviation/i);
     }
     for (const name of [/^Node function divide/, /^Node function abs/, /^Node function concat/]) {
-      expect(node(name).element().querySelector('.pf-v6-c-label')).toBeNull();
+      expect(node(name).element().querySelector('.ant-tag')).toBeNull();
       expect(node(name).element().textContent).not.toMatch(/[≠?]/);
     }
   });
@@ -597,7 +601,12 @@ describe('an orphaned reference and its remap', () => {
     return fakeApiClient({ [MAPPING]: model });
   }
   const remapDialog = () => page.getByRole('dialog', { name: 'Remap · Gone' });
-  const sourceField = () => remapDialog().getByRole('combobox', { name: 'Source field' });
+  const chooseField = async (label: string) => {
+    const select = remapDialog().getByRole('combobox', { name: 'Source field' });
+    await select.click();
+    await select.fill(label);
+    await userEvent.keyboard('{Enter}');
+  };
 
   test('marks the box on the canvas and its target field in the target pane; in view mode Remap is disabled', async () => {
     await renderCanvas({ api: await orphanApi() });
@@ -620,7 +629,7 @@ describe('an orphaned reference and its remap', () => {
     await expect.element(remapDialog()).toMatchTextContent('The source structure has no field /Order/Gone.');
     await expect.element(remapDialog().getByRole('button', { name: 'Remap', exact: true })).toBeDisabled();
 
-    await userEvent.selectOptions(sourceField(), ORDER_ID);
+    await chooseField('/Order/OrderId');
     await remapDialog().getByRole('button', { name: 'Remap', exact: true }).click();
 
     await expect.element(remapDialog()).not.toBeInTheDocument();
@@ -640,7 +649,7 @@ describe('an orphaned reference and its remap', () => {
     const store = await renderCanvas({ api: await orphanApi(), editing: true });
     await node(/^Source field Gone/).click({ button: 'right' });
     await menuItem('Remap').click();
-    await userEvent.selectOptions(sourceField(), ORDER_ID);
+    await chooseField('/Order/OrderId');
 
     await remapDialog().getByRole('button', { name: 'Cancel' }).click();
 
@@ -658,7 +667,7 @@ describe('an orphaned reference and its remap', () => {
     const remapTo = async (field: string) => {
       await node(/^Source field Gone/).click({ button: 'right' });
       await menuItem('Remap').click();
-      await userEvent.selectOptions(sourceField(), field);
+      await chooseField(field);
       await remapDialog().getByRole('button', { name: 'Remap', exact: true }).click();
     };
 

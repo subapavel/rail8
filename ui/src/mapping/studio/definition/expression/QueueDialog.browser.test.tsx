@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { Rail8Theme } from '../../../../theme';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -75,9 +75,13 @@ async function renderDefinition(last?: TestResult, options: RenderOptions = {}):
   document.body.append(host);
   root = createRoot(host);
   root.render(
-    <QueryClientProvider client={queryClient}>
-      <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={options.browserState ?? memoryBrowserState()} />
-    </QueryClientProvider>,
+    <Rail8Theme>
+      {() => (
+        <QueryClientProvider client={queryClient}>
+          <StudioFrame mappingId={MAPPING} api={api} store={store} browserState={options.browserState ?? memoryBrowserState()} />
+        </QueryClientProvider>
+      )}
+    </Rail8Theme>,
   );
   return store;
 }

@@ -1,5 +1,6 @@
-import { Button, Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
-import { useState, type ComponentType } from 'react';
+import { Button, Dropdown } from 'antd';
+import { CheckOutlined, DownOutlined } from '@ant-design/icons';
+import { useRef, useState, type ComponentType } from 'react';
 
 interface ToolProps {
   label: string;
@@ -12,7 +13,18 @@ interface ToolProps {
 
 /** An icon button of a toolbar, named by its label. */
 export function Tool({ label, icon: Icon, pressed, onClick, disabled }: ToolProps) {
-  return <Button variant="plain" size="sm" aria-label={label} title={label} aria-pressed={pressed} isClicked={pressed} isDisabled={disabled} icon={<Icon />} onClick={onClick} />;
+  return (
+    <Button
+      type={pressed ? 'primary' : 'text'}
+      size="small"
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      icon={<Icon aria-hidden />}
+      onClick={onClick}
+    />
+  );
 }
 
 /** One option of a `ToolMenu`: it runs; `checked` marks the option in force. */
@@ -26,23 +38,49 @@ export interface ToolMenuItem {
 /** A tool's options as a menu below its caret; `icon` shows on the caret when the menu is a tool of its own. */
 export function ToolMenu({ label, items, icon: Icon, disabled }: { label: string; items: ToolMenuItem[]; icon?: ComponentType; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   return (
     <Dropdown
-      isOpen={open}
+      autoFocus
+      trigger={['click']}
+      placement="bottomLeft"
+      open={open}
       onOpenChange={setOpen}
-      onSelect={() => setOpen(false)}
-      toggle={(ref) => (
-        <MenuToggle ref={ref} variant="plain" size="sm" aria-label={label} title={label} isDisabled={disabled} isExpanded={open} icon={Icon && <Icon />} onClick={() => setOpen(!open)} />
-      )}
-      popperProps={{ position: 'start' }}
+      disabled={disabled}
+      menu={{
+        'aria-label': label,
+        items: items.map((item) => ({
+          key: item.label,
+          label: item.label,
+          role: item.checked === undefined ? 'menuitem' : 'menuitemradio',
+          'aria-checked': item.checked,
+          disabled: item.disabled,
+          icon: item.checked ? <CheckOutlined aria-hidden /> : undefined,
+          onClick: () => {
+            setOpen(false);
+            trigger.current?.focus({ preventScroll: true });
+            item.run();
+          },
+        })),
+      }}
     >
-      <DropdownList>
-        {items.map(({ label: name, run, checked, disabled: off }) => (
-          <DropdownItem key={name} isSelected={checked} isDisabled={off} onClick={run}>
-            {name}
-          </DropdownItem>
-        ))}
-      </DropdownList>
+      <Button
+        ref={trigger}
+        type="text"
+        size="small"
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+        disabled={disabled}
+        icon={Icon ? <Icon aria-hidden /> : <DownOutlined aria-hidden />}
+      />
     </Dropdown>
   );
 }

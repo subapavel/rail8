@@ -1,6 +1,6 @@
-import { Divider, Menu, MenuContent, MenuGroup, MenuItem, MenuList, Popper } from '@patternfly/react-core';
-import { TrashIcon } from '@patternfly/react-icons';
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Dropdown, type MenuProps } from 'antd';
+import { CheckOutlined, DeleteOutlined, RightOutlined } from '@ant-design/icons';
+import { useEffect, useState, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -38,103 +38,68 @@ export interface OpenActionMenu {
 /** The keys that open a context menu from the keyboard. */
 export const isContextMenuKey = (e: KeyboardEvent) => e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10');
 
-function Items({ items, label, close, choice }: { items: ActionMenuItem[]; label: string; close: (focus: boolean) => void; choice?: boolean }) {
-  return (
-    <MenuList aria-label={label}>
-      {items.map((item) => (
-        <MenuItem
-          key={item.key ?? item.label}
-          itemId={item.key ?? item.label}
-          isDisabled={item.disabled}
-          isDanger={item.danger}
-          icon={item.danger ? <TrashIcon aria-hidden /> : undefined}
-          isSelected={choice ? item.checked === true : undefined}
-          flyoutMenu={item.children && <Flyout label={item.label} items={item.children} close={close} />}
-          onClick={
-            item.children
-              ? undefined
-              : () => {
-                  close(true);
-                  item.run?.();
-                }
-          }
-        >
-          {item.label}
-        </MenuItem>
-      ))}
-    </MenuList>
-  );
-}
-
-/** The flyout of an item with children: a list of choices when they carry `checked`. */
-function Flyout({ label, items, close }: { label: string; items: ActionMenuItem[]; close: (focus: boolean) => void }) {
-  const choice = items.some((item) => item.checked !== undefined);
-  return (
-    <Menu aria-label={label} containsFlyout role={choice ? 'listbox' : undefined}>
-      <MenuContent>
-        <Items items={items} label={label} close={close} choice={choice} />
-      </MenuContent>
-    </Menu>
-  );
-}
-
-/**
- * An action menu, a PatternFly menu below its anchor or at the point it was opened at: it takes the focus as it
- * opens; a choice, Escape, a pointer down outside it or a resize closes it, and a choice or Escape gives the focus back
- * to its anchor.
- * An item with children opens them in a flyout, by the pointer or the Right arrow.
- */
+/** A context menu positioned below a field or at the pointer, with keyboard-accessible flyouts. */
 export function ActionMenu({ menu, onClose }: { menu: OpenActionMenu; onClose: () => void }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const pointRef = useRef<HTMLSpanElement>(null);
-  const close = (focus: boolean) => {
+  const rect = menu.anchor.getBoundingClientRect();
+  const point = menu.at ?? { x: rect.left, y: rect.bottom };
+  const close = (restore: boolean) => {
     onClose();
-    if (focus && menu.anchor.isConnected) menu.anchor.focus({ preventScroll: true });
+    if (restore && menu.anchor.isConnected) menu.anchor.focus({ preventScroll: true });
   };
   useEffect(() => {
-    requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true }));
-  }, [menu]);
-  // a right click fires no click: a pointer down outside closes the menu, as another menu opens
-  useEffect(() => {
-    const outside = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) onClose();
-    };
-    const resize = () => onClose();
-    document.addEventListener('pointerdown', outside, true);
-    window.addEventListener('resize', resize);
-    return () => {
-      document.removeEventListener('pointerdown', outside, true);
-      window.removeEventListener('resize', resize);
-    };
+    window.addEventListener('resize', onClose);
+    return () => window.removeEventListener('resize', onClose);
   }, [onClose]);
-  const flyouts = menu.groups.some((group) => group.items.some((item) => item.children));
-  return (
-    <>
-      {menu.at && createPortal(<span ref={pointRef} aria-hidden style={{ position: 'fixed', left: menu.at.x, top: menu.at.y }} />, document.body)}
-      <Popper
-        triggerRef={() => pointRef.current ?? menu.anchor}
-        isVisible
-        placement="bottom-start"
-        appendTo={() => document.body}
-        onDocumentKeyDown={(event) => {
-          if (event?.key === 'Escape') close(true);
-        }}
-        popper={
-          <Menu ref={menuRef} aria-label={menu.label} containsFlyout={flyouts}>
-            <MenuContent>
-              {menu.groups.map(({ label, items }, i) => (
-                <Fragment key={label ?? i}>
-                  {i > 0 && <Divider />}
-                  <MenuGroup label={label}>
-                    <Items items={items} label={label ?? menu.label} close={close} />
-                  </MenuGroup>
-                </Fragment>
-              ))}
-            </MenuContent>
-          </Menu>
-        }
-      />
-    </>
+
+  const options = (items: ActionMenuItem[], prefix: string): NonNullable<MenuProps['items']> =>
+    items.map((item) => {
+      const key = `${prefix}/${item.key ?? item.label}`;
+      return item.children
+        ? { key, label: item.label, disabled: item.disabled, children: options(item.children, key) }
+        : {
+            key,
+            label: item.label,
+            disabled: item.disabled,
+            danger: item.danger,
+            role: item.checked !== undefined ? 'menuitemradio' : 'menuitem',
+            'aria-checked': item.checked,
+            icon: item.danger ? <DeleteOutlined aria-hidden /> : item.checked ? <CheckOutlined aria-hidden /> : undefined,
+            onClick: () => {
+              close(true);
+              item.run?.();
+            },
+          };
+    });
+  const entries: NonNullable<MenuProps['items']> = menu.groups.flatMap(({ label, items }, index) => {
+    const children = options(items, String(index));
+    return label ? [{ type: 'group', key: `group-${index}`, label, role: 'group', 'aria-label': label, children }] : children;
+  });
+  return createPortal(
+    <Dropdown
+      open
+      autoFocus
+      placement="bottomLeft"
+      trigger={['click']}
+      align={{ offset: [0, 0] }}
+      onOpenChange={(open, info) => {
+        if (!open && info.source === 'trigger') close(false);
+      }}
+      menu={{
+        'aria-label': menu.label,
+        items: entries,
+        expandIcon: <RightOutlined aria-hidden />,
+        triggerSubMenuAction: 'click',
+        onKeyDown: (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            close(true);
+          }
+        },
+      }}
+    >
+      <span aria-hidden style={{ position: 'fixed', pointerEvents: 'none', width: 1, height: 1, left: point.x, top: point.y - 1 }} />
+    </Dropdown>,
+    document.body,
   );
 }
 

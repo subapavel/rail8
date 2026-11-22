@@ -1,6 +1,5 @@
-import { Alert, Button, Content, Flex, FlexItem, Label, List, ListItem, Modal, ModalBody, ModalHeader, Stack, StackItem, Switch, Title } from '@patternfly/react-core';
-import { FileImportIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { Alert, Button, Flex, Modal, Switch, Table, Tag } from 'antd';
+import { ImportOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
 import type { TraceEntry } from '../../../api/client';
@@ -74,26 +73,21 @@ function NoTrace({ test: { session, format, level, editing } }: { test: QueueTes
     await session.getState().runTest(level);
   };
 
-  if (running)
-    return (
-      <Content component="p" role="status">
-        Running the simulation…
-      </Content>
-    );
+  if (running) return <p role="status">Running the simulation…</p>;
   if (!empty) return null;
-  if (!editing) return <Content component="p">No test data yet. A test document can be loaded in edit mode.</Content>;
+  if (!editing) return <p>No test data yet. A test document can be loaded in edit mode.</p>;
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Content component="p">No test data yet. Load a test file: the simulation runs on it and the queue shows here.</Content>
-      </StackItem>
-      <StackItem>
-        <Button variant="secondary" icon={<FileImportIcon />} onClick={() => file.current?.click()}>
+    <Flex vertical gap="small">
+      <div>
+        <p>No test data yet. Load a test file: the simulation runs on it and the queue shows here.</p>
+      </div>
+      <div>
+        <Button type="default" icon={<ImportOutlined aria-hidden />} onClick={() => file.current?.click()}>
           Load test file
         </Button>
         <input ref={file} type="file" hidden aria-label="Test file" accept={`.${format.toLowerCase()}`} onChange={(e) => void load(e)} />
-      </StackItem>
-    </Stack>
+      </div>
+    </Flex>
   );
 }
 
@@ -103,15 +97,20 @@ function RunFailure({ session }: { session: TestSession }) {
   const failure = useStore(session, (s) => (s.runFailed && !s.running ? s.runLog : null));
   if (failure === null) return null;
   return (
-    <Alert variant="danger" isInline title="The simulation failed">
-      <List aria-label="Run diagnostics">
-        {failure.lines
-          .filter((line) => line.time === undefined)
-          .map((line, i) => (
-            <ListItem key={i}>{line.message}</ListItem>
-          ))}
-      </List>
-    </Alert>
+    <Alert
+      type="error"
+      showIcon
+      title={<h3>The simulation failed</h3>}
+      description={
+        <ul aria-label="Run diagnostics">
+          {failure.lines
+            .filter((line) => line.time === undefined)
+            .map((line, i) => (
+              <li key={i}>{line.message}</li>
+            ))}
+        </ul>
+      }
+    />
   );
 }
 
@@ -138,11 +137,7 @@ function Value({ value }: { value: ShownValue }) {
     case 'empty':
       return <code>""</code>;
     case 'suppress':
-      return (
-        <Label isCompact color="grey">
-          SUPPRESS
-        </Label>
-      );
+      return <Tag>SUPPRESS</Tag>;
   }
 }
 
@@ -171,118 +166,113 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
   };
 
   return (
-    <Modal isOpen onClose={onClose} variant="medium" aria-label="Display Queue">
-      <ModalHeader title="Display Queue" description={trace === undefined ? 'No test run yet' : 'Traced queue · last test run'} />
-      <ModalBody>
-        <Stack hasGutter>
-          <StackItem>
-            <Flex justifyContent={{ default: 'justifyContentSpaceBetween' }} alignItems={{ default: 'alignItemsCenter' }}>
-              <FlexItem>
-                <strong>ƒ {name}</strong>
-              </FlexItem>
-              <FlexItem>
-                <Switch id="queue-row-numbers" label="Row numbers" isChecked={numbers} onChange={(_, checked) => changeNumbers(checked)} />
-              </FlexItem>
-            </Flex>
-          </StackItem>
-          <StackItem>
-            <RunFailure session={test.session} />
-          </StackItem>
-          {trace === undefined ? (
-            <StackItem>
-              <NoTrace test={test} />
-            </StackItem>
-          ) : (
-            <>
-              {stale && (
-                <StackItem>
-                  <Content component="p">
-                    <Label color="orange" isCompact>
-                      stale
-                    </Label>{' '}
-                    The working copy changed since this run.
-                  </Content>
-                </StackItem>
-              )}
-              <StackItem style={{ maxHeight: '24rem', overflow: 'auto' }}>
-                <Table aria-label={`${name} queue`} role="table" variant="compact" gridBreakPoint="" isStickyHeader>
-                  <Thead>
-                    <Tr>
-                      {numbers && <Th>#</Th>}
-                      {columns.map((c) => (
-                        <Th key={c.label}>{c.label}</Th>
-                      ))}
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {Array.from({ length: Math.min(MAX_ROWS, Math.max(1, count)) }, (_, i) => (
-                      <Tr key={i}>
-                        {numbers && <Td>{i}</Td>}
-                        {columns.map((c) => {
-                          const cell = c.cells?.[i];
-                          return (
-                            <Td key={c.label} style={cell && cell.kind !== 'value' ? { background: 'var(--pf-t--global--background--color--secondary--default)' } : undefined}>
-                              {cell ? <Cell cell={cell} /> : c.cells === undefined && i === 0 ? <em>Not evaluated in the last test run</em> : null}
-                            </Td>
-                          );
-                        })}
-                      </Tr>
-                    ))}
-                  </Tbody>
-                </Table>
-              </StackItem>
-              {columns
-                .filter((c) => c.size !== undefined)
-                .map((c) => (
-                  <StackItem key={c.label}>
-                    <Content component="small">
-                      {c.label} · {c.size}
-                      {c.capped && ` · capped: ${c.capped}`}
-                    </Content>
-                  </StackItem>
-                ))}
-              {count > MAX_ROWS && (
-                <StackItem>
-                  <Content component="small">
-                    Showing the first {MAX_ROWS} of {count} rows.
-                  </Content>
-                </StackItem>
-              )}
-              {shownOccurrences?.kind === 'occurrences' && (
-                <StackItem component="section" aria-label="Occurrences">
-                  <Title headingLevel="h4" size="md">
-                    Occurrences of {name}, {shownOccurrences.min}..{shownOccurrences.max ?? 'unbounded'}
-                  </Title>
-                  {shownOccurrences.capped && <Content component="small">capped: {shownOccurrences.capped}</Content>}
-                  <List component="ol" aria-label="Parent slots">
-                    {shownOccurrences.rows.map((row) =>
-                      row.kind === 'left-out' ? (
-                        <ListItem key={`${row.from}-${row.to}`}>
-                          <em>
-                            parent slots {row.from}–{row.to} not in the trace
-                          </em>
-                        </ListItem>
-                      ) : (
-                        <ListItem key={row.parentSlot}>
-                          parent slot {row.parentSlot}: {row.created} created
-                          {row.minOccurs && ` · po:MINOCCURS, fewer than ${shownOccurrences.min}`}
-                          <List>
-                            {row.slots.map(({ slot, status }) => (
-                              <ListItem key={slot}>
-                                slot {slot} {STATUS[status]}
-                              </ListItem>
-                            ))}
-                          </List>
-                        </ListItem>
-                      ),
-                    )}
-                  </List>
-                </StackItem>
-              )}
-            </>
-          )}
-        </Stack>
-      </ModalBody>
+    <Modal open title="Display Queue" onCancel={onClose} width={760} footer={null}>
+      <p>{trace === undefined ? 'No test run yet' : 'Traced queue · last test run'}</p>
+      <Flex vertical gap="small">
+        <div>
+          <Flex justify="space-between" align="center">
+            <div>
+              <strong>ƒ {name}</strong>
+            </div>
+            <div>
+              <Flex align="center" gap="small">
+                <label htmlFor="queue-row-numbers">Row numbers</label>
+                <Switch id="queue-row-numbers" checked={numbers} onChange={changeNumbers} />
+              </Flex>
+            </div>
+          </Flex>
+        </div>
+        <div>
+          <RunFailure session={test.session} />
+        </div>
+        {trace === undefined ? (
+          <div>
+            <NoTrace test={test} />
+          </div>
+        ) : (
+          <>
+            {stale && (
+              <div>
+                <p>
+                  <Tag color="warning">stale</Tag> The working copy changed since this run.
+                </p>
+              </div>
+            )}
+            <div style={{ maxHeight: '24rem', overflow: 'auto' }}>
+              <Table<number>
+                size="small"
+                aria-label={`${name} queue`}
+                pagination={false}
+                rowKey={(index) => String(index)}
+                className="queue-table"
+                dataSource={Array.from({ length: Math.min(MAX_ROWS, Math.max(1, count)) }, (_, i) => i)}
+                columns={[
+                  ...(numbers ? [{ key: 'number', title: '#', render: (_: unknown, index: number) => index }] : []),
+                  ...columns.map((col) => ({
+                    key: col.label,
+                    title: col.label,
+                    onCell: (index: number) => ({
+                      style: { background: col.cells?.[index] && col.cells[index]?.kind !== 'value' ? 'var(--ant-color-bg-layout)' : undefined },
+                    }),
+                    render: (_: unknown, index: number) => {
+                      const cell = col.cells?.[index];
+                      return cell ? <Cell cell={cell} /> : col.cells === undefined && index === 0 ? <em>Not evaluated in the last test run</em> : null;
+                    },
+                  })),
+                ]}
+              />
+            </div>
+            {columns
+              .filter((c) => c.size !== undefined)
+              .map((c) => (
+                <div key={c.label}>
+                  <small>
+                    {c.label} · {c.size}
+                    {c.capped && ` · capped: ${c.capped}`}
+                  </small>
+                </div>
+              ))}
+            {count > MAX_ROWS && (
+              <div>
+                <small>
+                  Showing the first {MAX_ROWS} of {count} rows.
+                </small>
+              </div>
+            )}
+            {shownOccurrences?.kind === 'occurrences' && (
+              <section aria-label="Occurrences">
+                <h4>
+                  Occurrences of {name}, {shownOccurrences.min}..{shownOccurrences.max ?? 'unbounded'}
+                </h4>
+                {shownOccurrences.capped && <small>capped: {shownOccurrences.capped}</small>}
+                <ol aria-label="Parent slots">
+                  {shownOccurrences.rows.map((row) =>
+                    row.kind === 'left-out' ? (
+                      <li key={`${row.from}-${row.to}`}>
+                        <em>
+                          parent slots {row.from}–{row.to} not in the trace
+                        </em>
+                      </li>
+                    ) : (
+                      <li key={row.parentSlot}>
+                        parent slot {row.parentSlot}: {row.created} created
+                        {row.minOccurs && ` · po:MINOCCURS, fewer than ${shownOccurrences.min}`}
+                        <ul>
+                          {row.slots.map(({ slot, status }) => (
+                            <li key={slot}>
+                              slot {slot} {STATUS[status]}
+                            </li>
+                          ))}
+                        </ul>
+                      </li>
+                    ),
+                  )}
+                </ol>
+              </section>
+            )}
+          </>
+        )}
+      </Flex>
     </Modal>
   );
 }

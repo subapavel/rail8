@@ -1,5 +1,4 @@
-import { Icon } from '@patternfly/react-core';
-import { CubeIcon } from '@patternfly/react-icons';
+import { BlockOutlined } from '@ant-design/icons';
 
 const NUMERIC_TYPES = new Set([
   'number',
@@ -25,14 +24,10 @@ const SYMBOLS: Record<string, string> = { string: 'T', boolean: 'T/F', array: '[
 /** A field's type as an icon: a cube for a structure field, else a symbol of its value type in the monospace font. */
 export function FieldTypeIcon({ type }: { type: string }) {
   if (type === 'structure') {
-    return (
-      <Icon size="md" isInline title={type} aria-hidden="true">
-        <CubeIcon />
-      </Icon>
-    );
+    return <BlockOutlined title={type} aria-hidden />;
   }
   return (
-    <span title={type} aria-hidden="true" data-field-type={type} style={{ fontFamily: 'var(--pf-t--global--font--family--mono)', fontSize: 'var(--pf-t--global--font--size--body--sm)' }}>
+    <span title={type} aria-hidden="true" data-field-type={type} style={{ fontFamily: 'var(--ant-font-family-code)', fontSize: 'var(--ant-font-size-sm)' }}>
       {NUMERIC_TYPES.has(type) ? '#' : (SYMBOLS[type] ?? '·')}
     </span>
   );

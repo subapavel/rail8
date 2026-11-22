@@ -1,5 +1,5 @@
-import { Button, Content, Flex, FlexItem, Icon } from '@patternfly/react-core';
-import { CheckCircleIcon, CogIcon, ExclamationCircleIcon, ExclamationTriangleIcon, MinusCircleIcon } from '@patternfly/react-icons';
+import { Button, Flex } from 'antd';
+import { CheckCircleOutlined, SettingOutlined, ExclamationCircleOutlined, WarningOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
 import { useEffect, useRef, type CSSProperties } from 'react';
 import type { FieldPath } from '../../../generated/mapping-model';
@@ -17,9 +17,9 @@ export const nodeRole = (node: ExpressionNode) => node.role ?? ROLES[node.kind];
 
 /** A node state's mark and its colour: complete, incomplete, or with no path to the target. */
 export const STATE_MARKS = {
-  complete: { icon: CheckCircleIcon, status: 'success', label: 'Complete' },
-  incomplete: { icon: ExclamationCircleIcon, status: 'warning', label: 'Incomplete' },
-  detached: { icon: MinusCircleIcon, status: 'custom', label: 'No target path' },
+  complete: { icon: CheckCircleOutlined, color: 'var(--ant-color-success)', label: 'Complete' },
+  incomplete: { icon: ExclamationCircleOutlined, color: 'var(--ant-color-warning)', label: 'Incomplete' },
+  detached: { icon: MinusCircleOutlined, color: 'var(--ant-color-text-secondary)', label: 'No target path' },
 } as const;
 
 /** The data of a canvas node: the graph node, its state, its field's type and the opener of its parameters. */
@@ -47,9 +47,9 @@ export type MappingFlowNode = Node<MappingNodeData, 'mapping'>;
 
 /** The colour of each kind of node's symbol: its background and its text. */
 const SYMBOL_COLOURS = {
-  source: ['var(--pf-t--global--color--nonstatus--teal--default)', 'var(--pf-t--global--text--color--nonstatus--on-teal--default)'],
-  function: ['var(--pf-t--global--color--nonstatus--purple--default)', 'var(--pf-t--global--text--color--nonstatus--on-purple--default)'],
-  target: ['var(--pf-t--global--color--nonstatus--blue--default)', 'var(--pf-t--global--text--color--nonstatus--on-blue--default)'],
+  source: ['var(--ant-cyan-1)', 'var(--ant-cyan-8)'],
+  function: ['var(--ant-purple-1)', 'var(--ant-purple-8)'],
+  target: ['var(--ant-blue-1)', 'var(--ant-blue-8)'],
 } as const;
 
 function portHint(node: ExpressionNode, port: Port | undefined, input: boolean, index: number): string[] {
@@ -74,9 +74,9 @@ function PortHandle({ node, state, port, index, count, input }: { node: Expressi
       data-mapping-hint={[...hint, state.description].join('\n')}
       style={{
         top: `calc(var(--node-height) * ${(index + 0.5) / count} - 1px)`,
-        width: 'var(--pf-t--global--spacer--sm)',
-        height: 'var(--pf-t--global--spacer--sm)',
-        ...(missing && { background: 'var(--pf-t--global--color--status--warning--default)', borderColor: 'var(--pf-t--global--color--status--warning--default)' }),
+        width: 'var(--ant-size-xs)',
+        height: 'var(--ant-size-xs)',
+        ...(missing && { background: 'var(--ant-color-warning)', borderColor: 'var(--ant-color-warning)' }),
       }}
     />
   );
@@ -112,25 +112,22 @@ export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) 
     .filter(Boolean)
     .join('\n');
   const mark = STATE_MARKS[state.kind];
-  const border = selected
-    ? 'var(--pf-t--global--border--color--clicked)'
-    : orphaned
-      ? 'var(--pf-t--global--border--color--status--warning--default)'
-      : 'var(--pf-t--global--border--color--default)';
+  const border = selected ? 'var(--ant-color-primary)' : orphaned ? 'var(--ant-color-warning-border)' : 'var(--ant-color-border)';
   const card: CSSProperties = {
     '--node-height': `${nodeHeight(node)}px`,
     height: 'var(--node-height)',
     width: NODE_WIDTH,
     boxSizing: 'border-box',
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
-    padding: '0 var(--pf-t--global--spacer--sm)',
-    background: 'var(--pf-t--global--background--color--primary--default)',
-    border: `${selected ? 'var(--pf-t--global--border--width--strong)' : 'var(--pf-t--global--border--width--regular)'} ${orphaned && !selected ? 'dashed' : 'solid'} ${border}`,
-    borderRadius: 'var(--pf-t--global--border--radius--small)',
-    boxShadow: selected ? 'var(--pf-t--global--box-shadow--md)' : 'var(--pf-t--global--box-shadow--sm)',
-    color: 'var(--pf-t--global--text--color--regular)',
-    fontSize: 'var(--pf-t--global--font--size--body--sm)',
+    padding: '0 var(--ant-size-xs)',
+    background: 'var(--ant-color-bg-container)',
+    border: `${selected ? 'var(--ant-line-width-bold)' : 'var(--ant-line-width)'} ${orphaned && !selected ? 'dashed' : 'solid'} ${border}`,
+    borderRadius: 'var(--ant-border-radius-sm)',
+    boxShadow: selected ? 'var(--ant-box-shadow)' : 'var(--ant-box-shadow-secondary)',
+    color: 'var(--ant-color-text)',
+    fontSize: 'var(--ant-font-size-sm)',
   } as CSSProperties;
   return (
     <div
@@ -149,77 +146,71 @@ export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) 
       {node.inputs.map((port, i) => (
         <PortHandle key={port.id} node={node} state={state} port={port} index={i} count={node.inputs.length} input />
       ))}
-      <Flex flexWrap={{ default: 'nowrap' }} alignItems={{ default: 'alignItemsCenter' }} gap={{ default: 'gapSm' }} style={{ minWidth: 0, flex: 1 }}>
-        <FlexItem
+      <Flex align="center" gap="small" style={{ minWidth: 0, flex: 1 }}>
+        <div
           style={{
             position: 'relative',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 'var(--pf-t--global--spacer--lg)',
-            height: 'var(--pf-t--global--spacer--lg)',
-            borderRadius: 'var(--pf-t--global--border--radius--small)',
+            width: 'var(--ant-size-lg)',
+            height: 'var(--ant-size-lg)',
+            borderRadius: 'var(--ant-border-radius-sm)',
             background: SYMBOL_COLOURS[node.kind][0],
             color: SYMBOL_COLOURS[node.kind][1],
             fontStyle: isFunction ? 'italic' : undefined,
           }}
         >
           {isFunction ? 'ƒ' : <FieldTypeIcon type={fieldType ?? ''} />}
-          <Icon
-            size="sm"
-            status={mark.status}
+          <mark.icon
+            aria-hidden
             style={{
+              color: mark.color,
               position: 'absolute',
-              right: 'calc(-1 * var(--pf-t--global--spacer--xs))',
-              bottom: 'calc(-1 * var(--pf-t--global--spacer--xs))',
-              borderRadius: 'var(--pf-t--global--border--radius--pill)',
-              background: 'var(--pf-t--global--background--color--primary--default)',
+              right: 'calc(-1 * var(--ant-size-xxs))',
+              bottom: 'calc(-1 * var(--ant-size-xxs))',
+              borderRadius: 'var(--ant-border-radius-lg)',
+              background: 'var(--ant-color-bg-container)',
             }}
-          >
-            <mark.icon aria-hidden />
-          </Icon>
-        </FlexItem>
-        <FlexItem flex={{ default: 'flex_1' }} style={{ minWidth: 0 }}>
-          <Flex gap={{ default: 'gapXs' }} flexWrap={{ default: 'nowrap' }} alignItems={{ default: 'alignItemsCenter' }}>
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Flex gap="var(--ant-size-xxs)" align="center">
             <strong
               style={{
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                ...(changedContext && { color: 'var(--pf-t--global--text--color--link--default)' }),
+                ...(changedContext && { color: 'var(--ant-color-link)' }),
               }}
             >
               {node.name}
             </strong>
-            {orphaned && (
-              <Icon size="sm" status="warning" role="img" aria-label="Orphaned reference" title={ORPHANED_HINT}>
-                <ExclamationTriangleIcon />
-              </Icon>
-            )}
+            {orphaned && <WarningOutlined aria-label="Orphaned reference" title={ORPHANED_HINT} style={{ color: 'var(--ant-color-warning)' }} />}
             {node.preview && <PreviewBadge {...node.preview} />}
           </Flex>
           {(portNote || changedContext || settings) && (
-            <Content component="small" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {portNote || [changedContext && contextLabel, settings].filter(Boolean).join(' · ')}
-            </Content>
+            </small>
           )}
-        </FlexItem>
+        </div>
         {editParameters && (
-          <FlexItem>
+          <div>
             <Button
-              variant="plain"
-              size="sm"
+              type="text"
+              size="small"
               className="nodrag nopan"
               aria-label={`Parameters for ${node.name}`}
               data-mapping-hint={`Function parameters\n${details}`}
-              icon={<CogIcon />}
+              icon={<SettingOutlined aria-hidden />}
               onDoubleClick={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 editParameters();
               }}
             />
-          </FlexItem>
+          </div>
         )}
       </Flex>
       {node.output && <PortHandle node={node} state={state} index={0} count={1} input={false} />}

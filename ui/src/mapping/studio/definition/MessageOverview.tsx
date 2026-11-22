@@ -50,11 +50,11 @@ interface FieldConnectionsProps {
   onSelect: (target: FieldPath) => void;
 }
 
-/** The colours of a connection, PatternFly tokens: the selected target field's in the brand colour. */
-const STROKE = 'var(--pf-t--global--border--color--default)';
-const CURRENT = 'var(--pf-t--global--border--color--clicked)';
-const MARK_FILL = 'var(--pf-t--global--background--color--primary--default)';
-const MARK_TEXT = 'var(--pf-t--global--text--color--regular)';
+/** Connections to the selected target field use the primary theme colour. */
+const STROKE = 'var(--ant-color-text-secondary)';
+const CURRENT = 'var(--ant-color-primary)';
+const MARK_FILL = 'var(--ant-color-bg-container)';
+const MARK_TEXT = 'var(--ant-color-text)';
 
 /**
  * The field connections: a curve from each source field row to each target field row whose mapping reads it, both in
@@ -102,7 +102,7 @@ function FieldConnections({ model, targets, selectedTarget, onSelect }: FieldCon
   }, [links]);
 
   return (
-    <div ref={gutter} style={{ flex: '0 0 var(--pf-t--global--spacer--3xl)', position: 'relative' }}>
+    <div ref={gutter} style={{ flex: '0 0 var(--ant-size-xxl)', position: 'relative' }}>
       <svg role="group" aria-label="Field connections" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}>
         {lines.map(({ source, target, functions, width, y1, y2 }, i) => {
           const curve = `M0 ${y1} C${width * 0.43} ${y1} ${width * 0.57} ${y2} ${width} ${y2}`;
@@ -130,7 +130,7 @@ function FieldConnections({ model, targets, selectedTarget, onSelect }: FieldCon
               {functions.length > 0 && (
                 <g transform={`translate(${width / 2} ${(y1 + y2) / 2})`}>
                   <rect x="-11" y="-9" width="22" height="18" rx="5" style={{ fill: MARK_FILL, stroke: current ? CURRENT : STROKE }} />
-                  <text y="4" textAnchor="middle" style={{ fill: MARK_TEXT, fontSize: 'var(--pf-t--global--font--size--body--sm)' }}>
+                  <text y="4" textAnchor="middle" style={{ fill: MARK_TEXT, fontSize: 'var(--ant-font-size-sm)' }}>
                     ƒ
                   </text>
                 </g>
