@@ -79,6 +79,7 @@ export function ActionMenu({ menu, onClose }: { menu: OpenActionMenu; onClose: (
       open
       autoFocus
       placement="bottomLeft"
+      styles={{ root: { position: 'fixed' } }}
       trigger={['click']}
       align={{ offset: [0, 0] }}
       onOpenChange={(open, info) => {
