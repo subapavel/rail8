@@ -30,7 +30,9 @@ describe('the flow canvas graph', () => {
     expect(receiver?.label).toBe('warehouse');
     expect(receiver?.parentId).toBeUndefined();
     expect(graph.edges.some(e => e.source === '/processes/dispatch/steps/0' && e.target === receiver?.id)).toBe(true);
-    expect(graph.edges.flatMap(e => e.insertAt ? [e.insertAt] : [])).toEqual(flow.edges.flatMap(e => e.insertAt ? [e.insertAt] : []));
+    expect(graph.edges.flatMap(e => e.insertAt ? [e.insertAt] : [])).toEqual([
+      ...flow.edges.flatMap(e => e.insertAt ? [e.insertAt] : []), ['processes', 'dispatch', 'steps', 0],
+    ]);
   });
 
   it('reroutes the same participants to the folded frame and restores the expanded connections', () => {

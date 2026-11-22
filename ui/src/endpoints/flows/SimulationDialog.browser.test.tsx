@@ -6,13 +6,13 @@ import { SimulationDialog } from './SimulationDialog';
 let host: HTMLElement;
 let root: Root;
 
-function mount(initiallyOpen = true, startLabel = 'Validate', endLabel = 'Send invoice') {
+function mount(initiallyOpen = true, startLabel = 'Validate', endLabel = 'Send invoice', stepCount = 2) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   const render = (open: boolean) => root.render(<>
     <button onClick={() => render(true)}>Open input</button>
-    <SimulationDialog open={open} onClose={() => render(false)} startLabel={startLabel} endLabel={endLabel} />
+    <SimulationDialog open={open} onClose={() => render(false)} startLabel={startLabel} endLabel={endLabel} stepCount={stepCount} />
   </>);
   render(initiallyOpen);
 }
@@ -57,7 +57,7 @@ test('previews the chosen range and all four parts of the input, and keeps the d
 });
 
 test('names a single step once and returns keyboard focus to the opener on Escape', async () => {
-  mount(false, 'Validate', 'Validate');
+  mount(false, 'Validate', 'Validate', 1);
   const opener = page.getByRole('button', { name: 'Open input' });
   await opener.click();
   await expect.element(dialog()).toMatchTextContent('Validate');
@@ -66,6 +66,11 @@ test('names a single step once and returns keyboard focus to the opener on Escap
   await userEvent.keyboard('{Escape}');
   await expect.element(dialog()).not.toBeInTheDocument();
   await expect.element(opener).toHaveFocus();
+});
+
+test('shows both bounds when a multi-step range starts and ends with the same label', async () => {
+  mount(true, 'Validate', 'Validate', 2);
+  await expect.element(dialog()).toMatchTextContent('Validate → Validate');
 });
 
 test('refuses duplicate header names across tabs and lets the user correct them', async () => {
