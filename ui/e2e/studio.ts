@@ -21,6 +21,7 @@ export async function openMappings(page: Page) {
 export async function openStudio(page: Page, mapping: string, tab?: string) {
   await openMappings(page);
   const name = mapping.slice(mapping.lastIndexOf('/') + 1);
+  await page.getByRole('textbox', { name: 'Find mappings' }).fill(name);
   const row = mappingsTable(page).getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
   await row.getByRole('button', { name: 'Open in studio' }).click();
   await expect(page.getByRole('heading', { level: 1, name })).toBeVisible();
