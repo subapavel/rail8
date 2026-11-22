@@ -1,19 +1,22 @@
-import { CheckCircleOutlined, CloseOutlined, EditOutlined, ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SearchOutlined, UndoOutlined } from '@ant-design/icons';
 import { ReactFlowProvider } from '@xyflow/react';
-import { Alert, App, Button, Collapse, Flex, Form, Grid, Input, Menu, Modal, Select, Spin, Splitter, Tag, Typography } from 'antd';
+import { Alert, App, Button, Collapse, Flex, Form, Input, Menu, Modal, Select, Spin, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DiscardDialog } from '../../DiscardDialog';
 import { ReadSpinner } from '../../ReadSpinner';
 import type { CloseGuard } from '../EndpointForm';
 import { FlowCanvas } from './FlowCanvas';
+import { FlowInspector, type InspectorView } from './FlowInspector';
 import { FlowPanel, type PanelEdit } from './FlowPanel';
 import { FlowsError, type FlowsApi, type StoredFlow } from './api';
+import { canvasGraph } from './canvasGraph';
 import { edit, EditRefused, follow, placeOf, type Op } from './edit';
 import { readFlow } from './flowYaml';
 import { addProcess, addStep, callable, callOf, callsOf, deleteProcess, deleteStep, moveStep, moveToList, renameProcess, stepListsOf } from './ops';
 import { BUILT_IN } from './steps';
 import type { FlowIngress, FlowNode, FlowProblem, Path, ServedSteps } from './types';
 import { pointer, view } from './view';
+import './flow-editor.css';
 
 /** The most texts undo goes back through. */
 const MAX_UNDO = 100;
@@ -40,7 +43,7 @@ type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind
  */
 interface Work {
   text: string;
-  undo: string[];
+  undo: { text: string; movedStep: boolean }[];
   key: string | null;
 }
 
@@ -49,11 +52,11 @@ type Discarding = { then: 'return to view mode' } | { then: 'close its tab'; clo
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * A flow file as a picture: its steps on a canvas, and beside it a drawer with the settings of the node chosen, or the
- * flow's own when none is. A file that cannot be drawn shows its text with its problems.
+ * A flow file as a picture, with properties of the flow or the selected node below the canvas.
+ * A file that cannot be drawn shows the problems that prevented the diagram from loading.
  *
  * It opens read-only; Edit, when the file may be edited and the flow is drawn, then Undo, Cancel, Check and Save. While
- * it is edited, the button on an edge adds a step there, or a call of another flow; the drawer moves the step chosen
+ * it is edited, the button on an edge adds a step there, or a call of another flow. The properties panel moves the step chosen
  * within its list or to another, deletes it and changes its fields, renames and deletes the process of the lane chosen,
  * adds a process and changes the flow's own settings; and the canvas, while it has the focus, takes Delete, the up and
  * down arrows and Ctrl+Z (Cmd+Z). A call of a flow whose address no `direct` out endpoint of the package names creates
@@ -70,11 +73,14 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [ingress, setIngress] = useState<FlowIngress>();
   const [asked, setAsked] = useState(0);
   const [selected, setSelected] = useState<Path | null>(null);
+  const [searchTarget, setSearchTarget] = useState<{ id: string; sequence: number }>();
+  const [inspector, setInspector] = useState<InspectorView>('minimized');
   const [work, setWork] = useState<Work | null>(null);
+  const [layoutRevision, setLayoutRevision] = useState(0);
   // a new generation remounts the controls that hold text of their own, so that text goes with the text it belonged to
   const [generation, setGeneration] = useState(0);
   const [invalid, setInvalid] = useState<ReadonlySet<string>>(new Set());
-  // the id of the node whose form the drawer shows, whose controls `invalid` speaks of
+  // The invalid controls belong to the selected node's form.
   const [formShown, setFormShown] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
   const [check, setCheck] = useState<FlowProblem[] | null>(null);
@@ -88,7 +94,6 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const { notification } = App.useApp();
-  const screens = Grid.useBreakpoint();
   const [showProblems, setShowProblems] = useState(false);
   const [discarding, setDiscarding] = useState<Discarding | null>(null);
   const ids = useId();
@@ -120,6 +125,12 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     const context = { ...result.stored.file.context, steps, ingress };
     return { view: view(text, context), value: read.kind === 'flow' ? read.value : {} };
   }, [result, text, steps, ingress]);
+  const searchable = useMemo(() => {
+    if (!drawn?.view.readable) return [];
+    return canvasGraph(drawn.view, false, false).nodes.flatMap((item) =>
+      item.original && item.original.kind !== 'end' && item.original.kind !== 'group' ? [{ value: item.id, label: item.label, path: item.original.path }] : [],
+    );
+  }, [drawn]);
 
   const unsaved = work !== null && stored !== null && work.text !== stored.file.text;
 
@@ -158,6 +169,11 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   }
   const calls = node === null ? undefined : picture.nodes.find((n) => n.id === `${node.id}#calls`);
   const canEdit = file.editable && picture.readable && picture.readOnly === undefined;
+  const title = typeof value.id === 'string' ? value.id : path.split('/').at(-1) ?? path;
+  const inspect = (at: Path | null) => {
+    setSelected(at);
+    setInspector((mode) => mode === 'minimized' ? 'split' : mode);
+  };
 
   /**
    * Applies `ops`, or the operations `ops` builds, to the working copy; a change of the field `key` right after another
@@ -180,7 +196,9 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     setCheck(null);
     if (selected !== null) setSelected(follow(selected, ops));
     if (next !== work.text) {
-      const undo = key !== null && work.key === key ? work.undo : [...work.undo, work.text].slice(-MAX_UNDO);
+      const movedStep = ops.some(op => op.op === 'move' && picture.nodes.some(n => n.kind === 'step' && n.id === pointer(op.from)));
+      const undo = key !== null && work.key === key ? work.undo : [...work.undo, { text: work.text, movedStep }].slice(-MAX_UNDO);
+      if (movedStep) setLayoutRevision(r => r + 1);
       setWork({ text: next, undo, key });
     }
     return true;
@@ -196,7 +214,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const undo = () => {
     const last = work?.undo.at(-1);
     if (work === null || last === undefined) return;
-    setWork({ text: last, undo: work.undo.slice(0, -1), key: null });
+    if (last.movedStep) setLayoutRevision(r => r + 1);
+    setWork({ text: last.text, undo: work.undo.slice(0, -1), key: null });
     startAgain();
   };
 
@@ -208,13 +227,14 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const move = (by: -1 | 1) => {
     if (step !== null) change(moveStep(step.path, [...step.path.slice(0, -1), index + by]));
   };
-  const remove = () => {
-    if (step !== null) change(deleteStep(step.path));
+  const removeStep = (target: FlowNode | null) => {
+    if (target?.kind === 'step' && target.locked === undefined) change(deleteStep(target.path));
   };
+  const remove = () => removeStep(step);
   const add = (type: string) => {
     const at = adding;
     setAdding(null);
-    if (at !== null && change(addStep(picture, at, type))) setSelected(at);
+    if (at !== null && change(addStep(picture, at, type))) inspect(at);
   };
   // a call of the flow `called` at `adding`: its endpoint file is created first when the package has none, and the
   // context read again so that the picture knows it
@@ -244,7 +264,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       setCalling(null);
     }
     setAdding(null);
-    if (change(addStep(picture, at, 'to', { endpoint: call.endpoint }))) setSelected(at);
+    if (change(addStep(picture, at, 'to', { endpoint: call.endpoint }))) inspect(at);
   };
   const flowsCalled = callable(file.context, path);
   const lane = node !== null && node.kind === 'lane' ? node : null;
@@ -262,7 +282,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     }
     if (change(ops)) {
       setNewProcess(null);
-      setSelected(['processes', name, 'steps']);
+      inspect(['processes', name, 'steps']);
     }
   };
 
@@ -303,22 +323,31 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
 
   /** The canvas's keys, while it has the focus and the flow is edited: never those typed into a field. */
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (work === null || (event.target as HTMLElement).closest('input, textarea, select, [contenteditable="true"]') !== null) return;
+    const target = event.target as HTMLElement;
+    if (work === null || event.defaultPrevented || !event.currentTarget.contains(target)) return;
+    const control = target.closest('button, input, textarea, select, [contenteditable="true"], [role="menu"], [role="menuitem"]');
+    if (control && !control.matches('.react-flow__node button[aria-pressed="true"]')) return;
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
       event.preventDefault();
       undo();
     } else if (step !== null && (event.key === 'Delete' || event.key === 'Backspace')) {
       event.preventDefault();
+      event.currentTarget.focus({ preventScroll: true });
       remove();
     } else if (step !== null && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
       event.preventDefault();
-      if (event.key === 'ArrowUp' ? index > 0 : index < length - 1) move(event.key === 'ArrowUp' ? -1 : 1);
+      if (event.key === 'ArrowUp' ? index > 0 : index < length - 1) {
+        // The old button remains at its file path when the selected step moves to another one.
+        event.currentTarget.focus({ preventScroll: true });
+        move(event.key === 'ArrowUp' ? -1 : 1);
+      }
     }
   };
 
   const leaveEditing = () => {
     setDiscarding(null);
     setSaveFailure(null);
+    if (unsaved && work?.undo.some(previous => previous.movedStep)) setLayoutRevision(r => r + 1);
     setWork(null);
     startAgain();
   };
@@ -359,45 +388,42 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   const header = (
-    <Flex vertical gap="small">
-      <Flex align="center" gap="small" wrap>
-        <Typography.Title level={1} style={{ margin: 0 }}>
-          {typeof value.id === 'string' ? value.id : path}
-        </Typography.Title>
+    <div className="rail8-flow-header">
+      <div className="rail8-flow-document">
+        <div className="rail8-flow-name">
+          <Typography.Text type="secondary" title={path}>{path.split('/').slice(0, -1).join(' / ')}</Typography.Text>
+          <Typography.Title level={1}>{title}</Typography.Title>
+        </div>
         {!canEdit && <Tag>Read-only</Tag>}
         {errors > 0 && <Tag color="error">{errors === 1 ? '1 problem' : `${errors} problems`}</Tag>}
         {warnings > 0 && <Tag color="warning">{warnings === 1 ? '1 warning' : `${warnings} warnings`}</Tag>}
-        <Flex wrap gap="small" style={{ marginInlineStart: 'auto' }}>
+        <Flex className="rail8-flow-actions" wrap gap={4} align="center">
           {work !== null ? (
             <>
-              <Button icon={<UndoOutlined aria-hidden />} disabled={work.undo.length === 0} onClick={undo}>
-                Undo
-              </Button>
-              <Button type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
+              <Button size="small" type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
                 Cancel
               </Button>
-              <Button icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(picture.problems)}>
+              <Button size="small" icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(picture.problems)}>
                 Check
               </Button>
-              <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
+              <Button size="small" type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} loading={saving} onClick={() => void save()}>
                 Save
               </Button>
             </>
           ) : (
             <>
-              <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
+              <Button size="small" type="text" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
                 Refresh
               </Button>
               {canEdit && (
-                <Button type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
+                <Button size="small" type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
                   Edit
                 </Button>
               )}
             </>
           )}
         </Flex>
-      </Flex>
-      <Typography.Text type="secondary">{path}</Typography.Text>
+      </div>
       {file.editable && picture.readable && picture.readOnly !== undefined && <Alert type="info" showIcon title={`The editor shows this flow read-only: ${picture.readOnly}.`} />}
       {refused !== null && (
         <Alert type="error" showIcon title="The change was not made" description={refused} closable={{ 'aria-label': 'Dismiss the refusal', onClose: () => setRefused(null) }} />
@@ -448,56 +474,100 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           ]}
         />
       )}
-    </Flex>
+    </div>
   );
 
   if (!picture.readable) {
     return (
-      <Flex vertical gap="middle">
+      <div className="rail8-flow-editor rail8-flow-unavailable" data-fill-workspace>
         {header}
-        <Alert type="warning" showIcon title="The flow cannot be drawn" description="The file is shown as it is, with what keeps it from being drawn." />
-        <pre>{result.stored.file.text}</pre>
-      </Flex>
+        <Alert type="warning" showIcon title="The flow cannot be drawn" description="Correct the listed problems in the working folder, then refresh the diagram." />
+      </div>
     );
   }
 
+  const insertionPoint = (): Path => {
+    if (step !== null) return [...step.path.slice(0, -1), index + 1];
+    if (node?.kind === 'from') return ['steps', 0];
+    const next = node && picture.edges.find((edge) => edge.source === node.id && edge.insertAt);
+    if (next?.insertAt) return next.insertAt;
+    const list = lane?.path ?? ['steps'];
+    return [...list, picture.nodes.filter((n) => n.kind === 'step' && pointer(n.path.slice(0, -1)) === pointer(list)).length];
+  };
+
   return (
-    <Flex vertical gap="middle">
+    <div className="rail8-flow-editor" data-fill-workspace>
       {header}
-      <Splitter orientation={screens.md === false ? 'vertical' : 'horizontal'} style={{ height: '70vh', minHeight: '24rem' }}>
-        <Splitter.Panel min="20%">
-          {/* The canvas takes its keys while it, or a node on it, has the focus. */}
-          <div style={{ height: '100%' }} data-testid="flow-canvas" tabIndex={-1} onKeyDown={onKey}>
+      <div className="rail8-flow-tools" role="toolbar" aria-label="Flow editing">
+        <Select
+          size="small"
+          className="rail8-flow-find"
+          aria-label="Find step"
+          placeholder="Find step"
+          value={null}
+          showSearch={{ optionFilterProp: 'label' }}
+          suffix={<SearchOutlined aria-hidden />}
+          options={searchable}
+          onChange={(id: string) => {
+            const chosen = searchable.find((option) => option.value === id);
+            if (chosen) {
+              inspect(chosen.path);
+              setSearchTarget((previous) => ({ id, sequence: (previous?.sequence ?? 0) + 1 }));
+            }
+          }}
+        />
+        {work !== null && (
+          <>
+            <span className="rail8-flow-rule" />
+            <Button size="small" type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setAdding(insertionPoint())}>
+              Add step
+            </Button>
+            <Tooltip title="Delete selected step">
+              <Button size="small" type="text" aria-label="Delete selected step" icon={<DeleteOutlined aria-hidden />} disabled={!step || step.locked !== undefined} onClick={remove} />
+            </Tooltip>
+            <Tooltip title="Undo last change">
+              <Button size="small" type="text" aria-label="Undo" icon={<UndoOutlined aria-hidden />} disabled={!work.undo.length} onClick={undo} />
+            </Tooltip>
+          </>
+        )}
+      </div>
+      <FlowInspector
+        mode={inspector}
+        setMode={setInspector}
+        selection={node?.label ?? title}
+        onFlowSelect={node === null ? undefined : () => inspect(null)}
+        canvas={
+          <div className="rail8-flow-graph" data-testid="flow-canvas" inert={inspector === 'maximized'} tabIndex={-1} onKeyDown={onKey}>
             <ReactFlowProvider>
               <FlowCanvas
                 view={picture}
                 selected={selected === null ? null : pointer(selected)}
-                onSelect={(n) => setSelected(n.path)}
-                {...(work === null ? {} : { onInsert: setAdding })}
+                inspectTarget={searchTarget?.id}
+                inspectSequence={searchTarget?.sequence}
+                layoutRevision={layoutRevision}
+                title={title}
+                {...(typeof value.description === 'string' ? { description: value.description } : {})}
+                onFlowSelect={() => inspect(null)}
+                onSelect={(n) => inspect(n.path)}
+                {...(work === null ? {} : { onInsert: setAdding, onRemove: removeStep })}
               />
             </ReactFlowProvider>
           </div>
-        </Splitter.Panel>
-        <Splitter.Panel defaultSize="40%" min="24%" style={{ padding: 'var(--ant-padding)' }}>
-          {node !== null && (
-            <Flex justify="end">
-              <Button type="text" aria-label="Show the flow's settings" icon={<CloseOutlined aria-hidden />} onClick={() => setSelected(null)} />
-            </Flex>
-          )}
-          <FlowPanel
-            flow={value}
-            {...(picture.settings === undefined ? {} : { settings: picture.settings })}
-            node={node}
-            {...(calls === undefined ? {} : { calls })}
-            {...(lane === null ? {} : { laneCalls: callsOf(picture, lane.label) })}
-            problems={picture.problems}
-            endpointForm={endpointForm}
-            openEndpoint={openEndpoint}
-            openFlow={openFlow}
-            {...(panelEdit === undefined ? {} : { edit: panelEdit })}
-          />
-        </Splitter.Panel>
-      </Splitter>
+        }
+      >
+        <FlowPanel
+          flow={value}
+          {...(picture.settings === undefined ? {} : { settings: picture.settings })}
+          node={node}
+          {...(calls === undefined ? {} : { calls })}
+          {...(lane === null ? {} : { laneCalls: callsOf(picture, lane.label) })}
+          problems={picture.problems}
+          endpointForm={endpointForm}
+          openEndpoint={openEndpoint}
+          openFlow={openFlow}
+          {...(panelEdit === undefined ? {} : { edit: panelEdit })}
+        />
+      </FlowInspector>
       <Modal
         open={adding !== null}
         title="Add a step"
@@ -597,6 +667,6 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           <strong>{path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
         </p>
       </Modal>
-    </Flex>
+    </div>
   );
 }

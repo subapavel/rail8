@@ -184,13 +184,17 @@ describe('Flows', () => {
     await expect.element(text('the file is not YAML: unclosed')).toBeVisible();
   });
 
-  test("draws the flow's steps, with the flow's own settings beside them, and offers Edit", async () => {
+  test("draws the flow's steps and opens its properties below the canvas", async () => {
     await open();
     await expect.element(button('Edit')).toBeVisible();
     for (const label of ['http-in', 'validate', 'route', 'partner', 'partner-domestic', 'partner-foreign', 'hand-over', 'order', 'end']) {
       await expect.element(nodeOf(label)).toBeVisible();
     }
     await expect.element(text("domestic · when /Invoice/Currency = 'CZK'")).toBeVisible();
+    await expect.element(button('Properties')).toHaveAttribute('aria-expanded', 'false');
+    await button('Properties').click();
+    const properties = page.getByRole('region', { name: 'Flow properties' });
+    expect(properties.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(canvas().element().getBoundingClientRect().bottom - 1);
     await expect.element(page.getByRole('heading', { name: 'Flow invoice' })).toBeVisible();
     await expect.element(page.getByRole('textbox', { name: 'description' })).toHaveValue('Validate an invoice and send it on.');
     await expect.element(page.getByRole('textbox', { name: 'delivery.mode' })).toHaveValue('sync');
@@ -219,7 +223,7 @@ describe('Flows', () => {
   test("shows the arrival's endpoint in its component's form, and opens it in a tab of its own", async () => {
     await open();
     await nodeOf('http-in').click();
-    await expect.element(page.getByLabelText('port', { exact: false })).toHaveValue('8080');
+    await expect.element(page.getByRole('textbox', { name: 'port', exact: true })).toHaveValue('8080');
     // the flow's own Edit, and none in the endpoint's form
     expect(button('Edit').elements()).toHaveLength(1);
     await button('Open endpoint').click();
@@ -233,12 +237,51 @@ describe('Flows', () => {
     await expect.element(page.getByRole('heading', { name: 'order', level: 1 })).toBeVisible();
   });
 
-  test('shows the text of a file it cannot draw, with the problem', async () => {
+  test('finds the receiver of an unconditional delivery by its endpoint name', async () => {
+    render(fakeFlows());
+    await button('order').click();
+    await page.getByRole('combobox', { name: 'Find step' }).fill('partner-domestic');
+    await expect.element(page.getByRole('option', { name: 'partner-domestic', exact: true })).toBeInTheDocument();
+    await userEvent.keyboard('{Enter}');
+    await expect.element(canvas().getByRole('button', { name: 'Inspect partner-domestic' })).toHaveAttribute('aria-pressed', 'true');
+    await expect.element(button('Open endpoint')).toBeVisible();
+  });
+
+  test('explains why a flow cannot be drawn without opening a source view', async () => {
     render(fakeFlows());
     await button('broken.yaml').click();
     await expect.element(text('The flow cannot be drawn')).toBeVisible();
-    await expect.element(text('id: [unclosed')).toBeVisible();
     await expect.element(text('the file: the file is not YAML')).toBeVisible();
+    expect(host!.querySelector('pre')).toBeNull();
+  });
+
+  test('finds a route, resizes its properties, and restores the split after maximizing and minimizing', async () => {
+    await open();
+    const tools = page.getByRole('toolbar', { name: 'Flow editing' });
+    const find = tools.getByRole('combobox', { name: 'Find step' });
+    await find.fill('route');
+    await expect.element(page.getByRole('option', { name: 'route', exact: true })).toBeInTheDocument();
+    await userEvent.keyboard('{Enter}');
+    const properties = page.getByRole('region', { name: 'Flow properties' });
+    await expect.element(properties.getByRole('table', { name: 'routes' })).toBeVisible();
+    const height = () => properties.element().getBoundingClientRect().height;
+    const before = height();
+    await button('Resize properties with arrow keys').click();
+    await userEvent.keyboard('{ArrowUp}');
+    await expect.poll(height).toBeGreaterThan(before);
+    const resized = height();
+    await button('Maximize properties').click();
+    await expect.poll(height).toBeGreaterThan(resized);
+    await userEvent.keyboard('{Escape}');
+    await expect.poll(height).toBeCloseTo(resized, 0);
+    await button('Minimize properties').click();
+    await expect.element(button('Properties')).toHaveAttribute('aria-expanded', 'false');
+    await button('Restore split view').click();
+    await expect.element(properties.getByRole('table', { name: 'routes' })).toBeVisible();
+    await button('Collapse flow').click();
+    await find.fill('route');
+    await userEvent.keyboard('{Enter}');
+    await expect.element(canvas().getByRole('button', { name: 'Inspect route' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   test("shows a module's step undescribed when the node does not answer", async () => {
@@ -253,6 +296,34 @@ const handOver = '  - type: to\n    name: hand-over\n    endpoint: order-call\n'
 const partner = '  - type: to\n    name: partner\n';
 
 describe('Editing a flow', () => {
+  test('clears an edge marker when two steps of the same type exchange places and when that move is undone', async () => {
+    const yaml = invoice.slice(0, invoice.indexOf('steps:')) + 'steps:\n  - type: xsd\n    name: first\n  - type: xsd\n    name: second\n';
+    await open(fakeFlows({ 'demo/flows/invoice.yaml': yaml }));
+    await button('Edit').click();
+    await button('Actions before second').click();
+    await page.getByRole('menuitem', { name: 'Set simulation start here' }).click();
+    await nodeOf('second').click();
+    await button('Move up').click();
+    await expect.element(button('Actions before first')).toHaveAttribute('title', 'Actions before first');
+    await button('Actions before second').click();
+    await page.getByRole('menuitem', { name: 'Set simulation start here' }).click();
+    await button('Undo').click();
+    await expect.element(button('Actions before first')).toHaveAttribute('title', 'Actions before first');
+  });
+  test('inserts after the selected step through the toolbar and can undo its removal', async () => {
+    const flows = fakeFlows();
+    await open(flows);
+    await button('Edit').click();
+    await nodeOf('validate').click();
+    await button('Add step').click();
+    await page.getByRole('menuitem', { name: /^filter/ }).click();
+    await expect.element(page.getByRole('heading', { name: 'filter', level: 2 })).toBeVisible();
+    await button('Delete selected step').click();
+    await expect.element(nodeOf('filter')).not.toBeInTheDocument();
+    await button('Undo').click();
+    await button('Save').click();
+    expect(lastSave(flows)).toBe(invoice.replace('  - type: route\n', '  - type: filter\n  - type: route\n'));
+  });
   test('adds a step of the type chosen where the button on an edge is pressed, and Save writes the text with the version it read', async () => {
     const flows = fakeFlows();
     await open(flows);
@@ -267,7 +338,7 @@ describe('Editing a flow', () => {
     await expect.element(button('Save')).toBeDisabled();
   });
 
-  test("moves and deletes the chosen step with the drawer's buttons, and Undo takes a change back", async () => {
+  test("moves and deletes the chosen step from its properties, and Undo takes a change back", async () => {
     const flows = fakeFlows();
     await open(flows);
     await button('Edit').click();
@@ -298,6 +369,10 @@ describe('Editing a flow', () => {
     await button('Move up').click();
     await nodeOf('validate').click();
     await page.getByRole('textbox', { name: 'Settings', exact: true }).fill('{ not json');
+    await button('Minimize properties').click();
+    await expect.element(button('Save')).toBeDisabled();
+    await button('Restore split view').click();
+    await expect.element(page.getByRole('textbox', { name: 'Settings', exact: true })).toHaveValue('{ not json');
     await expect.element(button('Save')).toBeDisabled();
     await button('Delete').click();
     await expect.element(button('Save')).toBeEnabled();
@@ -335,6 +410,18 @@ describe('Editing a flow', () => {
     await nodeOf('validat').click();
     await userEvent.keyboard('{Delete}');
     await expect.element(nodeOf('validat')).not.toBeInTheDocument();
+  });
+
+  test('navigating the edge action menu leaves the selected step in place', async () => {
+    await open();
+    await button('Edit').click();
+    await nodeOf('validate').click();
+    await button('Actions before route').click();
+    await userEvent.keyboard('{ArrowDown}');
+    await expect.element(page.getByRole('menuitem', { name: 'Insert step here' })).toBeVisible();
+    await userEvent.keyboard('{ArrowDown}{Escape}');
+    await expect.element(button('Save')).toBeDisabled();
+    await expect.element(button('Move up')).toBeDisabled();
   });
 
   test("a field's changes in a row are undone at once, and the problems are found again after each change without blocking Save", async () => {
@@ -496,6 +583,7 @@ describe('Editing the rest of a flow', () => {
     const flows = fakeFlows();
     await open(flows);
     await button('Edit').click();
+    await button('Properties').click();
     await page.getByRole('textbox', { name: 'description' }).fill('Send an invoice on.');
     await page.getByRole('combobox', { name: 'delivery.mode' }).click();
     await page.getByRole('option', { name: 'at-least-once', exact: true }).click();
@@ -507,6 +595,7 @@ describe('Editing the rest of a flow', () => {
     const flows = fakeFlows({ 'demo/flows/invoice.yaml': processes });
     await open(flows);
     await button('Edit').click();
+    await button('Properties').click();
     await button('Add a process').click();
     // a refused name says why in the dialog
     await page.getByRole('textbox', { name: 'Name' }).fill('enrich');

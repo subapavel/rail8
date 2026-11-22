@@ -8,7 +8,7 @@ the editor that the file cannot hold.
 This document is the agreed design. It is built in three stages, and none of them reworks what an
 earlier one built:
 
-- **The picture.** A flow opens drawn as one line, top to bottom: the inbound endpoint, then its steps.
+- **The picture.** A flow opens as a left-to-right diagram, from the calling endpoint through the flow's steps.
   The line fans out only at a `to` that picks its endpoint by a prop, to the endpoints it picks among,
   side by side. A click on a step shows its settings, read-only.
 - **A straight flow.** Adding, deleting and moving a step, a step's settings in a form, Save. The rules
@@ -21,9 +21,8 @@ a step is drawn and edited, and what its coming changes.
 
 ## Rules
 
-- The flow file holds no layout. The editor lays the flow out on its own, top to bottom. A file of
-  coordinates may come later with no change to the flow file's format. How it names a step is decided
-  then: a name is optional and may change, and a step's place changes when it moves.
+- The editor lays out the diagram when a flow opens. Resizing or folding its frame changes the view
+  for the current tab. The flow file stores only the flow definition.
 - Opening a file never changes it. The file is written only by Save, and only with what `edit` made of
   it.
 - An edit changes only what it edits. Every other byte of the file stays as it was: comments, blank
@@ -294,6 +293,11 @@ is as wide as its widest block, a fork as wide as its columns and the gaps betwe
 to bottom, centred in its column. Node sizes and gaps are fixed, and positions are whole numbers, so the
 same file always gives the same picture.
 
+Open Canvas projects this model from left to right. The flow has a labeled frame that can be resized and
+collapsed. Calling and receiving systems have their own frames outside it. Collapsing the flow keeps its
+external connections visible. Selecting a step opens its properties below the canvas. The separator adjusts
+the panel height, and the panel controls minimize it, maximize it or restore its previous size.
+
 - **Lanes.** The flow's `steps` are the main lane. Each process under `processes` is a lane of its own
   to the right, in file order, titled with its name, and drawn once however many steps call it. A
   process that no step calls is drawn too.
@@ -324,11 +328,12 @@ same file always gives the same picture.
 - **`process` call.** A node with a dashed `process` edge to its process's lane. A step in a lane lists
   in `runsAs` up to 8 of the names it runs under, one per call (`enrich/map`), and in `runs` how many
   there are. Calls are counted to 8 levels, the deepest the node allows; a loop is not followed.
-- **The end of a list.** Every list ends in an end node: the flow's own list ends the run, and a
-  process's goes back to its call. The edge into it is where a step is appended.
+- **The end of a list.** The flow's own list ends the run. A process returns to its caller. When the
+  flow finishes by sending to a receiver, the last connection goes directly to that receiver and
+  offers the append action. Other lists show their end explicitly.
 - **A step of a type the node does not serve** is drawn as a step with a warning, in its place.
 
-At most 2,048 nodes are drawn. A larger flow is not drawn: `readable` is false, and the text is shown.
+At most 2,048 nodes are drawn. A larger flow opens with a diagnostic explaining the limit.
 
 ### Settings
 
@@ -441,7 +446,7 @@ into a value. `rail8 validate` and the deploy stay the authority.
 ### Files the editor cannot fully understand
 
 - **No YAML, not a mapping, not a flow, or a `steps` that is no list.** The file is listed with its
-  problem. Its tab shows the text read-only, with the problem, and offers no Edit.
+  problem. Its tab explains why the diagram cannot be opened.
 - **A `schemaVersion` other than 1.** The file is drawn when it can be, and opens read-only, saying why.
 - **A step that is no mapping with a text `type`.** It is drawn in its place as a step with a problem,
   locked.

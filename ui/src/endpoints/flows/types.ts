@@ -100,7 +100,7 @@ export interface FlowEdge {
   insertAt?: Path;
 }
 
-/** What is drawn of a flow file. When `readable` is false the file cannot be drawn and its text is shown with the problems. */
+/** What the diagram draws. When the file cannot be drawn, problems describe what prevented it from opening. */
 export interface FlowView {
   readable: boolean;
   nodes: FlowNode[];
