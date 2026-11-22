@@ -6,6 +6,7 @@ interface Props {
   open: boolean;
   startLabel: string;
   endLabel: string;
+  stepCount: number;
   onClose: () => void;
 }
 
@@ -39,7 +40,7 @@ function PairEditor({ section, rows, change }: { section: PairTab; rows: Pair[];
 }
 
 /** Keeps a draft for this flow tab while its input dialog is closed. */
-export function SimulationDialog({ open, onClose, startLabel, endLabel }: Props) {
+export function SimulationDialog({ open, onClose, startLabel, endLabel, stepCount }: Props) {
   const [body, setBody] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [pairs, setPairs] = useState<Record<PairTab, Pair[]>>({ Properties: [], Headers: [] });
@@ -99,7 +100,7 @@ export function SimulationDialog({ open, onClose, startLabel, endLabel }: Props)
     ]}>
     <Flex vertical gap="small">
       <Typography.Text style={{ overflowWrap: 'anywhere' }}>
-        <strong>{startLabel}</strong>{endLabel !== startLabel && <> → <strong>{endLabel}</strong></>}
+        <strong>{startLabel}</strong>{stepCount > 1 && <> → <strong>{endLabel}</strong></>}
       </Typography.Text>
       <Typography.Text type="secondary">Preview the input for this range. No steps will run.</Typography.Text>
       {error && <Alert type="error" title={error} showIcon />}

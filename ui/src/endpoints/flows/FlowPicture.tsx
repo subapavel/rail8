@@ -577,7 +577,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         />
       </FlowInspector>
       <SimulationDialog open={simulationOpen && range !== null} onClose={() => setSimulationOpen(false)}
-        startLabel={range?.steps[0]?.label ?? ''} endLabel={range?.steps.at(-1)?.label ?? ''} />
+        startLabel={range?.steps[0]?.label ?? ''} endLabel={range?.steps.at(-1)?.label ?? ''} stepCount={range?.steps.length ?? 0} />
       <Modal
         open={adding !== null}
         title="Add a step"

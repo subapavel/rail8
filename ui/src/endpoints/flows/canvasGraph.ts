@@ -14,6 +14,8 @@ export interface CanvasItem extends Point, Size {
   detail?: string;
   parentId?: string;
   original?: FlowNode;
+  /** Source handle inside a process lane, relative to its top-left corner. */
+  entry?: Point;
 }
 
 export interface CanvasGraph {
@@ -86,11 +88,21 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
     const bottom = Math.max(...items.map(n => n.y + n.height + (n.role === 'station' && !vertical ? 42 : 0)));
     return { left, top, right, bottom };
   }
+  const processEntries: CanvasEdge[] = [];
   for (const group of inside.filter(n => n.role === 'group').reverse()) {
     const members = children.get(group.id);
     if (!members?.length) continue;
-    const { left, top, right, bottom } = bounds(members);
-    Object.assign(group, { x: left - 14, y: top - 32, width: right - left + 28, height: bottom - top + 46 });
+    const box = bounds(members);
+    const first = group.original?.kind === 'lane' ? members.find(n => n.id === `${group.id}/0`) : undefined;
+    if (first?.original) {
+      const x = first.x + (vertical ? TILE / 2 : -GAP);
+      const y = first.y + (vertical ? -GAP : TILE / 2);
+      box.left = Math.min(box.left, x);
+      box.top = Math.min(box.top, y);
+      group.entry = { x: x - box.left + 14, y: y - box.top + 32 };
+      processEntries.push({ id: `${group.id}->${first.id}`, source: group.id, target: first.id, kind: 'next', insertAt: first.original.path });
+    }
+    Object.assign(group, { x: box.left - 14, y: box.top - 32, width: box.right - box.left + 28, height: box.bottom - box.top + 46 });
   }
   const roots = children.get(FLOW_FRAME) ?? [];
   const { left, top, right, bottom } = roots.length ? bounds(roots) : { left: 0, top: 0, right: 0, bottom: 0 };
@@ -104,6 +116,7 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
   const nodes: CanvasItem[] = [{ id: FLOW_FRAME, role: 'frame', label: 'Flow', x: 0, y: 0, width, height }];
   if (!folded) nodes.push(...inside);
   const edges: CanvasEdge[] = folded ? [] : view.edges.filter(e => e.kind !== 'calls' && !(terminal.size && e.target === '/steps#end'));
+  if (!folded) edges.push(...processEntries);
   const firstEdge = sender && view.edges.find(e => e.source === sender.id);
   const first = firstEdge && inside.find(n => n.id === firstEdge.target);
   const centre = !folded && first ? vertical ? first.x + TILE / 2 : first.y + TILE / 2 : (vertical ? width : height) / 2;

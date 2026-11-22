@@ -6,6 +6,45 @@ import { Rail8Theme } from '../../theme';
 import { FlowCanvas } from './FlowCanvas';
 import { view } from './view';
 
+it('marks and previews a single-step process from the connection inside its lane', async () => {
+  const host = document.createElement('div');
+  Object.assign(host.style, { width: '1000px', height: '600px' });
+  document.body.append(host);
+  const root = createRoot(host);
+  const flow = view(`schemaVersion: 1
+kind: flow
+id: orders
+from: { endpoint: orders-in }
+steps:
+  - type: process
+    process: prepare
+processes:
+  prepare:
+    steps:
+      - type: jq
+        name: Normalize
+`, { endpoints: [], steps: [], flows: [] });
+  const rangeChanged = vi.fn();
+  const insert = vi.fn();
+  const button = (name: string) => page.getByRole('button', { name, exact: true });
+  async function mark(label: string, boundary: string) {
+    const name = `Actions before ${label}`;
+    await button(name).click();
+    await page.getByRole('menu', { name }).getByRole('menuitem', { name: `Set simulation ${boundary} here` }).click();
+  }
+  try {
+    root.render(<ReactFlowProvider><FlowCanvas view={flow} selected={null} onSelect={vi.fn()} onInsert={insert} onRangeChange={rangeChanged} /></ReactFlowProvider>);
+    await mark('Normalize', 'start');
+    await mark('back to the call', 'end');
+    expect(rangeChanged).toHaveBeenLastCalledWith(expect.objectContaining({ list: ['processes', 'prepare', 'steps'], startIndex: 0, endIndex: 1 }));
+    await button('Add a step at processes.prepare.steps[0]').click();
+    expect(insert).toHaveBeenCalledWith(['processes', 'prepare', 'steps', 0]);
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+});
+
 it('folds, inspects and resizes the real flow, and marks an insertion edge for simulation', async () => {
   const host = document.createElement('div');
   Object.assign(host.style, { width: '1080px', height: '480px' });

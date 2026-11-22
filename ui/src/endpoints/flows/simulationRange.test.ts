@@ -40,3 +40,8 @@ it('requires two increasing positions inside the same step list', () => {
   expect(simulationRange(flow, start, ['steps', 3])).toBeNull();
   expect(simulationRange(flow, before('/processes/prepare/steps/1'), before('/processes/prepare/steps#end'))?.steps.map(n => n.label)).toEqual(['xslt']);
 });
+
+it('selects the whole uncalled process from its entry connection', () => {
+  const first = edges.find(edge => edge.source === '/processes/prepare/steps' && edge.target === '/processes/prepare/steps/0');
+  expect(simulationRange(flow, first?.insertAt, before('/processes/prepare/steps#end'))?.steps.map(node => node.label)).toEqual(['jq', 'xslt']);
+});

@@ -51,10 +51,11 @@ type Frame = Node<{
 }, 'frame'>;
 type CanvasNode = Station | Frame;
 
-function Handles({ vertical }: { vertical: boolean }) {
+function Handles({ vertical, entry }: { vertical: boolean; entry?: Point }) {
   return <>
     <Handle type="target" position={vertical ? Position.Top : Position.Left} isConnectable={false} />
-    <Handle type="source" position={vertical ? Position.Bottom : Position.Right} isConnectable={false} />
+    <Handle type="source" position={vertical ? Position.Bottom : Position.Right} isConnectable={false}
+      style={entry && { left: entry.x, top: entry.y, transform: 'translate(-50%, -50%)' }} />
     <Handle id="side" type="target" position={vertical ? Position.Left : Position.Top} isConnectable={false} />
     <Handle id="side" type="source" position={vertical ? Position.Right : Position.Bottom} isConnectable={false} />
   </>;
@@ -104,7 +105,7 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
       : <WarningOutlined className="warning" title={problems.map(p => p.message).join('\n')} />)}
     {original.locked && <LockOutlined title={original.locked} />}
   </span>;
-  if (item.role === 'group') return <div className="flow-inner-frame"><Handles vertical={vertical} />
+  if (item.role === 'group') return <div className="flow-inner-frame"><Handles vertical={vertical} entry={item.entry} />
     {original.kind === 'lane' ? <Button type="text" size="small" onClick={select}>{item.label}</Button> : <span>{item.label}</span>}
   </div>;
   return <div className={`flow-station ${vertical ? 'vertical' : ''}`}>
