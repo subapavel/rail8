@@ -1,3 +1,4 @@
+import { unlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +42,27 @@ describe('replaceFile', () => {
 
 describe('walk', () => {
   const isJson = (name: string) => name.endsWith('.json');
+
+  it('still lists the other files when a file disappears during enumeration', async () => {
+    await writeFile(join(root, 'gone.json'), 'old');
+    await writeFile(join(root, 'kept.json'), 'current');
+    const found = await walk(root, (name) => {
+      if (name === 'gone.json') unlinkSync(join(root, name));
+      return isJson(name);
+    });
+    expect(found.files).toEqual([{ path: 'kept.json', text: 'current' }]);
+  });
+
+  it('reads changed files and newly added files on the next walk', async () => {
+    await writeFile(join(root, 'first.json'), 'one');
+    expect((await walk(root, isJson)).files).toEqual([{ path: 'first.json', text: 'one' }]);
+    await writeFile(join(root, 'first.json'), 'two');
+    await writeFile(join(root, 'next.json'), 'next');
+    expect((await walk(root, isJson)).files).toEqual([
+      { path: 'first.json', text: 'two' },
+      { path: 'next.json', text: 'next' },
+    ]);
+  });
 
   it('stops visiting files when the reader leaves', async () => {
     await writeFile(join(root, 'a.json'), 'a');

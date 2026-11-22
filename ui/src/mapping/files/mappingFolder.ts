@@ -209,8 +209,8 @@ function summaryOf(id: string, text: string | undefined): MappingSummary {
  * `*.mapping.json` whose path is a mapping id. A file over 1 MiB is not read and is listed by its id, name and package
  * alone. `truncated` is true when the walk stopped at its limit, so that more mappings may exist.
  */
-export async function listMappings(root: string): Promise<{ mappings: MappingSummary[]; truncated: boolean }> {
-  const { files, large, truncated } = await walk(root, (name) => name.endsWith(SUFFIX));
+export async function listMappings(root: string, signal?: AbortSignal): Promise<{ mappings: MappingSummary[]; truncated: boolean }> {
+  const { files, large, truncated } = await walk(root, (name) => name.endsWith(SUFFIX), signal);
   const found: { id: string; text?: string }[] = [
     ...files.map((file) => ({ id: file.path.slice(0, -SUFFIX.length), text: file.text })),
     ...large.map((path) => ({ id: path.slice(0, -SUFFIX.length) })),

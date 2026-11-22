@@ -72,7 +72,7 @@ export interface ApiClient {
    * file without them has its id, name and package alone. `truncated` is true when the list stopped at its limit,
    * so that more mappings may exist.
    */
-  listMappings(): Promise<{ mappings: MappingSummary[]; truncated: boolean }>;
+  listMappings(signal?: AbortSignal): Promise<{ mappings: MappingSummary[]; truncated: boolean }>;
   /**
    * Creates a mapping with its description, the fingerprint of each structure the request names and no target field
    * mapping, and resolves to it as stored; a side it does not name is absent until the Signature tab

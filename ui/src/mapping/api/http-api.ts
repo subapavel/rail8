@@ -41,8 +41,8 @@ export function httpApiClient(baseUrl = '', fetchPort: typeof fetch = (input, in
   }
 
   return {
-    listMappings: async () => {
-      const response = await send(`${baseUrl}/api/mappings`, 'GET');
+    listMappings: async (signal) => {
+      const response = await send(`${baseUrl}/api/mappings`, 'GET', undefined, {}, signal);
       return { mappings: (await response.json()) as MappingSummary[], truncated: response.headers.get('rail8-truncated') === 'true' };
     },
     createMapping: async (request: CreateMappingRequest) => storedOf(await send(`${baseUrl}/api/mappings`, 'POST', request)),

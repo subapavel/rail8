@@ -49,6 +49,13 @@ describe('the HTTP ApiClient', () => {
     expect(fetch).toHaveBeenCalledWith('/api/mappings/m/one', expect.objectContaining({ signal: controller.signal }));
   });
 
+  test('passes cancellation of the list read to the HTTP request', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(json([]));
+    const controller = new AbortController();
+    await httpApiClient('', fetch).listMappings(controller.signal);
+    expect(fetch).toHaveBeenCalledWith('/api/mappings', expect.objectContaining({ signal: controller.signal }));
+  });
+
   test('uses the global fetch when no fetch port is given', async () => {
     const port = fakeFetch(() => stored(model));
     vi.stubGlobal('fetch', port.fetch);

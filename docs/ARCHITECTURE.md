@@ -1001,8 +1001,8 @@ between steps that no row shows and the total, the duration of the list, so the 
 The payload after a step opens in a dialog (its first MiB) when its bytes were kept; when the latest
 attempt failed, its error is shown with Restart (`POST /admin/dlq/{id}/retry`).
 
-The Mappings screen lists the mappings of the working folder (`RAIL8_WORKSPACE`), finds them and creates
-them, and opens each one in a tab of its own, so that several mappings can be open at once. A
+The Mappings screen lists the mappings of the working folder (`RAIL8_WORKSPACE`) in pages of 25. Its search covers
+every page. It creates mappings and opens each one in a tab of its own, so that several mappings can be open at once. A
 mapping's tab is the mapping studio: it opens read-only; Edit, then Save (with `If-Match`, and a
 dialog when the file changed on disk), Cancel and Check; and its tabs Overview, Signature,
 Definition (the message trees, the field mappings and the expression canvas, on React Flow), Test

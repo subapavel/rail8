@@ -6,6 +6,7 @@ import { basename, dirname, join, relative, sep } from 'node:path';
 /** At most this many files of the kind a walk looks for are looked at, this deep, and none longer than this is read. */
 export const MAX_FILES = 1000;
 const MAX_DEPTH = 16;
+const READ_BATCH_SIZE = 8;
 export const MAX_FILE_BYTES = 1024 * 1024;
 const SKIPPED = new Set(['node_modules', 'target']);
 
@@ -34,30 +35,43 @@ export interface FoundFile {
 export async function walk(root: string, takes: (name: string) => boolean, signal?: AbortSignal): Promise<{ files: FoundFile[]; large: string[]; truncated: boolean }> {
   const files: FoundFile[] = [];
   const large: string[] = [];
-  let seen = 0;
+  const paths: string[] = [];
   let truncated = false;
+  const ignoreVanished = (error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+  };
   const visit = async (dir: string, depth: number) => {
     signal?.throwIfAborted();
     const entries = await readdir(dir, { withFileTypes: true });
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       signal?.throwIfAborted();
-      if (truncated || entry.name.startsWith('.')) continue;
+      if (truncated) break;
+      if (entry.name.startsWith('.')) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!SKIPPED.has(entry.name) && depth < MAX_DEPTH) await visit(full, depth + 1);
+        if (!SKIPPED.has(entry.name) && depth < MAX_DEPTH) await visit(full, depth + 1).catch(ignoreVanished);
       } else if (entry.isFile() && takes(entry.name)) {
-        if (++seen > MAX_FILES) {
+        if (paths.length === MAX_FILES) {
           truncated = true;
-          continue;
+          break;
         }
-        const path = relative(root, full).split(sep).join('/');
-        if ((await stat(full)).size > MAX_FILE_BYTES) large.push(path);
-        else files.push({ path, text: await readFile(full, { encoding: 'utf8', signal }) });
+        paths.push(full);
       }
     }
   };
   await visit(root, 0);
+  const read = async (full: string) => {
+    const info = await lstat(full);
+    if (!info.isFile()) return;
+    const path = relative(root, full).split(sep).join('/');
+    if (info.size > MAX_FILE_BYTES) large.push(path);
+    else files.push({ path, text: await readFile(full, { encoding: 'utf8', signal }) });
+  };
+  for (let i = 0; i < paths.length; i += READ_BATCH_SIZE) {
+    signal?.throwIfAborted();
+    await Promise.all(paths.slice(i, i + READ_BATCH_SIZE).map((path) => read(path).catch(ignoreVanished)));
+  }
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   large.sort();
   return { files, large, truncated };
