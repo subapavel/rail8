@@ -186,12 +186,18 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
   const byId = useMemo(() => new Map(view.nodes.map((n) => [n.id, n])), [view]);
   const canvas = useRef<HTMLDivElement>(null);
   const previousCount = useRef(view.nodes.length);
-  const { getViewport, setCenter } = useReactFlow();
+  const movedByUser = useRef(false);
+  const { fitView, getViewport, setCenter } = useReactFlow();
   useEffect(() => {
     const grew = view.nodes.length > previousCount.current;
     previousCount.current = view.nodes.length;
+    if (!grew) return;
+    if (!movedByUser.current) {
+      void fitView({ maxZoom: 1 });
+      return;
+    }
     const step = selected === null ? undefined : byId.get(selected);
-    if (!grew || !step || !canvas.current) return;
+    if (!step || !canvas.current) return;
     // Keep a newly added step and the insertion buttons on its edges inside the canvas at the author's zoom.
     const { x, y, zoom } = getViewport();
     const left = x + (step.x - GAP_X) * zoom;
@@ -201,7 +207,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
     if (left < 0 || top < 0 || right > canvas.current.clientWidth || bottom > canvas.current.clientHeight) {
       void setCenter(step.x + step.width / 2, step.y + step.height / 2, { zoom });
     }
-  }, [byId, getViewport, selected, setCenter, view.nodes.length]);
+  }, [byId, fitView, getViewport, selected, setCenter, view.nodes.length]);
   const nodes = useMemo<CanvasNode[]>(
     () =>
       view.nodes.map((n) => {
@@ -258,6 +264,9 @@ export function FlowCanvas({ view, selected, onSelect, onInsert }: FlowCanvasPro
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable
+      onMoveStart={(event) => {
+        if (event) movedByUser.current = true;
+      }}
       onNodeClick={(_, n) => {
         const node = byId.get(n.id);
         if (node !== undefined && node.kind !== 'group') onSelect(node);

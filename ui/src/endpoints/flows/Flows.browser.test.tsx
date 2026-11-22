@@ -153,6 +153,12 @@ const button = (name: string) => page.getByRole('button', { name, exact: true })
 const canvas = () => page.getByTestId('flow-canvas');
 const nodeOf = (label: string) => canvas().getByText(label, { exact: true });
 
+function insideCanvas(element: Element) {
+  const bounds = element.getBoundingClientRect();
+  const picture = canvas().element().getBoundingClientRect();
+  return bounds.top >= picture.top && bounds.bottom <= picture.bottom && bounds.left >= picture.left && bounds.right <= picture.right;
+}
+
 async function open(flows: FlowsApi = fakeFlows(), endpoints?: EndpointsApi) {
   render(flows, endpoints);
   await button('invoice').click();
@@ -500,6 +506,7 @@ describe('Editing the rest of a flow', () => {
     await page.getByRole('option', { name: 'validate', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
     await expect.element(canvas().getByText('process audit')).toBeVisible();
+    await expect.poll(() => ['process enrich', 'process audit'].every((name) => insideCanvas(nodeOf(name).element()))).toBe(true);
     await canvas().getByText('process enrich').click();
     await expect.element(text('the message history keeps enrich')).toBeVisible();
     await expect.element(button('Delete process')).toBeDisabled();
@@ -556,11 +563,7 @@ describe('Editing the rest of a flow', () => {
     await expect.element(page.getByRole('heading', { name: 'to', level: 2 })).toBeVisible();
     expect(endpoints.create).not.toHaveBeenCalled();
     const append = button('Add a step at steps[5]');
-    await expect.poll(() => {
-      const action = append.element().getBoundingClientRect();
-      const picture = canvas().element().getBoundingClientRect();
-      return action.top >= picture.top && action.bottom <= picture.bottom && action.left >= picture.left && action.right <= picture.right;
-    }).toBe(true);
+    await expect.poll(() => insideCanvas(append.element())).toBe(true);
     await append.click();
     await page.getByRole('menuitem', { name: /^payment/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to-2', level: 2 })).toBeVisible();
