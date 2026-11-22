@@ -1,12 +1,12 @@
-import { Spin } from 'antd';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { ReadSpinner } from '../../ReadSpinner';
 import type { ApiClient, StoredMapping } from '../api/client';
 import { newAuthoringId } from '../model/authoring-id';
-import type { BrowserStateStore } from './browser-state/browser-state';
 import { RefusedMapping } from './RefusedMapping';
+import type { CloseGuard } from './StudioFrame';
+import type { BrowserStateStore } from './browser-state/browser-state';
 import { createWorkingCopyStore, type StudioTab } from './store/working-copy';
-import { lastTabKey, openingTab, StudioFrame, type CloseGuard } from './StudioFrame';
 
 export interface StudioProps {
   /** The mapping's id: its workspace path without the file suffix. */
@@ -56,13 +56,19 @@ export function Studio(props: StudioProps) {
 
 function Loader(props: StudioProps) {
   const { mappingId, api } = props;
-  const mapping = useQuery({ queryKey: ['mapping', mappingId], queryFn: () => api.getMapping(mappingId) });
-  if (mapping.isSuccess) return <Opened {...props} opened={mapping.data} />;
+  const mapping = useQuery({
+    queryKey: ['mapping', mappingId],
+    queryFn: async ({ signal }) => {
+      const [opened, frame] = await Promise.all([api.getMapping(mappingId, signal), import('./StudioFrame')]);
+      return { opened, frame };
+    },
+  });
+  if (mapping.isSuccess) return <Opened {...props} {...mapping.data} />;
   return (
     <section>
       {mapping.isPending ? (
         <div role="status">
-          <Spin size="small" /> Opening {mappingId}…
+          <ReadSpinner size="small" /> Opening {mappingId}…
         </div>
       ) : (
         <RefusedMapping error={mapping.error} retrying={mapping.isFetching} onRetry={() => void mapping.refetch()} />
@@ -71,7 +77,8 @@ function Loader(props: StudioProps) {
   );
 }
 
-function Opened({ mappingId, api, browserState, openOn, startEditing, onSaved, guardClose, opened }: StudioProps & { opened: StoredMapping }) {
+function Opened({ mappingId, api, browserState, openOn, startEditing, onSaved, guardClose, opened, frame }: StudioProps & { opened: StoredMapping; frame: typeof import('./StudioFrame') }) {
+  const { StudioFrame, lastTabKey, openingTab } = frame;
   const [store] = useState(() => {
     const created = studioStore(api, mappingId, opened);
     created.getState().setTab(openOn ?? openingTab(browserState.read(lastTabKey(mappingId))));

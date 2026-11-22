@@ -42,6 +42,20 @@ describe('replaceFile', () => {
 describe('walk', () => {
   const isJson = (name: string) => name.endsWith('.json');
 
+  it('stops visiting files when the reader leaves', async () => {
+    await writeFile(join(root, 'a.json'), 'a');
+    await writeFile(join(root, 'b.json'), 'b');
+    const controller = new AbortController();
+    const visited: string[] = [];
+    const read = walk(root, (name) => {
+      visited.push(name);
+      controller.abort();
+      return false;
+    }, controller.signal);
+    await expect(read).rejects.toMatchObject({ name: 'AbortError' });
+    expect(visited).toEqual(['a.json']);
+  });
+
   it('reads the files it takes, in path order, and names those over the limit apart, unread', async () => {
     await mkdir(join(root, 'b', 'deep'), { recursive: true });
     await mkdir(join(root, '.hidden'));

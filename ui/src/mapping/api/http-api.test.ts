@@ -42,6 +42,13 @@ const TAG = '"sha256:aa"';
 const stored = (body: unknown, etag = TAG) => json(body, 200, 'application/json', etag);
 
 describe('the HTTP ApiClient', () => {
+  test('passes cancellation of the mapping read to the HTTP request', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(stored(model));
+    const controller = new AbortController();
+    await httpApiClient('', fetch).getMapping('m/one', controller.signal);
+    expect(fetch).toHaveBeenCalledWith('/api/mappings/m/one', expect.objectContaining({ signal: controller.signal }));
+  });
+
   test('uses the global fetch when no fetch port is given', async () => {
     const port = fakeFetch(() => stored(model));
     vi.stubGlobal('fetch', port.fetch);

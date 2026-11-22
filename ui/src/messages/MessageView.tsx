@@ -1,6 +1,7 @@
-import { Alert, Button, Descriptions, Empty, Flex, Spin, Tag, Typography } from 'antd';
-import { MountedModal } from '../MountedModal';
+import { Alert, Button, Descriptions, Empty, Flex, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { MountedModal } from '../MountedModal';
+import { ReadSpinner } from '../ReadSpinner';
 import { PAYLOAD_SHOWN, type AdminApi, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
 
@@ -88,7 +89,7 @@ export function MessageView({ api, id }: MessageViewProps) {
           Refresh
         </Button>
       </Flex>
-      {load.kind === 'loading' && <Spin aria-label="Loading the message" />}
+      {load.kind === 'loading' && <ReadSpinner label="Loading the message" />}
       {load.kind === 'missing' && (
         <Empty
           description={
@@ -276,7 +277,7 @@ function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
       onCancel={onClose}
       title={`Payload after step ${step.step} (${step.name}), attempt ${step.attempt}`}
     >
-      {load.kind === 'loading' && <Spin aria-label="Loading the payload" />}
+      {load.kind === 'loading' && <ReadSpinner label="Loading the payload" />}
       {load.kind === 'failed' && (
         <Alert showIcon type="error" title="The payload could not be read" description={load.message} />
       )}

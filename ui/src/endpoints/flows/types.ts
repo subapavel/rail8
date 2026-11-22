@@ -15,7 +15,7 @@ export type ServedSteps = { type: string; configSchema: unknown }[] | { missing:
  * their inbound `direct` endpoint serves. `partial` says the working folder was not read whole, so that what is not found
  * may still exist. `ingress`, when the node could be asked, is where the node takes requests.
  */
-export type FlowContext = Omit<ServedContext, 'partial'> & { partial?: boolean; steps: ServedSteps; ingress?: FlowIngress };
+export type FlowContext = Omit<ServedContext, 'partial'> & { partial?: boolean; steps: ServedSteps | undefined; ingress?: FlowIngress };
 
 /** Where the node takes requests: its environment, its advertised origin, and the HTTP prefix of each scheme that has one. */
 export interface FlowIngress extends NodeIngress {

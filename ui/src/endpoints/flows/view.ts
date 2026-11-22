@@ -290,6 +290,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       return { path: entry.path, settings, values };
     }
     if (served === null) {
+      if (context.steps === undefined) return { path: entry.path, settings: UNDESCRIBED, values, missing: 'Loading the step types from the node.' };
       return { path: entry.path, settings: UNDESCRIBED, values, missing: `The node's step types could not be read: ${(context.steps as { missing: string }).missing}` };
     }
     if (!served.has(entry.type)) {

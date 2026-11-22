@@ -1,6 +1,7 @@
-import { Alert, Button, Empty, Flex, Form, Input, Select, Spin, Tag, Typography } from 'antd';
 import { ProTable } from '@ant-design/pro-components';
+import { Alert, Button, Empty, Flex, Form, Input, Select, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState, type TableHTMLAttributes } from 'react';
+import { ReadSpinner } from '../ReadSpinner';
 import type { AdminApi, Counts, Listed, ListQuery, Status } from './admin';
 import { duration } from './progress';
 
@@ -233,7 +234,7 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
           </Button>
         </Flex>
       </Form>
-      {counted.kind === 'loading' && <Spin aria-label="Counting the messages by status" />}
+      {counted.kind === 'loading' && <ReadSpinner label="Counting the messages by status" />}
       {counted.kind === 'failed' && (
         <Alert
           showIcon
@@ -257,7 +258,7 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
           ))}
         </Flex>
       )}
-      {result.kind === 'loading' && <Spin aria-label="Reading the messages" />}
+      {result.kind === 'loading' && <ReadSpinner label="Reading the messages" />}
       {result.kind === 'failed' && (
         <Alert showIcon type="error" title="The messages could not be listed" description={result.message} />
       )}

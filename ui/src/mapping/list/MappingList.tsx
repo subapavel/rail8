@@ -1,8 +1,9 @@
-import { Alert, Button, Empty, Flex, Input, Spin } from 'antd';
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Empty, Flex, Input } from 'antd';
 import { useState, type TableHTMLAttributes } from 'react';
+import { ReadSpinner } from '../../ReadSpinner';
 import { describeError, type ApiClient, type MappingSummary } from '../api/client';
 import { NewMappingModal } from './NewMappingModal';
 
@@ -42,7 +43,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
   const failure = mappings.isError ? describeError(mappings.error) : undefined;
   const empty = mappings.isPending ? (
     <div role="status">
-      <Spin />
+      <ReadSpinner />
       <h2>Loading the mappings</h2>
     </div>
   ) : failure ? (

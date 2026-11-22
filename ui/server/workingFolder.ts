@@ -31,15 +31,17 @@ export interface FoundFile {
  * them. Hidden folders and files, `node_modules`, `target`, symbolic links and folders more than 16 deep are passed
  * over.
  */
-export async function walk(root: string, takes: (name: string) => boolean): Promise<{ files: FoundFile[]; large: string[]; truncated: boolean }> {
+export async function walk(root: string, takes: (name: string) => boolean, signal?: AbortSignal): Promise<{ files: FoundFile[]; large: string[]; truncated: boolean }> {
   const files: FoundFile[] = [];
   const large: string[] = [];
   let seen = 0;
   let truncated = false;
   const visit = async (dir: string, depth: number) => {
+    signal?.throwIfAborted();
     const entries = await readdir(dir, { withFileTypes: true });
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
+      signal?.throwIfAborted();
       if (truncated || entry.name.startsWith('.')) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -51,7 +53,7 @@ export async function walk(root: string, takes: (name: string) => boolean): Prom
         }
         const path = relative(root, full).split(sep).join('/');
         if ((await stat(full)).size > MAX_FILE_BYTES) large.push(path);
-        else files.push({ path, text: await readFile(full, 'utf8') });
+        else files.push({ path, text: await readFile(full, { encoding: 'utf8', signal }) });
       }
     }
   };

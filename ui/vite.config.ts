@@ -2,9 +2,10 @@ import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 import { adminProxy, nodeOf } from './server/adminProxy.ts';
 import { moduleServers } from './server/modules.ts';
+import { uiPort } from './server/uiPort.ts';
 
 // The development server listens on localhost only, on a fixed port, so the origins its own pages send are known.
-const port = 5173;
+const port = uiPort(process.env.RAIL8_UI_PORT);
 const origins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
 
 /**
