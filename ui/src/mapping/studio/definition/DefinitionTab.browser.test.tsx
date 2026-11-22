@@ -751,8 +751,9 @@ describe('the definition bar, the expression header and the field menus', () => 
     await expect.element(page.getByRole('group', { name: 'Where Used' })).not.toBeInTheDocument();
   });
 
-  test('a field menu opens below its field', async () => {
+  test('a field menu opens below its field and stays under the pointer when the page scrolls', async () => {
     await renderDefinition();
+    host!.style.minHeight = '200vh';
 
     await field('target', 'Note').click({ button: 'right' });
 
@@ -762,6 +763,14 @@ describe('the definition bar, the expression header and the field menus', () => 
     const opened = menu.element().getBoundingClientRect();
     expect(Math.abs(opened.left - at.left)).toBeLessThan(2);
     expect(Math.abs(opened.top - at.bottom)).toBeLessThan(2);
+    const before = window.scrollY;
+    window.scrollBy(0, 38);
+    try {
+      expect(window.scrollY - before).toBe(38);
+      expect(Math.abs(menu.element().getBoundingClientRect().top - opened.top)).toBeLessThan(2);
+    } finally {
+      window.scrollTo(0, before);
+    }
   });
 
   test('the context menu key and Shift+F10 open a field menu too', async () => {
