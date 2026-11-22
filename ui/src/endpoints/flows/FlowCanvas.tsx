@@ -12,6 +12,7 @@ import { Button, Dropdown, Space, type MenuProps } from 'antd';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { canvasGraph, canvasStructure, FLOW_FRAME, TILE, type CanvasEdge, type CanvasItem, type Point, type Size } from './canvasGraph';
 import { placeOf } from './edit';
+import { simulationRange, type SimulationRange } from './simulationRange';
 import type { FlowEdge, FlowNode, FlowProblem, FlowView, Path } from './types';
 import { pointer } from './view';
 import './FlowCanvas.css';
@@ -23,6 +24,7 @@ export interface FlowCanvasProps {
   onInsert?: (at: Path) => void;
   onRemove?: (node: FlowNode) => void;
   onFlowSelect?: () => void;
+  onRangeChange?: (range: SimulationRange | null) => void;
   title?: string;
   description?: string;
   direction?: 'horizontal' | 'vertical';
@@ -121,13 +123,14 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
   </div>;
 });
 
+type Boundary = 'start' | 'end';
 type Action = Edge<{
-  edge: CanvasEdge; target: CanvasItem; marked: boolean; vertical: boolean; mark: () => void;
+  edge: CanvasEdge; target: CanvasItem; starts: boolean; ends: boolean; vertical: boolean; mark?: (boundary: Boundary) => void;
   insert?: () => void; remove?: () => void;
 }, 'action'>;
 
 const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
-  const { edge, target, marked, mark, insert, remove, vertical } = props.data!;
+  const { edge, target, starts, ends, mark, insert, remove, vertical } = props.data!;
   let [path, x, y] = getBezierPath(props);
   if (edge.deliverySide !== undefined) {
     // Leave the station along its line, then turn through the gap between columns.
@@ -141,9 +144,13 @@ const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
     y = vertical ? targetY : (outside + targetY) / 2;
   }
   const actionLabel = `Actions before ${target.label}`;
+  const markerTitle = starts && ends ? 'Simulation starts and ends' : starts ? 'Simulation starts' : 'Simulation ends';
   const items: MenuProps['items'] = [
     ...(insert ? [{ key: 'insert', label: 'Insert step here', icon: <PlusOutlined aria-hidden />, onClick: insert }] : []),
-    { key: 'mark', label: marked ? 'Clear simulation start' : 'Set simulation start here', icon: <FlagOutlined aria-hidden />, onClick: mark },
+    ...(mark ? [
+      { key: 'start', label: starts ? 'Clear simulation start' : 'Set simulation start here', icon: <FlagOutlined aria-hidden />, onClick: () => mark('start') },
+      { key: 'end', label: ends ? 'Clear simulation end' : 'Set simulation end here', icon: <StopOutlined aria-hidden />, onClick: () => mark('end') },
+    ] : []),
     ...(remove ? [{ key: 'remove', label: `Delete ${target.label}`, danger: true, icon: <DeleteOutlined aria-hidden />, onClick: remove }] : []),
   ];
   return <>
@@ -154,10 +161,11 @@ const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
         {edge.label && <span className="flow-branch-label" title={edge.label}>{edge.label}</span>}
         {insert && edge.insertAt && <Button size="small" shape="circle" aria-label={`Add a step at ${placeOf(edge.insertAt)}`}
           title="Insert step here" icon={<PlusOutlined />} onClick={insert} />}
-        <Dropdown menu={{ items }} trigger={['click']}>
-          <Button size="small" shape="circle" className={marked ? 'marked' : ''} aria-label={actionLabel}
-            title={marked ? `Simulation starts before ${target.label}` : actionLabel} icon={marked ? <FlagOutlined /> : <EllipsisOutlined />} />
-        </Dropdown>
+        {items.length > 0 && <Dropdown menu={{ items, 'aria-label': actionLabel }} trigger={['click']}>
+          <Button size="small" shape="circle" className={starts || ends ? 'marked' : ''} aria-label={actionLabel}
+            title={starts || ends ? `${markerTitle} before ${target.label}` : actionLabel}
+            icon={starts ? <FlagOutlined /> : ends ? <StopOutlined /> : <EllipsisOutlined />} />
+        </Dropdown>}
       </div>
     </EdgeLabelRenderer>
   </>;
@@ -181,8 +189,8 @@ function Camera({ fit, manual }: { fit: () => void; manual: () => void }) {
   </Panel>;
 }
 
-/** Displays the semantic graph. Fold, size, camera, station positions and the simulation marker are local to the canvas. */
-export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlowSelect, title, description, direction, inspectSequence = 0, inspectTarget, layoutRevision = 0 }: FlowCanvasProps) {
+/** Displays the semantic graph. Fold, size, camera, station positions and simulation markers are local to the canvas. */
+export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlowSelect, onRangeChange, title, description, direction, inspectSequence = 0, inspectTarget, layoutRevision = 0 }: FlowCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 0, height: 0, visible: false });
   const [ready, setReady] = useState(false);
@@ -191,7 +199,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
   const [clicked, setClicked] = useState<{ id: string; path: string; sequence: number } | null>(null);
   const [sizes, setSizes] = useState<Partial<Record<'horizontal' | 'vertical', Size>>>({});
   const structure = useMemo(() => canvasStructure(view, layoutRevision), [view, layoutRevision]);
-  const [marker, setMarker] = useState<{ id: string; structure: string } | null>(null);
+  const [markers, setMarkers] = useState<{ structure: string; start?: string; end?: string } | null>(null);
   type Positions = Partial<Record<'horizontal' | 'vertical', Record<string, Point>>>;
   const [moved, setMoved] = useState<{ structure: string; positions: Positions } | null>(null);
   const manual = useRef(false);
@@ -209,7 +217,13 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
   }, []);
   const vertical = (box.width > 0 && box.width < 520) || direction === 'vertical';
   const axis = vertical ? 'vertical' : 'horizontal';
-  const graph = useMemo(() => canvasGraph(view, vertical, folded, sizes[axis]), [view, vertical, folded, sizes, axis]);
+  const expanded = useMemo(() => canvasGraph(view, vertical, false, sizes[axis]), [view, vertical, sizes, axis]);
+  const graph = useMemo(() => folded ? canvasGraph(view, vertical, true) : expanded, [view, vertical, folded, expanded]);
+  const start = expanded.edges.find(edge => edge.id === markers?.start && edge.insertAt);
+  const end = expanded.edges.find(edge => edge.id === markers?.end && edge.insertAt);
+  if (markers && (markers.structure !== structure || (markers.start && !start) || (markers.end && !end))) setMarkers(null);
+  const range = useMemo(() => simulationRange(view, start?.insertAt, end?.insertAt), [view, start, end]);
+  useLayoutEffect(() => { onRangeChange?.(range); }, [range, onRangeChange]);
   const byId = useMemo(() => new Map(graph.nodes.map(n => [n.id, n])), [graph]);
   const searched = inspectTarget ? byId.get(inspectTarget) : undefined;
   const activeId = clicked?.path === selected && clicked?.sequence === inspectSequence ? clicked.id
@@ -262,16 +276,18 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
       if (at) places.add(pointer(at));
       const original = target.original;
       const remove = onRemove && target.role === 'station' && original?.kind === 'step' && !original.locked ? () => onRemove(original) : undefined;
-      const marked = marker?.id === edge.id && marker.structure === structure;
+      const mark = at ? (boundary: Boundary) => setMarkers(previous => ({
+        ...previous, structure, [boundary]: previous?.[boundary] === edge.id ? undefined : edge.id,
+      })) : undefined;
       return {
         id: edge.id, source: edge.source, target: edge.target, type: 'action', markerEnd: arrow, zIndex: 1,
         sourceHandle: edge.deliverySide !== undefined ? 'delivery' : side ? 'side' : undefined,
         targetHandle: side || edge.deliverySide !== undefined ? 'side' : undefined,
         style: { strokeDasharray: dashes[edge.kind] },
-        data: { edge, target, vertical, insert, remove, marked, mark: () => setMarker(marked ? null : { id: edge.id, structure }) },
+        data: { edge, target, vertical, insert, remove, starts: start?.id === edge.id, ends: end?.id === edge.id, mark },
       };
     });
-  }, [graph, byId, onInsert, onRemove, marker, structure, vertical]);
+  }, [graph, byId, onInsert, onRemove, start, end, structure, vertical]);
   const moveNodes = (changes: NodeChange<CanvasNode>[]) => {
     const changesAt: Record<string, Point> = {};
     for (const c of changes) if (c.type === 'position' && c.position) changesAt[c.id] = c.position;

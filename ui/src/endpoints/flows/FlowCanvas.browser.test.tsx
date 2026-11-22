@@ -13,6 +13,7 @@ it('folds, inspects and resizes the real flow, and marks an insertion edge for s
   const root = createRoot(host);
   const inspect = vi.fn();
   const remove = vi.fn();
+  const rangeChanged = vi.fn();
   const source = `schemaVersion: 1
 kind: flow
 id: requests
@@ -29,7 +30,7 @@ steps:
   const render = (sequence: number, picture = flow) => root.render(<Rail8Theme>{() => <ReactFlowProvider>
     <div style={{ width: '1080px', height: '480px' }}>
       <FlowCanvas view={picture} selected="/steps/0" onSelect={vi.fn()} onRemove={remove} inspectSequence={sequence}
-        title="Requests" description="Check each order." onFlowSelect={inspect} onInsert={vi.fn()} />
+        title="Requests" description="Check each order." onFlowSelect={inspect} onInsert={vi.fn()} onRangeChange={rangeChanged} />
     </div>
   </ReactFlowProvider>}</Rail8Theme>);
   try {
@@ -49,6 +50,10 @@ steps:
     await button('Actions before Validate').click();
     await page.getByRole('menuitem', { name: 'Set simulation start here' }).click();
     await expect.element(button('Actions before Validate')).toHaveAttribute('title', 'Simulation starts before Validate');
+    await button('Actions before depot').click();
+    await page.getByRole('menu', { name: 'Actions before depot' }).getByRole('menuitem', { name: 'Set simulation end here' }).click();
+    await expect.element(button('Actions before depot')).toHaveAttribute('title', 'Simulation ends before depot');
+    expect(rangeChanged).toHaveBeenLastCalledWith(expect.objectContaining({ startIndex: 0, endIndex: 2 }));
     const tile = button('Inspect Validate');
     const station = tile.element().closest('.react-flow__node') as HTMLElement;
     const initialPosition = station.style.transform;
@@ -60,6 +65,7 @@ steps:
     expect(station.style.transform).toBe(moved);
     render(0, parse(source.replace('name: Validate', 'name: Check request').replace('endpoint: depot', 'endpoint: depot-v2')));
     await expect.element(button('Actions before Check request')).toHaveAttribute('title', 'Simulation starts before Check request');
+    await expect.element(button('Actions before depot-v2')).toHaveAttribute('title', 'Simulation ends before depot-v2');
     expect(station.style.transform).toBe(moved);
     render(0);
     await button('Actions before Validate').click();
@@ -79,6 +85,11 @@ steps:
     await expect.element(button('Inspect Validate')).toBeVisible();
     expect(host.querySelector('.react-flow__viewport')).toBe(camera);
     expect(camera.style.transform).toBe(before);
+    render(1, parse(source.replace('  - type: xsd', '  - type: jq\n    name: Prepare\n  - type: xsd')));
+    await expect.element(button('Actions before depot')).toHaveAttribute('title', 'Actions before depot');
+    expect(rangeChanged).toHaveBeenLastCalledWith(null);
+    render(1);
+    await expect.element(button('Actions before Validate')).toHaveAttribute('title', 'Actions before Validate');
   } finally {
     root.unmount();
     host.remove();

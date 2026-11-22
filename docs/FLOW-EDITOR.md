@@ -295,8 +295,14 @@ same file always gives the same picture.
 
 Open Canvas projects this model from left to right. The flow has a labeled frame that can be resized and
 collapsed. Calling and receiving systems have their own frames outside it. Collapsing the flow keeps its
-external connections visible. Selecting a step opens its properties below the canvas. The separator adjusts
+external connections visible. Selecting a step opens its properties below the canvas. Clicking the flow
+frame or empty canvas opens the properties of the flow itself. The separator adjusts
 the panel height, and the panel controls minimize it, maximize it or restore its previous size.
+
+To prepare a simulation input, mark the connection before the first step as the start and the
+connection after the last step as the end. The toolbar's play button opens the preview for a forward
+range within one step list. The dialog accepts a body, attachments, properties and headers. The
+preview and markers are local to the open editor. Preparing an input does not execute the flow.
 
 - **Lanes.** The flow's `steps` are the main lane. Each process under `processes` is a lane of its own
   to the right, in file order, titled with its name, and drawn once however many steps call it. A

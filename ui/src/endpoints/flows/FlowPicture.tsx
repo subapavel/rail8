@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SearchOutlined, UndoOutlined } from '@ant-design/icons';
+import { CaretRightOutlined, CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SearchOutlined, UndoOutlined } from '@ant-design/icons';
 import { ReactFlowProvider } from '@xyflow/react';
 import { Alert, App, Button, Collapse, Flex, Form, Input, Menu, Modal, Select, Spin, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -8,11 +8,13 @@ import type { CloseGuard } from '../EndpointForm';
 import { FlowCanvas } from './FlowCanvas';
 import { FlowInspector, type InspectorView } from './FlowInspector';
 import { FlowPanel, type PanelEdit } from './FlowPanel';
+import { SimulationDialog } from './SimulationDialog';
 import { FlowsError, type FlowsApi, type StoredFlow } from './api';
 import { canvasGraph } from './canvasGraph';
 import { edit, EditRefused, follow, placeOf, type Op } from './edit';
 import { readFlow } from './flowYaml';
 import { addProcess, addStep, callable, callOf, callsOf, deleteProcess, deleteStep, moveStep, moveToList, renameProcess, stepListsOf } from './ops';
+import type { SimulationRange } from './simulationRange';
 import { BUILT_IN } from './steps';
 import type { FlowIngress, FlowNode, FlowProblem, Path, ServedSteps } from './types';
 import { pointer, view } from './view';
@@ -77,6 +79,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [inspector, setInspector] = useState<InspectorView>('minimized');
   const [work, setWork] = useState<Work | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
+  const [range, setRange] = useState<SimulationRange | null>(null);
+  const [simulationOpen, setSimulationOpen] = useState(false);
   // a new generation remounts the controls that hold text of their own, so that text goes with the text it belonged to
   const [generation, setGeneration] = useState(0);
   const [invalid, setInvalid] = useState<ReadonlySet<string>>(new Set());
@@ -516,6 +520,9 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
             }
           }}
         />
+        <Tooltip title={range ? 'Open simulation preview' : 'Set a start and a later end on connections in the same step list'}>
+          <Button size="small" aria-label="Open simulation" icon={<CaretRightOutlined aria-hidden />} disabled={!range} onClick={() => setSimulationOpen(true)} />
+        </Tooltip>
         {work !== null && (
           <>
             <span className="rail8-flow-rule" />
@@ -545,6 +552,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
                 inspectTarget={searchTarget?.id}
                 inspectSequence={searchTarget?.sequence}
                 layoutRevision={layoutRevision}
+                onRangeChange={setRange}
                 title={title}
                 {...(typeof value.description === 'string' ? { description: value.description } : {})}
                 onFlowSelect={() => inspect(null)}
@@ -568,6 +576,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           {...(panelEdit === undefined ? {} : { edit: panelEdit })}
         />
       </FlowInspector>
+      <SimulationDialog open={simulationOpen && range !== null} onClose={() => setSimulationOpen(false)}
+        startLabel={range?.steps[0]?.label ?? ''} endLabel={range?.steps.at(-1)?.label ?? ''} />
       <Modal
         open={adding !== null}
         title="Add a step"
