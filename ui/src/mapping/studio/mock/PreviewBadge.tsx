@@ -1,6 +1,4 @@
-import { Label, Tooltip } from '@patternfly/react-core';
-import { useRef } from 'react';
-
+import { Tag, Tooltip } from 'antd';
 export interface PreviewBadgeProps {
   /** The preview feature's name. */
   feature: string;
@@ -13,15 +11,11 @@ export interface PreviewBadgeProps {
  * the feature and its follow-up issue, on hover and on keyboard focus.
  */
 export function PreviewBadge({ feature, issue }: PreviewBadgeProps) {
-  const badge = useRef<HTMLSpanElement>(null);
   return (
-    <>
-      <span ref={badge} tabIndex={0}>
-        <Label isCompact color="purple">
-          Preview
-        </Label>
-      </span>
-      <Tooltip triggerRef={badge} content={`${feature}: a preview kept in this browser only, never in the mapping file (#${issue}).`} />
-    </>
+    <Tooltip destroyOnHidden trigger={['hover', 'focus']} title={`${feature}: a preview kept in this browser only, never in the mapping file (#${issue}).`}>
+      <Tag tabIndex={0} color="purple">
+        Preview
+      </Tag>
+    </Tooltip>
   );
 }

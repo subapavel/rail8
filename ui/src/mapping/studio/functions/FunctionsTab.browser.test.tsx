@@ -1,4 +1,4 @@
-import '@patternfly/react-core/dist/styles/base.css';
+import { chooseOption } from '../select-test';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -225,7 +225,9 @@ describe('the Functions tab, a preview kept in the browser', () => {
     await button('init').click();
     await expect.element(page.getByText('}', { exact: true })).toBeVisible();
     await page.getByText('Preview', { exact: true }).hover();
-    await expect.element(page.getByRole('tooltip')).toHaveTextContent('User-defined functions: a preview kept in this browser only, never in the mapping file (#169).');
+    await expect
+      .element(page.getByRole('tooltip'))
+      .toHaveTextContent('User-defined functions: a preview kept in this browser only, never in the mapping file (#169).');
   });
 
   test('a mapping in the top folder is in the default package', async () => {
@@ -307,7 +309,7 @@ describe('editing functions', () => {
     await page.getByRole('textbox', { name: 'Title' }).fill('Total');
     await page.getByRole('textbox', { name: 'Description' }).fill('Sums the lines');
     await page.getByRole('textbox', { name: 'Category' }).fill('Orders');
-    await page.getByRole('combobox', { name: 'Execution Kind' }).selectOptions('Context');
+    await chooseOption(page.getByRole('combobox', { name: 'Execution Kind' }), 'Context');
 
     await expect.element(page.getByText('public static void calculate1(Context var1, ContextOut out, MappingRun run) {')).toBeVisible();
     await button('Save').click();
@@ -329,10 +331,10 @@ describe('editing functions', () => {
     await expect.element(actions.getByRole('button', { name: 'Delete row' })).toBeDisabled();
     await actions.getByRole('button', { name: 'Insert row' }).click();
     await expect.poll(declaration).toBe('public static String calculate1(String var1, String var2, MappingRun run) {');
-    await page.getByRole('combobox', { name: 'Variable kind' }).nth(1).selectOptions('Parameter');
-    await page.getByRole('combobox', { name: 'Java type' }).nth(1).selectOptions('int');
+    await chooseOption(page.getByRole('combobox', { name: 'Variable kind' }).nth(1), 'Parameter');
+    await chooseOption(page.getByRole('combobox', { name: 'Java type' }).nth(1), 'int');
     await expect.poll(declaration).toBe('public static String calculate1(String var1, @Parameter("var2") int var2, MappingRun run) {');
-    await page.getByRole('combobox', { name: 'Variable kind' }).nth(1).selectOptions('Argument');
+    await chooseOption(page.getByRole('combobox', { name: 'Variable kind' }).nth(1), 'Argument');
     await expect.poll(declaration).toBe('public static String calculate1(String var1, String var2, MappingRun run) {');
 
     await page.getByRole('textbox', { name: 'Variable name' }).nth(1).fill('run');
@@ -406,7 +408,7 @@ describe('Export and Import Source Text', () => {
       expect(text).toMatch(/^package mappings;/);
       expect(text).toContain('public class order_id_copy {');
       expect(text).toContain('return in0;');
-      await dialog.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click();
+      await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
       await expect.element(dialog).not.toBeInTheDocument();
       await expect.element(page.getByRole('heading', { name: 'Processing Log' })).toBeVisible();
       await expect.element(page.getByText('Exported order_id_copy.java')).toBeVisible();
@@ -418,7 +420,7 @@ describe('Export and Import Source Text', () => {
 
   test('Import Source Text reads the sections of an exported file back, and says why it refuses another', async () => {
     const browserState = keeping({ ...emptyFunctions(), functions: [newFunction('calculate1', 'f1')] });
-    const state = (browserState.read(functionsKey(MAPPING)) as FunctionsState);
+    const state = browserState.read(functionsKey(MAPPING)) as FunctionsState;
     const { exportSource } = await import('./function-source');
     const exported = exportSource(MAPPING, state).replace(/(\/\/ beginning of calculate1 \w+\n)/, '$1return in0.trim();');
     openFunctions({ browserState, startEditing: true });
@@ -435,14 +437,14 @@ describe('Export and Import Source Text', () => {
     await input.upload(new File([exported], 'order_id_copy.java', { type: 'text/plain' }));
 
     await expect.element(dialog.getByText('Imported source text from order_id_copy.java')).toBeVisible();
-    await dialog.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
     await button('Select function calculate1').click();
     await expect.element(source('calculate1')).toHaveValue('return in0.trim();');
 
     await input.upload(new File(['class Other {}'], 'Other.java', { type: 'text/plain' }));
 
     await expect.element(dialog.getByText('Import failed. Choose a source file exported for these functions. Check its section markers.')).toBeVisible();
-    await dialog.getByRole('contentinfo').getByRole('button', { name: 'Close' }).click();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
     await expect.element(source('calculate1')).toHaveValue('return in0.trim();');
   });
 });
@@ -485,7 +487,9 @@ describe('import instructions and archives', () => {
     // the archives as the draft has them, an empty field shown as Choose…
     const archives = () =>
       [...document.querySelectorAll('[aria-label="Archives Used"] tbody tr')].map((row) => {
-        const [name, namespace] = [...row.querySelectorAll('[aria-label^="Choose archive"]')].map((choose) => (choose.textContent === 'Choose…' ? '' : choose.textContent));
+        const [name, namespace] = [...row.querySelectorAll('[aria-label^="Choose archive"]')].map((choose) =>
+          choose.textContent === 'Choose…' ? '' : choose.textContent,
+        );
         return { name, namespace };
       });
     await button('Archives Used').click();

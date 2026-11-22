@@ -1,4 +1,4 @@
-import { Alert, Button } from '@patternfly/react-core';
+import { Alert, Button } from 'antd';
 import { describeError } from '../api/client';
 
 export interface RefusedMappingProps {
@@ -13,23 +13,26 @@ export function RefusedMapping({ error, retrying, onRetry }: RefusedMappingProps
   const failure = describeError(error);
   return (
     <Alert
-      variant="danger"
-      isInline
-      title={failure.title}
-      actionLinks={
-        <Button variant="link" isInline onClick={onRetry} isLoading={retrying} isDisabled={retrying}>
+      type="error"
+      showIcon
+      title={<h2>{failure.title}</h2>}
+      action={
+        <Button type="link" onClick={onRetry} loading={retrying} disabled={retrying}>
           Retry
         </Button>
       }
-    >
-      <p>{failure.detail}</p>
-      <ul aria-label="Load diagnostics">
-        {failure.diagnostics.map((d, i) => (
-          <li key={i}>
-            {d.severity} <code>{d.code}</code>: {d.message}
-          </li>
-        ))}
-      </ul>
-    </Alert>
+      description={
+        <>
+          <p>{failure.detail}</p>
+          <ul aria-label="Load diagnostics">
+            {failure.diagnostics.map((d, i) => (
+              <li key={i}>
+                {d.severity} <code>{d.code}</code>: {d.message}
+              </li>
+            ))}
+          </ul>
+        </>
+      }
+    />
   );
 }

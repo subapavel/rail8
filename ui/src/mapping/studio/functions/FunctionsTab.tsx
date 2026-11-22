@@ -1,32 +1,5 @@
-import {
-  Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  Form,
-  FormGroup,
-  FormSelect,
-  FormSelectOption,
-  Grid,
-  GridItem,
-  Label,
-  Stack,
-  StackItem,
-  TextArea,
-  TextInput,
-  Title,
-  Toolbar,
-  ToolbarContent,
-  ToolbarGroup,
-  ToolbarItem,
-} from '@patternfly/react-core';
-import { CodeIcon, DownloadIcon, UploadIcon } from '@patternfly/react-icons';
+import { Button, Card, Col, Divider, Flex, Form, Input, Row, Select, Tag } from 'antd';
+import { CodeOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
@@ -57,7 +30,7 @@ import { exportSource, importSource } from './function-source';
 import { Dependencies, NameEditor, RowTools, Variables } from './FunctionTables';
 
 const JDK = 'JDK 25 (Default)';
-const MONO = { fontFamily: 'var(--pf-t--global--font--family--mono)' } as const;
+const MONO = { fontFamily: 'var(--ant-font-family-code, monospace)' } as const;
 
 export interface FunctionsTabProps {
   /** The mapping's id: its name names the class, its mapping package the Java package. */
@@ -111,7 +84,12 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
     }
   }
   function add() {
-    const fn = newFunction(unusedName('calculate', list.map((f) => f.name)));
+    const fn = newFunction(
+      unusedName(
+        'calculate',
+        list.map((f) => f.name),
+      ),
+    );
     const at = index + 1;
     edit((s) => ({ ...s, functions: [...s.functions.slice(0, at), fn, ...s.functions.slice(at)] }));
     select(fn.id);
@@ -142,212 +120,197 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
   const taken = [...AREAS, ...Object.keys(catalogue.data ?? {})];
   const field = (name: string) => `${ids}-${name}`;
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Card component="section" aria-label="Function class">
-          <CardBody>
-            <Toolbar>
-              <ToolbarContent>
-                <ToolbarItem>
-                  <DescriptionList isHorizontal isCompact columnModifier={{ default: '2Col' }}>
-                    <DescriptionListGroup>
-                      <DescriptionListTerm>Class Name</DescriptionListTerm>
-                      <DescriptionListDescription>
-                        <code>{meta.className}</code>
-                      </DescriptionListDescription>
-                    </DescriptionListGroup>
-                    <DescriptionListGroup>
-                      <DescriptionListTerm>Package Name</DescriptionListTerm>
-                      <DescriptionListDescription>
-                        <code>{meta.packageName || '(default package)'}</code>
-                      </DescriptionListDescription>
-                    </DescriptionListGroup>
-                  </DescriptionList>
-                </ToolbarItem>
-                <ToolbarItem>
-                  <PreviewBadge feature="User-defined functions" issue={FUNCTIONS_ISSUE} />
-                </ToolbarItem>
-                <ToolbarItem variant="separator" />
-                <ToolbarGroup role="toolbar" aria-label="Java source actions">
-                  <ToolbarItem>
-                    <Tool label="Export Source Text" icon={DownloadIcon} onClick={download} />
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <Tool label="Import Source Text" icon={UploadIcon} disabled={!ready} onClick={() => file.current!.click()} />
-                  </ToolbarItem>
-                </ToolbarGroup>
-                <ToolbarItem variant="separator" />
-                <ToolbarGroup alignItems="center">
-                  <ToolbarItem>
-                    <Content component="small" aria-hidden="true">
-                      JDK Compliance
-                    </Content>
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <FormSelect aria-label="JDK Compliance" value={JDK} isDisabled={!ready} onChange={() => undefined}>
-                      <FormSelectOption value={JDK} label={JDK} />
-                    </FormSelect>
-                  </ToolbarItem>
-                </ToolbarGroup>
-              </ToolbarContent>
-            </Toolbar>
-            <input type="file" disabled={!ready} hidden accept=".java,text/plain" aria-label="Java source file" ref={file} onChange={(e) => void readFile(e)} />
-          </CardBody>
-        </Card>
-      </StackItem>
-      <StackItem>
-        <Grid hasGutter>
-          <GridItem lg={4}>
-            <Stack hasGutter>
-              <StackItem>
-                <Card component="section" aria-label="Functions and Java Areas">
-                  <CardTitle>
-                    <Title headingLevel="h2" size="lg">
-                      Functions and Java Areas
-                    </Title>
-                  </CardTitle>
-                  <CardBody>
-                    <RowTools
-                      label="Function actions"
-                      disabled={!ready}
-                      onAdd={add}
-                      canRemove={isCustom}
-                      canUp={index > 0}
-                      canDown={isCustom && index < list.length - 1}
-                      onRemove={remove}
-                      onMove={(delta) => edit((s) => ({ ...s, functions: [...moveRow(s.functions, index, delta)] }))}
-                    />
-                    <Stack role="list" aria-label="Functions">
-                      {AREAS.map((name) => (
-                        <StackItem key={name} role="listitem">
-                          <Entry label={name} pressed={active.name === name} onClick={() => select(name)} />
-                        </StackItem>
-                      ))}
-                      {list.map((fn) => (
-                        <StackItem key={fn.id} role="listitem">
-                          <Entry label={fn.name} name={`Select function ${fn.name}`} pressed={active.id === fn.id} onClick={() => select(fn.id)} />
-                          {ready && fn.id === active.id && (
-                            <FormGroup label="Method name" fieldId={field('method')}>
-                              <NameEditor
-                                id={field('method')}
-                                label="Method name"
-                                value={fn.name}
-                                taken={[...taken, ...list.filter((f) => f.id !== fn.id).map((f) => f.name)]}
-                                onCommit={(name) => change({ name })}
-                              />
-                            </FormGroup>
-                          )}
-                        </StackItem>
-                      ))}
-                    </Stack>
-                  </CardBody>
-                </Card>
-              </StackItem>
-              <StackItem>
-                <Dependencies state={state} edit={edit} disabled={!ready} />
-              </StackItem>
-            </Stack>
-          </GridItem>
-          <GridItem lg={8}>
-            <Card component="section" aria-label="Function editor" isFullHeight>
-              <CardHeader
-                actions={{
-                  actions: (
-                    <Label isCompact variant="outline">
-                      Java
-                    </Label>
-                  ),
-                  hasNoOffset: true,
-                }}
-              >
-                <CardTitle>
-                  <Title headingLevel="h2" size="lg">
-                    <CodeIcon /> {active.name}
-                  </Title>
-                </CardTitle>
-              </CardHeader>
-              <CardBody>
-                <Stack hasGutter>
-                  {(isCustom || active.name === 'init') && (
-                    <StackItem>
-                      <Form isHorizontal key={`properties-${selected}`}>
-                        {custom && (
-                          <FormGroup label="Title" fieldId={field('title')}>
-                            <TextInput id={field('title')} value={custom.title} isDisabled={!ready} onChange={(_, title) => change({ title })} />
-                          </FormGroup>
-                        )}
-                        <FormGroup label="Description" fieldId={field('description')}>
-                          <TextInput id={field('description')} value={active.description} isDisabled={!ready} onChange={(_, description) => change({ description })} />
-                        </FormGroup>
-                        {custom && (
-                          <>
-                            <FormGroup label="Execution Kind" fieldId={field('execution')}>
-                              <FormSelect id={field('execution')} value={custom.execution} isDisabled={!ready} onChange={(_, execution) => change({ execution: execution as ExecutionKind })}>
-                                {EXECUTION_KINDS.map((m) => (
-                                  <FormSelectOption key={m} value={m} label={m} />
-                                ))}
-                              </FormSelect>
-                            </FormGroup>
-                            <FormGroup label="Category" fieldId={field('category')}>
-                              <TextInput id={field('category')} value={custom.category} isDisabled={!ready} onChange={(_, category) => change({ category })} />
-                            </FormGroup>
-                          </>
-                        )}
-                      </Form>
-                    </StackItem>
-                  )}
-                  {(isCustom || active.name === 'init') && (
-                    <StackItem>
-                      <Variables disabled={!ready} key={`variables-${selected}`} fn={active} lifecycle={lifecycle} onChange={(variables) => change({ variables })} />
-                    </StackItem>
-                  )}
-                  <StackItem>
-                    {attributes ? (
-                      <Content component="p">Class attributes and shared methods are available to all functions in this mapping.</Content>
-                    ) : (
+    <Flex vertical gap="middle">
+      <Card role="region" aria-label="Function class">
+        <Flex align="center" gap="small" wrap>
+          <dl className="studio-details">
+            <div>
+              <dt>Class Name</dt>
+              <dd>
+                <code>{meta.className}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>Package Name</dt>
+              <dd>
+                <code>{meta.packageName || '(default package)'}</code>
+              </dd>
+            </div>
+          </dl>
+          <PreviewBadge feature="User-defined functions" issue={FUNCTIONS_ISSUE} />
+          <Divider vertical />
+          <Flex align="center" gap="small" wrap role="toolbar" aria-label="Java source actions">
+            <Tool label="Export Source Text" icon={DownloadOutlined} onClick={download} />
+            <Tool label="Import Source Text" icon={UploadOutlined} disabled={!ready} onClick={() => file.current!.click()} />
+          </Flex>
+          <Divider vertical />
+          <Flex align="center" gap="small" wrap>
+            <small aria-hidden="true">JDK Compliance</small>
+            <Select virtual={false} aria-label="JDK Compliance" value={JDK} disabled={!ready} options={[{ value: JDK, label: JDK }]} />
+          </Flex>
+        </Flex>
+        <input type="file" disabled={!ready} hidden accept=".java,text/plain" aria-label="Java source file" ref={file} onChange={(e) => void readFile(e)} />
+      </Card>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={8}>
+          <Flex vertical gap="middle">
+            <Card role="region" aria-label="Functions and Java Areas">
+              <h2>Functions and Java Areas</h2>
+
+              <RowTools
+                label="Function actions"
+                disabled={!ready}
+                onAdd={add}
+                canRemove={isCustom}
+                canUp={index > 0}
+                canDown={isCustom && index < list.length - 1}
+                onRemove={remove}
+                onMove={(delta) => edit((s) => ({ ...s, functions: [...moveRow(s.functions, index, delta)] }))}
+              />
+              <Flex vertical role="list" aria-label="Functions">
+                {AREAS.map((name) => (
+                  <div key={name} role="listitem">
+                    <Entry label={name} pressed={active.name === name} onClick={() => select(name)} />
+                  </div>
+                ))}
+                {list.map((fn) => (
+                  <div key={fn.id} role="listitem">
+                    <Entry label={fn.name} name={`Select function ${fn.name}`} pressed={active.id === fn.id} onClick={() => select(fn.id)} />
+                    {ready && fn.id === active.id && (
+                      <Form.Item label="Method name" htmlFor={field('method')}>
+                        <NameEditor
+                          id={field('method')}
+                          label="Method name"
+                          value={fn.name}
+                          taken={[...taken, ...list.filter((f) => f.id !== fn.id).map((f) => f.name)]}
+                          onCommit={(name) => change({ name })}
+                        />
+                      </Form.Item>
+                    )}
+                  </div>
+                ))}
+              </Flex>
+            </Card>
+
+            <Dependencies state={state} edit={edit} disabled={!ready} />
+          </Flex>
+        </Col>
+        <Col xs={24} lg={16}>
+          <Card role="region" aria-label="Function editor">
+            <Flex align="center" justify="space-between">
+              <h2>
+                <CodeOutlined aria-hidden /> {active.name}
+              </h2>
+              <Tag>Java</Tag>
+            </Flex>
+
+            <Flex vertical gap="middle">
+              {(isCustom || active.name === 'init') && (
+                <div>
+                  <Form colon={false} layout="vertical" component="div" key={`properties-${selected}`}>
+                    {custom && (
+                      <Form.Item label="Title" htmlFor={field('title')}>
+                        <Input
+                          aria-label="Title"
+                          id={field('title')}
+                          value={custom.title}
+                          disabled={!ready}
+                          onChange={({ target: { value: title } }) => change({ title })}
+                        />
+                      </Form.Item>
+                    )}
+                    <Form.Item label="Description" htmlFor={field('description')}>
+                      <Input
+                        aria-label="Description"
+                        id={field('description')}
+                        value={active.description}
+                        disabled={!ready}
+                        onChange={({ target: { value: description } }) => change({ description })}
+                      />
+                    </Form.Item>
+                    {custom && (
                       <>
-                        {lifecycle && <Content component="p">{active.name === 'init' ? 'Called before mapping.' : 'Called after mapping.'}</Content>}
-                        <Content component="pre">{declaration(active)}</Content>
+                        <Form.Item label="Execution Kind" htmlFor={field('execution')}>
+                          <Select
+                            virtual={false}
+                            aria-label="Execution Kind"
+                            id={field('execution')}
+                            value={custom.execution}
+                            disabled={!ready}
+                            onChange={(execution) => change({ execution: execution as ExecutionKind })}
+                            options={EXECUTION_KINDS.map((m) => ({ value: m, label: m }))}
+                          />
+                        </Form.Item>
+                        <Form.Item label="Category" htmlFor={field('category')}>
+                          <Input
+                            id={field('category')}
+                            value={custom.category}
+                            disabled={!ready}
+                            onChange={({ target: { value: category } }) => change({ category })}
+                          />
+                        </Form.Item>
                       </>
                     )}
-                  </StackItem>
-                  <StackItem>
-                    <TextArea
-                      aria-label={`Source code for ${active.name}`}
-                      readOnlyVariant={ready ? undefined : 'default'}
-                      spellCheck={false}
-                      rows={16}
-                      resizeOrientation="vertical"
-                      value={active.body}
-                      onChange={(_, body) => change({ body })}
-                      style={MONO}
-                    />
-                  </StackItem>
-                  {!attributes && (
-                    <StackItem>
-                      <Content component="pre">{'}'}</Content>
-                    </StackItem>
-                  )}
-                </Stack>
-              </CardBody>
-            </Card>
-          </GridItem>
-        </Grid>
-      </StackItem>
+                  </Form>
+                </div>
+              )}
+              {(isCustom || active.name === 'init') && (
+                <div>
+                  <Variables
+                    disabled={!ready}
+                    key={`variables-${selected}`}
+                    fn={active}
+                    lifecycle={lifecycle}
+                    onChange={(variables) => change({ variables })}
+                  />
+                </div>
+              )}
+              <div>
+                {attributes ? (
+                  <p>Class attributes and shared methods are available to all functions in this mapping.</p>
+                ) : (
+                  <>
+                    {lifecycle && <p>{active.name === 'init' ? 'Called before mapping.' : 'Called after mapping.'}</p>}
+                    <pre>{declaration(active)}</pre>
+                  </>
+                )}
+              </div>
+
+              <Input.TextArea
+                aria-label={`Source code for ${active.name}`}
+                readOnly={!ready}
+                spellCheck={false}
+                rows={16}
+                value={active.body}
+                onChange={({ target: { value: body } }) => change({ body })}
+                style={MONO}
+              />
+
+              {!attributes && (
+                <div>
+                  <pre>{'}'}</pre>
+                </div>
+              )}
+            </Flex>
+          </Card>
+        </Col>
+      </Row>
+
       {log !== '' && (
-        <StackItem>
+        <div>
           <ProcessingLog log={log} />
-        </StackItem>
+        </div>
       )}
       {showLog && <LogDialog log={log} onClose={() => setShowLog(false)} />}
-    </Stack>
+    </Flex>
   );
 }
 
 /** An entry of the list of Java areas and functions: a button that selects it, pressed while it is the one shown. */
 function Entry({ label, name, pressed, onClick }: { label: string; name?: string; pressed: boolean; onClick: () => void }) {
   return (
-    <Button variant="plain" isClicked={pressed} aria-pressed={pressed} aria-label={name} icon={<CodeIcon />} onClick={onClick}>
+    <Button color={pressed ? 'primary' : 'default'} variant={pressed ? 'filled' : 'text'} aria-pressed={pressed} aria-label={name} icon={<CodeOutlined aria-hidden />} onClick={onClick}>
       {label}
     </Button>
   );

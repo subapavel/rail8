@@ -1,21 +1,6 @@
-import {
-  Alert,
-  Button,
-  Form,
-  FormAlert,
-  FormGroup,
-  FormHelperText,
-  HelperText,
-  HelperTextItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  TextArea,
-  TextInput,
-} from '@patternfly/react-core';
+import { Alert, Form, Input, Modal } from 'antd';
 import { useMutation } from '@tanstack/react-query';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState } from 'react';
 import { describeError, type ApiClient, type CreateMappingRequest } from '../api/client';
 
 // A workspace path segment as the service accepts it: the service checks again and refuses reserved names.
@@ -65,7 +50,7 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
     onSuccess: (_, request) => onCreated(request.id),
   });
   const failure = create.isError ? describeError(create.error) : undefined;
-  const ids = { title: useId(), description: useId(), form: useId(), name: useId(), pkg: useId(), text: useId() };
+  const ids = { form: useId(), name: useId(), pkg: useId(), text: useId() };
 
   const trimmedName = name.trim();
   const trimmedPkg = pkg.trim();
@@ -76,80 +61,68 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
     description: descriptionError(description),
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const submit = () => {
     setSubmitted(true);
-    if (trimmedName === '' || errors.name || errors.pkg || errors.description) return;
+    if (create.isPending || trimmedName === '' || errors.name || errors.pkg || errors.description) return;
     create.mutate({ id: trimmedPkg === '' ? trimmedName : `${trimmedPkg}/${trimmedName}`, ...(description === '' ? {} : { description }) });
   };
 
-  const helper = (id: string, error: string | undefined, hint: string) => (
-    <FormHelperText>
-      <HelperText id={id}>
-        <HelperTextItem variant={error ? 'error' : 'default'}>{error ?? hint}</HelperTextItem>
-      </HelperText>
-    </FormHelperText>
-  );
-
+  const fields = [
+    { id: ids.name, label: 'Name', value: name, change: setName, error: errors.name, hint: 'The file name of the mapping in its package.' },
+    {
+      id: ids.pkg,
+      label: 'Package',
+      value: pkg,
+      change: setPkg,
+      error: errors.pkg,
+      hint: 'The workspace folder, such as orders/inbound; empty for the top folder.',
+    },
+    {
+      id: ids.text,
+      label: 'Description',
+      value: description,
+      change: setDescription,
+      error: errors.description,
+      hint: `Up to ${count(MAX_DESCRIPTION)} characters.`,
+    },
+  ];
   return (
-    <Modal variant="small" isOpen onClose={onClose} aria-labelledby={ids.title} aria-describedby={ids.description}>
-      <ModalHeader
-        title="New mapping"
-        labelId={ids.title}
-        description="Choose its source and target messages on the Signature tab once it is created."
-        descriptorId={ids.description}
-      />
-      <ModalBody>
-        <Form id={ids.form} onSubmit={submit} noValidate>
-          {failure && (
-            <FormAlert>
-              <Alert variant="danger" isInline title={failure.title}>
-                {failure.detail}
-              </Alert>
-            </FormAlert>
-          )}
-          <FormGroup label="Name" isRequired fieldId={ids.name}>
-            <TextInput
-              id={ids.name}
-              isRequired
-              value={name}
-              onChange={(_, value) => setName(value)}
-              validated={errors.name ? 'error' : 'default'}
-              aria-describedby={`${ids.name}-helper`}
-            />
-            {helper(`${ids.name}-helper`, errors.name, 'The file name of the mapping in its package.')}
-          </FormGroup>
-          <FormGroup label="Package" fieldId={ids.pkg}>
-            <TextInput
-              id={ids.pkg}
-              value={pkg}
-              onChange={(_, value) => setPkg(value)}
-              validated={errors.pkg ? 'error' : 'default'}
-              aria-describedby={`${ids.pkg}-helper`}
-            />
-            {helper(`${ids.pkg}-helper`, errors.pkg, 'The workspace folder, such as orders/inbound; empty for the top folder.')}
-          </FormGroup>
-          <FormGroup label="Description" fieldId={ids.text}>
-            <TextArea
-              id={ids.text}
-              value={description}
-              onChange={(_, value) => setDescription(value)}
-              validated={errors.description ? 'error' : 'default'}
-              aria-describedby={`${ids.text}-helper`}
-              resizeOrientation="vertical"
-            />
-            {helper(`${ids.text}-helper`, errors.description, `Up to ${count(MAX_DESCRIPTION)} characters.`)}
-          </FormGroup>
-        </Form>
-      </ModalBody>
-      <ModalFooter>
-        <Button type="submit" form={ids.form} isLoading={create.isPending} isDisabled={create.isPending}>
-          Create
-        </Button>
-        <Button variant="link" onClick={onClose}>
-          Cancel
-        </Button>
-      </ModalFooter>
+    <Modal
+      open
+      title="New mapping"
+      onCancel={onClose}
+      okText="Create"
+      cancelText="Cancel"
+      confirmLoading={create.isPending}
+      okButtonProps={{ 'aria-label': 'Create', form: ids.form, htmlType: 'submit', disabled: create.isPending }}
+    >
+      <p>Choose its source and target messages on the Signature tab once it is created.</p>
+      {failure && <Alert type="error" showIcon title={<h3>{failure.title}</h3>} description={failure.detail} />}
+      <Form colon={false} id={ids.form} layout="vertical" onFinish={submit}>
+        {fields.map(({ id, label, value, change, error, hint }) => {
+          const Control = id === ids.text ? Input.TextArea : Input;
+          return (
+            <Form.Item
+              key={id}
+              label={label}
+              htmlFor={id}
+              required={id === ids.name}
+              validateStatus={error ? 'error' : undefined}
+              help={<span id={id + '-help'}>{error ?? hint}</span>}
+            >
+              <Control
+                aria-label={label}
+                id={id}
+                value={value}
+                aria-required={id === ids.name}
+                aria-invalid={!!error}
+                aria-describedby={id + '-help'}
+                onChange={(event) => change(event.target.value)}
+              />
+            </Form.Item>
+          );
+        })}
+      </Form>
     </Modal>
   );
 }

@@ -1,27 +1,5 @@
-import {
-  Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  Content,
-  FormSelect,
-  FormSelectOption,
-  List,
-  ListItem,
-  Modal,
-  ModalBody,
-  ModalFooter,
-  ModalHeader,
-  Stack,
-  StackItem,
-  Title,
-  Toolbar,
-  ToolbarContent,
-  ToolbarGroup,
-  ToolbarItem,
-} from '@patternfly/react-core';
-import { PlayIcon } from '@patternfly/react-icons';
+import { Button, Card, Divider, Flex, Modal, Select } from 'antd';
+import { CaretRightOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { useStore } from 'zustand';
 import type { BrowserStateStore } from '../browser-state/browser-state';
@@ -48,7 +26,7 @@ export interface TestTabProps {
 }
 
 /** The height of the panes and the processing log together. */
-const SPLIT_HEIGHT = '42rem';
+const SPLIT_HEIGHT = 'clamp(28rem, calc(100dvh - 19rem), 42rem)';
 
 const viewKey = (pane: 'source' | 'result') => `test.${pane}.view`;
 const isMode = (value: unknown): value is DocumentMode => DOCUMENT_MODES.includes(value as DocumentMode);
@@ -63,14 +41,14 @@ const HEADER_ROWS: ParameterRow[] = Object.entries(HEADER_DEFAULTS).map(([key, v
 /** The lines of the processing log in the monospace font: a section's time before its first line, its details indented. */
 function LogBody({ lines }: { lines: readonly LogLine[] }) {
   return (
-    <List component="ol" isPlain style={{ fontFamily: 'var(--pf-t--global--font--family--mono)', fontSize: 'var(--pf-t--global--font--size--body--sm)' }}>
+    <ol style={{ fontFamily: 'var(--ant-font-family-code, monospace)', fontSize: 'var(--ant-font-size-sm)' }}>
       {lines.map((line, i) => (
-        <ListItem key={i} style={line.detail ? { paddingInlineStart: 'var(--pf-t--global--spacer--lg)' } : undefined}>
-          {line.time && <time style={{ marginInlineEnd: 'var(--pf-t--global--spacer--sm)', color: 'var(--pf-t--global--text--color--subtle)' }}>{line.time}</time>}
+        <li key={i} style={line.detail ? { paddingInlineStart: 'var(--ant-padding-lg)' } : undefined}>
+          {line.time && <time style={{ marginInlineEnd: 'var(--ant-padding-sm)', color: 'var(--ant-color-text-secondary)' }}>{line.time}</time>}
           {line.message}
-        </ListItem>
+        </li>
       ))}
-    </List>
+    </ol>
   );
 }
 
@@ -117,7 +95,8 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
   const run = () => void session.getState().runTest(trace);
 
   return (
-    <Stack
+    <Flex
+      vertical
       component="section"
       aria-label="Test"
       onKeyDown={(event) => {
@@ -126,26 +105,23 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
         layout.setView('split');
       }}
     >
-      <StackItem>
-        <Toolbar role="toolbar" aria-label="Test instance actions">
-          <ToolbarContent>
-            <ToolbarGroup variant="action-group-plain" alignItems="center">
-              <InstanceTools
-                library={library}
-                format={src}
-                resource={() => ({ text: source, values })}
-                onLoad={(loaded) => testInput(store).getState().load(loaded)}
-                editing={editing}
-                disabled={running}
-              />
-            </ToolbarGroup>
-            <ToolbarItem align={{ default: 'alignEnd' }}>
-              <PaneSizeTools upper pane="input and result" label="Input and result layout" view={layout.view} onChange={layout.setView} />
-            </ToolbarItem>
-          </ToolbarContent>
-        </Toolbar>
-      </StackItem>
-      <StackItem style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
+      <Flex align="center" gap="small" wrap role="toolbar" aria-label="Test instance actions">
+        <Flex align="center" gap="small" wrap>
+          <InstanceTools
+            library={library}
+            format={src}
+            resource={() => ({ text: source, values })}
+            onLoad={(loaded) => testInput(store).getState().load(loaded)}
+            editing={editing}
+            disabled={running}
+          />
+        </Flex>
+        <div style={{ marginInlineStart: 'auto' }}>
+          <PaneSizeTools upper pane="input and result" label="Input and result layout" view={layout.view} onChange={layout.setView} />
+        </div>
+      </Flex>
+
+      <div style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
         <VerticalSplitLayout
           label="Resize processing log"
           lowerId={`${mappingId}-processing-log`}
@@ -186,88 +162,66 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
             </SideBySide>
           }
           toolbar={
-            <Toolbar role="toolbar" aria-label="Simulation controls">
-              <ToolbarContent>
-                <ToolbarItem>
-                  <Button size="sm" icon={<PlayIcon />} isDisabled={running} isLoading={running} title="Start the Transformation" onClick={run}>
-                    Run simulation
-                  </Button>
-                </ToolbarItem>
-                <ToolbarItem variant="separator" />
-                <ToolbarGroup alignItems="center">
-                  <ToolbarItem>
-                    <Content component="small" aria-hidden="true">
-                      Trace Level
-                    </Content>
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <FormSelect
-                      aria-label="Trace Level"
-                      value={trace}
-                      isDisabled={!editing || running}
-                      onChange={(_event, value) => preview.getState().setTraceLevel(value as TraceLevel)}
-                    >
-                      {TRACE_LEVELS.map((level) => (
-                        <FormSelectOption key={level} value={level} label={level} />
-                      ))}
-                    </FormSelect>
-                  </ToolbarItem>
-                  <ToolbarItem>
-                    <PreviewBadge feature="Trace level" issue={TRACE_LEVEL_ISSUE} />
-                  </ToolbarItem>
-                </ToolbarGroup>
-                <ToolbarItem align={{ default: 'alignEnd' }}>
-                  <PaneSizeTools pane="processing log" label="Processing log layout" view={layout.view} onChange={layout.setView} />
-                </ToolbarItem>
-              </ToolbarContent>
-            </Toolbar>
+            <Flex align="center" gap="small" wrap role="toolbar" aria-label="Simulation controls">
+              <Button
+                size="small"
+                icon={<CaretRightOutlined aria-hidden />}
+                disabled={running}
+                loading={running}
+                title="Start the Transformation"
+                onClick={run}
+              >
+                Run simulation
+              </Button>
+              <Divider vertical />
+              <Flex align="center" gap="small" wrap>
+                <small aria-hidden="true">Trace Level</small>
+                <Select
+                  virtual={false}
+                  aria-label="Trace Level"
+                  value={trace}
+                  disabled={!editing || running}
+                  onChange={(value) => preview.getState().setTraceLevel(value as TraceLevel)}
+                  options={TRACE_LEVELS.map((level) => ({ value: level, label: level }))}
+                />
+                <PreviewBadge feature="Trace level" issue={TRACE_LEVEL_ISSUE} />
+              </Flex>
+              <div style={{ marginInlineStart: 'auto' }}>
+                <PaneSizeTools pane="processing log" label="Processing log layout" view={layout.view} onChange={layout.setView} />
+              </div>
+            </Flex>
           }
         >
-          <Card isFullHeight isCompact component="section" aria-labelledby={`${mappingId}-processing-log-heading`} tabIndex={0} style={{ minHeight: 0 }}>
-            <CardHeader
-              actions={{
-                actions: lines.length > 0 && (
-                  <>
-                    {runLog && <Content component="small">Last run · {runLog.level}</Content>}
-                    <Button size="sm" variant="link" onClick={() => setExpanded(true)}>
-                      Expand log
-                    </Button>
-                    <CopyTextButton label="processing log" text={text} />
-                  </>
-                ),
-                hasNoOffset: true,
-              }}
-            >
-              <CardTitle>
-                <Title headingLevel="h2" size="md" id={`${mappingId}-processing-log-heading`}>
-                  Processing log
-                </Title>
-              </CardTitle>
-            </CardHeader>
-            <CardBody style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
-              {lines.length > 0 ? (
-                <LogBody lines={lines} />
-              ) : (
-                <Content component="p" role="status">
-                  {running ? 'Running the simulation…' : 'Ready.'}
-                </Content>
-              )}
-            </CardBody>
+          <Card
+            className="studio-log"
+            size="small"
+            role="region"
+            aria-labelledby={`${mappingId}-processing-log-heading`}
+            tabIndex={0}
+            title={<h2 id={`${mappingId}-processing-log-heading`}>Processing log</h2>}
+            extra={
+              lines.length > 0 && (
+                <>
+                  {runLog && <small>Last run · {runLog.level}</small>}
+                  <Button size="small" type="link" onClick={() => setExpanded(true)}>
+                    Expand log
+                  </Button>
+                  <CopyTextButton label="processing log" text={text} />
+                </>
+              )
+            }
+          >
+            {lines.length > 0 ? <LogBody lines={lines} /> : <p role="status">{running ? 'Running the simulation…' : 'Ready.'}</p>}
           </Card>
         </VerticalSplitLayout>
-      </StackItem>
+      </div>
       {expanded && (
-        <Modal isOpen variant="medium" aria-label="Processing Log" onClose={() => setExpanded(false)}>
-          <ModalHeader title="Processing Log" description={runLog ? `Simulation · ${runLog.level}` : 'Compile of the working copy'} />
-          <ModalBody>
-            <CopyTextButton label="processing log" text={text} />
-            <LogBody lines={lines} />
-          </ModalBody>
-          <ModalFooter>
-            <Button onClick={() => setExpanded(false)}>Close</Button>
-          </ModalFooter>
+        <Modal open title="Processing Log" onCancel={() => setExpanded(false)} footer={<Button onClick={() => setExpanded(false)}>Close</Button>}>
+          <p>{runLog ? `Simulation · ${runLog.level}` : 'Compile of the working copy'}</p>
+          <CopyTextButton label="processing log" text={text} />
+          <LogBody lines={lines} />
         </Modal>
       )}
-    </Stack>
+    </Flex>
   );
 }

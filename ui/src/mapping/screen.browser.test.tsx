@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -191,14 +190,16 @@ describe('the mapping studio in the shell', () => {
     await catalogue.getByRole('button', { name: /^Text/ }).click();
     await catalogue.getByRole('button', { name: /^substring\b/ }).click();
     await canvasNode(/^Source field OrderId/).click({ button: 'right' });
-    await page.getByRole('menu').getByRole('button', { name: 'Connect to', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Connect to', exact: true }).click();
     await page.getByRole('menuitem', { name: 'substring · value', exact: true }).click();
     await canvasNode(/^Node function substring/).click({ button: 'right' });
-    await page.getByRole('menu').getByRole('button', { name: 'Connect to', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Connect to', exact: true }).click();
     await page.getByRole('menuitem', { name: 'OrderId · OrderId', exact: true }).click();
     await expect.element(canvasNode(/^Node function substring\. Complete/)).toBeVisible();
 
-    await canvasNode(/^Node function substring/).getByRole('button', { name: 'Parameters for substring' }).click();
+    await canvasNode(/^Node function substring/)
+      .getByRole('button', { name: 'Parameters for substring' })
+      .click();
     const parameters = page.getByRole('dialog', { name: 'Function parameters · substring' });
     await parameters.getByLabelText('Character Count').fill('3');
     await parameters.getByRole('button', { name: 'Apply' }).click();

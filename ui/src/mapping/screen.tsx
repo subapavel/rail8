@@ -1,10 +1,13 @@
+import { lazy } from 'react';
+import { PartitionOutlined } from '@ant-design/icons';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Screen } from '../screens';
 import type { ApiClient } from './api/client';
-import { MappingList } from './list/MappingList';
 import type { BrowserStateStore } from './studio/browser-state/browser-state';
-import { Studio } from './studio/Studio';
 import type { CloseGuard } from './studio/StudioFrame';
+
+const MappingList = lazy(() => import('./list/MappingList').then((module) => ({ default: module.MappingList })));
+const Studio = lazy(() => import('./studio/Studio').then((module) => ({ default: module.Studio })));
 
 export interface MappingTabOptions {
   /** Opens the mapping in edit mode on the Signature tab, as Create does. */
@@ -24,6 +27,7 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
   };
   return {
     id: `mapping:${id}`,
+    group: 'Design',
     title: id.slice(id.lastIndexOf('/') + 1),
     render: () => (
       <Studio
@@ -50,6 +54,9 @@ export function mappingsScreen(api: ApiClient, browserState: BrowserStateStore):
   const onSaved = () => void queryClient.invalidateQueries({ queryKey: ['mappings'] });
   return {
     id: 'mappings',
+    group: 'Design',
+    icon: <PartitionOutlined />,
+    description: 'Design and test message mappings in the working folder.',
     title: 'Mappings',
     render: (open) => (
       <QueryClientProvider client={queryClient}>

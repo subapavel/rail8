@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -160,21 +159,27 @@ describe('Check', () => {
     await expect.element(button('Checking…')).toBeDisabled();
     await expect.element(checkBanner().getByRole('heading', { name: /Check passed/ })).toBeVisible();
     await expect.element(checkBanner().getByText('Structures assigned and graph connections complete.')).toBeVisible();
-    await expect.element(checkBanner()).toHaveClass(/pf-m-success/);
+    await expect.element(checkBanner()).toHaveAccessibleName('Success');
     await expect.element(button('Check')).toBeEnabled();
     await page.getByRole('button', { name: 'Dismiss check' }).click();
     await expect.element(checkBanner()).not.toBeInTheDocument();
   });
 
   test('lists the missing structures in our words and each error and warning of a fresh compile', async () => {
-    const compile = { 'mappings/blank': [warning('missing-structure', 'no source'), warning('unknown-function', 'no such function', 'error'), warning('unreachable-box', 'box b1 is unreachable')] };
+    const compile = {
+      'mappings/blank': [
+        warning('missing-structure', 'no source'),
+        warning('unknown-function', 'no such function', 'error'),
+        warning('unreachable-box', 'box b1 is unreachable'),
+      ],
+    };
     const store = await renderFrame(fakeApiClient({ 'mappings/blank': { formatVersion: 1 } }, { compile }), 'mappings/blank');
     await button('Edit').click();
     store.getState().link(ORDER_ID, ORDER_ID);
 
     await button('Check').click();
 
-    await expect.element(checkBanner()).toHaveClass(/pf-m-warning/);
+    await expect.element(checkBanner()).toHaveAccessibleName('Warning');
     await expect.element(checkBanner().getByRole('heading', { name: /Check found issues/ })).toBeVisible();
     const items = checkBanner().getByRole('listitem');
     await expect.element(items).toHaveLength(4);
@@ -344,8 +349,10 @@ describe('Check', () => {
 
   test('the copy receipt goes after 2.4 s', async () => {
     const original = window.setTimeout;
-    const timers = vi.spyOn(window, 'setTimeout').mockImplementation(((fn: TimerHandler, delay?: number, ...rest: unknown[]) =>
-      original(fn, delay === 2400 ? 200 : delay, ...rest)) as typeof window.setTimeout);
+    const timers = vi
+      .spyOn(window, 'setTimeout')
+      .mockImplementation(((fn: TimerHandler, delay?: number, ...rest: unknown[]) =>
+        original(fn, delay === 2400 ? 200 : delay, ...rest)) as typeof window.setTimeout);
     const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
     try {
       const store = await renderFrame(fakeApiClient(), 'mappings/order-unmapped');
@@ -704,9 +711,11 @@ describe('Edit, Save and Discard', () => {
 
   test('the saved notice goes by itself after 8 s, and the next save shows it again', async () => {
     const original = window.setTimeout;
-    // PatternFly's alert timeout: the test runs it after 300 ms
-    const timers = vi.spyOn(window, 'setTimeout').mockImplementation(((fn: TimerHandler, delay?: number, ...rest: unknown[]) =>
-      original(fn, delay === 8000 ? 300 : delay, ...rest)) as typeof window.setTimeout);
+    // Run the save notification timer after 300 ms.
+    const timers = vi
+      .spyOn(window, 'setTimeout')
+      .mockImplementation(((fn: TimerHandler, delay?: number, ...rest: unknown[]) =>
+        original(fn, delay === 8000 ? 300 : delay, ...rest)) as typeof window.setTimeout);
     try {
       const store = await renderFrame(fakeApiClient(), 'mappings/order-unmapped');
       await button('Edit').click();

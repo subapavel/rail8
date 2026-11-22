@@ -1,5 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
-import '@patternfly/react-core/dist/styles/base.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -103,7 +101,9 @@ describe('the Test tab', () => {
   test('a run compile refused shows its diagnostics in the log, and the Result pane that it failed', async () => {
     const refused: TestResult = {
       kind: 'refused',
-      diagnostics: [{ severity: 'error', code: 'unconnected-target-field', message: 'the result is not connected', location: { kind: 'authoring-id', authoringId: 't1' } }],
+      diagnostics: [
+        { severity: 'error', code: 'unconnected-target-field', message: 'the result is not connected', location: { kind: 'authoring-id', authoringId: 't1' } },
+      ],
     };
     await renderTest({ api: scenario({ test: { [MAPPING]: refused } }) });
 
@@ -138,13 +138,38 @@ describe('the Test tab', () => {
   });
 
   test('the latest compile of the working copy lists its diagnostics in the log, with its time', async () => {
-    const missing: Diagnostic = { severity: 'error', code: 'unknown-function', message: 'no function named foo', location: { kind: 'authoring-id', authoringId: 'a1' } };
+    const missing: Diagnostic = {
+      severity: 'error',
+      code: 'unknown-function',
+      message: 'no function named foo',
+      location: { kind: 'authoring-id', authoringId: 'a1' },
+    };
     const store = await renderTest({ api: scenario({ compile: { [MAPPING]: [missing] } }) });
 
     store.getState().setDescription('An edit compiles the working copy');
 
     await expect.element(log()).toMatchTextContent(new RegExp(`${TIME}Compile of the working copy`));
     await expect.element(log()).toMatchTextContent('Error unknown-function: no function named foo');
+  });
+
+  test('the expanded XML editor writes to the same source used by the simulation', async () => {
+    const api = scenario({ test: { [MAPPING]: output } });
+    const runTest = vi.spyOn(api, 'runTest');
+    await renderTest({ api });
+    const input = source().getByRole('textbox', { name: 'Input XML' });
+    await input.fill('<Order/>');
+    await source().getByRole('button', { name: 'Open XML editor' }).click();
+    const dialog = page.getByRole('dialog', { name: 'XML editor' });
+    const editor = dialog.getByRole('textbox', { name: /XML source document/ });
+    await expect.element(editor).toBeVisible();
+    (editor.element() as HTMLElement).focus();
+    await expect.element(editor).toHaveFocus();
+    await userEvent.keyboard('{Home}{ArrowRight}Purchase');
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await expect.element(source().getByRole('button', { name: 'Open XML editor' })).toHaveFocus();
+    await expect.element(input).toHaveValue('<PurchaseOrder/>');
+    await runButton().click();
+    await expect.poll(() => runTest.mock.calls[0]?.[1].input).toBe('<PurchaseOrder/>');
   });
 
   test('the result shows as a tree of its fields and values', async () => {
@@ -195,7 +220,7 @@ describe('the Test tab', () => {
     await renderTest();
 
     const controls = page.getByRole('toolbar', { name: 'Simulation controls' });
-    await expect.element(controls.getByRole('combobox', { name: 'Trace Level' })).toHaveValue('Warning');
+    await expect.element(controls.getByText('Warning', { exact: true })).toBeVisible();
     await expect.element(controls.getByText('Preview')).toBeVisible();
     await source().getByRole('button', { name: 'Parameters' }).click();
     await expect.element(source().getByRole('table', { name: 'Header Parameters' })).toBeVisible();
@@ -305,7 +330,9 @@ describe('the Test tab', () => {
     const api = scenario({ test: { [MAPPING]: { kind: 'output', output: '{"total":[1,null]}', diagnostics: [], trace: {} } } });
     const store = await renderTest({ api });
     // the signature says the format: a JSON root on both sides
-    store.setState((s) => ({ workingCopy: { ...s.workingCopy, source: { ...s.workingCopy.source!, root: { json: '$' } }, target: { ...s.workingCopy.target!, root: { json: '$' } } } }));
+    store.setState((s) => ({
+      workingCopy: { ...s.workingCopy, source: { ...s.workingCopy.source!, root: { json: '$' } }, target: { ...s.workingCopy.target!, root: { json: '$' } } },
+    }));
     await source().getByRole('textbox', { name: 'Input JSON' }).fill('{"a":{"b":"x"}}');
     await source().getByRole('button', { name: 'Pretty Print' }).click();
     await expect.element(source().getByRole('textbox', { name: 'Input JSON' })).toHaveValue('{\n  "a": {\n    "b": "x"\n  }\n}');

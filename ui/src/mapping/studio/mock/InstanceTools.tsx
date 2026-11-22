@@ -1,6 +1,6 @@
-import { Alert, Button, Content, Form, FormGroup, FormSelect, FormSelectOption, Modal, ModalBody, ModalFooter, ModalHeader, TextInput, ToolbarItem } from '@patternfly/react-core';
-import { FileImportIcon, FileMedicalIcon, SaveIcon, TrashIcon } from '@patternfly/react-icons';
-import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { Alert, Form, Input, Modal, Select } from 'antd';
+import { UploadOutlined, FileAddOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
 import { Tool } from '../shared/Tool';
 import { PreviewBadge } from './PreviewBadge';
@@ -42,7 +42,16 @@ type Dialog = 'add' | 'delete' | null;
  * current instance. In read mode only the select works: it shows the instance chosen in read mode, else the current one,
  * and a choice loads it into the source without changing the library.
  */
-export function InstanceTools({ library, format, resource, onLoad, editing, disabled, validateFile = false, selectLabel = 'Select test instance' }: InstanceToolsProps) {
+export function InstanceTools({
+  library,
+  format,
+  resource,
+  onLoad,
+  editing,
+  disabled,
+  validateFile = false,
+  selectLabel = 'Select test instance',
+}: InstanceToolsProps) {
   const list = useStore(library, (s) => s.value);
   const chosen = useStore(instanceChoice(library), (s) => s.id);
   const entries = instancesOf(list, format);
@@ -54,6 +63,7 @@ export function InstanceTools({ library, format, resource, onLoad, editing, disa
   const [name, setName] = useState('');
   const [notice, setNotice] = useState('');
   const [reading, setReading] = useState(false);
+  const fieldId = useId();
   const file = useRef<HTMLInputElement>(null);
   // the file input is disabled while a file is read, so one read is under way at most
   const busy = disabled || reading;
@@ -75,8 +85,8 @@ export function InstanceTools({ library, format, resource, onLoad, editing, disa
       setReading(false);
     }
   };
-  const add = (event: FormEvent) => {
-    event.preventDefault();
+  const add = () => {
+    if (!name.trim()) return;
     try {
       actions.create(name.trim(), resource());
       setNotice('');
@@ -93,10 +103,10 @@ export function InstanceTools({ library, format, resource, onLoad, editing, disa
   return (
     <>
       <PreviewBadge feature="Test instances" issue={TEST_INSTANCES_ISSUE} />
-      <Tool label="Load Test Instance" icon={FileImportIcon} disabled={locked} onClick={() => file.current?.click()} />
+      <Tool label="Load Test Instance" icon={UploadOutlined} disabled={locked} onClick={() => file.current?.click()} />
       <Tool
         label="Add Test Instance"
-        icon={FileMedicalIcon}
+        icon={FileAddOutlined}
         disabled={locked}
         onClick={() => {
           setName('');
@@ -106,7 +116,7 @@ export function InstanceTools({ library, format, resource, onLoad, editing, disa
       />
       <Tool
         label="Save Test Instance"
-        icon={SaveIcon}
+        icon={SaveOutlined}
         disabled={locked || !current}
         onClick={() => {
           actions.save(resource());
@@ -115,73 +125,63 @@ export function InstanceTools({ library, format, resource, onLoad, editing, disa
       />
       <Tool
         label="Delete Test Instance"
-        icon={TrashIcon}
+        icon={DeleteOutlined}
         disabled={locked || !current}
         onClick={() => {
           setNotice('');
           setDialog('delete');
         }}
       />
-      <ToolbarItem>
-        <FormSelect
-          aria-label={selectLabel}
-          value={shown?.id ?? ''}
-          isDisabled={busy || !current}
-          onChange={(_, value) => (editing ? actions.select(value) : instanceChoice(library).getState().choose(value))}
-        >
-          {entries.map((i) => (
-            <FormSelectOption key={i.id} value={i.id} label={i.name} />
-          ))}
-        </FormSelect>
-      </ToolbarItem>
-      <input ref={file} type="file" hidden disabled={locked} aria-label="Test instance file" accept={`.${format.toLowerCase()},.zip`} onChange={(e) => void load(e)} />
-      {notice && !dialog && (
-        <ToolbarItem>
-          <Content component="small" role="status">
-            {notice}
-          </Content>
-        </ToolbarItem>
-      )}
+      <Select
+        virtual={entries.length > 100}
+        aria-label={selectLabel}
+        value={shown?.id ?? ''}
+        disabled={busy || !current}
+        onChange={(value) => (editing ? actions.select(value) : instanceChoice(library).getState().choose(value))}
+        options={entries.map((i) => ({ value: i.id, label: i.name }))}
+      />
+      <input
+        ref={file}
+        type="file"
+        hidden
+        disabled={locked}
+        aria-label="Test instance file"
+        accept={`.${format.toLowerCase()},.zip`}
+        onChange={(e) => void load(e)}
+      />
+      {notice && !dialog && <small role="status">{notice}</small>}
+
       {dialog === 'add' && (
-        <Modal isOpen variant="small" aria-label="Add Test Instance" onClose={close}>
-          <ModalHeader title="Add Test Instance" />
-          <ModalBody>
-            <Form id="add-test-instance" onSubmit={add}>
-              <FormGroup label="Test instance name" fieldId="test-instance-name">
-                <TextInput id="test-instance-name" autoFocus value={name} maxLength={100} onChange={(_, value) => setName(value)} />
-              </FormGroup>
-              {notice && <Alert variant="danger" isInline isPlain role="alert" title={notice} />}
-            </Form>
-          </ModalBody>
-          <ModalFooter>
-            <Button type="submit" form="add-test-instance" isDisabled={!name.trim()}>
-              OK
-            </Button>
-            <Button variant="link" onClick={close}>
-              Cancel
-            </Button>
-          </ModalFooter>
+        <Modal
+          title="Add Test Instance"
+          open
+          onCancel={close}
+          cancelText="Cancel"
+          okText="OK"
+          okButtonProps={{ htmlType: 'submit', form: fieldId + '-form', disabled: !name.trim() }}
+        >
+          <Form layout="vertical" id={fieldId + '-form'} onFinish={add}>
+            <Form.Item label="Test instance name" htmlFor={fieldId}>
+              <Input id={fieldId} autoFocus maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
+            </Form.Item>
+            {notice && <Alert type="error" title={notice} />}
+          </Form>
         </Modal>
       )}
       {dialog === 'delete' && current && (
-        <Modal isOpen variant="small" aria-label="Delete Test Instance" onClose={close}>
-          <ModalHeader title="Delete Test Instance" />
-          <ModalBody>Delete {current.name} from this browser?</ModalBody>
-          <ModalFooter>
-            <Button
-              variant="danger"
-              icon={<TrashIcon />}
-              onClick={() => {
-                actions.remove();
-                setDialog(null);
-              }}
-            >
-              Delete
-            </Button>
-            <Button variant="link" onClick={close}>
-              Cancel
-            </Button>
-          </ModalFooter>
+        <Modal
+          title="Delete Test Instance"
+          open
+          onCancel={close}
+          cancelText="Cancel"
+          okText="Delete"
+          okButtonProps={{ danger: true }}
+          onOk={() => {
+            actions.remove();
+            setDialog(null);
+          }}
+        >
+          Delete {current.name} from this browser?
         </Modal>
       )}
     </>

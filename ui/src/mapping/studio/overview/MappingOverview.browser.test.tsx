@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -29,7 +28,11 @@ const description = () => page.getByRole('textbox', { name: 'Description' });
 const button = (name: string) => page.getByRole('button', { name, exact: true });
 
 /** The description list's value for `term`. */
-const valueOf = (term: string) => details().getByRole('term').filter({ hasText: new RegExp(`^${term}$`) }).element().nextElementSibling;
+const valueOf = (term: string) =>
+  details()
+    .getByRole('term')
+    .filter({ hasText: new RegExp(`^${term}$`) })
+    .element().nextElementSibling;
 
 beforeEach(() => {
   consoleError = vi.spyOn(console, 'error');
@@ -48,7 +51,12 @@ describe('the Overview tab', () => {
 
     await expect.element(details().getByRole('heading', { name: 'Mapping details' })).toBeVisible();
     await expect.element(details().getByRole('term')).toHaveLength(5);
-    expect(details().getByRole('term').elements().map((term) => term.textContent)).toEqual(['Name', 'Mapping ID', 'Package', 'Source', 'Target']);
+    expect(
+      details()
+        .getByRole('term')
+        .elements()
+        .map((term) => term.textContent),
+    ).toEqual(['Name', 'Mapping ID', 'Package', 'Source', 'Target']);
     expect(valueOf('Name')?.textContent).toBe('order-id-copy');
     expect(valueOf('Mapping ID')?.querySelector('code')?.textContent).toBe('mappings/order-id-copy');
     expect(valueOf('Package')?.textContent).toBe('mappings');

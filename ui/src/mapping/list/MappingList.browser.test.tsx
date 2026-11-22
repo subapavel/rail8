@@ -1,4 +1,3 @@
-import '@patternfly/react-core/dist/styles/base.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -31,12 +30,14 @@ function spied(api: ApiClient = fakeApiClient()) {
 
 const table = () => page.getByRole('table', { name: 'Mappings' });
 /** The table's body rows: every row but the header row. */
-const rows = () => table().getByRole('row').filter({ hasNot: page.getByRole('columnheader') });
+const rows = () =>
+  table()
+    .getByRole('row')
+    .filter({ hasNot: page.getByRole('columnheader') });
 const search = () => page.getByRole('textbox', { name: 'Find mappings' });
 const modal = () => page.getByRole('dialog', { name: 'New mapping' });
 const field = (name: string) => modal().getByRole('textbox', { name });
-/** A field's helper text; PatternFly appends ": error status;" for screen readers to an error. */
-const helper = (text: string) => modal().getByText(new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(: error status;)?$`));
+const helper = (text: string) => modal().getByText(text, { exact: true });
 
 beforeEach(() => {
   consoleError = vi.spyOn(console, 'error');
@@ -137,8 +138,7 @@ describe('the Mappings screen', () => {
     const fake = fakeApiClient();
     render({ ...fake, listMappings: async () => ({ ...(await fake.listMappings()), truncated: true }) });
 
-    // PatternFly puts the variant before the title, for screen readers only
-    const warning = () => page.getByText('Warning alert:Only the first 1,000 mapping files of the working folder are listed');
+    const warning = () => page.getByText('Only the first 1,000 mapping files of the working folder are listed');
     await expect.element(rows()).toHaveLength(3);
     await expect.element(warning()).toBeVisible();
     root?.unmount();
@@ -298,7 +298,6 @@ describe('the New mapping modal', () => {
 
     await modal().getByRole('button', { name: 'Create' }).click();
 
-    // PatternFly names a loading button after its spinner too: "Loading... Create"
     await expect.element(modal().getByRole('button', { name: /Create$/ })).toBeDisabled();
     answer();
     await expect.poll(() => onCreated.mock.calls).toEqual([['slow']]);
@@ -313,6 +312,7 @@ describe('the New mapping modal', () => {
     await modal().getByRole('button', { name: 'Cancel' }).click();
 
     await expect.element(modal()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'New mapping' })).toHaveFocus();
     expect(createMapping).not.toHaveBeenCalled();
     await page.getByRole('button', { name: 'New mapping' }).click();
     await expect.element(field('Name')).toHaveValue('');
@@ -326,5 +326,6 @@ describe('the New mapping modal', () => {
     await userEvent.keyboard('{Escape}');
 
     await expect.element(modal()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'New mapping' })).toHaveFocus();
   });
 });

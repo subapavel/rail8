@@ -1,7 +1,6 @@
-import { Button, Content, Form, Label, Modal, ModalBody, ModalFooter, ModalHeader, Split, SplitItem, TextInput, Title } from '@patternfly/react-core';
-import { RedoIcon, SearchIcon } from '@patternfly/react-icons';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
-import { useId, useRef, useState, type FormEvent } from 'react';
+import { Button, Flex, Input, Modal, Table, Tag } from 'antd';
+import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { useRef, useState, type FormEvent } from 'react';
 import { ARCHIVE_EXAMPLES, type Archive } from '../mock/function-model';
 import { Tool } from '../shared/Tool';
 
@@ -12,7 +11,9 @@ import { Tool } from '../shared/Tool';
  */
 export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'namespace'; onApply: (entry: Archive) => void; close: () => void }) {
   const namespaces = kind === 'namespace';
-  const rows: readonly Archive[] = namespaces ? [...new Set(ARCHIVE_EXAMPLES.map((r) => r.namespace))].map((name) => ({ name, namespace: name })) : ARCHIVE_EXAMPLES;
+  const rows: readonly Archive[] = namespaces
+    ? [...new Set(ARCHIVE_EXAMPLES.map((r) => r.namespace))].map((name) => ({ name, namespace: name }))
+    : ARCHIVE_EXAMPLES;
   const columns: [string, keyof Archive][] = namespaces
     ? [['Namespace', 'name']]
     : [
@@ -23,8 +24,8 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
   const [selected, setSelected] = useState('');
   const [hit, setHit] = useState('');
   const [notice, setNotice] = useState('');
-  const table = useRef<HTMLTableElement>(null);
-  const title = useId();
+  const table = useRef<HTMLDivElement>(null);
+
   const chosen = rows.find((r) => r.name === selected);
   function go(event: FormEvent) {
     event.preventDefault();
@@ -38,7 +39,7 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
     const next = matches[(matches.findIndex((r) => r.name === hit) + 1) % matches.length]!;
     setHit(next.name);
     setNotice(`Match: ${next.name}`);
-    [...table.current!.rows].find((tr) => tr.dataset.name === next.name)?.scrollIntoView({ block: 'nearest' });
+    table.current?.querySelector(`[data-row-key="${CSS.escape(next.name)}"]`)?.scrollIntoView({ block: 'nearest' });
   }
   function refresh() {
     setQuery('');
@@ -47,87 +48,67 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
     setNotice('');
   }
   return (
-    <Modal variant="medium" isOpen onClose={close} aria-labelledby={title}>
-      <ModalHeader title={namespaces ? 'Choose Namespace' : 'Choose Imported Archive'} labelId={title} />
-      <ModalBody>
-        <Title headingLevel="h3" size="md">
-          Search Result
-        </Title>
-        <Form onSubmit={go}>
-          <Split hasGutter>
-            <SplitItem>
-              <Tool label="Refresh results" icon={RedoIcon} onClick={refresh} />
-            </SplitItem>
-            <SplitItem isFilled>
-              <TextInput
-                autoFocus
-                aria-label="Search catalog"
-                placeholder="Find in results"
-                customIcon={<SearchIcon />}
-                value={query}
-                onChange={(_, value) => {
-                  setQuery(value);
-                  setHit('');
-                  setNotice('');
-                }}
-              />
-            </SplitItem>
-            <SplitItem>
-              <Button type="submit" size="sm" variant="secondary" isDisabled={!query.trim()}>
-                Go
-              </Button>
-            </SplitItem>
-          </Split>
-        </Form>
-        {/* PatternFly gives a Table the role grid; this one has no grid keyboard navigation: it is a plain table */}
-        <Table ref={table} aria-label="Catalog results" role="table" variant="compact">
-          <Thead>
-            <Tr>
-              {columns.map(([h]) => (
-                <Th key={h}>{h}</Th>
-              ))}
-            </Tr>
-          </Thead>
-          <Tbody>
-            {rows.map((r) => (
-              <Tr key={r.name} data-name={r.name} isRowSelected={r.name === selected} onClick={() => setSelected(r.name)} onDoubleClick={() => onApply(r)}>
-                {columns.map(([h, k], i) => (
-                  <Td key={h} dataLabel={h}>
-                    {i === 0 ? (
-                      <>
-                        <Button variant="link" isInline aria-pressed={r.name === selected} onClick={() => setSelected(r.name)}>
-                          {r[k]}
-                        </Button>
-                        {r.name === hit && (
-                          <>
-                            {' '}
-                            <Label isCompact color="blue">
-                              Match
-                            </Label>
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      r[k]
-                    )}
-                  </Td>
-                ))}
-              </Tr>
-            ))}
-          </Tbody>
-        </Table>
-        <Content component="p" role="status">
-          {notice}
-        </Content>
-      </ModalBody>
-      <ModalFooter>
-        <Button isDisabled={!chosen} onClick={() => onApply(chosen!)}>
-          Apply
-        </Button>
-        <Button variant="link" onClick={close}>
-          Cancel
-        </Button>
-      </ModalFooter>
+    <Modal
+      open
+      title={namespaces ? 'Choose Namespace' : 'Choose Imported Archive'}
+      onCancel={close}
+      cancelText="Cancel"
+      okText="Apply"
+      onOk={() => chosen && onApply(chosen)}
+      okButtonProps={{ disabled: !chosen }}
+    >
+      <h3>Search Result</h3>
+      <form onSubmit={go}>
+        <Flex align="center" gap="small">
+          <Tool label="Refresh results" icon={ReloadOutlined} onClick={refresh} />
+
+          <Input
+            autoFocus
+            aria-label="Search catalog"
+            placeholder="Find in results"
+            prefix={<SearchOutlined />}
+            value={query}
+            onChange={(event) => {
+              const value = event.target.value;
+              setQuery(value);
+              setHit('');
+              setNotice('');
+            }}
+          />
+
+          <Button htmlType="submit" size="small" type="default" disabled={!query.trim()}>
+            Go
+          </Button>
+        </Flex>
+      </form>
+
+      <div ref={table}>
+        <Table<Archive>
+          aria-label="Catalog results"
+          rowKey="name"
+          size="small"
+          pagination={false}
+          dataSource={rows}
+          rowClassName={(row) => (row.name === selected ? 'studio-chosen' : '')}
+          onRow={(row) => ({ onClick: () => setSelected(row.name), onDoubleClick: () => onApply(row) })}
+          columns={columns.map(([title, field], index) => ({
+            title,
+            dataIndex: field,
+            render: (_, row) =>
+              index === 0 ? (
+                <>
+                  <Button type="link" aria-pressed={row.name === selected} onClick={() => setSelected(row.name)}>
+                    {row[field]}
+                  </Button>
+                  {hit === row.name && <Tag color="blue">Match</Tag>}
+                </>
+              ) : (
+                row[field]
+              ),
+          }))}
+        />
+      </div>
+      <p role="status">{notice}</p>
     </Modal>
   );
 }
