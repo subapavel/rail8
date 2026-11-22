@@ -246,7 +246,7 @@ export function mappingApi(options: MappingApiOptions) {
     const root = await rootOf();
     switch (route.op) {
       case 'list': {
-        const { mappings, truncated } = await listMappings(root);
+        const { mappings, truncated } = await listMappings(root, signal);
         return { status: 200, body: Buffer.from(JSON.stringify(mappings)), headers: truncated ? { 'rail8-truncated': 'true' } : {} };
       }
       case 'get': {

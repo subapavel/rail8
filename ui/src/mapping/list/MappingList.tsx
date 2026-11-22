@@ -2,12 +2,14 @@ import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Empty, Flex, Input } from 'antd';
-import { useState, type TableHTMLAttributes } from 'react';
+import { useEffect, useState, type TableHTMLAttributes } from 'react';
 import { ReadSpinner } from '../../ReadSpinner';
 import { describeError, type ApiClient, type MappingSummary } from '../api/client';
 import { NewMappingModal } from './NewMappingModal';
 
 const MappingsTable = (props: TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Mappings" />;
+
+const PAGE_SIZE = 25;
 
 /** What a cell shows for an absent value: a package of the top folder, a message not chosen, no description. */
 const orDash = (value: string | undefined) => (value ? value : '—');
@@ -32,13 +34,27 @@ export interface MappingListProps {
  * the toolbar says when the list was cut at its limit.
  */
 export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
-  const mappings = useQuery({ queryKey: ['mappings'], queryFn: () => api.listMappings() });
+  const mappings = useQuery({ queryKey: ['mappings'], queryFn: ({ signal }) => api.listMappings(signal) });
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
+  const changeSearch = (value: string) => {
+    setSearch(value);
+    setPage(1);
+  };
   const term = search.trim();
   // an empty term is in every name
   const shown = (mappings.data?.mappings ?? []).filter((m) => matches(m, term));
+  const lastPage = Math.max(1, Math.ceil(shown.length / PAGE_SIZE));
+  if (page > lastPage) setPage(lastPage);
+
+  useEffect(() => {
+    if (mappings.isSuccess) {
+      // Load the editor code while the user chooses a mapping. Opening it handles errors and offers Retry.
+      void import('../studio/StudioFrame').catch(() => undefined);
+    }
+  }, [mappings.isSuccess]);
 
   const failure = mappings.isError ? describeError(mappings.error) : undefined;
   const empty = mappings.isPending ? (
@@ -64,7 +80,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
         )
       }
     >
-      {mappings.data?.mappings.length ? <Button onClick={() => setSearch('')}>Clear search</Button> : null}
+      {mappings.data?.mappings.length ? <Button onClick={() => changeSearch('')}>Clear search</Button> : null}
     </Empty>
   );
   const columns: ProColumns<MappingSummary>[] = [
@@ -92,7 +108,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
         rowKey="id"
         columns={columns}
         dataSource={shown}
-        pagination={false}
+        pagination={{ current: page, pageSize: PAGE_SIZE, onChange: setPage, hideOnSinglePage: true, showSizeChanger: false }}
         search={false}
         options={false}
         size="small"
@@ -105,10 +121,10 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
               placeholder="Find mappings"
               prefix={<SearchOutlined aria-hidden />}
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => changeSearch(event.target.value)}
               suffix={
                 search && (
-                  <Button type="text" size="small" aria-label="Reset" onClick={() => setSearch('')}>
+                  <Button type="text" size="small" aria-label="Reset" onClick={() => changeSearch('')}>
                     ×
                   </Button>
                 )

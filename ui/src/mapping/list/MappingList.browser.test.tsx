@@ -12,7 +12,7 @@ let host: HTMLElement | undefined;
 let consoleError: ReturnType<typeof vi.spyOn>;
 
 function render(api: ApiClient, onCreated: (id: string) => void = () => undefined, onOpen: (id: string) => void = () => undefined) {
-  renderScreen(<MappingList api={api} onOpen={onOpen} onCreated={onCreated} />);
+  return renderScreen(<MappingList api={api} onOpen={onOpen} onCreated={onCreated} />);
 }
 
 function renderScreen(screen: ReactNode) {
@@ -21,6 +21,7 @@ function renderScreen(screen: ReactNode) {
   root = createRoot(host);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root.render(<QueryClientProvider client={queryClient}>{screen}</QueryClientProvider>);
+  return queryClient;
 }
 
 /** The fake with a spy on createMapping, so a test can read the request the modal sent. */
@@ -54,6 +55,34 @@ afterEach(() => {
 });
 
 describe('the Mappings screen', () => {
+  test('stays on the last remaining page when the workspace later grows again', async () => {
+    const mappings = Array.from({ length: 80 }, (_, i) => ({ id: `map-${i}`, name: `map-${i}`, package: '' }));
+    const client = render({ ...fakeApiClient(), listMappings: async () => ({ mappings, truncated: false }) });
+    await page.getByText('4', { exact: true }).click();
+    const firstName = () => rows().first().getByRole('cell').first();
+    await expect.element(firstName()).toHaveTextContent('map-75');
+    client.setQueryData(['mappings'], { mappings: mappings.slice(0, 26), truncated: false });
+    await expect.element(firstName()).toHaveTextContent('map-25');
+    client.setQueryData(['mappings'], { mappings, truncated: false });
+    await expect.element(rows()).toHaveLength(25);
+    await expect.element(firstName()).toHaveTextContent('map-25');
+  });
+
+  test('pages a large workspace and searches every mapping from any page', async () => {
+    const mappings = Array.from({ length: 80 }, (_, i) => ({ id: `files/map-${i}`, name: `map-${i}`, package: 'files' }));
+    const opened = vi.fn();
+    render({ ...fakeApiClient(), listMappings: async () => ({ mappings, truncated: false }) }, undefined, opened);
+    await expect.element(rows()).toHaveLength(25);
+    await page.getByText('2', { exact: true }).click();
+    await expect.element(rows().first().getByRole('cell').first()).toHaveTextContent('map-25');
+    await search().fill('map-79');
+    await expect.element(rows()).toHaveLength(1);
+    await rows().first().getByRole('button', { name: 'Open in studio' }).click();
+    expect(opened).toHaveBeenCalledWith('files/map-79');
+    await search().fill('');
+    await expect.element(rows().first().getByRole('cell').first()).toHaveTextContent('map-0');
+  });
+
   test('is a table of the mappings with Name, Package, Source, Target and Description, each with Open in studio', async () => {
     const onOpen = vi.fn();
     render(fakeApiClient(), undefined, onOpen);
