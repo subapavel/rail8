@@ -313,7 +313,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
   return <div className="flow-map" ref={host}>
     {box.width > 0 && <ReactFlow<CanvasNode, Action> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
       aria-label="Flow diagram" nodesConnectable={false} elementsSelectable={false} nodesFocusable={false} edgesFocusable={false}
-      onNodesChange={moveNodes} onInit={() => setReady(true)} onMoveStart={event => { if (event) manual.current = true; }}
+      onPaneClick={onFlowSelect} onNodesChange={moveNodes} onInit={() => setReady(true)} onMoveStart={event => { if (event) manual.current = true; }}
       minZoom={0.12} maxZoom={2} nodeDragThreshold={0} zoomOnDoubleClick={false} deleteKeyCode={null} zIndexMode="manual" attributionPosition="bottom-left">
       <Background gap={18} size={1} color="var(--ant-color-border)" />
       <Camera fit={() => { manual.current = false; fit(); }} manual={() => { manual.current = true; }} />
