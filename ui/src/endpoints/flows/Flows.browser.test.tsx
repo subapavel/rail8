@@ -754,4 +754,43 @@ steps:
     await open(fakeFlows(undefined, { ingress: vi.fn(async () => ({ environment: 'dev', httpOrigin: 'http://localhost:8080', prefixes: { http: '/http' } })) }));
     await expect.element(canvas().getByText('http · preview · http://localhost:8080/http/in', { exact: true })).toBeVisible();
   });
+
+  test('opens a simulation preview for the steps between marked connections and keeps the range in its flow tab', async () => {
+    await open();
+    const simulate = button('Open simulation');
+    const mark = async (target: string, action: string) => {
+      const name = `Actions before ${target}`;
+      await button(name).click();
+      await page.getByRole('menu', { name }).getByRole('menuitem', { name: action }).click();
+    };
+    await expect.element(simulate).toBeDisabled();
+    await mark('route', 'Set simulation start here');
+    await mark('validate', 'Set simulation end here');
+    await expect.element(simulate).toBeDisabled();
+    await mark('validate', 'Set simulation start here');
+    await expect.element(simulate).toBeDisabled();
+    await mark('route', 'Set simulation end here');
+    await simulate.click();
+    const preview = page.getByRole('dialog', { name: 'Simulation preview' });
+    await expect.element(preview).toBeVisible();
+    await expect.element(preview.getByText('validate', { exact: true })).toBeVisible();
+    const body = preview.getByRole('textbox', { name: 'Message body' });
+    await body.fill('Sample invoice');
+    await userEvent.keyboard('{Escape}');
+    await page.getByRole('tab', { name: 'Flows', exact: true }).click();
+    await button('order').click();
+    await expect.element(simulate).toBeDisabled();
+    await mark('to', 'Set simulation start here');
+    await mark('partner-domestic', 'Set simulation end here');
+    await simulate.click();
+    await expect.element(body).toHaveValue('');
+    await userEvent.keyboard('{Escape}');
+    await page.getByRole('tab', { name: 'invoice', exact: true }).click();
+    await expect.element(simulate).toBeEnabled();
+    await simulate.click();
+    await expect.element(body).toHaveValue('Sample invoice');
+    await userEvent.keyboard('{Escape}');
+    await mark('route', 'Clear simulation end');
+    await expect.element(simulate).toBeDisabled();
+  });
 });
