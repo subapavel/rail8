@@ -200,6 +200,29 @@ describe('Flows', () => {
     await expect.element(page.getByRole('textbox', { name: 'delivery.mode' })).toHaveValue('sync');
   });
 
+  test('opens the flow properties from the surrounding canvas, frame interior and description', async () => {
+    await open();
+    const flowHeading = page.getByRole('heading', { name: 'Flow invoice' });
+    await expect.element(button('Properties')).toHaveAttribute('aria-expanded', 'false');
+    await expect.element(button('Collapse flow')).toBeVisible();
+    await canvas().click({ position: { x: 6, y: 6 } });
+    await expect.element(flowHeading).toBeVisible();
+
+    const frame = canvas().getByRole('region', { name: 'Flow invoice' });
+    for (const area of ['interior', 'description']) {
+      await nodeOf('validate').click();
+      await expect.element(page.getByRole('heading', { name: 'validate', level: 2 })).toBeVisible();
+      const pane = canvas().element().getBoundingClientRect();
+      const rect = (area === 'interior' ? frame : frame.getByText('Validate an invoice and send it on.')).element().getBoundingClientRect();
+      await canvas().click({ position: {
+        x: rect.left - pane.left + 5,
+        y: (area === 'interior' ? rect.bottom - 6 : rect.top + rect.height / 2) - pane.top,
+      } });
+      await expect.element(flowHeading).toBeVisible();
+      await expect.element(button('Inspect validate')).toHaveAttribute('aria-pressed', 'false');
+    }
+  });
+
   test("shows a step's settings when its node is chosen, and its name on the Step tab", async () => {
     await open();
     await nodeOf('validate').click();
