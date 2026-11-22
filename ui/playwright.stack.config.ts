@@ -1,11 +1,12 @@
 import { defineConfig } from '@playwright/test';
 import { stackWorkspace } from './e2e/stack-workspace';
+import { uiPort } from './server/uiPort';
 
 // The @stack scenarios: the UI's development server, whose /api requests it answers itself over a working folder and the
 // real node. The node is the quickstart's, started by `docker compose up` from the repository root, with its admin API
 // on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and the token exported in RAIL8_ADMIN_TOKEN. The working folder is a
 // temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares.
-const port = 5173;
+const port = uiPort(process.env.RAIL8_UI_PORT);
 
 export default defineConfig({
   testDir: 'e2e',

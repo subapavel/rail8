@@ -46,7 +46,7 @@ export function httpApiClient(baseUrl = '', fetchPort: typeof fetch = (input, in
       return { mappings: (await response.json()) as MappingSummary[], truncated: response.headers.get('rail8-truncated') === 'true' };
     },
     createMapping: async (request: CreateMappingRequest) => storedOf(await send(`${baseUrl}/api/mappings`, 'POST', request)),
-    getMapping: async (id) => storedOf(await send(mapping(id), 'GET')),
+    getMapping: async (id, signal) => storedOf(await send(mapping(id), 'GET', undefined, {}, signal)),
     saveMapping: async (id, model, etag) => storedOf(await send(mapping(id), 'PUT', model, { 'if-match': etag })),
     loadStructure: (request: StructureRequest) => call<StructureResponse>(`${baseUrl}/api/structures`, 'POST', request),
     runTest: (id, request: TestRequest) => call<TestResult>(`${mapping(id)}/test`, 'POST', request),

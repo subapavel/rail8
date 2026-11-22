@@ -1,11 +1,12 @@
 import { CheckCircleOutlined, EditOutlined, SaveOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Flex, Form, Modal, Spin, Tabs, Tag, Typography } from 'antd';
+import { Alert, App, Button, Flex, Form, Modal, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
-import type { EndpointsApi, StoredEndpoint } from './api';
+import { ReadSpinner } from '../ReadSpinner';
 import { FieldControl } from './FieldControl';
-import { inboundAddress, optionsIn, type NodeIngress } from './inbound';
 import { RawOptions } from './RawOptions';
+import type { EndpointsApi, StoredEndpoint } from './api';
+import { inboundAddress, optionsIn, type NodeIngress } from './inbound';
 import { sameValue } from './same-value';
 import { checkOptions, shownFields, type Options, type Problem, type SettingsDescription, type SettingsField } from './settings';
 
@@ -157,7 +158,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     return <Alert showIcon type="error" title={`${path} could not be read`} description={failed} />;
   }
   if (stored === null) {
-    return <Spin aria-label={`Reading ${path}`} />;
+    return <ReadSpinner label={`Reading ${path}`} />;
   }
 
   const { file } = stored;
@@ -335,7 +336,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
       )}
       {saveFailure !== null && <Alert type="error" showIcon title="The file was not saved" description={saveFailure} />}
       {described.kind === 'reading' ? (
-        <Spin aria-label="Reading the component's description" />
+        <ReadSpinner label="Reading the component's description" />
       ) : settings === null || !settings.described ? (
         <Form layout="vertical">
           <RawOptions

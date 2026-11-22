@@ -166,6 +166,17 @@ async function open(flows: FlowsApi = fakeFlows(), endpoints?: EndpointsApi) {
 }
 
 describe('Flows', () => {
+  test('draws the file while the node is still describing steps and ingress', async () => {
+    let finishSteps!: (types: []) => void;
+    const steps = new Promise<[]>((resolve) => { finishSteps = resolve; });
+    const flows = fakeFlows(undefined, { steps: () => steps, ingress: () => new Promise(() => {}) });
+    await open(flows);
+    await expect.element(nodeOf('validate')).toBeVisible();
+    await expect.element(button('Edit')).toBeDisabled();
+    finishSteps([]);
+    await expect.element(button('Edit')).toBeEnabled();
+  });
+
   test('lists the flow files of the working folder, and a file that cannot be read says why', async () => {
     render(fakeFlows());
     await expect.element(button('invoice')).toBeVisible();

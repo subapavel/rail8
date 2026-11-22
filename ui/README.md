@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173`. Set `RAIL8_WORKSPACE` to the directory of packages to inspect or edit. Set `RAIL8_ADMIN_URL` to the node's admin origin (default `http://127.0.0.1:8081`) and `RAIL8_ADMIN_TOKEN` in the environment of the Vite server. Setting `RAIL8_READ_ONLY=true` makes the file editors read-only. The quickstart instructions cover starting a node. The production build produces static assets under `dist/`; serving those assets also requires the application's HTTP routes.
+Open `http://localhost:5173`. On Windows, run Vite in the same WSL distribution as the working folder to avoid reading each workspace directory across the Windows filesystem bridge. If another application uses the default port, run `RAIL8_UI_PORT=5175 npm run dev` and open `http://localhost:5175` in Windows. Set `RAIL8_WORKSPACE` to the directory of packages to inspect or edit. Set `RAIL8_ADMIN_URL` to the node's admin origin (default `http://127.0.0.1:8081`) and `RAIL8_ADMIN_TOKEN` in the environment of the Vite server. Setting `RAIL8_READ_ONLY=true` makes the file editors read-only. The quickstart instructions cover starting a node. The production build produces static assets under `dist/`; serving those assets also requires the application's HTTP routes.
 
 ## Presentation
 

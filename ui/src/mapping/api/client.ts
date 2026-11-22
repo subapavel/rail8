@@ -80,7 +80,7 @@ export interface ApiClient {
    * a 400.
    */
   createMapping(request: CreateMappingRequest): Promise<StoredMapping>;
-  getMapping(id: string): Promise<StoredMapping>;
+  getMapping(id: string, signal?: AbortSignal): Promise<StoredMapping>;
   /**
    * Saves on condition that the stored file still has `etag` (`If-Match`), and resolves to the canonical
    * model the service wrote. A file changed on disk rejects with a 409 `mapping-changed` problem.

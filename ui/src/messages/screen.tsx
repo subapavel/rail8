@@ -1,10 +1,8 @@
-import { lazy } from 'react';
 import { MailOutlined } from '@ant-design/icons';
 import type { Screen } from '../screens';
+import { MessageList } from './MessageList';
+import { MessageView } from './MessageView';
 import type { AdminApi } from './admin';
-
-const MessageList = lazy(() => import('./MessageList').then((module) => ({ default: module.MessageList })));
-const MessageView = lazy(() => import('./MessageView').then((module) => ({ default: module.MessageView })));
 
 /** The tab of one message: its id is `message:` and the message's id, its title the message's id. */
 export function messageTab(api: AdminApi, id: string): Screen {

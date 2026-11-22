@@ -5,6 +5,20 @@ const answer = (status: number, body: unknown, headers: Record<string, string> =
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
 describe('httpFlowsApi', () => {
+  it('passes cancellation of a closed flow screen to every outstanding read', async () => {
+    const send = vi.fn<typeof fetch>(async () => answer(200, { items: [] }, { etag: '"v1"' }));
+    const api = httpFlowsApi(send);
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const requests = [api.list(signal), api.read('demo/flows/order.yaml', signal), api.steps(signal), api.ingress(signal)];
+    controller.abort();
+    await Promise.all(requests);
+    expect(send).toHaveBeenCalledTimes(4);
+    for (const [, init] of send.mock.calls) {
+      expect(init?.signal).toBe(signal);
+    }
+  });
+
   it('reads a flow file with its ETag, its path encoded part by part', async () => {
     const send = vi.fn(async () => answer(200, { path: 'demo/flows/a b.yaml', text: 'x', editable: false, context: {} }, { etag: '"e1"' }));
     const stored = await httpFlowsApi(send).read('demo/flows/a b.yaml');

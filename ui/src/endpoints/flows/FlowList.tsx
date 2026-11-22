@@ -1,7 +1,8 @@
 import { PlusCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
-import { Alert, Button, Empty, Flex, Form, Input, Modal, Spin, Typography } from 'antd';
+import { Alert, Button, Empty, Flex, Form, Input, Modal, Typography } from 'antd';
 import { useCallback, useEffect, useId, useState } from 'react';
+import { ReadSpinner } from '../../ReadSpinner';
 import { FlowsError, type FlowList as Listed, type FlowsApi } from './api';
 import { edit } from './edit';
 
@@ -67,14 +68,13 @@ export function FlowList({ api, onOpen }: FlowListProps) {
   const ids = useId();
 
   useEffect(() => {
-    let current = true;
-    api.list().then(
-      (list) => current && setResult({ kind: 'read', list }),
-      (error: unknown) => current && setResult({ kind: 'failed', message: error instanceof Error ? error.message : String(error) }),
+    const controller = new AbortController();
+    const { signal } = controller;
+    api.list(signal).then(
+      (list) => !signal.aborted && setResult({ kind: 'read', list }),
+      (error: unknown) => !signal.aborted && setResult({ kind: 'failed', message: error instanceof Error ? error.message : String(error) }),
     );
-    return () => {
-      current = false;
-    };
+    return () => controller.abort();
   }, [api, asked]);
 
   // a new flow's file goes beside the first flow listed, else at the top of the working folder
@@ -125,7 +125,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
 
   let body;
   if (result.kind === 'reading') {
-    body = <Spin aria-label="Reading the working folder" />;
+    body = <ReadSpinner label="Reading the working folder" />;
   } else if (result.kind === 'failed') {
     body = <Alert showIcon type="error" title="The working folder could not be read" description={result.message} />;
   } else if (!result.list.configured) {

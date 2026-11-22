@@ -21,17 +21,17 @@ export interface StoredFlow {
 
 /** What the flow screens ask of the server. Every call rejects with an {@link FlowsError} when it is refused. */
 export interface FlowsApi {
-  list(): Promise<FlowList>;
-  read(path: string): Promise<StoredFlow>;
+  list(signal?: AbortSignal): Promise<FlowList>;
+  read(path: string, signal?: AbortSignal): Promise<StoredFlow>;
   /**
    * Writes `text` over the file, on condition that it is still at `etag`; a 412 refusal means it changed since. With
    * `etag` null it creates the file, and a 412 refusal means a file of that name exists.
    */
   save(path: string, text: string, etag: string | null): Promise<StoredFlow>;
   /** The step types of the node's modules and plugins, from its admin API, or why they could not be read. */
-  steps(): Promise<ServedSteps>;
+  steps(signal?: AbortSignal): Promise<ServedSteps>;
   /** Where the node takes requests, from its admin API, or undefined when it could not be asked. */
-  ingress(): Promise<FlowIngress | undefined>;
+  ingress(signal?: AbortSignal): Promise<FlowIngress | undefined>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer) and the error text it gave. */
@@ -81,26 +81,26 @@ export function httpFlowsApi(send: typeof fetch = (input, init) => fetch(input, 
   }
 
   return {
-    async list() {
-      return (await (await call('/files/flows')).json()) as FlowList;
+    async list(signal) {
+      return (await (await call('/files/flows', { signal })).json()) as FlowList;
     },
-    async read(path) {
-      return stored(await call(fileUrl(path)));
+    async read(path, signal) {
+      return stored(await call(fileUrl(path), { signal }));
     },
     async save(path, text, etag) {
       const precondition: Record<string, string> = etag === null ? { 'if-none-match': '*' } : { 'if-match': etag };
       return stored(await call(fileUrl(path), { method: 'PUT', headers: { 'content-type': 'application/json', ...precondition }, body: JSON.stringify({ text }) }));
     },
-    async steps() {
+    async steps(signal) {
       try {
-        return ((await (await call('/admin/steps')).json()) as { items: { type: string; configSchema: unknown }[] }).items;
+        return ((await (await call('/admin/steps', { signal })).json()) as { items: { type: string; configSchema: unknown }[] }).items;
       } catch (failed) {
         return { missing: failed instanceof Error ? failed.message : String(failed) };
       }
     },
-    async ingress() {
+    async ingress(signal) {
       try {
-        const { environment, httpOrigin, items } = (await (await call('/admin/components')).json()) as NodeComponents;
+        const { environment, httpOrigin, items } = (await (await call('/admin/components', { signal })).json()) as NodeComponents;
         const prefixes = Object.fromEntries(items.flatMap((c) => (c.httpPrefix === null ? [] : [[c.scheme, c.httpPrefix]])));
         return { environment, httpOrigin, prefixes };
       } catch {

@@ -38,13 +38,16 @@ The working folder `~/rail8-workspace` holds the packages as git repositories, e
 repository `demo`. The node mounts the folder read-only and deploys a commit of a repository in it, never the files
 beside the commit, so a change is deployed once it is committed. The folder must exist before the first `up`.
 
-Then start the UI in the same terminal, where `RAIL8_ADMIN_TOKEN` is exported; it runs until Ctrl+C:
+Start the UI in the terminal where `RAIL8_ADMIN_TOKEN` is exported. On Windows with the working folder in WSL,
+run Vite in that WSL distribution so opening an editor reads the files on the local Linux filesystem.
 
 ```sh
 cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
 ```
 
-Open **http://localhost:5173**. The UI has **Messages**, the list of the messages the node recorded, **Endpoints**, the
+Leave the terminal running and open **http://localhost:5173** in your browser. If that port is occupied,
+add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**.
+The UI has **Messages**, the list of the messages the node recorded, **Endpoints**, the
 settings form of each endpoint file in `RAIL8_WORKSPACE`, **Flows**, the picture of each flow file in it, and
 **Mappings**, the mapping studio. The UI sends its
 `/admin` requests to the node on `localhost:8081` and adds the token itself, so the browser never sees it.

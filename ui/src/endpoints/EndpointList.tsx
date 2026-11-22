@@ -1,7 +1,8 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
-import { Alert, Button, Empty, Flex, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { ReadSpinner } from '../ReadSpinner';
 import type { EndpointList as Listed, EndpointsApi } from './api';
 
 export interface EndpointListProps {
@@ -34,7 +35,7 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
 
   let body;
   if (result.kind === 'reading') {
-    body = <Spin aria-label="Reading the working folder" />;
+    body = <ReadSpinner label="Reading the working folder" />;
   } else if (result.kind === 'failed') {
     body = <Alert showIcon type="error" title="The working folder could not be read" description={result.message} />;
   } else if (!result.list.configured) {

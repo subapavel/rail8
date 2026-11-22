@@ -1,14 +1,15 @@
 import { CheckCircleOutlined, CloseOutlined, EditOutlined, ReloadOutlined, SaveOutlined, UndoOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Collapse, Flex, Form, Grid, Input, Menu, Modal, Select, Spin, Splitter, Tag, Typography } from 'antd';
 import { ReactFlowProvider } from '@xyflow/react';
+import { Alert, App, Button, Collapse, Flex, Form, Grid, Input, Menu, Modal, Select, Spin, Splitter, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DiscardDialog } from '../../DiscardDialog';
+import { ReadSpinner } from '../../ReadSpinner';
 import type { CloseGuard } from '../EndpointForm';
+import { FlowCanvas } from './FlowCanvas';
+import { FlowPanel, type PanelEdit } from './FlowPanel';
 import { FlowsError, type FlowsApi, type StoredFlow } from './api';
 import { edit, EditRefused, follow, placeOf, type Op } from './edit';
-import { FlowCanvas } from './FlowCanvas';
 import { readFlow } from './flowYaml';
-import { FlowPanel, type PanelEdit } from './FlowPanel';
 import { addProcess, addStep, callable, callOf, callsOf, deleteProcess, deleteStep, moveStep, moveToList, renameProcess, stepListsOf } from './ops';
 import { BUILT_IN } from './steps';
 import type { FlowIngress, FlowNode, FlowProblem, Path, ServedSteps } from './types';
@@ -31,7 +32,7 @@ export interface FlowPictureProps {
   guardClose?: (guard: CloseGuard | null) => void;
 }
 
-type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; stored: StoredFlow; steps: ServedSteps; ingress: FlowIngress | undefined };
+type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; stored: StoredFlow };
 
 /**
  * The working copy while the flow is edited: its text, the texts before its changes (the last at the end), and the key
@@ -65,6 +66,8 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
  */
 export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, createEndpoint, guardClose }: FlowPictureProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
+  const [steps, setSteps] = useState<ServedSteps>();
+  const [ingress, setIngress] = useState<FlowIngress>();
   const [asked, setAsked] = useState(0);
   const [selected, setSelected] = useState<Path | null>(null);
   const [work, setWork] = useState<Work | null>(null);
@@ -92,14 +95,21 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
 
   useEffect(() => {
-    let current = true;
-    Promise.all([api.read(path), api.steps(), api.ingress()]).then(
-      ([stored, steps, ingress]) => current && setResult({ kind: 'read', stored, steps, ingress }),
-      (error: unknown) => current && setResult({ kind: 'failed', message: error instanceof Error ? error.message : String(error) }),
+    const controller = new AbortController();
+    const { signal } = controller;
+    api.read(path, signal).then(
+      (stored) => !signal.aborted && setResult({ kind: 'read', stored }),
+      (error: unknown) => !signal.aborted && setResult({ kind: 'failed', message: messageOf(error) }),
     );
-    return () => {
-      current = false;
-    };
+    api.steps(signal).then(
+      (types) => !signal.aborted && setSteps(types),
+      (error: unknown) => !signal.aborted && setSteps({ missing: messageOf(error) }),
+    );
+    api.ingress(signal).then(
+      (address) => !signal.aborted && setIngress(address),
+      () => !signal.aborted && setIngress(undefined),
+    );
+    return () => controller.abort();
   }, [api, path, asked]);
 
   const stored = result.kind === 'read' ? result.stored : null;
@@ -107,9 +117,9 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const drawn = useMemo(() => {
     if (result.kind !== 'read') return null;
     const read = readFlow(text);
-    const context = { ...result.stored.file.context, steps: result.steps, ...(result.ingress === undefined ? {} : { ingress: result.ingress }) };
+    const context = { ...result.stored.file.context, steps, ingress };
     return { view: view(text, context), value: read.kind === 'flow' ? read.value : {} };
-  }, [result, text]);
+  }, [result, text, steps, ingress]);
 
   const unsaved = work !== null && stored !== null && work.text !== stored.file.text;
 
@@ -127,7 +137,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   }, [guardClose, unsaved]);
 
   if (result.kind === 'reading') {
-    return <Spin aria-label="Reading the flow file" />;
+    return <ReadSpinner label="Reading the flow file" />;
   }
   if (result.kind === 'failed' || drawn === null) {
     return <Alert type="error" showIcon title="The flow file could not be read" description={result.kind === 'failed' ? result.message : ''} />;
@@ -257,7 +267,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   // the types a step can be added of: the built-in ones, then those the node serves
-  const served = Array.isArray(result.steps) ? result.steps.map((s) => s.type).filter((t) => !Object.hasOwn(BUILT_IN, t)) : [];
+  const served = Array.isArray(steps) ? steps.map((s) => s.type).filter((t) => !Object.hasOwn(BUILT_IN, t)) : [];
   const addable = [...Object.keys(BUILT_IN).map((type) => ({ type, from: 'Built in' })), ...[...served].sort().map((type) => ({ type, from: 'Served by the node' }))];
 
   const markInvalid = (key: string, bad: boolean) =>
@@ -326,7 +336,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     try {
       const next = await api.save(path, work.text, result.stored.etag);
       // editing goes on from the text saved, and undo still goes back through it
-      setResult({ kind: 'read', stored: next, steps: result.steps, ingress: result.ingress });
+      setResult({ kind: 'read', stored: next });
       notification.success({
         key: path,
         title: `Flow ${typeof value.id === 'string' ? value.id : path} saved`,
@@ -379,7 +389,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
                 Refresh
               </Button>
               {canEdit && (
-                <Button type="primary" icon={<EditOutlined aria-hidden />} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
+                <Button type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
                   Edit
                 </Button>
               )}

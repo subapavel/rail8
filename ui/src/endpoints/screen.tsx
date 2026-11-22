@@ -1,14 +1,11 @@
-import { lazy } from 'react';
 import { ApiOutlined, ApartmentOutlined } from '@ant-design/icons';
 import type { Screen } from '../screens';
+import { EndpointForm, type CloseGuard } from './EndpointForm';
+import { EndpointList } from './EndpointList';
 import type { EndpointsApi } from './api';
-import type { CloseGuard } from './EndpointForm';
+import { FlowList } from './flows/FlowList';
+import { FlowPicture } from './flows/FlowPicture';
 import type { FlowsApi } from './flows/api';
-
-const EndpointForm = lazy(() => import('./EndpointForm').then((module) => ({ default: module.EndpointForm })));
-const EndpointList = lazy(() => import('./EndpointList').then((module) => ({ default: module.EndpointList })));
-const FlowList = lazy(() => import('./flows/FlowList').then((module) => ({ default: module.FlowList })));
-const FlowPicture = lazy(() => import('./flows/FlowPicture').then((module) => ({ default: module.FlowPicture })));
 
 /**
  * The tab of one endpoint file: its id is `endpoint:` and the file's path, its title the endpoint's id. Closing it while

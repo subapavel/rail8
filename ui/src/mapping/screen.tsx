@@ -1,13 +1,11 @@
-import { lazy } from 'react';
 import { PartitionOutlined } from '@ant-design/icons';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Screen } from '../screens';
 import type { ApiClient } from './api/client';
-import type { BrowserStateStore } from './studio/browser-state/browser-state';
+import { MappingList } from './list/MappingList';
+import { Studio } from './studio/Studio';
 import type { CloseGuard } from './studio/StudioFrame';
-
-const MappingList = lazy(() => import('./list/MappingList').then((module) => ({ default: module.MappingList })));
-const Studio = lazy(() => import('./studio/Studio').then((module) => ({ default: module.Studio })));
+import type { BrowserStateStore } from './studio/browser-state/browser-state';
 
 export interface MappingTabOptions {
   /** Opens the mapping in edit mode on the Signature tab, as Create does. */

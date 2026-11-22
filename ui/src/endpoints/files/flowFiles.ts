@@ -57,8 +57,9 @@ interface Endpoint {
 }
 
 /** The working folder as one walk reads it: its flows, its endpoints, the folder of each package, and what could not be read. */
-async function survey(root: string) {
-  const { files, truncated } = await walk(root, isYaml);
+async function survey(root: string, signal?: AbortSignal) {
+  const { files, truncated } = await walk(root, isYaml, signal);
+  signal?.throwIfAborted();
   const packages = new Set(files.filter((f) => f.path === 'package.yaml' || f.path.endsWith('/package.yaml')).map((f) => folderOf(f.path)));
   const packageOf = (path: string) => {
     for (let folder = folderOf(path); ; folder = folderOf(folder)) {
@@ -125,20 +126,20 @@ export function flowFiles(options: FlowFilesOptions) {
     return realpath(options.workspace);
   };
 
-  const list = async () => {
+  const list = async (signal: AbortSignal) => {
     if (options.workspace === undefined) return { configured: false, editable: false, items: [], truncated: false };
-    const { flows, truncated } = await survey(await rootOf());
+    const { flows, truncated } = await survey(await rootOf(), signal);
     return { configured: true, editable: options.editable, truncated, items: flows.map((f) => f.item) };
   };
 
-  const read = async (path: string) => {
+  const read = async (path: string, signal?: AbortSignal) => {
     const root = await rootOf();
     const file = await locate(root, path, isYaml, 'flow file');
-    const bytes = await readFile(file);
+    const bytes = await readFile(file, { signal });
     const text = bytes.toString('utf8');
     const flow = readFlow(text);
     if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, `${path} is not a flow file`);
-    const { flows, endpoints, unreadable, truncated, packageOf } = await survey(root);
+    const { flows, endpoints, unreadable, truncated, packageOf } = await survey(root, signal);
     const pkg = packageOf(path);
     const served = (f: (typeof flows)[number]) =>
       endpoints.find((e) => e.pkg === f.pkg && e.entry.id === f.from && e.entry.scheme === 'direct' && e.entry.direction === 'in')?.entry;
@@ -213,10 +214,14 @@ export function flowFiles(options: FlowFilesOptions) {
     }
     const path = url.pathname.slice(PREFIX.length + 1);
     const answer = async () => {
-      if (path === '' && req.method === 'GET') send(res, 200, await list());
-      else if (path !== '' && req.method === 'GET') {
-        const { file, etag } = await read(path);
-        send(res, 200, file, etag);
+      if (req.method === 'GET') {
+        const controller = new AbortController();
+        res.once('close', () => controller.abort());
+        if (path === '') send(res, 200, await list(controller.signal));
+        else {
+          const { file, etag } = await read(path, controller.signal);
+          send(res, 200, file, etag);
+        }
       } else if (path !== '' && req.method === 'PUT') {
         const done = saves.then(() => save(req, path));
         saves = done.catch(() => undefined);
@@ -224,6 +229,8 @@ export function flowFiles(options: FlowFilesOptions) {
         send(res, created ? 201 : 200, file, etag);
       } else send(res, 405, { error: 'the flow files take GET, and PUT of one file' });
     };
-    answer().catch((error: unknown) => sendFailure(res, error));
+    answer().catch((error: unknown) => {
+      if (!res.destroyed) sendFailure(res, error);
+    });
   };
 }
