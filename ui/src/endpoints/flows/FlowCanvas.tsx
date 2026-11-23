@@ -1,7 +1,7 @@
 import {
-  AimOutlined, ApiOutlined, ApartmentOutlined, BranchesOutlined, CodeOutlined, DeleteOutlined, DownOutlined, EllipsisOutlined,
+  AimOutlined, ApiOutlined, ApartmentOutlined, BranchesOutlined, CodeOutlined, DeleteOutlined, DownOutlined, EditOutlined, EllipsisOutlined,
   ExclamationCircleOutlined, ExportOutlined, FileProtectOutlined, FilterOutlined, FlagOutlined, ImportOutlined, KeyOutlined,
-  LockOutlined, PartitionOutlined, PlusOutlined, RightOutlined, StopOutlined, SwapOutlined, WarningOutlined, ZoomInOutlined, ZoomOutOutlined,
+  LockOutlined, PartitionOutlined, PlusCircleOutlined, PlusOutlined, RightOutlined, StopOutlined, SwapOutlined, WarningOutlined, ZoomInOutlined, ZoomOutOutlined,
 } from '@ant-design/icons';
 import {
   Background, BaseEdge, EdgeLabelRenderer, getBezierPath, getViewportForBounds, Handle, MarkerType, NodeResizeControl, Panel,
@@ -32,6 +32,8 @@ export interface FlowCanvasProps {
   inspectSequence?: number;
   inspectTarget?: string;
   layoutRevision?: number;
+  /** Marks steps by the pointer of their path: added ones with the success token, changed or moved ones with the warning token. */
+  marks?: ReadonlyMap<string, 'added' | 'changed'>;
 }
 
 export const selectionOf = (node: FlowNode) => node.kind === 'lane' ? node.id : pointer(node.path);
@@ -43,7 +45,7 @@ const icons: Record<string, typeof CodeOutlined> = {
 };
 
 type Station = Node<{
-  item: CanvasItem; vertical: boolean; active: boolean; problems: FlowProblem[]; select: () => void;
+  item: CanvasItem; vertical: boolean; active: boolean; problems: FlowProblem[]; select: () => void; change?: 'added' | 'changed';
 }, 'station'>;
 type Frame = Node<{
   title: string; description: string; count: number; folded: boolean; vertical: boolean; size: Size; minimum: Size;
@@ -94,7 +96,7 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<Frame>) {
 });
 
 const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
-  const { item, active, vertical, problems, select } = data;
+  const { item, active, vertical, problems, select, change } = data;
   const original = item.original!;
   const system = item.role === 'sender' || item.role === 'receiver';
   const error = problems.some(p => !p.warning);
@@ -104,6 +106,8 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
     {problems.length > 0 && (error ? <ExclamationCircleOutlined className="error" title={problems.map(p => p.message).join('\n')} />
       : <WarningOutlined className="warning" title={problems.map(p => p.message).join('\n')} />)}
     {original.locked && <LockOutlined title={original.locked} />}
+    {change === 'added' && <PlusCircleOutlined className="added" title="Added" />}
+    {change === 'changed' && <EditOutlined className="changed" title="Changed" />}
   </span>;
   if (item.role === 'group') return <div className="flow-inner-frame"><Handles vertical={vertical} entry={item.entry} />
     {original.kind === 'lane' ? <Button type="text" size="small" onClick={select}>{item.label}</Button> : <span>{item.label}</span>}
@@ -117,7 +121,7 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
       <strong title={item.label}>{item.label}</strong>
       {item.detail && <small title={item.detail}>{item.detail}</small>}
       {marks}
-    </Button> : <Button className="flow-tile" data-type={type} aria-pressed={active} aria-label={`Inspect ${item.label}`}
+    </Button> : <Button className="flow-tile" data-type={type} data-change={change} aria-pressed={active} aria-label={`Inspect ${item.label}`}
       title={[item.label, original.detail, ...(original.rows ?? [])].filter(Boolean).join('\n')} onClick={select}>
       <Glyph aria-hidden /><span className="flow-caption">{item.label}</span>{marks}
     </Button>}
@@ -190,8 +194,11 @@ function Camera({ fit, manual }: { fit: () => void; manual: () => void }) {
   </Panel>;
 }
 
-/** Displays the semantic graph. Fold, size, camera, station positions and simulation markers are local to the canvas. */
-export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlowSelect, onRangeChange, title, description, direction, inspectSequence = 0, inspectTarget, layoutRevision = 0 }: FlowCanvasProps) {
+/**
+ * Displays the semantic graph. Fold, size, camera, station positions and simulation markers are local to the canvas;
+ * the markers are offered only with `onRangeChange`.
+ */
+export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlowSelect, onRangeChange, title, description, direction, inspectSequence = 0, inspectTarget, layoutRevision = 0, marks }: FlowCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 0, height: 0, visible: false });
   const [ready, setReady] = useState(false);
@@ -250,14 +257,15 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
     ] : undefined;
     const at = { x: item.x - (parent ? parent.x : 0), y: item.y - (parent ? parent.y : 0) };
     const problems = problemsById.get(original.id)!;
+    const change = item.role === 'station' && original.kind === 'step' ? marks?.get(pointer(original.path)) : undefined;
     return { id: item.id, type: 'station', width: item.width, height: item.height, position: at, parentId: item.parentId, extent,
       draggable: item.role === 'station' && original.kind === 'step', zIndex: item.role === 'group' ? 0 : 2,
-      data: { item, vertical, active: item.id === activeId, problems, select: () => {
+      data: { item, vertical, active: item.id === activeId, problems, ...(change === undefined ? {} : { change }), select: () => {
         setClicked({ id: item.id, path: selectionOf(original), sequence: inspectSequence });
         onSelect(original);
       } },
     };
-  }), [graph, title, description, view, folded, inspectSequence, onFlowSelect, axis, byId, vertical, problemsById, activeId, onSelect]);
+  }), [graph, title, description, view, folded, inspectSequence, onFlowSelect, axis, byId, vertical, problemsById, activeId, onSelect, marks]);
   const nodes = useMemo(() => positions ? automaticNodes.map(node => {
     const p = positions[node.id];
     if (!p || !Array.isArray(node.extent)) return node;
@@ -277,7 +285,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
       if (at) places.add(pointer(at));
       const original = target.original;
       const remove = onRemove && target.role === 'station' && original?.kind === 'step' && !original.locked ? () => onRemove(original) : undefined;
-      const mark = at ? (boundary: Boundary) => setMarkers(previous => ({
+      const mark = at && onRangeChange ? (boundary: Boundary) => setMarkers(previous => ({
         ...previous, structure, [boundary]: previous?.[boundary] === edge.id ? undefined : edge.id,
       })) : undefined;
       return {
@@ -288,7 +296,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
         data: { edge, target, vertical, insert, remove, starts: start?.id === edge.id, ends: end?.id === edge.id, mark },
       };
     });
-  }, [graph, byId, onInsert, onRemove, start, end, structure, vertical]);
+  }, [graph, byId, onInsert, onRemove, onRangeChange, start, end, structure, vertical]);
   const moveNodes = (changes: NodeChange<CanvasNode>[]) => {
     const changesAt: Record<string, Point> = {};
     for (const c of changes) if (c.type === 'position' && c.position) changesAt[c.id] = c.position;

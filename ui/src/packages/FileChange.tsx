@@ -1,5 +1,5 @@
 import { Alert, Typography } from 'antd';
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { ArtifactKinds, type Side } from '../artifacts';
 import { ReadSpinner } from '../ReadSpinner';
 import { PackagesError, type Change, type FileVersion, type PackagesApi } from './api';
@@ -75,6 +75,14 @@ export function FileChange({ api, repository, change, before, after, onStale }: 
       current = false;
     };
   }, [api, repository, change, before, after, onStale]);
+  // the sides are made once for each read, so that a kind's drawing reads its context once
+  const sides = useMemo(() => {
+    if (read.kind !== 'read') return null;
+    const textOf = (v: FileVersion | null) => (v !== null && 'text' in v ? v.text : null);
+    const b = textOf(read.before);
+    const a = textOf(read.after);
+    return { before: b === null || before === null ? null : sideOf(api, repository, before, b), after: a === null ? null : sideOf(api, repository, after, a) };
+  }, [read, api, repository, before, after]);
 
   if (read.kind === 'large') return <Typography.Text type="secondary">too large to compare</Typography.Text>;
   if (read.kind === 'reading') return <ReadSpinner label={`Reading ${change.path}`} />;
@@ -89,14 +97,6 @@ export function FileChange({ api, repository, change, before, after, onStale }: 
     );
   }
   const kind = kinds.get(change.kind);
-  if (kind !== undefined) {
-    return (
-      <kind.Change
-        path={change.path}
-        before={b === null || before === null ? null : sideOf(api, repository, before, b.text)}
-        after={a === null ? null : sideOf(api, repository, after, a.text)}
-      />
-    );
-  }
+  if (kind !== undefined && sides !== null) return <kind.Change path={change.path} before={sides.before} after={sides.after} />;
   return <LineDiff before={b?.text ?? ''} after={a?.text ?? ''} />;
 }

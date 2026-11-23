@@ -176,3 +176,14 @@
     flex-basis: 100%;
   }
 }
+
+.rail8-flow-change {
+  flex: 1;
+  min-width: 0;
+  height: 360px;
+}
+
+.rail8-flow-removed {
+  flex: none;
+  width: 260px;
+}
