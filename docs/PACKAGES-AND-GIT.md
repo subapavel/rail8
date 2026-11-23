@@ -535,7 +535,7 @@ always checks first:
 The check first is the screen's rule. The node's own order is the guarantee: every problem of a deploy is answered
 before anything stops. A pool runs one deploy at a time, so the window between the second read and the deploy is the
 only one left. It closes once the node takes the expected state with a deploy ("Every node of the pool"): the git half
-then sends `running` with the deploy, and the node compares it as it applies.
+then sends that state with the deploy, and the node compares it as it applies.
 
 In a deployed environment, the node takes only a commit reachable from its `RAIL8_GIT_REF` on the git host. The check
 fetches the commit, proves that, and refuses it before anything changes.
