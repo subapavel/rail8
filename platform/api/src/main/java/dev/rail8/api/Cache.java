@@ -7,7 +7,7 @@ import java.util.Objects;
 /**
  * A cache of strings a step's code keeps between messages: a token fetched in an unusual way, a key derived from a
  * secret, anything the step can load again. Which keys a step sees is set by the node ({@link Services#cache()}). What is
- * kept may vanish at any time: at a restart, under the node's memory limit, on another node. So a value here is always
+ * kept may vanish at any time: at a restart, under the cache's limits, on another node. So a value here is always
  * one the step can load again, and never state whose loss loses a message.
  *
  * <p>Both methods block, so they run only on a virtual thread, such as the message's thread a step runs on. On any other
@@ -36,6 +36,11 @@ public interface Cache {
      * the exception as thrown (a checked one too, undeclared, as {@code Future.await()} does), and each caller that waited
      * gets an {@link IllegalStateException} naming the key, with that exception as its cause. A loader that returns
      * {@code null}, or asks for its own key, fails the same way with an {@link IllegalStateException}.
+     *
+     * <p>Where the nodes share the cache, a key is also loaded once at a time across them. A caller whose key another node
+     * is loading waits for that load, for a bounded time, and then fails with an {@link IllegalStateException} naming the
+     * key. When that load fails, the caller gets an {@link IllegalStateException} naming the key, without a cause; when it
+     * keeps nothing, is removed, or its node stops, the caller loads the key itself.
      *
      * @throws IllegalArgumentException naming the key when it is not a key
      * @throws IllegalStateException    off a virtual thread, and as above

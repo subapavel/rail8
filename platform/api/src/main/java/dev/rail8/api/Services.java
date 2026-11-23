@@ -30,8 +30,9 @@ public interface Services {
 
     /**
      * The cache of the step. Its keys are shared by every step of the same type in the flows of the same package and
-     * met by no other: a key the steps of another package or another type use is another entry. A node keeps it in
-     * memory, within a node-wide limit; entries stay across a redeploy of the package.
+     * met by no other: a key the steps of another package or another type use is another entry. A node with Valkey shares it
+     * with the other nodes there, within a limit per package; a node without keeps it in its memory, within a node-wide
+     * limit. Entries stay across a redeploy of the package.
      */
     Cache cache();
 }
