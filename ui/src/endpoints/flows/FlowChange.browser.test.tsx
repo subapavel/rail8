@@ -64,12 +64,13 @@ afterEach(() => {
 
 describe('the readable change of a flow', () => {
   test('draws the newer version with its added and changed steps marked, and lists the removed steps beside it', async () => {
-    const before = flow('  - type: validate\n    name: check\n    required: /a\n  - type: jq\n    name: normalize\n  - type: xslt\n    name: shape\n  - type: to\n    name: send\n    endpoint: partner\n');
-    const after = flow('  - type: validate\n    name: check\n    required: /b\n  - type: jq\n    name: normalize\n  - type: filter\n    name: only-big\n    when: /big\n  - type: to\n    name: send\n    endpoint: partner\n');
+    const before = flow('  - type: validate\n    name: check\n    required: /a\n  - type: jq\n    name: normalize\n  - type: xslt\n    name: shape\n  - type: jq\n    name: tidy\n  - type: to\n    name: send\n    endpoint: partner\n');
+    const after = flow('  - type: jq\n    name: tidy\n  - type: validate\n    name: check\n    required: /b\n  - type: jq\n    name: normalize\n  - type: filter\n    name: only-big\n    when: /big\n  - type: to\n    name: send\n    endpoint: partner\n');
     draw(side(COMMIT, before, ENDPOINTS), side('work', after, ENDPOINTS));
 
     await expect.element(tile('only-big')).toHaveAttribute('data-change', 'added');
     await expect.element(tile('check')).toHaveAttribute('data-change', 'changed');
+    await expect.element(tile('tidy')).toHaveAttribute('data-change', 'changed');
     await expect.element(tile('normalize')).not.toHaveAttribute('data-change');
     await expect.element(tile('shape')).not.toBeInTheDocument();
     await expect.element(page.getByRole('list', { name: 'Removed steps' })).toHaveTextContent('shape in steps, after normalize');
@@ -77,7 +78,18 @@ describe('the readable change of a flow', () => {
     await expect.element(lines().getByRole('row').filter({ hasText: 'check' })).toHaveTextContent('Changedcheck in stepsrequired: "/a" → "/b"');
     await expect.element(lines().getByRole('row').filter({ hasText: 'only-big' })).toHaveTextContent('Addedonly-big in steps');
     await expect.element(lines().getByRole('row').filter({ hasText: 'shape' })).toHaveTextContent('Removedshape in steps, after normalize');
+    await expect.element(lines().getByRole('row').filter({ hasText: 'tidy' })).toHaveTextContent('Movedtidy in steps');
     await expect.element(lines().getByRole('row').filter({ hasText: 'shape' }).getByRole('button')).not.toBeInTheDocument();
+  });
+
+  test('offers no simulation markers: the picture is read-only', async () => {
+    const text = flow('  - type: jq\n    name: normalize\n  - type: filter\n    name: only-big\n    when: /big\n');
+    draw(side(COMMIT, flow('  - type: jq\n    name: normalize\n')), side('work', text));
+
+    const actions = page.getByRole('button', { name: 'Actions before only-big', exact: true });
+    await expect.element(tile('only-big')).toHaveAttribute('data-change', 'added');
+    await expect.element(actions).not.toBeInTheDocument();
+    await expect.element(page.getByRole('menuitem', { name: 'Set simulation start here' })).not.toBeInTheDocument();
   });
 
   test('selects a step in the picture when its line in the list of changes is chosen', async () => {
