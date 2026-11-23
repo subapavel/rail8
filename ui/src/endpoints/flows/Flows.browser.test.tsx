@@ -385,6 +385,21 @@ describe('Editing a flow', () => {
     await expect.element(button('Move down')).toBeDisabled();
   });
 
+  test('Save and close with a field that is not valid saves nothing and keeps the tab open, saying why', async () => {
+    const flows = fakeFlows(undefined, { steps: vi.fn(async () => ({ missing: 'the server does not answer' })) });
+    await open(flows);
+    await button('Edit').click();
+    await nodeOf('route').click();
+    await button('Move up').click();
+    await nodeOf('validate').click();
+    await page.getByRole('textbox', { name: 'Settings', exact: true }).fill('{ not json');
+    await button('Close invoice').click();
+    await button('Save and close').click();
+    await expect.element(text('Some fields are not valid. Correct them, then save.')).toBeVisible();
+    await expect.element(page.getByRole('tab', { name: 'invoice', exact: true })).toHaveAttribute('aria-selected', 'true');
+    expect(flows.save).not.toHaveBeenCalled();
+  });
+
   test('a field holding what cannot become a value blocks Save until its form is gone', async () => {
     await open(fakeFlows(undefined, { steps: vi.fn(async () => ({ missing: 'the server does not answer' })) }));
     await button('Edit').click();
