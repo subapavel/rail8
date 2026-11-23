@@ -1,0 +1,299 @@
+# Differential cases of sub/2, sub/3, gsub/2 and gsub/3: no match, one and several matches, the flags g, i, x and n,
+# named captures in the replacement, a group that did not match, empty matches and an empty input, a replacement that
+# emits several results, none or raises, non-ASCII and astral characters, and non-string inputs, regexes, replacements
+# and flags. Format: oracle/src/main/java/dev/rail8/jq/oracle/diff/DiffCase.java. Expected outputs live in
+# regex-sub.rec, written by scripts/oracle-record.sh only. Ids are immutable. Every case uses -c.
+
+case regex-sub/no-match
+arg -c
+filter sub("x"; "y")
+stdin "abc"\n
+end
+
+case regex-sub/one-match
+arg -c
+filter sub("b"; "y")
+stdin "abc"\n
+end
+
+case regex-sub/several-first-only
+arg -c
+filter sub("a"; "y")
+stdin "aaa"\n
+end
+
+case regex-sub/gsub-several
+arg -c
+filter gsub("a"; "y")
+stdin "banana"\n
+end
+
+case regex-sub/gsub-no-match
+arg -c
+filter gsub("x"; "y")
+stdin "abc"\n
+end
+
+case regex-sub/sub-flag-g
+arg -c
+filter sub("a"; "y"; "g")
+stdin "banana"\n
+end
+
+case regex-sub/sub3-flag-i
+arg -c
+filter sub("A"; "y"; "i")
+stdin "banana"\n
+end
+
+case regex-sub/gsub3-flag-i
+arg -c
+filter gsub("A"; "y"; "i")
+stdin "banana"\n
+end
+
+case regex-sub/flag-x
+arg -c
+filter sub("a b # c\\n"; "y"; "x")
+stdin "zab"\n
+end
+
+case regex-sub/gsub-flag-x
+arg -c
+filter gsub("a  b"; "y"; "x")
+stdin "abab"\n
+end
+
+case regex-sub/flag-n
+arg -c
+filter sub("a.b"; "y"; "n")
+stdin "a\\nb"\n
+end
+
+case regex-sub/flag-n-not-given
+arg -c
+filter sub("a.b"; "y")
+stdin "a\\nb"\n
+end
+
+case regex-sub/flag-gi
+arg -c
+filter gsub("A"; "y"; "gi")
+stdin "aAa"\n
+end
+
+case regex-sub/named-capture
+arg -c
+filter sub("(?<x>[a-z]+)-(?<y>[0-9]+)"; "\\(.y)-\\(.x)")
+stdin "abc-12"\n
+end
+
+case regex-sub/gsub-named-capture
+arg -c
+filter gsub("(?<d>[0-9])"; "<\\(.d)>")
+stdin "a1b22"\n
+end
+
+case regex-sub/optional-group-null
+arg -c
+filter sub("(?<a>x)?b"; "[\\(.a)]")
+stdin "abc"\n
+end
+
+case regex-sub/optional-group-null-gsub
+arg -c
+filter gsub("(?<a>x)?b"; "[\\(.a)]")
+stdin "abcb"\n
+end
+
+case regex-sub/empty-match-sub
+arg -c
+filter sub(""; "-")
+stdin "abc"\n
+end
+
+case regex-sub/empty-match-gsub
+arg -c
+filter gsub(""; "-")
+stdin "abc"\n
+end
+
+case regex-sub/empty-match-star
+arg -c
+filter gsub("x*"; "-")
+stdin "abxc"\n
+end
+
+case regex-sub/empty-input-sub
+arg -c
+filter sub(""; "y")
+stdin ""\n
+end
+
+case regex-sub/empty-input-gsub
+arg -c
+filter gsub(""; "y")
+stdin ""\n
+end
+
+case regex-sub/empty-input-nomatch
+arg -c
+filter sub("a"; "y")
+stdin ""\n
+end
+
+case regex-sub/emit-several-sub
+arg -c
+filter [sub("a"; "x", "y")]
+stdin "abc"\n
+end
+
+case regex-sub/emit-several-gsub
+arg -c
+filter [gsub("a"; "x", "y")]
+stdin "aba"\n
+end
+
+case regex-sub/emit-several-two-matches
+arg -c
+filter [gsub("[ab]"; "1", "2")]
+stdin "ab"\n
+end
+
+case regex-sub/emit-none-sub
+arg -c
+filter [sub("a"; empty)]
+stdin "abc"\n
+end
+
+case regex-sub/emit-none-gsub
+arg -c
+filter [gsub("a"; empty)]
+stdin "aba"\n
+end
+
+case regex-sub/replacement-raises
+arg -c
+filter try sub("a"; error("boom")) catch .
+stdin "abc"\n
+end
+
+case regex-sub/replacement-raises-gsub
+arg -c
+filter try gsub("a"; error("boom")) catch .
+stdin "aba"\n
+end
+
+case regex-sub/replacement-raises-no-match
+arg -c
+filter try sub("x"; error("boom")) catch .
+stdin "abc"\n
+end
+
+case regex-sub/non-ascii
+arg -c
+filter gsub("é"; "e")
+stdin "éaé"\n
+end
+
+case regex-sub/non-ascii-class
+arg -c
+filter gsub("[à-ÿ]"; "_")
+stdin "aéb€ü"\n
+end
+
+case regex-sub/astral
+arg -c
+filter gsub("😀"; "x")
+stdin "a😀b😀"\n
+end
+
+case regex-sub/astral-dot
+arg -c
+filter gsub("."; "x")
+stdin "a😀b"\n
+end
+
+case regex-sub/astral-replacement
+arg -c
+filter gsub("a"; "😀")
+stdin "aba"\n
+end
+
+case regex-sub/astral-empty-match
+arg -c
+filter gsub(""; "-")
+stdin "a😀"\n
+end
+
+case regex-sub/astral-capture
+arg -c
+filter sub("(?<c>.)$"; "<\\(.c)>")
+stdin "x😀"\n
+end
+
+case regex-sub/input-number
+arg -c
+filter try sub("a"; "b") catch .
+stdin 1\n
+end
+
+case regex-sub/input-null
+arg -c
+filter try sub("a"; "b") catch .
+stdin null\n
+end
+
+case regex-sub/input-array
+arg -c
+filter try gsub("a"; "b") catch .
+stdin ["a"]\n
+end
+
+case regex-sub/regex-number
+arg -c
+filter try sub(1; "b") catch .
+stdin "a1"\n
+end
+
+case regex-sub/regex-null
+arg -c
+filter try gsub(null; "b") catch .
+stdin "a"\n
+end
+
+case regex-sub/replacement-number
+arg -c
+filter try sub("a"; 1) catch .
+stdin "abc"\n
+end
+
+case regex-sub/replacement-null
+arg -c
+filter try gsub("a"; null) catch .
+stdin "abc"\n
+end
+
+case regex-sub/replacement-object
+arg -c
+filter try sub("a"; {}) catch .
+stdin "abc"\n
+end
+
+case regex-sub/flags-number
+arg -c
+filter try sub("a"; "b"; 1) catch .
+stdin "abc"\n
+end
+
+case regex-sub/flags-invalid
+arg -c
+filter try sub("a"; "b"; "q") catch .
+stdin "abc"\n
+end
+
+case regex-sub/regex-invalid
+arg -c
+filter try sub("("; "b") catch .
+stdin "abc"\n
+end
