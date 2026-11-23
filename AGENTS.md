@@ -11,7 +11,9 @@ change touches. Everything in the repository is in English.
 - Think first. State your assumptions; when a requirement is unclear, ask before you code.
 - Simplicity: the least code that solves the task. No speculative features, options or layers.
 - Surgical changes: touch only what the task needs; leave unrelated code, comments and style alone.
-- Verifiable goals: turn the task into a test that fails first, then make it pass.
+- Verifiable goals: turn the task into a test that fails first, then make it pass. Before the review,
+  break the code each new test covers (delete a line, flip a condition), see that test go red, restore
+  the code, and name each break in the pull request.
 - Comments and docs are for people: what the code does, its inputs, its outputs. Each one stands on
   its own, with no task ids, decision ids or pointers to other files.
 - UI: use Ant Design 6 components and design tokens, ProComponents v3 for enterprise tables, and React Flow for graphical editors. Consult the official Ant Design skill and MCP server.
