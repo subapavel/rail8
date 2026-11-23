@@ -202,9 +202,12 @@ function HistoryPane({ api, repository, head, host, now }: { api: PackagesApi; r
   const [shown, setShown] = useState<{ commits: Commit[]; next: string | null; failure: string | null; read: boolean }>({ commits: [], next: null, failure: null, read: false });
   const [more, setMore] = useState(false);
   const failed = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  /** Counts the reads of the first page, so that an older page asked for before the latest one is dropped. */
+  const reads = useRef(0);
 
   useEffect(() => {
     let current = true;
+    reads.current++;
     api.log(repository).then(
       (page) => current && setShown({ commits: page.items, next: page.next, failure: null, read: true }),
       (error: unknown) => current && setShown((s) => ({ ...s, failure: failed(error), read: true })),
@@ -214,10 +217,11 @@ function HistoryPane({ api, repository, head, host, now }: { api: PackagesApi; r
     };
   }, [api, repository, head]);
   const older = (before: string) => {
+    const read = reads.current;
     setMore(true);
     api.log(repository, { before }).then(
-      (page) => setShown((s) => ({ ...s, commits: [...s.commits, ...page.items], next: page.next })),
-      (error: unknown) => setShown((s) => ({ ...s, failure: failed(error) })),
+      (page) => read === reads.current && setShown((s) => ({ ...s, commits: [...s.commits, ...page.items], next: page.next })),
+      (error: unknown) => read === reads.current && setShown((s) => ({ ...s, failure: failed(error) })),
     ).finally(() => setMore(false));
   };
   const { commits, next, failure, read } = shown;

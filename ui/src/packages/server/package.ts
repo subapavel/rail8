@@ -69,17 +69,20 @@ async function streamedTagOf(file: string): Promise<string> {
   return `"sha256-${hash.digest('hex')}"`;
 }
 
+/** Whether the real path `real` lies in the clone at `clone` outside its `.git` folder, in any letter case. */
+const inClone = (clone: string, real: string) => real.startsWith(clone + sep) && !real.slice(clone.length + 1).split(sep).some((s) => s.toLowerCase() === '.git');
+
 /**
  * What lies on disk at `inside` of the clone at `clone`: null when nothing does; else its size, the tag of its bytes,
  * and its text when it is read for its kind and within the read limit. The tag is null when its real path leaves the
- * clone or is no file.
+ * clone, leads into its `.git` folder or is no file.
  */
 async function diskAt(clone: string, inside: string): Promise<{ size: number; tag: string | null; text: string | null } | null> {
   const full = join(clone, ...inside.split('/'));
   const info = await lstat(full).catch((error: unknown) => (missing(error) ? null : Promise.reject(error)));
   if (info === null) return null;
   const real = await realpath(full).catch(() => null);
-  const target = real === null || !real.startsWith(clone + sep) ? null : await stat(real);
+  const target = real === null || !inClone(clone, real) ? null : await stat(real);
   if (real === null || target === null || !target.isFile()) return { size: info.size, tag: null, text: null };
   if (target.size > READ_LIMIT) return { size: target.size, tag: await streamedTagOf(real), text: null };
   const bytes = await readFile(real);
@@ -208,8 +211,8 @@ function isBinary(bytes: Buffer): boolean {
 /**
  * One version of the file at `path`, relative to the working folder, at `rev`, with the tag of its bytes. Refused with
  * 400 for a malformed revision or path, or one with a `.git` segment; 404 for a commit the clone lacks, a path outside
- * the package or no file at it; 403 when its real path on disk leaves the package's real folder; 413 over the read
- * limit.
+ * the package or no file at it; 403 when its real path on disk leaves the package's real folder or leads into its
+ * `.git` folder; 413 over the read limit.
  */
 export async function fileOf(git: Runner, clone: string, repository: string, rev: string, path: string): Promise<FileVersion> {
   await revisionIn(git, clone, rev, 'rev');
@@ -218,7 +221,7 @@ export async function fileOf(git: Runner, clone: string, repository: string, rev
   if (rev === 'work') {
     const real = await realpath(join(clone, ...inside.split('/'))).catch(() => null);
     if (real === null) throw new Refusal(404, `no file ${path} on disk`);
-    if (!real.startsWith(clone + sep)) throw new Refusal(403, `${path} leads out of the package's folder`);
+    if (!inClone(clone, real)) throw new Refusal(403, `${path} leads out of the package's folder or into its .git folder`);
     const info = await stat(real);
     if (!info.isFile()) throw new Refusal(404, `no file ${path} on disk`);
     if (info.size > READ_LIMIT) throw new Refusal(413, `${path} is over 1 MiB, the read limit`);

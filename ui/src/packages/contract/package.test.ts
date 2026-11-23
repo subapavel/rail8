@@ -221,8 +221,8 @@ describe.each<[string, Build]>([
     expect((await refusalOf(api.changes('orders', ABSENT, 'work'))).status).toBe(404);
   });
 
-  test('a path with a .git segment is 400, one that leaves the package by a link 403, and one outside the package 404', async () => {
-    const { api, id } = await open({ clones: [{ folder: 'orders', outside: ['secret.txt'] }, { folder: 'billing' }] });
+  test('a path with a .git segment is 400, one that leaves the package or leads into .git by a link 403, and one outside the package 404', async () => {
+    const { api, id } = await open({ clones: [{ folder: 'orders', outside: ['secret.txt'], intoGit: { 'link.txt': 'config', sub: '' } }, { folder: 'billing' }] });
 
     for (const path of ['orders/.git/config', 'orders/sub/.git/config', 'orders/../billing/package.yaml', 'orders//package.yaml', 'orders/-x/..']) {
       expect((await refusalOf(api.file('orders', 'work', path))).status, path).toBe(400);
@@ -231,7 +231,21 @@ describe.each<[string, Build]>([
       expect((await refusalOf(api.file('orders', 'work', path))).status, path).toBe(404);
     }
     expect((await refusalOf(api.file('orders', id('orders', 'first'), 'orders/.git/config'))).status).toBe(400);
-    expect((await refusalOf(api.file('orders', 'work', 'orders/secret.txt'))).status).toBe(403);
+    for (const path of ['orders/secret.txt', 'orders/link.txt', 'orders/sub/config']) {
+      expect((await refusalOf(api.file('orders', 'work', path))).status, path).toBe(403);
+    }
+  });
+
+  test('a file whose name holds a line break is listed among the changes like any other', async () => {
+    const { api, id } = await open({ clones: [{ folder: 'orders', files: { 'a\nb.yaml': 'kind: flow\n', 'c.yaml': 'kind: endpoint\n' }, edits: { 'a\nb.yaml': null, 'c.yaml': null } }] });
+
+    const state = await api.get('orders');
+    expect(state.changes.map((c) => [c.path, c.status])).toEqual([
+      ['orders/a\nb.yaml', 'deleted'],
+      ['orders/c.yaml', 'deleted'],
+    ]);
+    expect(state.changes[1]!.kind).toBe('endpoint');
+    expect((await api.artifacts('orders', id('orders', 'first'))).artifacts.map((a) => a.path)).toContain('orders/c.yaml');
   });
 
   test('a folder that is no package, or no repository name, is refused', async () => {

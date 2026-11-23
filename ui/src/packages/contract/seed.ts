@@ -52,6 +52,8 @@ export interface CloneSeed {
   edits?: Record<string, string | null>;
   /** Paths of the first commit that are symbolic links to a file outside the package. */
   outside?: string[];
+  /** Symbolic links of the first commit into the clone's own `.git` folder: from the link's path to the path within `.git` it names. */
+  intoGit?: Record<string, string>;
 }
 
 /** What the node runs of `repository`: the commit of that clone with the label `commit`, or `commit` itself when it is 40 hex digits. */
@@ -137,7 +139,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     folder.disk = { ...(head?.files ?? folder.disk) };
     if (clone.conflict) folder.disk['conflict.txt'] = '<<<<<<< HEAD\nmain\n=======\nside\n>>>>>>> side\n';
     if (clone.detached) folder.head.branch = null;
-    if (clone.outside !== undefined) folder.escapes = [...clone.outside];
+    if (clone.outside !== undefined || clone.intoGit !== undefined) folder.escapes = [...(clone.outside ?? []), ...Object.keys(clone.intoGit ?? {})];
     for (const [from, to] of Object.entries(clone.moves ?? {})) {
       folder.index[to] = folder.index[from]!;
       folder.disk[to] = folder.disk[from]!;

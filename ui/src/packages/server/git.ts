@@ -186,9 +186,15 @@ export interface Blob {
 /**
  * The objects `names` of the clone at `clone`, each a name `cat-file` takes such as `<commit>:<path>`, read with
  * `git cat-file --batch`, or only their types and sizes with `--batch-check` (`bytes` is then empty, and `size` gives
- * the size). A name the clone lacks is null.
+ * the size). A name the clone lacks is null, and so is a name with a line break, which `cat-file` cannot be asked for.
  */
 export async function catFile(git: Runner, clone: string, names: readonly string[], check: boolean): Promise<(Blob & { size: number } | null)[]> {
+  if (names.some((n) => n.includes('\n'))) {
+    const asked = names.filter((n) => !n.includes('\n'));
+    const answers = await catFile(git, clone, asked, check);
+    let next = 0;
+    return names.map((n) => (n.includes('\n') ? null : answers[next++]!));
+  }
   if (names.length === 0) return [];
   const ran = await git.run({ args: ['cat-file', check ? '--batch-check' : '--batch'], clone, mode: 'read', stdin: names.map((n) => `${n}\n`).join('') });
   if (ran.code !== 0) throw new GitSaid(formatted(ran.stderr.toString('utf8')) || `git cat-file exited with ${String(ran.code)}`);
