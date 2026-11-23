@@ -29,7 +29,11 @@ export interface CanvasEdge extends FlowEdge {
   deliverySide?: number;
 }
 
-/** Paths and types describe the hierarchy. The editor increments the revision when it moves steps of the same type. */
+/**
+ * A key for the structure of the flow `view` draws: the ids and types of its sender, steps and receivers, with
+ * `revision`. It changes when a step is added, removed or retyped; a move of steps of one type changes neither ids nor
+ * types, so the editor raises `revision` for it.
+ */
 export function canvasStructure(view: FlowView, revision: number): string {
   return JSON.stringify([revision, view.nodes.filter(n => n.kind === 'step' || n.kind === 'from' || n.kind === 'destination')
     .map(n => [n.id, n.type])]);
