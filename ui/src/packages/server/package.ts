@@ -23,7 +23,8 @@ import {
   walked,
   type Compared,
 } from '../rules.ts';
-import { catFile, holds, LOG_FORMAT, parseDiffTree, parseLog, parseNameStatus, parseTree, read, type Diffed } from './git.ts';
+import { formatted } from './formatter.ts';
+import { catFile, GitSaid, holds, LOG_FORMAT, parseDiffTree, parseLog, parseNameStatus, parseTree, read, type Diffed } from './git.ts';
 import { folderOf, rowOf, statusOf, type NodeState } from './packages.ts';
 import type { Runner } from './runner.ts';
 
@@ -77,7 +78,7 @@ const inClone = (clone: string, real: string) => real.startsWith(clone + sep) &&
  * and its text when it is read for its kind and within the read limit. The tag is null when its real path leaves the
  * clone, leads into its `.git` folder or is no file.
  */
-async function diskAt(clone: string, inside: string): Promise<{ size: number; tag: string | null; text: string | null } | null> {
+export async function diskAt(clone: string, inside: string): Promise<{ size: number; tag: string | null; text: string | null } | null> {
   const full = join(clone, ...inside.split('/'));
   const info = await lstat(full).catch((error: unknown) => (missing(error) ? null : Promise.reject(error)));
   if (info === null) return null;
@@ -184,17 +185,32 @@ async function commitArtifacts(git: Runner, clone: string, repository: string, r
   return { artifacts: await artifactsOf(repository, found, present, new Map()), truncated };
 }
 
-/** The package's state, as its tab shows it: its row, its changes against `HEAD` and its artifacts on disk. */
+/**
+ * The author identity git gives in the clone at `clone`, from `git var GIT_AUTHOR_IDENT`, which fails, with 128, exactly
+ * when a commit would fail for want of one: null then.
+ */
+export async function identityOf(git: Runner, clone: string): Promise<PackageState['identity']> {
+  const ran = await git.run({ args: ['var', 'GIT_AUTHOR_IDENT'], clone, mode: 'read' });
+  if (ran.code === 128) return null;
+  const said = ran.stdout.toString('utf8');
+  if (ran.code !== 0) throw new GitSaid(formatted(ran.stderr.toString('utf8')) || `git var exited with ${String(ran.code)}`);
+  const ident = /^(.*) <([^<>\n]*)> \d+ [+-]\d{4}\n?$/.exec(said);
+  if (ident === null) throw new GitSaid(`git var GIT_AUTHOR_IDENT answered ${formatted(said)}, which names no identity`);
+  return { name: ident[1]!, email: ident[2]! };
+}
+
+/** The package's state, as its tab shows it: its row, git's author identity, its changes against `HEAD` and its artifacts on disk. */
 export async function stateOf(git: Runner, clone: string, repository: string, node: NodeState): Promise<PackageState> {
   const status = await statusOf(git, clone);
   const compared = statusCompared(status.entries);
   const head = status.oid;
-  const [row, changes] = await Promise.all([
+  const [row, identity, changes] = await Promise.all([
     rowOf(git, clone, repository, node, status),
+    identityOf(git, clone),
     workChanges(git, clone, repository, compared.slice(0, MAX_LISTED), indexFrom(status.entries), (inside) => (head === null ? null : `${head}:${inside}`)),
   ]);
   const artifacts = await workArtifacts(clone, repository, changes);
-  return { ...row, changes, artifacts: artifacts.artifacts, truncated: compared.length > MAX_LISTED || artifacts.truncated };
+  return { ...row, identity, changes, artifacts: artifacts.artifacts, truncated: compared.length > MAX_LISTED || artifacts.truncated };
 }
 
 /** Whether `bytes` are binary: a NUL among the first 8000 bytes, as git looks for it, or no UTF-8. */

@@ -11,8 +11,8 @@ export interface PackageListProps {
   api: PackagesApi;
   /** The clock the ages of commits and fetches are told against. */
   now: () => Date;
-  /** Opens the package whose clone is the folder `repository` in a tab of its own. */
-  onOpen: (repository: string) => void;
+  /** Opens the package whose clone is the folder `repository` in a tab of its own, on a server that takes writes when `writable`. */
+  onOpen: (repository: string, writable: boolean) => void;
 }
 
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; list: Listed; at: Date };
@@ -154,7 +154,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
                 title: 'Repository',
                 dataIndex: 'repository',
                 render: (_, row) => (
-                  <Button type="link" style={{ padding: 0 }} onClick={() => onOpen(row.repository)}>
+                  <Button type="link" style={{ padding: 0 }} onClick={() => onOpen(row.repository, list.writable)}>
                     {row.repository}
                   </Button>
                 ),

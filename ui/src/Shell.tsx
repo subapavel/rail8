@@ -6,6 +6,7 @@ import { RegisteredScreens, type Screen } from './screens';
 import { closedBy, closeTab, isPinned, noTabs, openTab, pinTab, unpinTab, type CloseCommand } from './tabs';
 import { Rail8Theme } from './theme';
 import { UnsavedDialog } from './UnsavedDialog';
+import { RegisteredWorkingFiles, workingFileRegistry, WorkingTab } from './workingFiles';
 import { WorkspaceNavigation } from './WorkspaceNavigation';
 import { WorkspaceQuickOpen } from './WorkspaceQuickOpen';
 
@@ -40,7 +41,8 @@ const closeItems: readonly { key: CloseCommand; label: string }[] = [
  * with three dots at its end lists the tabs it hides.
  *
  * Quick open, also on Ctrl+K or ⌘K, finds a screen of `screens` or an open tab by name and shows it. `start` names the
- * screen open at first; with no tab open the main area says so.
+ * screen open at first; with no tab open the main area says so. The editors in every tab register the files they
+ * hold with the shell's working files, which `useWorkingFiles` answers there.
  */
 export function Shell({ screens, start }: ShellProps) {
   const [quickOpen, setQuickOpen] = useState(false);
@@ -50,6 +52,7 @@ export function Shell({ screens, start }: ShellProps) {
   const [menu, setMenu] = useState<string | null>(null);
   const [asking, setAsking] = useState<readonly string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [workingFiles] = useState(() => workingFileRegistry((id) => setTabs((current) => openTab(current, id))));
   const byId = new Map(screens.map((screen) => [screen.id, screen]));
   const screenOf = (id: string) => opened.get(id) ?? byId.get(id);
   const active = tabs.active ? screenOf(tabs.active) : undefined;
@@ -227,7 +230,11 @@ export function Shell({ screens, start }: ShellProps) {
                     ),
                     children: (
                       <main className="rail8-panel">
-                        <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
+                        <RegisteredWorkingFiles.Provider value={workingFiles}>
+                          <WorkingTab.Provider value={id}>
+                            <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
+                          </WorkingTab.Provider>
+                        </RegisteredWorkingFiles.Provider>
                       </main>
                     ),
                   };

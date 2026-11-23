@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, Kind, PackageRow } from './api';
+import type { Artifact, Change, ChangeStatus, CommitBody, Kind, PackageRow } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -72,6 +72,52 @@ export function isRevision(rev: string): boolean {
 }
 
 export const isCommitId = (rev: string) => /^[0-9a-f]{40}$/.test(rev);
+
+/** At most this many paths are chosen for one commit, and its message holds at most this many bytes. */
+export const MAX_CHOSEN = 1000;
+export const MAX_MESSAGE_BYTES = 8 * 1024;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * `body` as a commit of the package `repository` takes it, or its refusal: 400 when it is malformed (a message that is
+ * blank, over 8 KiB or holds a NUL; a branch that is no text; a head that is neither null nor 40 hex digits; more than
+ * 1000 paths, a path twice, or a path that is malformed or has a `.git` segment), 404 for a path outside the package,
+ * and 422 for no path at all, since there is nothing to commit.
+ */
+export function commitBodyOf(repository: string, body: unknown): CommitBody | { status: 400 | 404 | 422; error: string } {
+  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+  const { message, branch, head, paths } = body;
+  if (typeof message !== 'string' || message.trim() === '') return { status: 400, error: 'the commit needs a message' };
+  if (new TextEncoder().encode(message).length > MAX_MESSAGE_BYTES) return { status: 400, error: 'the message is over 8 KiB' };
+  if (message.includes('\0')) return { status: 400, error: 'the message holds a NUL character' };
+  if (typeof branch !== 'string' || branch === '') return { status: 400, error: 'the request names no branch' };
+  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return { status: 400, error: 'head is neither null nor a commit of 40 hex digits' };
+  if (!Array.isArray(paths)) return { status: 400, error: 'paths is no list' };
+  if (paths.length > MAX_CHOSEN) return { status: 400, error: `a commit takes at most ${MAX_CHOSEN} paths` };
+  const chosen: CommitBody['paths'] = [];
+  for (const entry of paths as unknown[]) {
+    if (!isRecord(entry) || typeof entry.path !== 'string' || (entry.tag !== null && typeof entry.tag !== 'string')) {
+      return { status: 400, error: 'each path is {path, tag}, its tag a text or null' };
+    }
+    const found = inPackage(repository, entry.path);
+    if ('error' in found) return found;
+    if (chosen.some((c) => c.path === entry.path)) return { status: 400, error: `${entry.path} is chosen twice` };
+    chosen.push({ path: entry.path, tag: entry.tag });
+  }
+  if (chosen.length === 0) return { status: 422, error: 'nothing to commit: no path is chosen' };
+  return { message, branch, head, paths: chosen };
+}
+
+/**
+ * The command that takes `insides`, paths of a clone that `HEAD` lacks, out of its index in a terminal in the clone, its
+ * files staying on disk, whatever the index holds of them: `git restore --staged`, or `git rm --cached -f` on a branch
+ * with no commit yet (`unborn`), which has no `HEAD` to restore from. A path the shell would read otherwise is quoted.
+ */
+export function unstageCommand(insides: readonly string[], unborn: boolean): string {
+  const words = insides.map((inside) => (/^[\w./@%+=:,-]+$/.test(inside) ? inside : `'${inside.replaceAll("'", `'\\''`)}'`));
+  return `${unborn ? 'git rm --cached -f --' : 'git restore --staged --'} ${words.join(' ')}`;
+}
 
 /**
  * The path within the package `repository` of `path`, a path relative to the working folder with `/`; or the refusal
@@ -228,9 +274,14 @@ export function statusCompared(entries: readonly StatusEntry[]): Compared[] {
   );
 }
 
-/** Each path's index state as the status `entries` give it; `clean` for a path they do not list. */
+/**
+ * Each path's index state as the status `entries` give it, from the first record of the path, so that a path the index
+ * no longer holds but the disk does (a `D.` record, then an untracked one) reads `differs`; `clean` for a path they do
+ * not list.
+ */
 export function indexFrom(entries: readonly StatusEntry[]): (inside: string, onDisk: boolean) => Change['index'] {
-  const byPath = new Map(entries.map((e) => [e.path, e] as const));
+  const byPath = new Map<string, StatusEntry>();
+  for (const e of entries) if (!byPath.has(e.path)) byPath.set(e.path, e);
   return (inside, onDisk) => {
     const entry = byPath.get(inside);
     return entry === undefined ? 'clean' : indexOf(entry.kind, entry.xy, onDisk);

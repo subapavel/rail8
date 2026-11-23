@@ -15,6 +15,12 @@ export interface Limits {
 /** The limits of a git read: 10 s, and 4 MiB on each stream. */
 export const READ_LIMITS: Limits = { ms: 10_000, bytes: 4 * 1024 * 1024 };
 
+/** The limits of each call of an undo: 10 s, and 1 MiB on each stream. */
+export const UNDO_LIMITS: Limits = { ms: 10_000, bytes: 1024 * 1024 };
+
+/** An undo makes at most this many calls, so that it ends within this many times {@link UNDO_LIMITS}' 10 s. */
+export const UNDO_CALLS = 6;
+
 /** From TERM to KILL. */
 export const KILL_AFTER_MS = 2_000;
 
@@ -65,7 +71,7 @@ export type Spawn = (
 /** The process that receives the signals a terminal sends: the development server's own, or a fake one in a test. */
 export interface Signals {
   readonly pid: number;
-  once(signal: NodeJS.Signals, listener: () => void): unknown;
+  on(signal: NodeJS.Signals, listener: () => void): unknown;
   off(signal: NodeJS.Signals, listener: () => void): unknown;
   kill(pid: number, signal: NodeJS.Signals): unknown;
 }
@@ -78,6 +84,8 @@ export interface RunnerOptions {
   /** Sends `signal` to the process group `pid` leads. */
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   signals?: Signals;
+  /** Prints a line of the runner's own in the development server's output; to stderr by default. */
+  say?: (line: string) => void;
 }
 
 /** Starts git, one call at a time per process slot, and stops every process it started when it closes. */
@@ -88,7 +96,19 @@ export interface Runner {
    * call passed its deadline and 500 when it wrote more than its limit, both after its process was stopped.
    */
   run(call: Call): Promise<Ran>;
-  /** Refuses every call from now on, and stops every process it started: TERM, then KILL 2 s later. Resolves once each has exited. */
+  /**
+   * Runs `work`, and answers what it answers. When it rejects, for any reason (its own refusal, a call refused or
+   * stopped, the runner closing), `undo` runs once, given the failure and a `run` whose calls are admitted even while
+   * the runner closes and however many calls wait, still one write at a time, at most {@link UNDO_CALLS} of them
+   * (a further one is refused with 503), each within {@link UNDO_LIMITS} and never
+   * stopped by a close; then it rejects with work's failure, or with undo's own. Refused with 503, and neither run, once
+   * the runner closes.
+   */
+  undoable<T>(work: () => Promise<T>, undo: (run: (call: Call) => Promise<Ran>, failure: unknown) => Promise<void>): Promise<T>;
+  /**
+   * Refuses every call from now on but an undo's, and stops every process it started but an undo's: TERM, then KILL
+   * 2 s later. Resolves once each has exited and every undoable under way has settled.
+   */
   close(): Promise<void>;
 }
 
@@ -127,8 +147,9 @@ function killGroup(pid: number, signal: NodeJS.Signals) {
 
 const mib = (bytes: number) => `${bytes / (1024 * 1024)} MiB`;
 
-/** What a call is while its process runs: how to stop it, and when it has exited. */
+/** What a call is while its process runs: whether it is an undo's, how to stop it, and when it has exited. */
 interface Live {
+  undo: boolean;
   stop(why: Refusal): void;
   exited: Promise<void>;
 }
@@ -143,30 +164,41 @@ interface Live {
  * At most {@link MAX_RUNNING} processes run at once, and one write at a time; reads run beside it. A call that cannot
  * start waits in order, at most {@link MAX_WAITING} of its mode.
  *
- * While a process runs, SIGINT and SIGHUP of `options.signals` (the development server's process by default) first
- * stop every process as {@link Runner.close} does, then end the server with the same signal.
+ * While a process runs, or an undoable is under way, SIGINT and SIGHUP of `options.signals` (the development server's
+ * process by default) first close the runner as {@link Runner.close} does, and end the server with the same signal
+ * once it has closed. While an undoable is under way, the first of them also says so in a line of `options.say`, and
+ * any further one is caught and ignored until the runner has closed.
  */
 export function runner(options: RunnerOptions): Runner {
   const spawn = options.spawn ?? (nodeSpawn as unknown as Spawn);
   const kill = options.kill ?? killGroup;
   const signals = options.signals ?? process;
+  const say = options.say ?? ((line: string) => void process.stderr.write(`${line}\n`));
   const timer = options.timer;
   const live = new Set<Live>();
-  const waiting: { call: Call; resolve: (ran: Ran) => void; reject: (error: unknown) => void }[] = [];
+  const undoables = new Set<Promise<unknown>>();
+  const waiting: { call: Call; undo: boolean; resolve: (ran: Ran) => void; reject: (error: unknown) => void }[] = [];
   let running = 0;
   let writing = false;
   let closing: Promise<void> | null = null;
 
   const ending = new Map<NodeJS.Signals, () => void>();
+  let ended = false;
   const listen = (on: boolean) => {
     for (const signal of ENDING) {
       if (on && !ending.has(signal)) {
         const listener = () => {
-          listen(false);
-          void close().finally(() => signals.kill(signals.pid, signal));
+          // a signal after the first waits for the close as well: the undo under way ends within its bounds
+          if (ended) return;
+          ended = true;
+          if (undoables.size > 0) say(`Undoing an unfinished git write before the server ends: at most ${(UNDO_CALLS * UNDO_LIMITS.ms) / 1000} s.`);
+          void close().finally(() => {
+            listen(false);
+            signals.kill(signals.pid, signal);
+          });
         };
         ending.set(signal, listener);
-        signals.once(signal, listener);
+        signals.on(signal, listener);
       } else if (!on && ending.has(signal)) {
         signals.off(signal, ending.get(signal)!);
         ending.delete(signal);
@@ -174,9 +206,12 @@ export function runner(options: RunnerOptions): Runner {
     }
   };
 
-  const start = (call: Call): Promise<Ran> =>
+  // the signals are caught while a process runs or an undoable is under way
+  const watch = () => listen(live.size > 0 || undoables.size > 0);
+
+  const start = (call: Call, undo: boolean): Promise<Ran> =>
     new Promise<Ran>((resolve, reject) => {
-      const limits = call.limits ?? READ_LIMITS;
+      const limits = undo ? UNDO_LIMITS : (call.limits ?? READ_LIMITS);
       const argv = ['--no-pager', ...(call.clone === undefined ? [] : ['-C', call.clone]), ...call.args];
       let child: Child;
       try {
@@ -201,6 +236,7 @@ export function runner(options: RunnerOptions): Runner {
       let endDrain: (() => void) | undefined;
       let markExited: () => void = () => {};
       const entry: Live = {
+        undo,
         stop(why) {
           if (exited || failure !== undefined) return;
           failure = why;
@@ -216,7 +252,7 @@ export function runner(options: RunnerOptions): Runner {
         }),
       };
       live.add(entry);
-      if (live.size === 1) listen(true);
+      watch();
 
       const cancelDeadline = timer.after(limits.ms, () => {
         if (exited) endDrain?.();
@@ -231,7 +267,7 @@ export function runner(options: RunnerOptions): Runner {
         child.stdout?.destroy();
         child.stderr?.destroy();
         live.delete(entry);
-        if (live.size === 0) listen(false);
+        watch();
         markExited();
         if (error !== undefined) reject(error);
         else resolve({ code, stdout: Buffer.concat(output.stdout), stderr: Buffer.concat(output.stderr) });
@@ -285,10 +321,10 @@ export function runner(options: RunnerOptions): Runner {
 
   const canStart = (mode: Mode) => running < MAX_RUNNING && (mode === 'read' || !writing);
 
-  const launch = (call: Call, resolve: (ran: Ran) => void, reject: (error: unknown) => void) => {
+  const launch = (call: Call, undo: boolean, resolve: (ran: Ran) => void, reject: (error: unknown) => void) => {
     running++;
     if (call.mode === 'write') writing = true;
-    start(call)
+    start(call, undo)
       .then(resolve, reject)
       .finally(() => {
         running--;
@@ -297,29 +333,57 @@ export function runner(options: RunnerOptions): Runner {
           const next = waiting[i]!;
           if (canStart(next.call.mode)) {
             waiting.splice(i, 1);
-            launch(next.call, next.resolve, next.reject);
+            launch(next.call, next.undo, next.resolve, next.reject);
           } else i++;
         }
       });
   };
 
+  const submit = (call: Call, undo: boolean): Promise<Ran> => {
+    if (closing !== null && !undo) return Promise.reject(new Refusal(503, 'the development server is closing'));
+    return new Promise<Ran>((resolve, reject) => {
+      if (canStart(call.mode)) launch(call, undo, resolve, reject);
+      else if (!undo && waiting.filter((w) => w.call.mode === call.mode).length >= MAX_WAITING[call.mode]) {
+        reject(new Refusal(503, `too many git ${call.mode}s are waiting: try again`));
+      } else waiting.push({ call, undo, resolve, reject });
+    });
+  };
+
   const close = (): Promise<void> => {
     if (closing !== null) return closing;
-    for (const entry of waiting.splice(0)) entry.reject(new Refusal(503, 'the development server is closing'));
-    for (const entry of live) entry.stop(new Refusal(503, 'the development server closed while git ran'));
-    closing = Promise.all([...live].map((entry) => entry.exited)).then(() => {});
+    for (let i = 0; i < waiting.length; ) {
+      if (waiting[i]!.undo) i++;
+      else waiting.splice(i, 1)[0]!.reject(new Refusal(503, 'the development server is closing'));
+    }
+    for (const entry of live) if (!entry.undo) entry.stop(new Refusal(503, 'the development server closed while git ran'));
+    closing = Promise.all([...[...live].map((entry) => entry.exited), ...[...undoables].map((u) => u.catch(() => undefined))]).then(() => {});
     return closing;
   };
 
   return {
-    run(call) {
+    run: (call) => submit(call, false),
+    undoable(work, undo) {
       if (closing !== null) return Promise.reject(new Refusal(503, 'the development server is closing'));
-      return new Promise<Ran>((resolve, reject) => {
-        if (canStart(call.mode)) launch(call, resolve, reject);
-        else if (waiting.filter((w) => w.call.mode === call.mode).length >= MAX_WAITING[call.mode]) {
-          reject(new Refusal(503, `too many git ${call.mode}s are waiting: try again`));
-        } else waiting.push({ call, resolve, reject });
+      const done = (async () => {
+        try {
+          return await work();
+        } catch (failure) {
+          let calls = 0;
+          await undo((call) => (++calls > UNDO_CALLS ? Promise.reject(new Refusal(503, `an undo makes at most ${UNDO_CALLS} git calls`)) : submit(call, true)), failure);
+          throw failure;
+        }
+      })();
+      const settled = done.then(
+        () => undefined,
+        () => undefined,
+      );
+      undoables.add(settled);
+      watch();
+      void settled.then(() => {
+        undoables.delete(settled);
+        watch();
       });
+      return done;
     },
     close,
   };

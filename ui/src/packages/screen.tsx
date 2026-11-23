@@ -6,14 +6,17 @@ import type { PackagesApi } from './api';
 
 const clock = () => new Date();
 
-/** The tab of the package whose clone is the folder `repository`: its id is `package:` and the repository, its title the repository. */
-export function packageTab(api: PackagesApi, repository: string, now: () => Date = clock): Screen {
+/**
+ * The tab of the package whose clone is the folder `repository`, on a server that takes writes when `writable`: its id
+ * is `package:` and the repository, its title the repository.
+ */
+export function packageTab(api: PackagesApi, repository: string, writable: boolean, now: () => Date = clock): Screen {
   return {
     id: `package:${repository}`,
     title: repository,
     group: 'Design',
     icon: <BranchesOutlined aria-hidden />,
-    render: (open) => <PackageTab api={api} repository={repository} now={now} open={open} />,
+    render: (open) => <PackageTab api={api} repository={repository} now={now} open={open} writable={writable} />,
   };
 }
 
@@ -28,6 +31,6 @@ export function packagesScreen(api: PackagesApi, now: () => Date = clock): Scree
     group: 'Design',
     icon: <BranchesOutlined aria-hidden />,
     description: 'See each package of the working folder: its branch, last commit, changes and what the node runs.',
-    render: (open) => <PackageList api={api} now={now} onOpen={(repository) => open(packageTab(api, repository, now))} />,
+    render: (open) => <PackageList api={api} now={now} onOpen={(repository, writable) => open(packageTab(api, repository, writable, now))} />,
   };
 }

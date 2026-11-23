@@ -92,10 +92,13 @@ export interface Change {
 }
 
 /**
- * One package, as its tab shows it: its row, every file of its folder that differs from `HEAD`, sorted by path, and its
- * artifacts on disk, sorted by path. `truncated` says when either list was cut at its limit.
+ * One package, as its tab shows it: its row, git's author identity in its clone, every file of its folder that differs
+ * from `HEAD`, sorted by path, and its artifacts on disk, sorted by path. `truncated` says when either list was cut at
+ * its limit.
  */
 export interface PackageState extends PackageRow {
+  /** The author identity git gives in this clone, as `git var GIT_AUTHOR_IDENT` names it; null when it gives none, and a commit is refused. */
+  identity: { name: string; email: string } | null;
   changes: Change[];
   artifacts: Artifact[];
   truncated: boolean;
@@ -108,6 +111,44 @@ export type FileVersion = ({ text: string } | { binary: true; size: number }) & 
 export interface LogPage {
   items: Commit[];
   next: string | null;
+}
+
+/**
+ * A commit of chosen paths: its message; the branch and the commit `HEAD` the author reviewed (`head` null: the branch
+ * has no commit yet); and each chosen path, relative to the working folder, with the tag of the version on disk the
+ * author reviewed (null: not on disk). A renamed change is named with the path it was renamed from too, with that
+ * path's own tag, or null when it is not on disk.
+ */
+export interface CommitBody {
+  message: string;
+  branch: string;
+  head: string | null;
+  paths: { path: string; tag: string | null }[];
+}
+
+/**
+ * The commit a commit of chosen paths made, as it was read back: the commit itself; `staged`, the paths it changes
+ * against its parent that were not chosen, which a hook staged; `rewritten`, the chosen paths it does not hold as their
+ * bytes were checked (a path it lacks counts), which a hook rewrote; and `changedOnDisk`, the chosen paths whose bytes
+ * on disk after the commit are not those it holds, which a hook changed without staging. Each list is sorted, and none
+ * is undone. Its first parent is not the request's `head` when a commit was made in a terminal in between.
+ */
+export interface Committed extends Commit {
+  staged: string[];
+  rewritten: string[];
+  changedOnDisk: string[];
+}
+
+/**
+ * What a commit answers: the commit (null when git committed but its commit could not be read back, or `HEAD` is no
+ * longer the commit git named), what git and the hooks said, and the package's state after it (null when it could not
+ * be read). `problem` says why either is null.
+ */
+export interface CommitAnswer {
+  commit: Committed | null;
+  output: string;
+  package: PackageState | null;
+  problem?: string;
 }
 
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
@@ -126,6 +167,11 @@ export interface PackagesApi {
   artifacts(repository: string, rev: string): Promise<{ artifacts: Artifact[]; truncated: boolean }>;
   /** The first-parent history of `HEAD`, or of the commit `before`, `limit` commits to a page (50 by default, at most 100). */
   log(repository: string, page?: { before?: string; limit?: number }): Promise<LogPage>;
+  /**
+   * Commits the chosen paths alone, with the author's own git identity and hooks, once it has checked under the
+   * working folder's lock that the branch, `HEAD` and each path's tag are still the ones the author reviewed.
+   */
+  commit(repository: string, body: CommitBody): Promise<CommitAnswer>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
@@ -190,5 +236,7 @@ export function httpPackagesApi(send: typeof fetch = (input, init) => fetch(inpu
     changes: (repository, from, to) => json(of(repository, '/changes', { from, to })),
     artifacts: (repository, rev) => json(of(repository, '/artifacts', { rev })),
     log: (repository, page = {}) => json<LogPage>(of(repository, '/log', { before: page.before, limit: page.limit?.toString() })),
+    commit: async (repository, body) =>
+      (await (await call(of(repository, '/commit'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()) as CommitAnswer,
   };
 }

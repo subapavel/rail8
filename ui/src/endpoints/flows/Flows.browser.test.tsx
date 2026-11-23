@@ -1,7 +1,10 @@
+import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import type { Screen } from '../../screens';
 import { Shell } from '../../Shell';
+import { useWorkingFiles, type WorkingFiles } from '../../workingFiles';
 import type { EndpointFile, EndpointsApi } from '../api';
 import { flowsScreen } from '../screen';
 import { FlowsError, type FlowFile, type FlowsApi } from './api';
@@ -136,16 +139,31 @@ function fakeEndpoints(): EndpointsApi {
 let root: Root | undefined;
 let host: HTMLElement | undefined;
 
+let working: WorkingFiles | undefined;
+
+/** Gives the test the working files of the shell it is in. */
+function Probe() {
+  const files = useWorkingFiles();
+  useEffect(() => {
+    working = files;
+  });
+  return null;
+}
+
+/** `screen` with the probe of the working files beside what it shows. */
+const probed = (screen: Screen): Screen => ({ ...screen, render: (open) => <><Probe />{screen.render(open)}</> });
+
 function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints()) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[flowsScreen(flows, endpoints)]} start="flows" />);
+  root.render(<Shell screens={[probed(flowsScreen(flows, endpoints))]} start="flows" />);
 }
 
 afterEach(() => {
   root?.unmount();
   host?.remove();
+  working = undefined;
 });
 
 const text = (shown: string) => page.getByText(shown, { exact: false });
@@ -519,6 +537,48 @@ describe('Editing a flow', () => {
     await button('Reload').click();
     await expect.element(nodeOf('check')).toBeVisible();
     await expect.element(button('Edit')).toBeVisible();
+  });
+
+  test('gives the shell its file, with unsaved changes while its working copy differs, and reads it again when the shell asks while it has none', async () => {
+    const flows = fakeFlows();
+    await open(flows);
+    await expect.poll(() => working?.files().get('demo/flows/invoice.yaml')?.dirty).toBe(false);
+
+    await button('Edit').click();
+    await nodeOf('validate').click();
+    await page.getByLabelText('schema', { exact: false }).fill('flows/other.xsd');
+    expect(working!.files().get('demo/flows/invoice.yaml')?.dirty).toBe(true);
+    // a hook rewrites the file
+    await flows.save('demo/flows/invoice.yaml', invoice.replace('name: validate', 'name: check'), '"v1"');
+    working!.reload(['demo/flows/invoice.yaml']);
+    await expect.element(page.getByLabelText('schema', { exact: false })).toHaveValue('flows/other.xsd');
+
+    await button('Cancel').click();
+    await button('Discard changes').click();
+    working!.reload(['demo/flows/invoice.yaml']);
+    await expect.element(nodeOf('check')).toBeVisible();
+  });
+
+  test('Edit waits for the read a reload started, so the working copy starts from the text the read gives, with its tag', async () => {
+    const flows = fakeFlows();
+    const reading = flows.read;
+    let held: (() => void) | undefined;
+    await open(flows);
+    await expect.poll(() => working?.files().get('demo/flows/invoice.yaml')?.dirty).toBe(false);
+    // a hook rewrites the file, and the read the reload starts waits
+    await flows.save('demo/flows/invoice.yaml', invoice.replace('name: validate', 'name: check'), '"v1"');
+    flows.read = vi.fn((path: string, signal?: AbortSignal) => new Promise<Awaited<ReturnType<FlowsApi['read']>>>((done) => (held = () => void reading(path, signal).then(done))));
+
+    working!.reload(['demo/flows/invoice.yaml']);
+    await expect.element(button('Edit')).toBeDisabled();
+    held!();
+    await expect.element(nodeOf('check')).toBeVisible();
+    await button('Edit').click();
+    await nodeOf('check').click();
+    await page.getByLabelText('schema', { exact: false }).fill('flows/other.xsd');
+    await button('Save').click();
+
+    expect(flows.save).toHaveBeenLastCalledWith('demo/flows/invoice.yaml', expect.stringContaining('name: check'), '"v2"');
   });
 
   test('a save the server refuses says why, and the changes stay', async () => {

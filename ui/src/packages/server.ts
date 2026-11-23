@@ -9,9 +9,10 @@ import { realTimer } from './server/timer.ts';
  * The packages module's half of the development server, the git half: it serves the packages of the working folder
  * that RAIL8_WORKSPACE names under `/git`, through the author's own git found on PATH, checked once when the server
  * starts, and reads what the node at RAIL8_ADMIN_URL runs with RAIL8_ADMIN_TOKEN. Writes are refused under
- * RAIL8_READ_ONLY=true. When the development server closes or restarts, every git process it started is stopped.
+ * RAIL8_READ_ONLY=true, and every write shares the working folder's writes with the editors' saves. When the development
+ * server closes or restarts, every git process it started is stopped.
  */
-const packagesServer: ModuleServer = ({ origins, env }) => {
+const packagesServer: ModuleServer = ({ origins, env, writes }) => {
   let git: Runner | undefined;
   return {
     name: 'rail8-git-packages',
@@ -20,6 +21,7 @@ const packagesServer: ModuleServer = ({ origins, env }) => {
       const options = {
         workspace: env.RAIL8_WORKSPACE?.trim() || undefined,
         writable: env.RAIL8_READ_ONLY?.trim() !== 'true',
+        writes,
         origins,
         node: nodeOf(env),
         git,

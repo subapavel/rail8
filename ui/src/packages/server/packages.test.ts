@@ -87,6 +87,7 @@ describe('the list of packages over real git', () => {
         calls.push(call);
         return real.run(call);
       },
+      undoable: (work, undo) => real.undoable(work, undo),
       close: () => real.close(),
     };
     const running: Running[] = [

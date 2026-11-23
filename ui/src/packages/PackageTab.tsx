@@ -1,11 +1,12 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tabs, Tag, Typography } from 'antd';
-import { useCallback, useContext, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useContext, useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { ArtifactKinds } from '../artifacts';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
 import type { Artifact, Change, Commit, Kind, PackagesApi, PackageState } from './api';
+import { CommitDialog } from './CommitDialog';
 import { FileChange } from './FileChange';
 import { Age, BUSY, DeployedState, short } from './PackageList';
 import { MAX_LISTED } from './rules';
@@ -17,6 +18,8 @@ export interface PackageTabProps {
   now: () => Date;
   /** Opens a screen in a tab of its own. */
   open: (screen: Screen) => void;
+  /** Whether the server takes writes; false under RAIL8_READ_ONLY=true. */
+  writable: boolean;
 }
 
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; state: PackageState; at: Date };
@@ -51,6 +54,17 @@ const KIND: Record<Kind, string> = {
 
 /** The path of `path` within its package: the working folder's path without its first segment. */
 const inside = (path: string) => path.slice(path.indexOf('/') + 1);
+
+/** Why Commit… is disabled for the package `state`, read or not, on a server that takes writes when `writable`; null when it is not. */
+function commitRefused(writable: boolean, state: PackageState | null): string | null {
+  if (!writable) return 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).';
+  if (state === null) return 'The package is not read.';
+  if (state.busy !== null) return `The clone is busy (${BUSY[state.busy]}): finish it in a terminal.`;
+  if (state.branch === null) return 'HEAD is detached: switch to a branch in a terminal.';
+  if (state.identity === null) return 'git gives no author identity here: set git config user.name and git config user.email in a terminal.';
+  if (state.changes.length === 0) return 'Nothing to commit: no file differs from the last commit.';
+  return null;
+}
 
 /** Calls `shown` each time the element of `ref` comes into view again after it was hidden, as a tab that is chosen again. */
 function useShownAgain(ref: RefObject<HTMLElement | null>, shown: () => void) {
@@ -270,13 +284,16 @@ function HistoryPane({ api, repository, head, host, now }: { api: PackagesApi; r
  * The tab of one package: a header with its name and version, branch, last commit, ahead and behind its upstream and
  * what the node runs of it, and three tabs of its own. Changes lists every file that differs from the last commit, each
  * with its kind and its readable change; Artifacts lists the package's flows, endpoints, mappings and tests and the
- * files they use; History lists the commits of the branch, each opening the files it changed. The package is read
- * again when the tab is shown again, when the window gets the focus, on Refresh, and when a file changed after its
- * change was listed.
+ * files they use; History lists the commits of the branch, each opening the files it changed. Commit… opens the commit
+ * dialog, and says why when the commit route would refuse it. The package is read again when the tab is shown again,
+ * when the window gets the focus, on Refresh, and when a file changed after its change was listed; a commit's answer
+ * redraws it.
  */
-export function PackageTab({ api, repository, now, open }: PackageTabProps) {
+export function PackageTab({ api, repository, now, open, writable }: PackageTabProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
+  const [committing, setCommitting] = useState(false);
+  const refusedId = useId();
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const root = useRef<HTMLDivElement>(null);
   useShownAgain(root, refresh);
@@ -297,6 +314,8 @@ export function PackageTab({ api, repository, now, open }: PackageTabProps) {
     };
   }, [api, repository, asked, now]);
 
+  const read = result.kind === 'read' ? result.state : null;
+  const refused = commitRefused(writable, read);
   let body;
   let title = repository;
   if (result.kind === 'reading') {
@@ -375,13 +394,30 @@ export function PackageTab({ api, repository, now, open }: PackageTabProps) {
           {title}
         </Typography.Title>
         <Typography.Text type="secondary">{repository}</Typography.Text>
-        <Flex gap="small" style={{ marginInlineStart: 'auto' }}>
+        <Flex gap="small" align="center" wrap style={{ marginInlineStart: 'auto' }}>
+          {refused !== null && result.kind === 'read' && (
+            <Typography.Text type="secondary" id={refusedId}>
+              {refused}
+            </Typography.Text>
+          )}
+          <Button disabled={refused !== null} aria-describedby={refused !== null && result.kind === 'read' ? refusedId : undefined} onClick={() => setCommitting(true)}>
+            Commit…
+          </Button>
           <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
             Refresh
           </Button>
         </Flex>
       </Flex>
       {body}
+      {committing && read !== null && (
+        <CommitDialog
+          api={api}
+          repository={repository}
+          state={read}
+          onState={(state) => (state === null ? refresh() : setResult({ kind: 'read', state, at: now() }))}
+          onClose={() => setCommitting(false)}
+        />
+      )}
     </Flex>
   );
 }

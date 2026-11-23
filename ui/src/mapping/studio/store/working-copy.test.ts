@@ -454,6 +454,23 @@ describe('a save conflict', () => {
     expect(selectUnsaved(s.getState())).toBe(false);
   });
 
+  test('an edit made while a Reload reads the file keeps the store as it is: the file read is dropped', async () => {
+    const load = deferred<[]>();
+    const s = store({ newId: ids('b1', 'm1'), load: load.port });
+
+    const reloading = s.getState().reload();
+    s.getState().link(ORDER_ID, ORDER_ID);
+    const edited = s.getState().workingCopy;
+    load.calls[0]!.resolve({ model: { ...canonicalLinked, targetFieldMappings: {} }, etag: '"sha256:disk"' });
+    await reloading;
+
+    expect(s.getState().workingCopy).toBe(edited);
+    expect(s.getState().baseline).toBe(baseline);
+    expect(s.getState().etag).toBe(BASELINE_TAG);
+    expect(s.getState().past).toEqual([baseline]);
+    expect(selectUnsaved(s.getState())).toBe(true);
+  });
+
   test('a Reload that fails keeps everything as it was and passes the error on', async () => {
     const { s, load } = await conflicted();
     const edited = s.getState().workingCopy;

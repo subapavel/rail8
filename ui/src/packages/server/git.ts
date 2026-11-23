@@ -13,7 +13,7 @@ export class GitSaid extends Error {
 }
 
 /** The stdout of the read `args` in the clone at `clone`, as text; a {@link GitSaid} when git exits with an error. */
-export async function read(git: Runner, clone: string, args: readonly string[]): Promise<string> {
+export async function read(git: Pick<Runner, 'run'>, clone: string, args: readonly string[]): Promise<string> {
   const ran = await git.run({ args, clone, mode: 'read' });
   if (ran.code !== 0) throw new GitSaid(formatted(ran.stderr.toString('utf8')) || `git ${args[0]} exited with ${String(ran.code)}`);
   return ran.stdout.toString('utf8');
@@ -177,18 +177,19 @@ export function parseLog(output: string): Commit[] {
   return commits;
 }
 
-/** What `git cat-file --batch` gives of one object: its type and its bytes; null when the clone has no such object. */
+/** What `git cat-file --batch` gives of one object: its id, its type and its bytes; null when the clone has no such object. */
 export interface Blob {
+  oid: string;
   type: string;
   bytes: Buffer;
 }
 
 /**
  * The objects `names` of the clone at `clone`, each a name `cat-file` takes such as `<commit>:<path>`, read with
- * `git cat-file --batch`, or only their types and sizes with `--batch-check` (`bytes` is then empty, and `size` gives
+ * `git cat-file --batch`, or only their ids, types and sizes with `--batch-check` (`bytes` is then empty, and `size` gives
  * the size). A name the clone lacks is null, and so is a name with a line break, which `cat-file` cannot be asked for.
  */
-export async function catFile(git: Runner, clone: string, names: readonly string[], check: boolean): Promise<(Blob & { size: number } | null)[]> {
+export async function catFile(git: Pick<Runner, 'run'>, clone: string, names: readonly string[], check: boolean): Promise<(Blob & { size: number } | null)[]> {
   if (names.some((n) => n.includes('\n'))) {
     const asked = names.filter((n) => !n.includes('\n'));
     const answers = await catFile(git, clone, asked, check);
@@ -212,9 +213,9 @@ export async function catFile(git: Runner, clone: string, names: readonly string
     }
     const size = Number(header[2]);
     if (check) {
-      found.push({ type: header[1]!, size, bytes: Buffer.alloc(0) });
+      found.push({ oid: header[0]!, type: header[1]!, size, bytes: Buffer.alloc(0) });
     } else {
-      found.push({ type: header[1]!, size, bytes: Buffer.from(out.subarray(at, at + size)) });
+      found.push({ oid: header[0]!, type: header[1]!, size, bytes: Buffer.from(out.subarray(at, at + size)) });
       at += size + 1;
     }
   }

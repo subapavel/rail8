@@ -47,7 +47,7 @@ async function commitOf(git: Runner, clone: string, oid: string): Promise<Commit
 }
 
 /** The operation git left open in the clone, from the state files in its `.git`; else a path in conflict; else none. */
-async function busyOf(clone: string, status: Status): Promise<Busy> {
+export async function busyOf(clone: string, status: Status): Promise<Busy> {
   const files: [string, Exclude<Busy, null | 'conflict'>][] = [
     ['MERGE_HEAD', 'merge'],
     ['rebase-merge', 'rebase'],
