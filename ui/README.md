@@ -1,6 +1,6 @@
 # Rail8 web application
 
-Open Canvas keeps workspace tabs in the top bar. Use the left-edge navigation or press Ctrl+K (Cmd+K on macOS) to open a screen or switch to an open tab. The shell discovers each module through its `module.tsx`. Each editor owns its working copy until its tab closes. A dirty editor can defer the close through `beforeClose`.
+Open Canvas keeps workspace tabs in the top bar. Use the left-edge navigation or press Ctrl+K (Cmd+K on macOS) to open a screen or switch to an open tab. The shell discovers each module through its `module.tsx`. Each editor owns its working copy until its tab closes. Right-click a tab, or press the menu key or Shift+F10 on it, to close it, the others, those to its left or right, or all but the pinned ones, and to pin or unpin it. When tabs about to close have unsaved changes, the shell asks once whether to save them; an editor tells it through `unsaved`, which also saves them. The button with three dots at the end of the row lists the tabs that do not fit.
 
 ## Development
 

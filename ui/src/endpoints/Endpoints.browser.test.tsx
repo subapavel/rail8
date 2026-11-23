@@ -204,16 +204,40 @@ describe('Endpoints', () => {
   });
 
   test('Cancel and closing the tab with unsaved changes ask first', async () => {
-    await open(fakeApi());
+    const api = fakeApi();
+    await open(api);
     await button('Edit').click();
     await field('host').fill('other');
     await button('Cancel').click();
     await button('Keep editing').click();
     await expect.element(field('host')).toHaveValue('other');
     await button('Close inbox').click();
-    await expect.element(text('Discard changes?')).toBeVisible();
-    await button('Discard changes').click();
+    await expect.element(page.getByRole('dialog', { name: 'Save changes to inbox?' })).toBeVisible();
+    await button('Close without saving').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).not.toBeInTheDocument();
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
+  test('Save and close saves the settings as they are now, then closes the tab', async () => {
+    const api = fakeApi();
+    await open(api);
+    await button('Edit').click();
+    await field('host').fill('other');
+    await button('Close inbox').click();
+    await button('Save and close').click();
+    await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).not.toBeInTheDocument();
+    expect(api.save).toHaveBeenCalledWith('demo/endpoints/inbox.yaml', expect.objectContaining({ host: 'other' }), '"v1"');
+  });
+
+  test('a save that fails when the tab closes keeps it open and says why', async () => {
+    await open(fakeApi([inbox], { save: vi.fn(async () => Promise.reject(new EndpointsError(500, 'the disk is full'))) }));
+    await button('Edit').click();
+    await field('host').fill('other');
+    await button('Close inbox').click();
+    await button('Save and close').click();
+    await expect.element(text('The file was not saved')).toBeVisible();
+    await expect.element(text('the disk is full')).toBeVisible();
+    await expect.element(field('host')).toHaveValue('other');
   });
 
   test("without the component's description the options are shown as JSON, read-only, with the reason", async () => {

@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { ReadSpinner } from '../../ReadSpinner';
+import type { UnsavedChanges } from '../../screens';
 import type { ApiClient, StoredMapping } from '../api/client';
 import { newAuthoringId } from '../model/authoring-id';
 import { RefusedMapping } from './RefusedMapping';
-import type { CloseGuard } from './StudioFrame';
 import type { BrowserStateStore } from './browser-state/browser-state';
 import { createWorkingCopyStore, type StudioTab } from './store/working-copy';
 
@@ -21,8 +21,8 @@ export interface StudioProps {
   startEditing?: boolean;
   /** Told after each save the API accepted. */
   onSaved?: () => void;
-  /** Given the question to ask before the mapping's tab closes while it has unsaved changes, and null when it has none. */
-  guardClose?: (guard: CloseGuard | null) => void;
+  /** Given what saves the mapping while it has unsaved changes, so that its tab can save them before it closes, and null when it has none. */
+  guardClose?: (changes: UnsavedChanges | null) => void;
 }
 
 /** The store of an open mapping, its ports wired to `api`. */

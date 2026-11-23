@@ -1,6 +1,6 @@
 import { ApiOutlined, ApartmentOutlined } from '@ant-design/icons';
-import type { Screen } from '../screens';
-import { EndpointForm, type CloseGuard } from './EndpointForm';
+import type { Screen, UnsavedChanges } from '../screens';
+import { EndpointForm } from './EndpointForm';
 import { EndpointList } from './EndpointList';
 import type { EndpointsApi } from './api';
 import { FlowList } from './flows/FlowList';
@@ -9,11 +9,11 @@ import type { FlowsApi } from './flows/api';
 
 /**
  * The tab of one endpoint file: its id is `endpoint:` and the file's path, its title the endpoint's id. Closing it while
- * the form has unsaved changes asks first.
+ * the form has unsaved changes asks first whether to save them.
  */
 export function endpointTab(api: EndpointsApi, path: string, id: string): Screen {
-  let guard: CloseGuard | null = null;
-  const guardClose = (next: CloseGuard | null) => {
+  let guard: UnsavedChanges | null = null;
+  const guardClose = (next: UnsavedChanges | null) => {
     guard = next;
   };
   return {
@@ -21,7 +21,7 @@ export function endpointTab(api: EndpointsApi, path: string, id: string): Screen
     title: id,
     group: 'Design',
     render: () => <EndpointForm api={api} path={path} guardClose={guardClose} />,
-    beforeClose: (close) => (guard === null ? close() : guard(close)),
+    unsaved: () => guard,
   };
 }
 
@@ -50,13 +50,14 @@ function readOnly(api: EndpointsApi): EndpointsApi {
 
 /**
  * The tab of one flow file: its id is `flow:` and the file's path, its title the flow's id. Its picture opens the
- * endpoints and flows it links to in tabs of their own. Closing it while the flow has unsaved changes asks first.
+ * endpoints and flows it links to in tabs of their own. Closing it while the flow has unsaved changes asks first
+ * whether to save them.
  */
 export function flowTab(flows: FlowsApi, endpoints: EndpointsApi, path: string, id: string): Screen {
   const shown = readOnly(endpoints);
   const idOf = (file: string) => file.split('/').at(-1)!.replace(/\.ya?ml$/, '');
-  let guard: CloseGuard | null = null;
-  const guardClose = (next: CloseGuard | null) => {
+  let guard: UnsavedChanges | null = null;
+  const guardClose = (next: UnsavedChanges | null) => {
     guard = next;
   };
   return {
@@ -74,7 +75,7 @@ export function flowTab(flows: FlowsApi, endpoints: EndpointsApi, path: string, 
         guardClose={guardClose}
       />
     ),
-    beforeClose: (close) => (guard === null ? close() : guard(close)),
+    unsaved: () => guard,
   };
 }
 

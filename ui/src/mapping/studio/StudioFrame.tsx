@@ -20,6 +20,7 @@ import { AboutStudio } from './AboutStudio';
 import type { BrowserStateStore } from './browser-state/browser-state';
 import { DefinitionTab } from './definition/DefinitionTab';
 import { DiscardDialog } from '../../DiscardDialog';
+import type { UnsavedChanges } from '../../screens';
 import { FunctionsTab } from './functions/FunctionsTab';
 import { MappingOverview } from './overview/MappingOverview';
 import { SaveConflict } from './SaveConflict';
@@ -46,9 +47,6 @@ export const lastTabKey = (mappingId: string) => `mapping:${mappingId}:studio-ta
 export function openingTab(kept: unknown): StudioTab {
   return VIEWS.find(([tab]) => tab === kept)?.[0] ?? 'overview';
 }
-
-/** The question asked before a mapping's tab closes: it calls `close` when the tab may close. */
-export type CloseGuard = (close: () => void) => void;
 
 const CHECK_PASSED = 'Structures assigned and graph connections complete.';
 
@@ -112,19 +110,16 @@ export interface StudioFrameProps {
   browserState: BrowserStateStore;
   /** Told after each save the service accepted. */
   onSaved?: () => void;
-  /** Given the question to ask before the mapping's tab closes while it has unsaved changes, and null when it has none. */
-  guardClose?: (guard: CloseGuard | null) => void;
+  /** Given what saves the mapping while it has unsaved changes, so that its tab can save them before it closes, and null when it has none. */
+  guardClose?: (changes: UnsavedChanges | null) => void;
 }
-
-/** What the Discard changes? dialog is asked for: Cancel's return to view mode, or closing the tab. */
-type Discarding = { then: 'return to view mode' } | { then: 'close its tab'; close: () => void };
 
 /**
  * The Mapping studio around one open mapping: a line with the studio's tabs, the mapping's name, and Edit, or Cancel,
  * Check and Save in edit mode, then the active tab's body. Arrow keys, Home and End move between the tabs; the tab
  * chosen is kept in the browser state for the mapping's next open. The structures are refreshed once on open; Save sends
- * `If-Match` and meets a save conflict in its dialog; Cancel, or closing the mapping's tab, with unsaved changes asks
- * before it discards them; the page asks before it unloads while the working copy differs from the baseline. While
+ * `If-Match` and meets a save conflict in its dialog; Cancel with unsaved changes asks before it discards them; while
+ * there are some, `guardClose` is given the studio's save; the page asks before it unloads while the working copy differs from the baseline. While
  * the studio is shown, Check and F7 check the working copy, and Ctrl+S and Cmd+S save it. A command the store
  * refuses shows why in an inline warning the author can dismiss.
  */
@@ -153,12 +148,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
     return () => window.removeEventListener('beforeunload', ask);
   }, [unsaved]);
 
-  const [discarding, setDiscarding] = useState<Discarding | null>(null);
-  useEffect(() => {
-    if (!unsaved) return undefined;
-    guardClose?.((close) => setDiscarding({ then: 'close its tab', close }));
-    return () => guardClose?.(null);
-  }, [guardClose, unsaved]);
+  const [discarding, setDiscarding] = useState(false);
 
   // Refresh on open. The answer is taken in mutate's callbacks, which TanStack Query calls only while the
   // studio is open: an answer that comes after it closed leaves the store alone.
@@ -212,23 +202,32 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<ReturnType<typeof describeError> | null>(null);
   const [saved, setSaved] = useState(0);
-  const save = async () => {
-    if (!editing || !unsaved || saving) return;
+  /** Saves the working copy: true once it is saved; false when it is not, and the studio says why. */
+  const save = async (): Promise<boolean> => {
+    if (!editing || !unsaved || saving) return false;
     setSaving(true);
     setFailure(null);
     try {
       await store.getState().save();
       // a save conflict resolves too: its dialog asks, and nothing was saved
-      if (!store.getState().conflict) {
-        setSaved((n) => n + 1);
-        onSaved?.();
-      }
+      if (store.getState().conflict) return false;
+      setSaved((n) => n + 1);
+      onSaved?.();
+      return true;
     } catch (error) {
       setFailure(describeError(error));
+      return false;
     } finally {
       setSaving(false);
     }
   };
+
+  // the save handed over is the one of the latest render, which knows the working copy as it is now
+  useEffect(() => {
+    if (!unsaved) return undefined;
+    guardClose?.({ save });
+    return () => guardClose?.(null);
+  });
 
   // Ctrl+S or Cmd+S saves and F7 checks, as Save and Check do, in the studio shown; a key pressed in a dialog is the
   // dialog's. The studios of the other open mappings sit in hidden tabs.
@@ -249,16 +248,10 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   });
 
   const leaveEditing = () => {
-    setDiscarding(null);
+    setDiscarding(false);
     setFailure(null);
     store.getState().discard();
     requestAnimationFrame(() => editButtonRef.current?.focus());
-  };
-  const discard = () => {
-    if (discarding?.then === 'close its tab') {
-      setDiscarding(null);
-      discarding.close();
-    } else leaveEditing();
   };
 
   // A refused command says why until it is dismissed or a command applies; each refusal is a new object, so the next one shows.
@@ -307,7 +300,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
         <Flex align="center" gap="small">
           {editing ? (
             <>
-              <Button onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>Cancel</Button>
+              <Button onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>Cancel</Button>
               <Button icon={<CheckCircleOutlined aria-hidden />} disabled={!unsaved || checking} onClick={runCheck}>
                 {checking ? 'Checking…' : 'Check'}
               </Button>
@@ -363,7 +356,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
           items={VIEWS.map(([key, label, Icon]) => ({ key, label, icon: <Icon aria-hidden />, children: panel[key] }))}
         />
       </div>
-      <DiscardDialog isOpen={discarding !== null} name={name} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
+      <DiscardDialog isOpen={discarding} name={name} then="return to view mode" onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
       <SaveConflict store={store} />
       {saved > 0 && (
         <Alert

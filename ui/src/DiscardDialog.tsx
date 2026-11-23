@@ -4,7 +4,7 @@ export interface DiscardDialogProps {
   isOpen: boolean;
   /** The name of what is being edited, such as a mapping's. */
   name: string;
-  /** What Discard changes does next, ending the question: "return to view mode" or "close its tab". */
+  /** What Discard changes does next, ending the question, such as "return to view mode". */
   then: string;
   onDiscard: () => void;
   onKeepEditing: () => void;
