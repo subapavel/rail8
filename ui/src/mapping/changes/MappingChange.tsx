@@ -34,17 +34,19 @@ export function MappingChange({ path, before, after }: MappingChangeProps) {
 
   useEffect(() => {
     let current = true;
-    Promise.all([sourcesOf(path, before), sourcesOf(path, after)]).then(
-      ([b, a]) => current && setRead({ before, after, changes: mappingChanges(path, before?.text ?? null, after?.text ?? null, { before: b, after: a }) }),
-      (error: unknown) => current && setRead({ failed: error instanceof Error ? error.message : String(error) }),
-    );
+    Promise.all([sourcesOf(path, before), sourcesOf(path, after)])
+      .then(([b, a]) => mappingChanges(path, before?.text ?? null, after?.text ?? null, { before: b, after: a }))
+      .then(
+        (changes) => current && setRead({ before, after, changes }),
+        (error: unknown) => current && setRead({ failed: error instanceof Error ? error.message : String(error) }),
+      );
     return () => {
       current = false;
     };
   }, [path, before, after]);
 
   if (read === null || ('changes' in read && (read.before !== before || read.after !== after))) return <ReadSpinner label={`Reading the UDF sources of ${path}`} />;
-  if ('failed' in read) return <Alert type="error" showIcon title="The UDF sources could not be read" description={read.failed} />;
+  if ('failed' in read) return <Alert type="error" showIcon title="The change could not be read" description={read.failed} />;
   const { changes } = read;
   if (changes.status === 'same') return <Typography.Text type="secondary">No change.</Typography.Text>;
   if (changes.status === 'formatting') return <Typography.Text>Only the formatting changed.</Typography.Text>;
