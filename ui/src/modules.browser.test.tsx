@@ -16,14 +16,20 @@ describe('the artifact kinds the modules register', () => {
     expect(kinds.get('mapping')!.open('orders/mappings/order.mapping.json')).toMatchObject({ id: 'mapping:orders/mappings/order' });
   });
 
-  test('the endpoint and the mapping read a change as "changed"', async () => {
-    for (const kind of ['endpoint', 'mapping']) {
+  test('the endpoint and the mapping draw their own change', async () => {
+    const side = (rev: string, text: string) => ({ rev, text, artifacts: async () => [], read: async () => null });
+    const endpoint = 'schemaVersion: 1\nkind: endpoint\nid: in\nscheme: http\ndirection: in\nconfig:\n  path: /orders\n';
+    const mapping = '{"formatVersion": 1}';
+    for (const [kind, path, before, after, says] of [
+      ['endpoint', 'orders/endpoints/in.yaml', endpoint, `# the orders\n${endpoint}`, 'Only comments or formatting changed.'],
+      ['mapping', 'orders/mappings/order.mapping.json', mapping, `${mapping}\n`, 'Only the formatting changed.'],
+    ] as const) {
       const { Change } = kinds.get(kind)!;
       const host = document.createElement('div');
       document.body.append(host);
       const root = createRoot(host);
-      root.render(<Change path="orders/a.yaml" before={null} after={null} />);
-      await expect.element(page.getByText('changed', { exact: true })).toBeVisible();
+      root.render(<Change path={path} before={side('a'.repeat(40), before)} after={side('work', after)} />);
+      await expect.element(page.getByText(says)).toBeVisible();
       root.unmount();
       host.remove();
     }

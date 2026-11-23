@@ -3,7 +3,8 @@ import { useContext, useEffect, useMemo, useState } from 'react';
 import { ArtifactKinds, type Side } from '../artifacts';
 import { ReadSpinner } from '../ReadSpinner';
 import { PackagesError, type Change, type FileVersion, type PackagesApi } from './api';
-import { LineDiff } from './LineDiff';
+import { LineDiff } from '../LineDiff';
+import { PackageFileChange } from './PackageFileChange';
 
 export interface FileChangeProps {
   api: PackagesApi;
@@ -46,9 +47,10 @@ function sideOf(api: PackagesApi, repository: string, rev: string, text: string)
 
 /**
  * The readable change of one file of a package between two revisions. A flow, an endpoint or a mapping is drawn by
- * the module that owns its kind; a binary file shows its two sizes; any other file shows its line diff. A file over
- * the read limit reads "too large to compare". When the version on disk no longer has the tag the change was listed
- * with, nothing is drawn and `onStale` is told.
+ * the module that owns its kind; a `package.yaml`, a `package.lock` or a `folder.yaml` shows its fields and its
+ * dependencies; a binary file shows its two sizes; any other file shows its line diff. A file over the read limit
+ * reads "too large to compare". When the version on disk no longer has the tag the change was listed with, nothing is
+ * drawn and `onStale` is told.
  */
 export function FileChange({ api, repository, change, before, after, onStale }: FileChangeProps) {
   const kinds = useContext(ArtifactKinds);
@@ -98,5 +100,8 @@ export function FileChange({ api, repository, change, before, after, onStale }: 
   }
   const kind = kinds.get(change.kind);
   if (kind !== undefined && sides !== null) return <kind.Change path={change.path} before={sides.before} after={sides.after} />;
+  if (change.kind === 'package' || change.kind === 'lock' || change.kind === 'folder') {
+    return <PackageFileChange path={change.path} before={b?.text ?? null} after={a?.text ?? null} />;
+  }
   return <LineDiff before={b?.text ?? ''} after={a?.text ?? ''} />;
 }

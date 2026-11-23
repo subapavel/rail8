@@ -1,15 +1,8 @@
+import { leaves, same, type SettingChange } from '../../leaves';
 import { readFlow } from './flowYaml';
 import type { Path } from './types';
 
-/** The longest a value of a changed setting is written: longer ones are cut, ending in `…`. */
-const MAX_VALUE = 200;
-
-/** One changed setting, leaf by leaf: its key path, such as `delivery.mode` or `routes[1].when`, and its two values on one line each; `none` when absent. */
-export interface SettingChange {
-  key: string;
-  before: string;
-  after: string;
-}
+export type { SettingChange };
 
 /**
  * One step that differs between the two versions, in its list (`steps`, or `processes.<name>.steps`):
@@ -53,49 +46,6 @@ export interface FlowChanges {
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/** Whether two values read from YAML are equal: the same scalars, lists in order, and mappings by key in any order. */
-function same(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => same(v, b[i]));
-  if (isRecord(a) && isRecord(b)) {
-    const keys = Object.keys(a);
-    return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && same(a[k], b[k]));
-  }
-  return false;
-}
-
-/** A value on one line of at most {@link MAX_VALUE} characters: JSON, so a text is in quotes as written, `secret://` names included. */
-function written(value: unknown): string {
-  const text = value instanceof Date ? JSON.stringify(value.toISOString()) : (JSON.stringify(value) ?? String(value));
-  return text.length > MAX_VALUE ? `${text.slice(0, MAX_VALUE - 1)}…` : text;
-}
-
-/** The key path of `key` under `at`: `a.b`, and `a[2]` for an item of a list. */
-const keyOf = (at: string, key: string | number) => (typeof key === 'number' ? `${at}[${key}]` : at === '' ? key : `${at}.${key}`);
-
-/**
- * The leaves that differ between `before` and `after`, under the key path `at`. A mapping or a list on both sides is
- * compared key by key, or item by item; anything else is one leaf. `undefined` is a missing value.
- */
-function leaves(before: unknown, after: unknown, at: string, out: SettingChange[]): void {
-  if (same(before, after)) return;
-  const nonEmpty = (v: unknown) => (isRecord(v) && Object.keys(v).length > 0) || (Array.isArray(v) && v.length > 0);
-  if (isRecord(before) && isRecord(after)) {
-    const keys = [...Object.keys(before), ...Object.keys(after).filter((k) => !Object.hasOwn(before, k))];
-    for (const k of keys) leaves(before[k], after[k], keyOf(at, k), out);
-    return;
-  }
-  if (Array.isArray(before) && Array.isArray(after)) {
-    for (let i = 0; i < Math.max(before.length, after.length); i++) leaves(before[i], after[i], keyOf(at, i), out);
-    return;
-  }
-  // a mapping or list against a missing value is listed leaf by leaf; against a value of another shape it is one leaf
-  if (before === undefined && nonEmpty(after)) return leaves(Array.isArray(after) ? [] : {}, after, at, out);
-  if (after === undefined && nonEmpty(before)) return leaves(before, Array.isArray(before) ? [] : {}, at, out);
-  out.push({ key: at, before: before === undefined ? 'none' : written(before), after: after === undefined ? 'none' : written(after) });
-}
 
 /** A step's effective name, as the flow screen names it: its `name`, else the process a call calls, else its type; `step n` for an item that is no step. */
 function nameOf(step: unknown, index: number): string {
@@ -152,8 +102,7 @@ function compareList(before: readonly unknown[], after: readonly unknown[], path
       out.steps.push({ status: 'added', list, name: s.name, path: [...path, i], settings: [] });
       return;
     }
-    const settings: SettingChange[] = [];
-    leaves(before[at], after[i], '', settings);
+    const settings = leaves(before[at], after[i]);
     if (!inOrder.has(s.key)) out.steps.push({ status: 'moved', list, name: s.name, path: [...path, i], settings });
     else if (settings.length > 0) out.steps.push({ status: 'changed', list, name: s.name, path: [...path, i], settings });
   });
@@ -195,7 +144,7 @@ export function flowChanges(before: string | null, after: string | null): FlowCh
 
   const a = partsOf(older);
   const b = partsOf(newer);
-  if (older !== null && newer !== null) leaves(a.settings, b.settings, '', out.settings);
+  if (older !== null && newer !== null) out.settings = leaves(a.settings, b.settings);
   compareList(a.steps, b.steps, ['steps'], 'steps', out);
   const names = [...Object.keys(b.processes), ...Object.keys(a.processes).filter((n) => !Object.hasOwn(b.processes, n))];
   for (const name of names) {

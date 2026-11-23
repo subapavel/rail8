@@ -1,7 +1,7 @@
-import { ChangedOnly } from '../ChangedOnly';
 import type { Side } from '../artifacts';
 import type { UiModule } from '../screens';
 import { httpEndpointsApi } from './api';
+import { EndpointChange } from './EndpointChange';
 import { httpFlowsApi } from './flows/api';
 import { FlowChange } from './flows/FlowChange';
 import { endpointsScreen, endpointTab, flowsScreen, flowTab } from './screen';
@@ -12,6 +12,11 @@ const flows = httpFlowsApi();
 /** The readable change of a flow file, drawn over the working folder's flows on disk. */
 function FlowFileChange(props: { path: string; before: Side | null; after: Side | null }) {
   return <FlowChange api={flows} {...props} />;
+}
+
+/** The readable change of an endpoint file, titled by the settings descriptions of the node's components. */
+function EndpointFileChange(props: { path: string; before: Side | null; after: Side | null }) {
+  return <EndpointChange api={endpoints} {...props} />;
 }
 
 /** The id a tab opened from a package shows for the file at `path`: its name without `.yaml` or `.yml`. */
@@ -26,6 +31,6 @@ export default {
   screens: [endpointsScreen(endpoints), flowsScreen(flows, endpoints)],
   artifacts: [
     { kind: 'flow', open: (path) => flowTab(flows, endpoints, path, idOf(path)), Change: FlowFileChange },
-    { kind: 'endpoint', open: (path) => endpointTab(endpoints, path, idOf(path)), Change: ChangedOnly },
+    { kind: 'endpoint', open: (path) => endpointTab(endpoints, path, idOf(path)), Change: EndpointFileChange },
   ],
 } satisfies UiModule;

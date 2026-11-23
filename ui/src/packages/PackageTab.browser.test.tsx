@@ -106,6 +106,16 @@ describe('the tab of a package', () => {
     await expect.element(page.getByText('The flow change of orders/flows/orders.yaml, commit: from: { endpoint: in } to work: from: { endpoint: out }')).toBeVisible();
   });
 
+  test('shows a package.lock by its dependencies, with each pin before and after', async () => {
+    const lock = (commit: string) =>
+      `schemaVersion: 1\nkind: lock\ndependencies:\n  - name: "common"\n    version: "1.2.0"\n    content: "sha256:${'1'.repeat(64)}"\n    repository: "common"\n    commit: "${commit}"\n`;
+    await openOrders({ clones: [{ folder: 'orders', files: { 'package.lock': lock('a'.repeat(40)) }, edits: { 'package.lock': lock('b'.repeat(40)) } }] });
+
+    await expand(changeRow('package.lock'));
+    const row = page.getByRole('table', { name: 'Dependencies of orders/package.lock' }).getByRole('row').filter({ hasText: 'common' });
+    await expect.element(row).toMatchTextContent(`common1.2.01.2.0common at ${'a'.repeat(40)}, sha256:${'1'.repeat(64)}common at ${'b'.repeat(40)}, sha256:${'1'.repeat(64)}Changed`);
+  });
+
   test('shows the two sizes of a binary file, and reads "too large to compare" for a file over 1 MiB', async () => {
     await openOrders({
       clones: [{ folder: 'orders', files: { 'logo.png': 'PNG\0ab', 'big.txt': 'small\n' }, edits: { 'logo.png': 'PNG\0abcd', 'big.txt': 'x'.repeat(1024 * 1024 + 1) } }],
