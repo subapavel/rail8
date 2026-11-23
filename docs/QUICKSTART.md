@@ -48,7 +48,8 @@ cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
 Leave the terminal running and open **http://localhost:5173** in your browser. If that port is occupied,
 add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**.
 The UI has **Messages**, the list of the messages the node recorded, **Packages**, each package of `RAIL8_WORKSPACE`
-with its branch, last commit, changed files and what the node runs of it, **Endpoints**, the
+with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
+artifacts and history, **Endpoints**, the
 settings form of each endpoint file in `RAIL8_WORKSPACE`, **Flows**, the picture of each flow file in it, and
 **Mappings**, the mapping studio. The UI sends its
 `/admin` requests to the node on `localhost:8081` and adds the token itself, so the browser never sees it.

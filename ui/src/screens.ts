@@ -1,4 +1,5 @@
 import { createContext, type ReactNode } from 'react';
+import type { ArtifactKind } from './artifacts';
 
 /**
  * A screen of the application: its id, the title on its tab and in the navigation, and what it shows. `render` is
@@ -31,11 +32,13 @@ export interface UnsavedChanges {
 
 /**
  * What the `module.tsx` of a module of the UI, a folder `src/<name>/`, default-exports: its place in the navigation,
- * after Home and before every module of a higher `order`, and its screens, in the order the navigation lists them.
+ * after Home and before every module of a higher `order`, its screens, in the order the navigation lists them, and the
+ * kinds of artifact it owns, which the tab of a package opens and compares through it.
  */
 export interface UiModule {
   order: number;
   screens: readonly Screen[];
+  artifacts?: readonly ArtifactKind[];
 }
 
 export const RegisteredScreens = createContext<readonly Screen[]>([]);

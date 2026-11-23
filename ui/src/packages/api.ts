@@ -1,3 +1,7 @@
+import type { Artifact, ChangeStatus, Kind } from '../artifacts';
+
+export type { Artifact, ChangeStatus, Kind };
+
 /** A commit of a package's clone: its id (40 hex digits), its parents' ids, its subject, its author's name and its author date. */
 export interface Commit {
   id: string;
@@ -70,9 +74,58 @@ export interface PackageList {
   truncated: boolean;
 }
 
+/**
+ * One file that differs between two versions of a package: its path relative to the working folder, with `/`, as the
+ * editors' routes name it; its kind; how it differs, and the path it was renamed from; whether the index holds
+ * `HEAD`'s version (`clean`), the version on disk (`staged`) or neither (`differs`); the git half's tag of its bytes on
+ * disk (null when it is not on disk, or the newer version is a commit); and whether a version is over the read limit,
+ * so that it is listed and not compared.
+ */
+export interface Change {
+  path: string;
+  kind: Kind;
+  status: ChangeStatus;
+  renamedFrom?: string;
+  index: 'clean' | 'staged' | 'differs';
+  tag: string | null;
+  large?: true;
+}
+
+/**
+ * One package, as its tab shows it: its row, every file of its folder that differs from `HEAD`, sorted by path, and its
+ * artifacts on disk, sorted by path. `truncated` says when either list was cut at its limit.
+ */
+export interface PackageState extends PackageRow {
+  changes: Change[];
+  artifacts: Artifact[];
+  truncated: boolean;
+}
+
+/** One version of one file: its text, or its size when it is binary, and the git half's tag of its bytes. */
+export type FileVersion = ({ text: string } | { binary: true; size: number }) & { etag: string };
+
+/** One page of a package's first-parent history, newest first, and the commit the next page starts at (null: none). */
+export interface LogPage {
+  items: Commit[];
+  next: string | null;
+}
+
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
 export interface PackagesApi {
   list(): Promise<PackageList>;
+  /** The package of the working folder whose clone is the folder `repository`. */
+  get(repository: string): Promise<PackageState>;
+  /**
+   * One version of the file at `path`, relative to the working folder, at `rev`. A revision is `work`, the files on
+   * disk, or a commit of 40 hex digits that the clone holds; never a name such as `HEAD`.
+   */
+  file(repository: string, rev: string, path: string): Promise<FileVersion>;
+  /** The files that differ between the commit `from` and `to`, `work` or a commit, sorted by path. */
+  changes(repository: string, from: string, to: string): Promise<{ changes: Change[]; truncated: boolean }>;
+  /** The package's artifacts at `rev`, sorted by path. */
+  artifacts(repository: string, rev: string): Promise<{ artifacts: Artifact[]; truncated: boolean }>;
+  /** The first-parent history of `HEAD`, or of the commit `before`, `limit` commits to a page (50 by default, at most 100). */
+  log(repository: string, page?: { before?: string; limit?: number }): Promise<LogPage>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
@@ -120,9 +173,22 @@ export function httpPackagesApi(send: typeof fetch = (input, init) => fetch(inpu
     return res;
   }
 
+  const of = (repository: string, route = '', query: Record<string, string | undefined> = {}) => {
+    const search = new URLSearchParams(Object.entries(query).filter((e): e is [string, string] => e[1] !== undefined)).toString();
+    return `/git/packages/${encodeURIComponent(repository)}${route}${search === '' ? '' : `?${search}`}`;
+  };
+  const json = async <T>(url: string) => (await (await call(url)).json()) as T;
+
   return {
-    async list() {
-      return (await (await call('/git/packages')).json()) as PackageList;
+    list: () => json<PackageList>('/git/packages'),
+    get: (repository) => json<PackageState>(of(repository)),
+    async file(repository, rev, path) {
+      const res = await call(of(repository, '/file', { rev, path }));
+      const body = (await res.json()) as { text: string } | { binary: true; size: number };
+      return { ...body, etag: res.headers.get('etag') ?? '' };
     },
+    changes: (repository, from, to) => json(of(repository, '/changes', { from, to })),
+    artifacts: (repository, rev) => json(of(repository, '/artifacts', { rev })),
+    log: (repository, page = {}) => json<LogPage>(of(repository, '/log', { before: page.before, limit: page.limit?.toString() })),
   };
 }

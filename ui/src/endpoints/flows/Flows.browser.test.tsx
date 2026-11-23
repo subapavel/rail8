@@ -184,6 +184,20 @@ describe('Flows', () => {
     await expect.element(text('the file is not YAML: unclosed')).toBeVisible();
   });
 
+  test('names the package of each flow file, and its filter keeps the files of one package', async () => {
+    render(fakeFlows({ 'demo/flows/invoice.yaml': invoice, 'billing/flows/order.yaml': order }));
+    const table = page.getByRole('table', { name: 'Flow files' });
+    const rows = () => table.getByRole('row').filter({ hasText: /\.yaml/ });
+    await expect.element(rows()).toHaveLength(3);
+    await expect.element(rows().filter({ hasText: 'billing/flows/order.yaml' })).toMatchTextContent('billing');
+
+    await table.getByRole('columnheader', { name: /Package/ }).getByRole('button').click();
+    await page.getByRole('menuitem', { name: 'demo' }).click();
+    await page.getByRole('button', { name: 'OK' }).click();
+    await expect.element(rows()).toHaveLength(2);
+    await expect.element(rows().filter({ hasText: 'billing' })).not.toBeInTheDocument();
+  });
+
   test("draws the flow's steps and opens its properties below the canvas", async () => {
     await open();
     await expect.element(button('Edit')).toBeVisible();

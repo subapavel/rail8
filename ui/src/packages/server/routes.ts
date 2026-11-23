@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { Refusal, send, sendFailure } from '../../../server/workingFolder.ts';
 import type { PackageList } from '../api.ts';
+import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
 import type { Runner } from './runner.ts';
@@ -34,36 +35,87 @@ const PREFIX = '/git';
  *
  * - `GET /git/packages`: 200 {@link PackageList}. `configured` is false, with empty lists, when no working folder is
  *   set; 404 when the folder that is set does not exist; 503 when too many git calls wait.
+ * - `GET /git/packages/{repository}`: 200 `PackageState` of the package whose clone is that folder.
+ * - `GET …/{repository}/file?rev=&path=`: 200 `{text}`, or `{binary: true, size}`, with the `ETag` of its bytes.
+ * - `GET …/{repository}/changes?from=&to=`: 200 `{changes, truncated}`, the files that differ between two revisions.
+ * - `GET …/{repository}/artifacts?rev=`: 200 `{artifacts, truncated}`, the package's artifacts at a revision.
+ * - `GET …/{repository}/log?before=&limit=`: 200 `{items, next}`, a page of the first-parent history.
+ *
+ * A revision is `work` or a commit of 40 hex digits, never a name such as `HEAD`. Under a package, 400 refuses a
+ * malformed repository name, revision or path, or a path with a `.git` segment; 404 a folder that is no package, a
+ * path outside it, no file there or a commit the clone lacks; 403 a path whose real path leaves the package's real
+ * folder; 413 a file over the read limit of 1 MiB.
  *
  * Every refusal is `{error}`. Every other path goes to `next`.
  */
 export function gitPackages(options: GitPackagesOptions) {
   const host = hostOf(options.node.target);
 
+  const rootOf = async (workspace: string): Promise<string> => {
+    try {
+      return await realpath(workspace);
+    } catch {
+      throw new Refusal(404, `the working folder ${workspace} does not exist`);
+    }
+  };
+  const nodeState = (): NodeState => {
+    let answer: Promise<NodeRead> | undefined;
+    return { host, read: () => (answer ??= readNode(options.node, options.timer, options.fetch)) };
+  };
+
   const list = async (): Promise<PackageList> => {
     const shown = { writable: options.writable, node: host };
     if (options.workspace === undefined) return { configured: false, ...shown, packages: [], others: [], truncated: false };
-    let root: string;
-    try {
-      root = await realpath(options.workspace);
-    } catch {
-      throw new Refusal(404, `the working folder ${options.workspace} does not exist`);
-    }
-    let answer: Promise<NodeRead> | undefined;
-    const node: NodeState = { host, read: () => (answer ??= readNode(options.node, options.timer, options.fetch)) };
-    return { configured: true, ...shown, ...(await listPackages(options.git, root, node)) };
+    return { configured: true, ...shown, ...(await listPackages(options.git, await rootOf(options.workspace), nodeState())) };
   };
 
-  const answer = async (req: IncomingMessage, path: string): Promise<unknown> => {
+  const one = async (repository: string, route: string | undefined, query: URLSearchParams): Promise<{ value: unknown; etag?: string }> => {
+    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+    const clone = await cloneOf(options.git, await rootOf(options.workspace), repository);
+    const param = (name: string) => query.get(name) ?? undefined;
+    const required = (name: string) => {
+      const value = query.get(name);
+      if (value === null) throw new Refusal(400, `the query names no ${name}`);
+      return value;
+    };
+    switch (route) {
+      case undefined:
+        return { value: await stateOf(options.git, clone, repository, nodeState()) };
+      case 'file': {
+        const { etag, ...value } = await fileOf(options.git, clone, repository, required('rev'), required('path'));
+        return { value, etag };
+      }
+      case 'changes':
+        return { value: await changesOf(options.git, clone, repository, required('from'), required('to')) };
+      case 'artifacts':
+        return { value: await artifactsAt(options.git, clone, repository, required('rev')) };
+      case 'log':
+        return { value: await logOf(options.git, clone, repository, nodeState(), param('before'), param('limit')) };
+      default:
+        throw new Refusal(404, `the git half has no route ${route} of a package`);
+    }
+  };
+
+  const answer = async (req: IncomingMessage, url: URL): Promise<{ value: unknown; etag?: string }> => {
     const unfit = await options.ready;
     if (unfit !== null) throw new Refusal(503, unfit);
-    if (path !== '/git/packages') throw new Refusal(404, `the git half has no route ${path}`);
-    if (req.method !== 'GET') throw new Refusal(405, 'GET /git/packages is the only way to call this route');
-    return list();
+    const path = url.pathname;
+    const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
+    if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
+    if (req.method !== 'GET') throw new Refusal(405, `GET is the only way to call ${path}`);
+    if (under === null) return { value: await list() };
+    let repository: string;
+    try {
+      repository = decodeURIComponent(under[1]!);
+    } catch {
+      throw new Refusal(400, 'the repository name is not well encoded');
+    }
+    return one(repository, under[2], url.searchParams);
   };
 
   return (req: IncomingMessage, res: ServerResponse, next: () => void) => {
-    const path = new URL(req.url ?? '', 'http://localhost').pathname;
+    const url = new URL(req.url ?? '', 'http://localhost');
+    const path = url.pathname;
     if (path !== PREFIX && !path.startsWith(`${PREFIX}/`)) {
       next();
       return;
@@ -73,8 +125,8 @@ export function gitPackages(options: GitPackagesOptions) {
       send(res, 403, { error: refused });
       return;
     }
-    answer(req, path).then(
-      (value) => send(res, 200, value),
+    answer(req, url).then(
+      ({ value, etag }) => send(res, 200, value, etag),
       (error: unknown) => sendFailure(res, error),
     );
   };

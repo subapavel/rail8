@@ -120,6 +120,20 @@ describe('Endpoints', () => {
     await expect.element(text('an endpoint file names its id and scheme')).toBeVisible();
   });
 
+  test('names the package of each endpoint file, and its filter keeps the files of one package', async () => {
+    render(fakeApi([inbox, { ...httpIn, path: 'billing/endpoints/http-in.yaml' }]));
+    const table = page.getByRole('table', { name: 'Endpoint files' });
+    const rows = () => table.getByRole('row').filter({ hasText: /\.yaml/ });
+    await expect.element(rows()).toHaveLength(3);
+    await expect.element(rows().filter({ hasText: 'billing/endpoints/http-in.yaml' })).toMatchTextContent('billing');
+
+    await table.getByRole('columnheader', { name: /Package/ }).getByRole('button').click();
+    await page.getByRole('menuitem', { name: 'billing' }).click();
+    await page.getByRole('button', { name: 'OK' }).click();
+    await expect.element(rows()).toHaveLength(1);
+    await expect.element(rows().nth(0)).toMatchTextContent('billing/endpoints/http-in.yaml');
+  });
+
   test('says how to set a working folder when none is set', async () => {
     render(fakeApi([], { list: vi.fn(async () => ({ configured: false, editable: false, truncated: false, items: [] })) }));
     await expect.element(text('No working folder')).toBeVisible();

@@ -54,8 +54,17 @@ export const httpWorld: Build = async (seed) => {
     const manifest = manifestFor(seeded);
     if (manifest !== null) await write(join(clone, 'package.yaml'), manifest);
     for (const [path, text] of Object.entries(seeded.files ?? {})) await write(join(clone, path), text);
+    for (const path of seeded.outside ?? []) {
+      await write(join(temp, 'outside', 'secret.txt'), 'not of the package\n');
+      await mkdir(dirname(join(clone, path)), { recursive: true });
+      await symlink(join(temp, 'outside', 'secret.txt'), join(clone, path));
+    }
     for (const label of seeded.commits ?? ['first']) {
       await write(join(clone, `${label}.txt`), `${label}\n`);
+      for (const [path, text] of Object.entries(seeded.commitFiles?.[label] ?? {})) {
+        if (text === null) await rm(join(clone, path));
+        else await write(join(clone, path), text);
+      }
       commit(clone, seeded.folder, label);
     }
     if (seeded.upstream !== undefined) {
@@ -93,6 +102,17 @@ export const httpWorld: Build = async (seed) => {
       }
     }
     if (seeded.detached) git(clone, 'checkout', '-q', '--detach');
+    for (const [from, to] of Object.entries(seeded.moves ?? {})) {
+      await mkdir(dirname(join(clone, to)), { recursive: true });
+      git(clone, 'mv', '--', from, to);
+    }
+    for (const [path, text] of Object.entries(seeded.staged ?? {})) {
+      if (text === null) git(clone, 'rm', '-q', '--', path);
+      else {
+        await write(join(clone, path), text);
+        git(clone, 'add', '--', path);
+      }
+    }
     for (const [path, text] of Object.entries(seeded.edits ?? {})) {
       if (text === null) await rm(join(clone, path));
       else await write(join(clone, path), text);
