@@ -67,13 +67,8 @@ class ValkeyCacheTest {
         try (ServerSocket silent = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {   // accepts, never answers
             Cache c = cache("redis://127.0.0.1:" + silent.getLocalPort());
             CompletableFuture<String> got = async(() -> c.get("k", () -> new Cache.Entry("loaded", Duration.ofMinutes(5))));
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (!(timer.pending() == 1 && timer.nextDelay().equals(ValkeyCache.CALL))) {
-                if (got.isDone()) fail("the call ended before its bound: " + got.join());
-                if (System.nanoTime() > deadline) fail("no call to Valkey is pending");
-                Thread.onSpinWait();
-            }
-            clock.advance(ValkeyCache.CALL);
+            endCall(got);   // the read
+            endCall(got);   // the write of what the node loaded
             assertEquals("loaded", got.get(10, TimeUnit.SECONDS));
         }
     }
@@ -87,6 +82,25 @@ class ValkeyCacheTest {
             assertThrows(IllegalArgumentException.class, () -> caches.scope(MessageContext.DEFAULT_TENANT, bad, "t"), bad);
         }
         caches.scope(MessageContext.DEFAULT_TENANT, "a".repeat(64), "any step type: here, too");
+    }
+
+    /** Waits until a call to Valkey is the one thing on the timer, then moves the clock past its bound. */
+    private void endCall(CompletableFuture<?> got) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!callPending()) {
+            if (got.isDone()) fail("the get ended before the bound of its call: " + got.join());
+            if (System.nanoTime() > deadline) fail("no call to Valkey is pending");
+            Thread.onSpinWait();
+        }
+        clock.advance(ValkeyCache.CALL);
+    }
+
+    private boolean callPending() {
+        try {
+            return timer.pending() == 1 && timer.nextDelay().equals(ValkeyCache.CALL);
+        } catch (IllegalStateException cancelledMeanwhile) {   // nothing pending by the time the delay was asked for
+            return false;
+        }
     }
 
     private Cache cache(String uri) {

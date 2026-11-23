@@ -103,7 +103,7 @@ import java.util.function.Supplier;
  * {@code default} tenant's key, their refs in the work pool, bounded by {@code RAIL8_BLOB_DURABLE_MAX}; no spool; a body in another
  * live node's journal read through the peer link) and states its notices once — the profile's, one journal copy and, when no
  * other member is live, that nobody takes its items over —, opens the stores (the work queue claiming only what this journal holds) and
- * the poller leases (in the Valkey of {@code RAIL8_VALKEY_URI} over one client the
+ * the poller leases and the cache of custom code (in the Valkey of {@code RAIL8_VALKEY_URI}, each over a client of its own the
  * node builds; without it in the node's memory, with one WARNING), builds the {@link Deployments} over them and the node's
  * one {@link Targets} ({@code RAIL8_TARGET_*}: every flow it builds sends under it, across packages and versions), starts the
  * {@link CpuSampler} when {@code RAIL8_CPU_SAMPLING} sets a period, binds the HTTP port — until the start returns it answers
@@ -145,11 +145,12 @@ public final class Node implements AutoCloseable {
     private static final String TENANT = "default";
 
     /**
-     * The connections of the node's Valkey client, and the commands it queues when all are busy: every get of the cache of custom
-     * code is a round trip, beside the poller leases.
+     * The connections of the Valkey client of the cache of custom code, and the commands it queues when all are busy: every get
+     * is a round trip, and a full queue fails the call at once, so the node loads on its own. The poller leases have a client
+     * of their own, which the cache never holds up.
      */
-    private static final int VALKEY_CONNECTIONS = 16;
-    private static final int VALKEY_QUEUED = 1_024;
+    private static final int CACHE_CONNECTIONS = 16;
+    private static final int CACHE_QUEUED = 256;
 
     /** The exit status of a superseded node (fail-stop): a peer released its lease, or a newer incarnation joined. */
     public static final int SUPERSEDED = 3;
@@ -327,11 +328,19 @@ public final class Node implements AutoCloseable {
             PollerLeases leases;
             Caches caches;   // the cache of custom code
             if (config.leases().valkey().isPresent()) {
-                Redis valkey = Redis.createClient(vertx, new RedisOptions().setConnectionString(config.leases().valkey().get().toString())
-                        .setMaxPoolSize(VALKEY_CONNECTIONS).setMaxPoolWaiting(VALKEY_QUEUED));   // connects on its first command
-                closeValkey = () -> valkey.close().await();
+                String uri = config.leases().valkey().get().toString();
+                Redis valkey = Redis.createClient(vertx, uri);   // each client connects on its first command
+                Redis cached = Redis.createClient(vertx, new RedisOptions().setConnectionString(uri)
+                        .setMaxPoolSize(CACHE_CONNECTIONS).setMaxPoolWaiting(CACHE_QUEUED));
+                closeValkey = () -> {
+                    try {
+                        cached.close().await();
+                    } finally {
+                        valkey.close().await();
+                    }
+                };
                 leases = new ValkeyPollerLeases(valkey);
-                caches = new ValkeyCache(valkey, master, config.nodeId(), clock, timer, ids);   // sealed under the master key the pool shares
+                caches = new ValkeyCache(cached, master, config.nodeId(), clock, timer, ids);   // sealed under the master key the pool shares
             } else {
                 LOG.log(System.Logger.Level.WARNING, "RAIL8_VALKEY_URI is not set: this node holds its poller leases and the cache of custom "
                         + "code in its own memory. Alone that is enough; two such nodes on one polling endpoint both poll it (duplicates, never "

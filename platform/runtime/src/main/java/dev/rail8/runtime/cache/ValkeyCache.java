@@ -14,6 +14,7 @@ import io.vertx.redis.client.Response;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
@@ -49,7 +50,7 @@ import java.util.regex.Pattern;
  *       under {@code #}.</li>
  * </ul>
  * The step type is URL-encoded, so it holds no {@code :}, and the key comes last. An owner is the node's id and an id of its
- * own. Each change is one script, which Valkey runs with nothing in between.
+ * own. Each change is one script, which Valkey runs with nothing in between; a full Valkey refuses a script whole.
  *
  * <p><b>A get.</b> A value whose expiry has not passed on this node's clock is a hit. Otherwise the caller takes the lock and
  * runs its loader, renewing the lock every {@link #RENEW} while the loader runs. The value is written only while the lock
@@ -58,18 +59,27 @@ import java.util.regex.Pattern;
  * or the lock is free; after {@link #MAX_WAIT} on its clock it fails. A lock left by a node that stopped lapses within
  * {@link #LEASE}. When the load it waited for failed, it fails with an {@link IllegalStateException} naming the key.
  *
+ * <p>A key loads on one node at a time while that node keeps its lock. A node that stalls for longer than the lease, or a
+ * Valkey that fails over to a replica without the lock, lets a second node load; only the load that still holds the lock is
+ * kept. A node whose clock runs ahead of the writer's treats a value as expired early and loads it again; Valkey drops it
+ * after its ttl in any case.
+ *
  * <p><b>The share.</b> A package keeps at most {@link #SHARE_ENTRIES} entries and {@link #SHARE_BYTES} bytes (each entry's
- * value key, expiry and sealed value). A write first forgets up to 64 entries that Valkey's clock says have expired; then,
- * while the package is over its share, the entry nearest its expiry, other than the one written, goes.
+ * value key, expiry and sealed value, and its name in the package's entries and bytes). A write first forgets up to 64
+ * entries that Valkey's clock says have expired; then, while the package is over its share, the entry nearest its expiry,
+ * other than the one written, goes.
  *
  * <p><b>Sealing.</b> A value is AES-256-GCM under a key {@link ChunkedAead#derive derived} from the master key, which the
- * nodes of a pool share, with a fresh salt per value. Its AAD is the value key's name and its expiry, so a value moved to
- * another key, or given a later expiry, does not open; such a value is logged once and loaded again.
+ * nodes of a pool share, with a fresh salt per value. Its AAD is the value key's name, after its length, and its expiry in
+ * 8 bytes, so a value moved to another key, or given a later expiry, does not open; such a value is logged once and loaded
+ * again.
  *
- * <p><b>Valkey down.</b> Every call waits at most {@link #CALL} on the injected timer. A call that fails runs the load on this
- * node and keeps the value in the front for at most {@link #OUTAGE_KEEP}, so the calls after it do not wait on Valkey. One
- * warning is logged when Valkey stops answering, one line when it answers again. A remove that does not reach Valkey is
- * logged; the value then ages out on its ttl.
+ * <p><b>Valkey down.</b> Every call waits at most {@link #CALL} on the injected timer; a full Valkey, which refuses every
+ * script, counts as down. A read that fails runs the load on this node, under the lock that read may still have taken, and
+ * then offers the value to Valkey under that lock: Valkey keeps it only if the read did take it. A value Valkey did not take
+ * stays in the front for at most {@link #OUTAGE_KEEP}, so the calls after it do not wait on Valkey. One warning is logged
+ * when Valkey stops answering, one line when it answers again. A remove that does not reach Valkey is logged; the value then
+ * ages out on its ttl.
  *
  * @since 0.1
  */
@@ -112,6 +122,7 @@ public final class ValkeyCache implements Caches {
      * {'wait', owner}, or {'run'} with the lock taken.
      */
     private static final String READ = """
+            #!lua
             if ARGV[5] == '0' then
               local kept = redis.call('HMGET', KEYS[1], 'x', 'c')
               if kept[2] and tonumber(kept[1]) > tonumber(ARGV[1]) then return {'hit', kept[1], kept[2]} end
@@ -126,11 +137,13 @@ public final class ValkeyCache implements Caches {
 
     /** KEYS[1] the lock; ARGV[1] the owner, ARGV[2] the lease (ms): 1 renewed, 0 the lock is not the owner's. */
     private static final String RENEW_LOCK = """
+            #!lua
             if redis.call('GET', KEYS[1]) == 'run ' .. ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
             return 0""";
 
     /** KEYS[1] the lock; ARGV[1] the owner, ARGV[2] '1' the load failed, ARGV[3] the lease (ms): 1 ended, 0 not the owner's. */
     private static final String END = """
+            #!lua
             if redis.call('GET', KEYS[1]) ~= 'run ' .. ARGV[1] then return 0 end
             if ARGV[2] == '1' then
               redis.call('SET', KEYS[1], 'failed ' .. ARGV[1], 'PX', ARGV[3])
@@ -145,6 +158,7 @@ public final class ValkeyCache implements Caches {
      * the most entries, ARGV[8] the most bytes, ARGV[9] the bookkeeping's ttl (ms): 1 kept, 0 the lock is not the owner's.
      */
     private static final String WRITE = """
+            #!lua
             if redis.call('GET', KEYS[2]) ~= 'run ' .. ARGV[1] then return 0 end
             redis.call('DEL', KEYS[2])
             local function forget(m)
@@ -159,7 +173,7 @@ public final class ValkeyCache implements Caches {
             local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
             for _, m in ipairs(redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now, 'LIMIT', 0, 64)) do forget(m) end
             forget(ARGV[5])
-            local size = #KEYS[1] + #ARGV[2] + #ARGV[3]
+            local size = #KEYS[1] + #ARGV[2] + #ARGV[3] + 2 * #ARGV[5]
             redis.call('HSET', KEYS[1], 'x', ARGV[2], 'c', ARGV[3])
             redis.call('PEXPIRE', KEYS[1], ARGV[4])
             redis.call('ZADD', KEYS[3], now + tonumber(ARGV[4]), ARGV[5])
@@ -180,6 +194,7 @@ public final class ValkeyCache implements Caches {
 
     /** KEYS[1] the value, KEYS[2] the lock, KEYS[3] the package's entries, KEYS[4] their bytes; ARGV[1] the entry. */
     private static final String REMOVE = """
+            #!lua
             redis.call('DEL', KEYS[1], KEYS[2])
             local size = redis.call('HGET', KEYS[4], ARGV[1])
             if size then
@@ -313,13 +328,13 @@ public final class ValkeyCache implements Caches {
             try {
                 read = call(eval(READ, k.value(), k.lock()).arg(clock.millis()).arg(owner).arg(LEASE.toMillis()).arg(waited)
                         .arg(passOver ? "1" : "0"));
-            } catch (Unreachable unreachable) {
+            } catch (Unreachable unreachable) {   // the read may still have taken the lock
                 down(unreachable.getCause());
-                return alone(key, loader);
+                return load(k, key, loader, owner, stripe, seen, false);
             }
             switch (read.get(0).toString()) {
                 case "hit" -> {
-                    Optional<String> value = open(k, read.get(1).toString(), read.get(2).toBytes());
+                    Optional<String> value = open(k, read.get(1).toLong(), read.get(2).toBytes());
                     if (value.isPresent()) return new Cache.Entry(value.get(), Duration.ZERO);
                     passOver = true;
                 }
@@ -334,15 +349,19 @@ public final class ValkeyCache implements Caches {
                     pause = pause.multipliedBy(2).compareTo(LAST_POLL) < 0 ? pause.multipliedBy(2) : LAST_POLL;
                 }
                 case "run" -> {
-                    return load(k, key, loader, owner, stripe, seen);
+                    return load(k, key, loader, owner, stripe, seen, true);
                 }
                 default -> throw new IllegalStateException("Valkey answered the cache's read of '" + key + "' with " + read.get(0));
             }
         }
     }
 
-    /** Runs {@code loader} under the lock {@code owner} holds, and keeps its value on Valkey unless the key was removed meanwhile. */
-    private Cache.Entry load(Keys k, String key, Cache.Loader loader, String owner, int stripe, long seen) throws Exception {
+    /**
+     * Runs {@code loader} under the lock of {@code owner}, and keeps its value on Valkey unless the key was removed meanwhile.
+     * {@code claimed} is false when the read that took the lock gave no answer: the value Valkey does not take then stays in the
+     * front for at most {@link #OUTAGE_KEEP}.
+     */
+    private Cache.Entry load(Keys k, String key, Cache.Loader loader, String owner, int stripe, long seen, boolean claimed) throws Exception {
         Renewal renewal = new Renewal(k.lock(), owner);
         Cache.Entry entry;
         try {
@@ -361,15 +380,15 @@ public final class ValkeyCache implements Caches {
         Instant now = clock.instant();
         long until = now.plus(entry.ttl()).toEpochMilli();   // in whole ms, never after the ttl has passed
         long px = Math.max(1, Math.ceilDiv(entry.ttl().toNanos(), 1_000_000L));
-        String x = Long.toString(until);
+        Response kept;
         try {
-            call(eval(WRITE, k.value(), k.lock(), k.entries(), k.bytes()).arg(owner).arg(x).arg(seal(k, x, entry.value())).arg(px)
-                    .arg(k.entry()).arg(k.values()).arg(SHARE_ENTRIES).arg(SHARE_BYTES).arg(BOOKKEEPING.toMillis()));
+            kept = call(eval(WRITE, k.value(), k.lock(), k.entries(), k.bytes()).arg(owner).arg(until).arg(seal(k, until, entry.value()))
+                    .arg(px).arg(k.entry()).arg(k.values()).arg(SHARE_ENTRIES).arg(SHARE_BYTES).arg(BOOKKEEPING.toMillis()));
         } catch (Unreachable unreachable) {
             down(unreachable.getCause());
             return new Cache.Entry(entry.value(), shorter(entry.ttl()));
         }
-        return new Cache.Entry(entry.value(), Duration.ZERO);
+        return new Cache.Entry(entry.value(), claimed || kept.toLong() == 1 ? Duration.ZERO : shorter(entry.ttl()));
     }
 
     /** Frees the lock {@code owner} holds, marking a failed load; Valkey out of reach is logged. */
@@ -381,13 +400,6 @@ public final class ValkeyCache implements Caches {
         }
     }
 
-    /** The value of {@code key} while Valkey does not answer: loaded here, kept in the front for at most {@link #OUTAGE_KEEP}. */
-    private static Cache.Entry alone(String key, Cache.Loader loader) throws Exception {
-        Cache.Entry entry = loader.load();
-        if (entry == null) throw new IllegalStateException("the loader of cache key '" + key + "' returned null");
-        return new Cache.Entry(entry.value(), shorter(entry.ttl()));
-    }
-
     private static Duration shorter(Duration ttl) {
         return ttl.compareTo(OUTAGE_KEEP) < 0 ? ttl : OUTAGE_KEEP;
     }
@@ -397,7 +409,7 @@ public final class ValkeyCache implements Caches {
     }
 
     /** The salt, then {@code value} sealed under the key the salt derives, with the value key's name and {@code x} as AAD. */
-    private byte[] seal(Keys k, String x, String value) {
+    private byte[] seal(Keys k, long x, String value) {
         byte[] salt = new byte[SALT_BYTES];
         random.nextBytes(salt);
         try {
@@ -412,7 +424,7 @@ public final class ValkeyCache implements Caches {
     }
 
     /** The value {@code c} holds, or empty when it does not open: logged once. */
-    private Optional<String> open(Keys k, String x, byte[] c) {
+    private Optional<String> open(Keys k, long x, byte[] c) {
         try {
             if (c.length < SALT_BYTES + ChunkedAead.TAG_BYTES) throw new GeneralSecurityException("too short");
             Cipher cipher = cipher(Cipher.DECRYPT_MODE, Arrays.copyOf(c, SALT_BYTES), k, x);
@@ -426,9 +438,10 @@ public final class ValkeyCache implements Caches {
         }
     }
 
-    private Cipher cipher(int mode, byte[] salt, Keys k, String x) throws GeneralSecurityException {
+    private Cipher cipher(int mode, byte[] salt, Keys k, long x) throws GeneralSecurityException {
         Cipher cipher = ChunkedAead.cipher(ChunkedAead.derive(master, salt, INFO, "the master key"), mode, salt, ChunkedAead.LAST);
-        cipher.updateAAD((k.value() + "\0" + x).getBytes(StandardCharsets.UTF_8));
+        byte[] name = k.value().getBytes(StandardCharsets.UTF_8);
+        cipher.updateAAD(ByteBuffer.allocate(Integer.BYTES + name.length + Long.BYTES).putInt(name.length).put(name).putLong(x).array());
         return cipher;
     }
 
