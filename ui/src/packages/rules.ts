@@ -17,12 +17,13 @@ export const REASONS = {
   noManifest: 'its clone has no package.yaml at its root',
 } as const;
 
-/** What every route answers, with 503, when git is not on the development server's PATH. */
-export const GIT_MISSING = 'git is not installed or not on the PATH of the development server: the Packages screen needs git 2.30 or later';
+/** What every route answers, with 503, when git is not on the development server's PATH, which is checked when the server starts. */
+export const GIT_MISSING =
+  'git is not installed or not on the PATH of the development server: the Packages screen needs git 2.30 or later; install it, then restart the development server';
 
 /** What every route answers, with 503, when the development server's git is older than 2.30. */
 export function gitTooOld(version: string): string {
-  return `git ${version} is older than 2.30, which the Packages screen needs: install a newer git`;
+  return `git ${version} is older than 2.30, which the Packages screen needs: install a newer git, then restart the development server`;
 }
 
 /** Whether `name` is a repository name: one segment of at most 100 letters, digits, `.`, `_` and `-`, starting with neither `.` nor `-`. */

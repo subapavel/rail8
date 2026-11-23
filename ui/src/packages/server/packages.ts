@@ -116,8 +116,9 @@ async function rowOf(git: Runner, clone: string, repository: string, node: NodeS
 
 /**
  * The packages directly in the real working folder `root`, sorted by repository, and the folders that are no package,
- * sorted by name, each with the reason. Hidden folders and files are passed over, and so is every file that is no
- * folder or link. A folder whose clone git cannot read is listed among those that are no package, with what git said.
+ * sorted by name, each with the reason. Every entry whose name starts with `.` is passed over, and so is every entry
+ * that is neither a folder nor a symbolic link to one. A folder whose clone git cannot read is listed among those that
+ * are no package, with what git said.
  * The list ends at the {@link MAX_PACKAGES}th package, at most as many folders that are no package are listed, and
  * `truncated` says when there are more. Rejects with the
  * runner's 503 when git cannot be run for the list at all.

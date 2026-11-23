@@ -28,7 +28,7 @@ const packagesServer: ModuleServer = ({ origins, env }) => {
       };
       server.middlewares.use(gitPackages(options));
     },
-    // Vite calls this when the development server closes, and before a restart makes the halves again
+    // Vite calls this when the development server closes, and on a restart once the new server's halves are made
     async closeBundle() {
       await git?.close();
     },

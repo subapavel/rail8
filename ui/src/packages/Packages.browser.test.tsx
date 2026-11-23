@@ -106,21 +106,22 @@ describe('the Packages screen', () => {
     expect(packages().getByRole('row').elements()).toHaveLength(2);
   });
 
-  test('says when the node gives no answer, and why', async () => {
-    open({ clones: [{ folder: 'orders' }], node: 'silent' });
+  test('says when the node gives no answer, and why, and reads it again on Refresh', async () => {
+    const state = open({ clones: [{ folder: 'orders' }], node: 'silent' });
 
     await expect.element(page.getByRole('alert').filter({ hasText: 'The node at 127.0.0.1:8081 does not answer' })).toBeVisible();
     await expect.element(rowOf('orders').getByText('Unknown')).toBeVisible();
+
+    state.node = { host: '127.0.0.1:8081', answers: true, running: [] };
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect.element(rowOf('orders').getByText('Not running on 127.0.0.1:8081')).toBeVisible();
+    await expect.element(page.getByRole('alert')).not.toBeInTheDocument();
   });
 
-  test('says when git is missing, and lists the packages after Refresh once it is there', async () => {
-    const state = open({ clones: [{ folder: 'orders' }], git: 'missing' });
+  test('says when git is missing', async () => {
+    open({ clones: [{ folder: 'orders' }], git: 'missing' });
 
     await expect.element(page.getByRole('alert').filter({ hasText: 'The packages could not be read' })).toMatchTextContent(GIT_MISSING);
-
-    state.git = null;
-    await page.getByRole('button', { name: 'Refresh' }).click();
-    await expect.element(rowOf('orders')).toBeVisible();
   });
 
   test('without a working folder it says how to set one', async () => {
