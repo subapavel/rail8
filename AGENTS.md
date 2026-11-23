@@ -24,7 +24,8 @@ change touches. Everything in the repository is in English.
 
 1. One task = one GitHub issue = one fresh session, branched from `main`.
 2. The session writes the test and the code. Before it merges, it runs the build with the tests of the
-   modules it touched, and `python3 ci/change_guard.py --base origin/main`.
+   modules it touched and of every module that depends on them (`./mvnw verify -pl <modules> -am -amd`),
+   and `python3 ci/change_guard.py --base origin/main`.
 3. It opens a pull request. Every commit is signed off (`git commit -s`, checked by DCO).
 4. One review by a different agent (`reviewer`), launched at the effort the class sets: correct behaviour, needless complexity, readable
    comments. Wording in docs is never a reason to send a change back. One round of fixes.
