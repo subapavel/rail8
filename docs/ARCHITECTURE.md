@@ -1152,8 +1152,9 @@ given, of one flow, with the same status, and answer every status, 0 included:
 `{"completed":…,"failed":…,"running":…,"cancelled":…}`.
 
 Configuration is by environment variables `RAIL8_*`; `RAIL8_ENV` is required, and any value other
-than `dev` or `ci` is a deployed environment with stricter rules (no manual deploy, no mock
-endpoints, and by default a synchronous Postgres standby).
+than `dev` or `ci` is a deployed environment with stricter rules (a deploy only of a commit
+reachable from `RAIL8_GIT_REF` and never one with no origin, no mock endpoints, and by default a
+synchronous Postgres standby).
 
 ### Running it
 
