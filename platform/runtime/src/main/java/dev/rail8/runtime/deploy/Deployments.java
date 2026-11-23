@@ -16,6 +16,7 @@ import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.TargetLimit;
 import dev.rail8.core.admission.Targets;
+import dev.rail8.core.cache.Caches;
 import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.dlq.Dlq;
 import dev.rail8.core.flow.Delivery;
@@ -302,7 +303,7 @@ public final class Deployments {
     private final PollerLeases leases;
     private final Targets targets;
     private final Runs runs;   // every run of every flow deployed here, on the node's clock and timer
-    private final InMemoryCache caches;   // the cache of custom code, one for the node, kept across redeploys
+    private final Caches caches;   // the cache of custom code, one for the node, kept across redeploys
     private final BooleanSupplier fence;
     private final Workers workers;
     private final WorkSignals signals;
@@ -458,6 +459,18 @@ public final class Deployments {
                        List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
                        Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
                        WorkSignals signals) {
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, intake, leases, targets, fence,
+                workers, signals, new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES));
+    }
+
+    /**
+     * Deployments whose steps' custom code keeps its values in {@code caches}, the node's: in Valkey, shared with the other nodes
+     * there, or in the node's memory. The other constructors give the deployments an {@link InMemoryCache} of their own.
+     */
+    public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
+                       List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
+                       Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
+                       WorkSignals signals, Caches caches) {
         this.workers = Objects.requireNonNull(workers, "workers");
         this.signals = Objects.requireNonNull(signals, "signals");
         this.config = Objects.requireNonNull(config, "config");
@@ -480,7 +493,7 @@ public final class Deployments {
         this.targets = Objects.requireNonNull(targets, "targets");
         this.fence = Objects.requireNonNull(fence, "fence");
         this.runs = new Runs(clock, timer, WorkerPolicy.DEFAULT.lease());
-        this.caches = new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES);
+        this.caches = Objects.requireNonNull(caches, "caches");
     }
 
     /**

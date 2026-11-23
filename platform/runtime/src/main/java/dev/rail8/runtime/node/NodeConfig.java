@@ -600,8 +600,9 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
     /**
      * Where a polling consumer's lease is held and for how long: the node runs the consumer only while it holds the lease.
      *
-     * @param valkey {@code RAIL8_VALKEY_URI}, a {@code redis://} or {@code rediss://} URI with a host (none: the leases are held
-     *               in the node's memory — one node alone; two such nodes on one endpoint both poll)
+     * @param valkey {@code RAIL8_VALKEY_URI}, a {@code redis://} or {@code rediss://} URI with a host, which also holds the cache
+     *               of custom code the nodes share (none: the leases and the cache are held in the node's memory — one node alone;
+     *               two such nodes on one endpoint both poll)
      * @param ttl {@code RAIL8_POLLER_LEASE_TTL}, ISO-8601 in whole milliseconds, more than zero and at most PT10M (PT30S): how
      *            long a hold lasts
      * @param renew {@code RAIL8_POLLER_LEASE_RENEW}, ISO-8601 in whole milliseconds, more than zero and at most PT10M, at most

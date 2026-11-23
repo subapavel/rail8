@@ -12,6 +12,8 @@ import dev.rail8.api.plugin.AdminService;
 import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.core.admission.Targets;
 import dev.rail8.core.batch.BatchingWriter;
+import dev.rail8.core.cache.Caches;
+import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.flow.Workers;
 import dev.rail8.core.node.NodeLease;
 import dev.rail8.core.record.MessageStore;
@@ -20,6 +22,7 @@ import dev.rail8.core.record.StepCpu;
 import dev.rail8.ingress.SharedHttpPort;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.blob.TieredBlobStore;
+import dev.rail8.runtime.cache.ValkeyCache;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.PgDeploymentStore;
@@ -52,6 +55,7 @@ import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.PgConnection;
 import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisOptions;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 
@@ -139,6 +143,13 @@ public final class Node implements AutoCloseable {
 
     /** The tenant whose journal key seals the node's bodies until tenants are configured. */
     private static final String TENANT = "default";
+
+    /**
+     * The connections of the node's Valkey client, and the commands it queues when all are busy: every get of the cache of custom
+     * code is a round trip, beside the poller leases.
+     */
+    private static final int VALKEY_CONNECTIONS = 16;
+    private static final int VALKEY_QUEUED = 1_024;
 
     /** The exit status of a superseded node (fail-stop): a peer released its lease, or a newer incarnation joined. */
     public static final int SUPERSEDED = 3;
@@ -314,15 +325,19 @@ public final class Node implements AutoCloseable {
             });
             closeWork = () -> work.close().await();
             PollerLeases leases;
+            Caches caches;   // the cache of custom code
             if (config.leases().valkey().isPresent()) {
-                Redis valkey = Redis.createClient(vertx, config.leases().valkey().get().toString());   // connects on its first command
+                Redis valkey = Redis.createClient(vertx, new RedisOptions().setConnectionString(config.leases().valkey().get().toString())
+                        .setMaxPoolSize(VALKEY_CONNECTIONS).setMaxPoolWaiting(VALKEY_QUEUED));   // connects on its first command
                 closeValkey = () -> valkey.close().await();
                 leases = new ValkeyPollerLeases(valkey);
+                caches = new ValkeyCache(valkey, master, config.nodeId(), clock, timer, ids);   // sealed under the master key the pool shares
             } else {
-                LOG.log(System.Logger.Level.WARNING, "RAIL8_VALKEY_URI is not set: this node holds its poller leases in its own memory. "
-                        + "Alone that is enough; two such nodes on one polling endpoint both poll it (duplicates, never a loss): give a pool of "
-                        + "nodes one Valkey (D-083)");
+                LOG.log(System.Logger.Level.WARNING, "RAIL8_VALKEY_URI is not set: this node holds its poller leases and the cache of custom "
+                        + "code in its own memory. Alone that is enough; two such nodes on one polling endpoint both poll it (duplicates, never "
+                        + "a loss), and each loads what its steps cache on its own: give a pool of nodes one Valkey");
                 leases = new InMemoryPollerLeases(clock);
+                caches = new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES);
             }
             // an at-least-once ingress saves its body, its record and its item in one transaction
             // the node's started workers: its intake hands each saved item off to the flow's worker, leased to this node
@@ -336,7 +351,7 @@ public final class Node implements AutoCloseable {
             Deployments restored = new Deployments(config, runtime, byScheme, clock, timer, stepFactories, expressions, messages, dlq, work,
                     Meter.system(), new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connectOptions(pg, "deploy", config.nodeId())).map(c -> c)),
                     intake, leases,
-                    new Targets(config.targets().defaults(), config.targets().overrides(), timer), lease, workers, signals);   // the node's one Targets and fence
+                    new Targets(config.targets().defaults(), config.targets().overrides(), timer), lease, workers, signals, caches);   // the node's one Targets and fence
             deployments = restored;
             admitting.set(restored);
             StepCpu cpu = new StepCpu(StepCpu.Limits.DEFAULT);

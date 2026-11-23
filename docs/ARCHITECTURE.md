@@ -238,8 +238,9 @@ node that holds the body (see part 6).
 
 ### Valkey, S3, ClickHouse
 
-- **Valkey** is used only for poller leases (part 6). It is optional; a node without it warns that
-  two nodes would both poll.
+- **Valkey** holds the poller leases (part 6) and the cache of custom code that the nodes share
+  (part 5). It is optional; a node without it warns at start that two nodes would both poll and that
+  each keeps the cache in its own memory.
 - **S3** is not used: packages are deployed from git.
 - **ClickHouse** is in the compose file but not used by any code. Kafka likewise: a flow asking for a
   Kafka queue is refused.
@@ -262,8 +263,7 @@ any work row points at that place, so the callee can read the body after the cal
   defaults. The `bodies` table goes away.
 - Bodies that wait long (a parked message, a partner down for days) move to S3 in the background, so
   a node's journal stays small.
-- Valkey also serves as a distributed cache, and the cache of custom code (part 5) gets a Valkey
-  implementation that the nodes share.
+- Valkey also serves as a distributed cache.
 
 ## 4. Packages, flows and deployment
 
@@ -738,10 +738,19 @@ script in SAP Integration Suite works with security material.
   and answered; its kind and whether it is retried stay as they were.
 - **Cache.** `get(key, loader)` returns the value kept under `key`, or runs the loader and keeps what
   it returns for its time to live (at most 24 h): a token fetched an unusual way, a key derived once
-  a day. Keys are up to 256 characters, values up to 64 KiB. While a key loads, other callers on the
-  node wait for that load instead of starting their own. The steps of one type in one package share
-  their keys, and no one else sees them. A node keeps the cache in memory, at most 10,000 entries and
-  64 MiB, dropping the least recently used first; entries stay across a redeploy.
+  a day. Keys are up to 256 characters, values up to 64 KiB. The steps of one type in one package share
+  their keys, and no one else sees them; entries stay across a redeploy.
+  - With Valkey, the nodes share the cache, so a partner that limits token requests sees one per
+    pool. A key loads on one node at a time; callers on other nodes ask Valkey again, 10 ms apart
+    doubling to 200 ms, for at most 30 s, and fail when the load they waited for failed. The loading
+    node holds a lock that it renews every 3 s and that lapses 10 s after its node stops. A value
+    lives in Valkey for its ttl and is AES-256-GCM under a key derived from the master key. Each
+    package keeps at most 1,000 entries and 8 MiB; the entry nearest its expiry goes first. When
+    Valkey does not answer within 1 s, the node loads on its own and keeps the value for at most a
+    minute.
+  - Without Valkey, a node keeps the cache in memory, at most 10,000 entries and 64 MiB, dropping the
+    least recently used first. Callers on the node wait for a load under way instead of starting
+    their own either way.
 - **Logging.** A line logged through `System.Logger`, `java.util.logging` or SLF4J on the message's
   thread while the step runs, at or above the level the node's log shows for its logger, is kept in
   the step's record: its time, level, logger, text, and the failure logged with it (class and
@@ -751,7 +760,7 @@ script in SAP Integration Suite works with security material.
   the code started itself, reaches only the node's log. In a kept line every value the flow's steps
   took as a secret is replaced by its reference; the node's log gets the line as it was logged.
 - **Testing.** The testkit's `FakeServices` gives a step under test its secrets and a cache on a fake
-  clock. Every cache passes the testkit's cache contract.
+  clock. Every cache passes the testkit's cache contract, the Valkey one against a real Valkey.
 
 ### Mocks and contract suites
 
