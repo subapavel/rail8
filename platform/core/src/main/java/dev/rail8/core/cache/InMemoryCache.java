@@ -20,7 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * @since 0.1
  */
-public final class InMemoryCache {
+public final class InMemoryCache implements Caches {
 
     /** The node's limit on entries. */
     public static final long MAX_ENTRIES = 10_000;
@@ -44,6 +44,7 @@ public final class InMemoryCache {
     }
 
     /** The cache of the steps of {@code stepType} in package {@code packageName} of {@code tenant}. */
+    @Override
     public Cache scope(String tenant, String packageName, String stepType) {
         return new Scoped(new Scope(Objects.requireNonNull(tenant, "tenant"), Objects.requireNonNull(packageName, "packageName"),
                 Objects.requireNonNull(stepType, "stepType")));

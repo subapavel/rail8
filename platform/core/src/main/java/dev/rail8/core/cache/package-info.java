@@ -1,5 +1,5 @@
 /**
- * The node's cache for custom code ({@link dev.rail8.api.Services#cache()}) in memory.
+ * The node's cache for custom code ({@link dev.rail8.api.Services#cache()}): the scopes it hands the steps, and the cache in memory.
  *
  * @since 0.1
  */
