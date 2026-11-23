@@ -662,8 +662,8 @@ Modules still import no other module. The shell gains two contracts, as files di
   again from disk, with `useWorkingFile(path, dirty, reload)`. `useWorkingFiles()` answers the open files with their
   state. `reload(paths)` reloads the tabs of those files: it reads each tab's dirty state just before, and leaves a
   dirty tab as it is. Opening a tab that is already open only selects it, so a reload is the only way a tab shows the
-  new file. The commit dialog, the pull and the shell's own question for unsaved changes read this one registry. It
-  holds no tags.
+  new file. The commit dialog and the pull read this registry. Its dirty state is the one the editor's screen gives the
+  shell's question for unsaved changes through `unsaved`, never a second record of it. It holds no tags.
 
 ## Limits
 
