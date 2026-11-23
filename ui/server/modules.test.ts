@@ -33,7 +33,7 @@ const half = (name: string) => `export default () => ({ name: '${name}' });\n`;
 describe('moduleServers', () => {
   test("gives the halves of today's modules, then the plugin that restarts the server", async () => {
     const plugins = await moduleServers(dev);
-    expect(plugins.map((plugin) => plugin.name)).toEqual(['rail8-working-folder', 'rail8-mapping-studio', 'rail8-module-servers']);
+    expect(plugins.map((plugin) => plugin.name)).toEqual(['rail8-working-folder', 'rail8-mapping-studio', 'rail8-git-packages', 'rail8-module-servers']);
   });
 
   test('calls each half with the development server, in the order of the folder names, and passes over a module without one', async () => {

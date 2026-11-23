@@ -700,6 +700,7 @@ Modules still import no other module. The shell gains two contracts, as files di
 | Fetch, pull, push | 120 s each, 1 MiB on each stream |
 | `rail8 lock` | 120 s, 1 MiB on each stream |
 | From TERM to KILL | 2 s |
+| After git exits, for the end of its output while a process it started holds the pipes open | 100 ms, within the deadline |
 | The node, for a read | 10 s, 8 MiB |
 | The node, for a deploy or a check | 5 min, the wait of `rail8 deploy` |
 | What git, a hook or the node says, in an answer | 40 lines of 200 characters |
