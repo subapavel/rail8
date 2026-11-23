@@ -2,6 +2,7 @@ package dev.rail8.runtime;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
+import dev.rail8.api.Cache;
 import dev.rail8.api.Component;
 import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
@@ -11,6 +12,10 @@ import dev.rail8.api.Health;
 import dev.rail8.api.Keys;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Props;
+import dev.rail8.api.Stage;
+import dev.rail8.api.StepConfig;
+import dev.rail8.api.StepFactory;
+import dev.rail8.api.StepResources;
 import dev.rail8.components.http.HttpComponent;
 import dev.rail8.components.mock.DisguisedMock;
 import dev.rail8.components.mock.nested.NestedMock;
@@ -195,8 +200,12 @@ class NodeIT {
     }
 
     Node start(Map<String, String> env, Function<ComponentContext, List<Component>> components) throws Exception {
+        return start(env, components, List.of());
+    }
+
+    Node start(Map<String, String> env, Function<ComponentContext, List<Component>> components, List<StepFactory> steps) throws Exception {
         NodeConfig config = NodeConfig.from(env);
-        node = OnVirtualThread.call(() -> Node.start(config, vertx, components, List.of(), List.of()));
+        node = OnVirtualThread.call(() -> Node.start(config, vertx, components, steps, List.of()));
         return node;
     }
 
@@ -478,10 +487,42 @@ class NodeIT {
 
     /** {@code shop} 1.0.0: flow {@code feed} from the polling endpoint {@code drop} to {@code partner}, both on the {@code poll} scheme. */
     static PackageDraft pollingShop() {
+        return pollingShop(PackageDraft.toPartner());
+    }
+
+    /** {@link #pollingShop()} whose flow runs a {@link Keeper} step before it sends to the partner. */
+    static PackageDraft keepingShop() {
+        return pollingShop(new JsonArray().add(new JsonObject().put("type", Keeper.TYPE).put("name", "keep")).addAll(PackageDraft.toPartner()));
+    }
+
+    private static PackageDraft pollingShop(JsonArray steps) {
         return PackageDraft.of("shop", "1.0.0")
                 .endpoint("drop", "poll", "in", new JsonObject().put("path", "/drop"))
                 .endpoint("partner", "poll", "out", new JsonObject().put("url", "poll://partner"))
-                .flow("feed", "1.0.0", "sync", "drop", 1024, PackageDraft.toPartner());
+                .flow("feed", "1.0.0", "sync", "drop", 1024, steps);
+    }
+
+    /** A step of type {@value #TYPE} that hands each message on as it is; it holds the cache the node gave it, for the case to use. */
+    static final class Keeper implements StepFactory {
+        static final String TYPE = "keep";
+        final AtomicReference<Cache> cache = new AtomicReference<>();
+
+        @Override public String type() { return TYPE; }
+
+        @Override public String configSchema() { return "{}"; }
+
+        @Override
+        public Stage create(StepConfig step, StepResources resources) {
+            cache.set(resources.services().cache());
+            return Stage.of(e -> e);
+        }
+
+        /** The value the cache keeps under {@code key}, loading {@code value} for five minutes on a miss. */
+        String get(String key, String value) throws Exception {
+            Cache c = cache.get();
+            assertNotNull(c, "the flow with the keep step was built");
+            return OnVirtualThread.call(() -> c.get(key, () -> new Cache.Entry(value, Duration.ofMinutes(5))));
+        }
     }
 
     /** Every record at WARNING or above under {@code dev.rail8}, formatted; attached while a case runs. */
@@ -518,8 +559,9 @@ class NodeIT {
 
     /**
      * RAIL8_VALKEY_URI set: a polling flow deployed on the node is leased in that Valkey — its key appears there, held by the
-     * node ({@code <RAIL8_NODE_ID>#<n>}), and its consumer runs — and no WARNING names Valkey. Close releases the key (before
-     * the client closes: the release still reaches Valkey) and closes the node's client: only the observer stays connected.
+     * node ({@code <RAIL8_NODE_ID>#<n>}), and its consumer runs —, the cache of its step keeps its values in that Valkey, and no
+     * WARNING names Valkey. Close releases the key (before the clients close: the release still reaches Valkey) and closes the
+     * node's clients: only the observer stays connected.
      */
     @Test
     void aNodeWithAValkeyUriHoldsItsPollerLeasesThereAndClosesTheClientAtClose() throws Exception {
@@ -537,11 +579,14 @@ class NodeIT {
                 Map<String, String> env = env("ci");
                 env.put("RAIL8_VALKEY_URI", uri);
                 PollingDoors poll = new PollingDoors();
-                Node started = start(env, ctx -> List.of(poll));
+                Keeper keeper = new Keeper();
+                Node started = start(env, ctx -> List.of(poll), List.of(keeper));
 
-                deployOk(started.adminPort(), pollingShop());
+                deployOk(started.adminPort(), keepingShop());
 
                 until(() -> exists(api, FEED_LEASE), "the polling flow's lease key " + FEED_LEASE + " appears in the node's Valkey");
+                assertEquals("token", keeper.get("k", "token"));
+                assertTrue(exists(api, "rail8:cache:{default/shop}:v:" + Keeper.TYPE + ":k"), "the step's cache keeps its value in the node's Valkey");
                 String owner = api.get(FEED_LEASE).await().toString();
                 assertTrue(owner.startsWith("node-it#"), "the key is held by this node, <RAIL8_NODE_ID>#<n>: " + owner);
                 until(poll::aConsumerRuns, "the flow's consumer runs under the lease held in Valkey");
@@ -552,7 +597,7 @@ class NodeIT {
                 node = null;
 
                 assertFalse(exists(api, FEED_LEASE), "close released the lease in Valkey: the release ran before the client closed");
-                until(() -> connectedClients(api) == alone, "close closed the node's Valkey client: only the observer's connection is left");
+                until(() -> connectedClients(api) == alone, "close closed the node's Valkey clients: only the observer's connection is left");
             } finally {
                 if (node != null) {
                     closeNode(node);
@@ -566,8 +611,9 @@ class NodeIT {
     }
 
     /**
-     * RAIL8_VALKEY_URI absent: the node leases in memory — a polling flow's consumer still starts — and its start logs exactly
-     * one WARNING naming the missing Valkey, before any deploy; holding a lease adds no other.
+     * RAIL8_VALKEY_URI absent: the node leases and caches in memory — a polling flow's consumer still starts, and its step's
+     * cache loads a key once — and its start logs exactly one WARNING naming the missing Valkey and the cache, before any
+     * deploy; holding a lease adds no other.
      */
     @Test
     void aNodeWithoutAValkeyUriLeasesInMemoryAndWarnsOnceAtStart() throws Exception {
@@ -578,12 +624,16 @@ class NodeIT {
             Map<String, String> env = env("ci");
             assertFalse(env.containsKey("RAIL8_VALKEY_URI"), "fixture: no Valkey configured");
             PollingDoors poll = new PollingDoors();
+            Keeper keeper = new Keeper();
 
-            Node started = start(env, ctx -> List.of(poll));
+            Node started = start(env, ctx -> List.of(poll), List.of(keeper));
 
             assertEquals(1, warnings.namingValkey().size(), "start logged exactly one WARNING naming the missing Valkey: " + warnings.records);
-            deployOk(started.adminPort(), pollingShop());
+            assertTrue(warnings.namingValkey().get(0).contains("the cache of custom code"), "the WARNING names the cache: " + warnings.records);
+            deployOk(started.adminPort(), keepingShop());
             until(poll::aConsumerRuns, "the polling flow's consumer starts under a lease held in memory");
+            assertEquals("first", keeper.get("k", "first"));
+            assertEquals("first", keeper.get("k", "second"), "the node keeps the step's cache in its own memory");
             assertEquals(1, warnings.namingValkey().size(), "holding a lease in memory warns no more: " + warnings.records);
         } finally {
             rail8.removeHandler(warnings);

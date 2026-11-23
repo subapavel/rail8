@@ -278,6 +278,33 @@ class ValkeyCacheIT extends CacheContract {
     }
 
     @Test
+    void aValueValkeyDidNotTakeAfterAReadWithoutAnswerIsKeptOnTheNodeForAtMostAMinute() throws Exception {
+        try (Node a = new Node("node-a", 1)) {   // one connection: the write follows the read
+            String pkg = freshPackage();
+            a.client.send(Request.cmd(Command.PING)).await();   // connected before the pause
+            CompletableFuture<String> got;
+            try {
+                api.client(List.of("PAUSE", "60000", "WRITE")).await();
+                got = async(() -> a.scope(pkg).get("k", () -> {
+                    api.client(List.of("UNPAUSE")).await();
+                    until(() -> api.exists(List.of(lockKey(pkg, "k"))).await().toInteger() == 1, "Valkey runs the read, which takes the lock");
+                    api.del(List.of(lockKey(pkg, "k"))).await();   // the lock lapses before the write
+                    return new Cache.Entry("token", Duration.ofMinutes(5));
+                }));
+                until(a::calling, "A's read waits for its answer");
+                a.clock.advance(ValkeyCache.CALL);
+                assertEquals("token", result(got));
+            } finally {
+                api.client(List.of("UNPAUSE")).await();
+            }
+            assertEquals(0, api.exists(List.of(valueKey(pkg, "k"))).await().toInteger(), "Valkey did not take the value");
+            assertEquals("token", call(() -> a.scope(pkg).get("k", value("unused", Duration.ofMinutes(5)))), "the node keeps it");
+            a.clock.advance(ValkeyCache.OUTAGE_KEEP);
+            assertEquals("again", call(() -> a.scope(pkg).get("k", value("again", Duration.ofMinutes(5)))), "for a minute, not its ttl");
+        }
+    }
+
+    @Test
     void aFullValkeyCountsAsDownAndRefusesEachScriptWhole() throws Exception {
         try (Node a = new Node("node-a")) {
             String pkg = freshPackage();
