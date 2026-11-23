@@ -71,16 +71,16 @@ stderr
 end
 
 case regex-sub/flag-n
-def e0b2cc81cb81
+def 494d00afaaa0
 rc 0
-stdout "a\\nb"\n
+stdout "ab-c"\n
 stderr
 end
 
 case regex-sub/flag-n-not-given
-def 5179a0f0d4c2
+def 927b83688838
 rc 0
-stdout "a\\nb"\n
+stdout "-a-b--c-"\n
 stderr
 end
 
