@@ -69,15 +69,19 @@ bin/rail8 deploy demo HEAD
 
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
-To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow's
-steps from top to bottom: where messages arrive, each step, the fork of a `to` by prop into its endpoints, a call of
-another flow beside the step that makes it, and the end. Choose a node to see its settings in the drawer beside the
-picture; with none chosen, the drawer shows the flow's own settings. An endpoint opens in its form with Open endpoint,
-a flow called with Open flow. The settings of the steps of modules and plugins come from the node, so it needs the node
-running too.
+To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow from
+left to right inside a labelled frame: the system that calls it arrives on the left, then each step, the fork of a `to`
+by prop into its endpoints, a call of another flow beside the step that makes it, and the receiving systems outside the
+frame. The frame can be resized and collapsed; collapsed, the connections to the outside stay visible. **Find step**
+in the toolbar jumps to a step or a receiver by its name. Choose a step and its properties open in a panel below the
+canvas; choose the flow's frame or empty canvas and the panel shows the flow's own settings. Drag the separator, or use
+its arrow keys, to change the panel's height, and minimize, maximize or restore it with its buttons. An endpoint opens in
+its form with Open endpoint, a flow called with Open flow. The settings of the steps of modules and plugins come from the
+node, so it needs the node running too.
 
-To edit a flow, open `invoice-sync` and choose Edit. The + on an edge adds a step there: choose its type, such as
-`filter`, and fill in its settings in the drawer. Choose a step to move it up or down or delete it with the drawer's
+To edit a flow, open `invoice-sync` and choose Edit. The button on a connection between two steps opens a menu: Insert
+step here adds a step there, whose type you choose, such as `filter`, and whose settings you fill in below the canvas.
+The toolbar's Add step inserts after the chosen step. Choose a step to move it up or down or delete it with the panel's
 buttons, or, with the canvas focused, with the arrow keys and Delete; Undo (or Ctrl+Z) takes a change back. The
 problems are found again after every change; Check lists them, and they do not stop Save. Save writes
 `~/rail8-workspace/demo/flows/invoice-sync.yaml`, changing only the lines of what you changed and keeping its comments.
@@ -85,13 +89,15 @@ Commit it and deploy it as above. A flow written in a form the editor does not k
 such as its steps on one line, opens read-only and says why.
 
 While a flow is edited, the rules of a `route` and the endpoints of a `to` by prop are tables: Add a row, change a row's
-values in place, move a rule up or down, remove a row, and rename an endpoint's value in its first column. With no node
-chosen, the drawer is a form of the flow's own settings, such as its `delivery.mode`, and Add a process adds a process
+values in place, move a rule up or down, remove a row, and rename an endpoint's value in its first column. With no step
+chosen, the panel is a form of the flow's own settings, such as its `delivery.mode`, and Add a process adds a process
 with its first step as a lane of its own. Choose a lane to rename its process, which renames every call of it too, or to
-delete it once no step calls it; the drawer of a step moves it to the end of another lane with Move to. The + on an edge
-also offers Call a flow: choose `order-partner`, and the step sends to `order-partner-call`, the `direct` endpoint whose
-address that flow serves. A flow whose address no endpoint of the package names gets one, `call-<flow id>.yaml`, written
-before the step is added; Cancel leaves it in place. New flow, on the Flows screen, writes a new flow file with one step,
+delete it once no step calls it; the panel of a step moves it to the end of another lane with Move to. The menu of a
+connection also offers Call a flow: choose `order-partner`, and the step sends to `order-partner-call`, the `direct`
+endpoint whose address that flow serves. A flow whose address no endpoint of the package names gets one,
+`call-<flow id>.yaml`, written before the step is added; Cancel leaves it in place. The same menu marks where a
+simulation starts and ends: with both marked in one list of steps, Open simulation takes a body, attachments, properties
+and headers, and runs nothing. New flow, on the Flows screen, writes a new flow file with one step,
 such as `demo/flows/audit.yaml` arriving at `http-in` and sending to `partner-domestic`, and opens it; it never writes
 over an existing file.
 
@@ -108,7 +114,17 @@ git pull
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
 (cd ui && npm ci)
 export RAIL8_ADMIN_TOKEN=<the token of the first run>   # a new shell has none, and the node refuses to start without it
-docker compose up -d --build --force-recreate           # the node restores the deployed demo from its git cache
+docker compose up -d --build --force-recreate           # the node restores the packages deployed before, from its git cache
+```
+
+A pull that brings a database migration which clears the deployments, such as `deploy/postgres/V27__deploy_pool.sql`,
+leaves the node with no package deployed: the migration deletes the deployment records and every package is deployed
+again. You see it as `404 no endpoint at /http/invoice/async` from a call that worked before, and the Messages screen
+stays empty. Check the packages with `curl -H "Authorization: Bearer $RAIL8_ADMIN_TOKEN" localhost:8081/admin/flows`,
+which lists none. Deploy the demo again:
+
+```sh
+bin/rail8 deploy demo HEAD
 ```
 
 A working copy of the mapping corpus made by an older checkout, `~/rail8-mapping-workspace`, is moved into the working
