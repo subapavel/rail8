@@ -1,0 +1,344 @@
+# jq-1.8.2 sha256 b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f
+
+case regex-sub/no-match
+def e6de5d5cf691
+rc 0
+stdout "abc"\n
+stderr
+end
+
+case regex-sub/one-match
+def 47a9c48651a1
+rc 0
+stdout "ayc"\n
+stderr
+end
+
+case regex-sub/several-first-only
+def 70c68af76e6f
+rc 0
+stdout "yaa"\n
+stderr
+end
+
+case regex-sub/gsub-several
+def e193243452fb
+rc 0
+stdout "bynyny"\n
+stderr
+end
+
+case regex-sub/gsub-no-match
+def 9864238529a1
+rc 0
+stdout "abc"\n
+stderr
+end
+
+case regex-sub/sub-flag-g
+def 040f7bd64744
+rc 0
+stdout "bynyny"\n
+stderr
+end
+
+case regex-sub/sub3-flag-i
+def 802e66365fff
+rc 0
+stdout "bynana"\n
+stderr
+end
+
+case regex-sub/gsub3-flag-i
+def e0f785bc08ab
+rc 0
+stdout "bynyny"\n
+stderr
+end
+
+case regex-sub/flag-x
+def ee1971f2b9c4
+rc 0
+stdout "zy"\n
+stderr
+end
+
+case regex-sub/gsub-flag-x
+def 36b9808a23c5
+rc 0
+stdout "yy"\n
+stderr
+end
+
+case regex-sub/flag-n
+def e0b2cc81cb81
+rc 0
+stdout "a\\nb"\n
+stderr
+end
+
+case regex-sub/flag-n-not-given
+def 5179a0f0d4c2
+rc 0
+stdout "a\\nb"\n
+stderr
+end
+
+case regex-sub/flag-gi
+def e697f7696cba
+rc 0
+stdout "yyy"\n
+stderr
+end
+
+case regex-sub/named-capture
+def cf52d745579d
+rc 0
+stdout "12-abc"\n
+stderr
+end
+
+case regex-sub/gsub-named-capture
+def 0917645d06dc
+rc 0
+stdout "a<1>b<2><2>"\n
+stderr
+end
+
+case regex-sub/optional-group-null
+def f2facc296dd6
+rc 0
+stdout "a[null]c"\n
+stderr
+end
+
+case regex-sub/optional-group-null-gsub
+def bbdf68531113
+rc 0
+stdout "a[null]c[null]"\n
+stderr
+end
+
+case regex-sub/empty-match-sub
+def 16efab7f2d3e
+rc 0
+stdout "-abc"\n
+stderr
+end
+
+case regex-sub/empty-match-gsub
+def 1c949a4ca289
+rc 0
+stdout "-a-b-c-"\n
+stderr
+end
+
+case regex-sub/empty-match-star
+def 78a111991b68
+rc 0
+stdout "-a-b--c-"\n
+stderr
+end
+
+case regex-sub/empty-input-sub
+def 6736e1311a62
+rc 0
+stdout "y"\n
+stderr
+end
+
+case regex-sub/empty-input-gsub
+def ac531b4d54cf
+rc 0
+stdout "y"\n
+stderr
+end
+
+case regex-sub/empty-input-nomatch
+def 5f387e7da9da
+rc 0
+stdout ""\n
+stderr
+end
+
+case regex-sub/emit-several-sub
+def 905971c3c044
+rc 0
+stdout ["xbc","ybc"]\n
+stderr
+end
+
+case regex-sub/emit-several-gsub
+def c9cdc7549318
+rc 0
+stdout ["xbx","yby"]\n
+stderr
+end
+
+case regex-sub/emit-several-two-matches
+def 1eda492c2e2a
+rc 0
+stdout ["11","22"]\n
+stderr
+end
+
+case regex-sub/emit-none-sub
+def d7a514b97704
+rc 0
+stdout ["abc"]\n
+stderr
+end
+
+case regex-sub/emit-none-gsub
+def d0d277466807
+rc 0
+stdout ["aba"]\n
+stderr
+end
+
+case regex-sub/replacement-raises
+def d0fff45b678a
+rc 0
+stdout "boom"\n
+stderr
+end
+
+case regex-sub/replacement-raises-gsub
+def 8e7a22725bef
+rc 0
+stdout "boom"\n
+stderr
+end
+
+case regex-sub/replacement-raises-no-match
+def cbc3b1e0e837
+rc 0
+stdout "abc"\n
+stderr
+end
+
+case regex-sub/non-ascii
+def 2a149d0fb246
+rc 0
+stdout "eae"\n
+stderr
+end
+
+case regex-sub/non-ascii-class
+def 799ad262572e
+rc 0
+stdout "a_b€_"\n
+stderr
+end
+
+case regex-sub/astral
+def df9a20e30b67
+rc 0
+stdout "axbx"\n
+stderr
+end
+
+case regex-sub/astral-dot
+def 7eff3c826d4b
+rc 0
+stdout "xxx"\n
+stderr
+end
+
+case regex-sub/astral-replacement
+def 63e01357c97a
+rc 0
+stdout "😀b😀"\n
+stderr
+end
+
+case regex-sub/astral-empty-match
+def d35e8ce4ef83
+rc 0
+stdout "-a-😀----"\n
+stderr
+end
+
+case regex-sub/astral-capture
+def b1cf30088be3
+rc 0
+stdout "x<😀>"\n
+stderr
+end
+
+case regex-sub/input-number
+def 14dbae6777b1
+rc 0
+stdout "number (1) cannot be matched, as it is not a string"\n
+stderr
+end
+
+case regex-sub/input-null
+def 2009538f7b06
+rc 0
+stdout "null (null) cannot be matched, as it is not a string"\n
+stderr
+end
+
+case regex-sub/input-array
+def 48948fb460e8
+rc 0
+stdout "array ([\\"a\\"]) cannot be matched, as it is not a string"\n
+stderr
+end
+
+case regex-sub/regex-number
+def 0715e2653a91
+rc 0
+stdout "number (1) is not a string"\n
+stderr
+end
+
+case regex-sub/regex-null
+def f8218f831690
+rc 0
+stdout "null (null) is not a string"\n
+stderr
+end
+
+case regex-sub/replacement-number
+def 9c6f16254ae1
+rc 0
+stdout "string (\\"\\") and number (1) cannot be added"\n
+stderr
+end
+
+case regex-sub/replacement-null
+def 03ef0cf57424
+rc 0
+stdout "bc"\n
+stderr
+end
+
+case regex-sub/replacement-object
+def fcd42ace63f0
+rc 0
+stdout "string (\\"\\") and object ({}) cannot be added"\n
+stderr
+end
+
+case regex-sub/flags-number
+def c6f9e453b86a
+rc 0
+stdout "number (1) is not a string"\n
+stderr
+end
+
+case regex-sub/flags-invalid
+def 91530bd202fa
+rc 0
+stdout "q is not a valid modifier string"\n
+stderr
+end
+
+case regex-sub/regex-invalid
+def 6827c5eec357
+rc 0
+stdout "Regex failure: end pattern with unmatched parenthesis"\n
+stderr
+end
