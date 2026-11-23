@@ -20,7 +20,12 @@ function initialMode(): Mode {
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-/** The workspace and Ant portals share the same theme and notification context. */
+/**
+ * The theme of the workspace and of everything Ant Design mounts outside it, with the notification context: compact
+ * sizing, English texts, and a light or dark mode. The mode starts from the choice saved in localStorage, or else from
+ * the system's preference. `children` is called with whether the mode is dark and a function that switches it; a
+ * switch is saved in localStorage when the browser allows it.
+ */
 export function Rail8Theme({ children }: { children: (dark: boolean, toggle: () => void) => ReactNode }) {
   const [mode, setMode] = useState(initialMode);
   const dark = mode === 'dark';

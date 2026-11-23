@@ -15,7 +15,15 @@ export interface ShellProps {
   start?: string;
 }
 
-/** The workspace keeps open screens mounted. A registered screen or an open document can be reached from Quick open. */
+/**
+ * The application's shell: a header with the brand, the button that shows or hides the navigation, Quick open and the
+ * tabs of the open screens. Choosing a screen in the navigation opens it in a new tab, or shows the tab it already has;
+ * each tab closes with its close button, once its screen agrees, so a screen with unsaved changes can ask first. A
+ * screen may open tabs of its own, such as one for each message it found, through the function its `render` is given.
+ * Every open screen stays mounted while another tab shows. Quick open, also on Ctrl+K or ⌘K, finds a screen of
+ * `screens` or an open tab by name and shows it. `start` names the screen open at first; with no tab open the main
+ * area says so.
+ */
 export function Shell({ screens, start }: ShellProps) {
   const [quickOpen, setQuickOpen] = useState(false);
   const [tabs, setTabs] = useState(() => (start === undefined ? noTabs : openTab(noTabs, start)));
