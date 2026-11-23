@@ -104,7 +104,7 @@ function nameOf(step: unknown, index: number): string {
   return step.type === 'process' && typeof step.process === 'string' ? step.process : step.type;
 }
 
-/** The indices of the longest common subsequence of `a` and `b`: the pairs kept in order. */
+/** The keys of `a` and `b` that their longest common subsequence keeps in order. */
 function common(a: readonly string[], b: readonly string[]): Set<string> {
   const table = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--) {
