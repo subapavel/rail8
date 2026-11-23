@@ -92,11 +92,11 @@ While a flow is edited, the rules of a `route` and the endpoints of a `to` by pr
 values in place, move a rule up or down, remove a row, and rename an endpoint's value in its first column. With no step
 chosen, the panel is a form of the flow's own settings, such as its `delivery.mode`, and Add a process adds a process
 with its first step as a lane of its own. Choose a lane to rename its process, which renames every call of it too, or to
-delete it once no step calls it; the panel of a step moves it to the end of another lane with Move to. The menu of a
-connection also offers Call a flow: choose `order-partner`, and the step sends to `order-partner-call`, the `direct`
+delete it once no step calls it; the panel of a step moves it to the end of another lane with Move to. The step types
+offered by Insert step here or Add step also include Call a flow: choose `order-partner`, and the step sends to `order-partner-call`, the `direct`
 endpoint whose address that flow serves. A flow whose address no endpoint of the package names gets one,
-`call-<flow id>.yaml`, written before the step is added; Cancel leaves it in place. The same menu marks where a
-simulation starts and ends: with both marked in one list of steps, Open simulation takes a body, attachments, properties
+`call-<flow id>.yaml`, written before the step is added; Cancel leaves it in place. The connection's menu also marks where a
+simulation starts and ends: with both marked in one list of steps, the start before the end, Open simulation takes a body, attachments, properties
 and headers, and runs nothing. New flow, on the Flows screen, writes a new flow file with one step,
 such as `demo/flows/audit.yaml` arriving at `http-in` and sending to `partner-domestic`, and opens it; it never writes
 over an existing file.
