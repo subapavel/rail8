@@ -260,6 +260,20 @@ describe('Endpoints', () => {
     expect(api.save).toHaveBeenCalledWith('demo/endpoints/raw.yaml', { a: 2, b: true }, '"v1"');
   });
 
+  test('Save and close with a setting that is not valid saves nothing and keeps the tab open, saying why', async () => {
+    const raw: EndpointFile = { ...inbox, id: 'raw-in', path: 'demo/endpoints/raw.yaml', scheme: 'raw', environments: [], config: { a: 1 } };
+    const api = fakeApi([raw]);
+    await open(api, 'raw-in');
+    await button('Edit').click();
+    await field('Settings').fill('{"a": 2}');
+    await field('Settings').fill('{"a": ');
+    await button('Close raw-in').click();
+    await button('Save and close').click();
+    await expect.element(text('Some settings are not valid. Correct them, then save.')).toBeVisible();
+    await expect.element(page.getByRole('tab', { name: 'raw-in', exact: true })).toHaveAttribute('aria-selected', 'true');
+    expect(api.save).not.toHaveBeenCalled();
+  });
+
   test("shows under an in endpoint's address a preview of the URL senders call, which follows the draft", async () => {
     await open(fakeApi([httpIn]), 'http-in');
     const address = page.getByRole('textbox', { name: 'address' });
