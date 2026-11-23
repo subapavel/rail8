@@ -89,7 +89,8 @@ The tab reads its package again when it is shown, when the window gets the focus
 
 The Flows, Endpoints and Mappings screens stay as they are: lists across the whole working folder, so that an artifact
 is found fast without knowing its package. Each list gains a Package column and a filter on it. The package is the
-first segment of the file's path, and choosing it opens the package's tab.
+first segment of the file's path. The column links nowhere: the lists belong to the endpoints and mapping modules,
+which do not import the packages module, so a package's tab opens from the Packages screen.
 
 ## Which folders are packages
 
@@ -127,13 +128,16 @@ Every git process, and `rail8 lock`, is started through one runner:
 - **No shell.** It uses `spawn` with an argument array, `--no-pager` and `-C <the clone's real path>`.
 - **User values stay out of options.** A path comes after `--`, a revision after `--end-of-options`, and a commit
   message on stdin.
+- **Every path is literal.** Each path is given as `:(literal)<path>`, so a `*` in a file name is no pattern. It is
+  never set through `GIT_LITERAL_PATHSPECS`, which the author's hooks would inherit: a hook's own patterns, such as
+  `git diff --cached -- '*.java'`, keep working.
 - **The environment** is the development server's, with every `GIT_*` and `RAIL8_*` variable removed, then:
   - `GIT_TERMINAL_PROMPT=0`;
   - `GCM_INTERACTIVE=never`;
   - `SSH_ASKPASS_REQUIRE=never`;
-  - `GIT_LITERAL_PATHSPECS=1`, so a `*` in a file name is no pattern;
-  - `LC_ALL=C`;
-  - for reads, `GIT_OPTIONAL_LOCKS=0`, so a read never blocks the author's own git in a terminal.
+  - for reads only, `LC_ALL=C`, and `GIT_OPTIONAL_LOCKS=0` so that a read never blocks the author's own git in a
+    terminal. A write keeps the author's locale for its hooks. The half reads only exit codes and machine formats from
+    a write, and shows git's words as they are.
 
   An exported `GIT_SSH_COMMAND` or `GIT_SSH` is removed with the rest. The way to set one is `core.sshCommand` in git
   config, which the UI reads like any other setting. The admin token is never passed on.
@@ -197,8 +201,12 @@ At most 4 processes run at once. At most 8 writes and 32 reads wait, and one mor
 
 ### The working folder's lock
 
-The editors' saves and the git writes share one lock of the working folder, in `ui/server/workingFolder.ts`.
+The editors' saves and the git writes share one lock of the working folder.
 
+- **Where it lives.** `moduleServers` (`ui/server/modules.ts`) makes the lock once and hands it to every half on
+  `DevServer`, as `writes`. It cannot be a module-level value of `ui/server/workingFolder.ts`, because each half's
+  `server.ts` is loaded on its own and holds its own copy of what it imports. `replaceFile`, `writeNew` and
+  `createFile` take the lock as an argument.
 - **Who takes it.** Every save of the flow screen, the endpoint form and the mapping studio, and every git write that
   reads or writes the files of a clone: commit, pull, lock and new package. Fetch and push touch no file and do not
   take it.
@@ -302,11 +310,11 @@ Every refusal is `{error, problems?, output?}`, with the status:
 | 400 | A malformed body, repository name, path or revision. A path with a `.git` segment. A message that is blank, over 8 KiB or holds a NUL. More than 1000 paths. |
 | 403 | A foreign page. Any write under `RAIL8_READ_ONLY=true` except a deploy check. A path that leaves the package's real folder. |
 | 404 | No working folder, no such package, a path outside it, or a revision the clone lacks. |
-| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A new package over a folder that exists. |
-| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`; `manifestTag` or `lockTag`; a dependency's `head`; or the commit the node runs. Nothing was done. |
+| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
+| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
 | 413 | A body over its limit. |
 | 422 | No git identity. Nothing to commit. A hook refused the commit (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
-| node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a redeploy that rolled back. |
+| node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a failure on the node: of git, of the deploy record's write (or a write whose outcome is unknown), or of a start, which was rolled back. The package's state read after it shows what runs. |
 | 500 | git or `rail8 lock` wrote more than its output limit, and was stopped. |
 | 502 | The node does not answer, or refuses `RAIL8_ADMIN_TOKEN` (its 401). |
 | 503 | git, or the `rail8` command for a lock, is missing. Too many calls are waiting. |
@@ -511,7 +519,9 @@ always checks first:
    - The git half checks that the clone holds it, with `rev-parse --verify --end-of-options <commit>^{commit}`.
    - It reads `/admin/packages`, and answers as `running` the commit the node runs for this repository, or `null`.
    - It sends `POST /admin/deploy?check=true` with `{repository, commit}`, the token, and `X-Rail8-Actor` set to the
-     identity, `Name <email>`, at most 128 characters, or `ui` when git has none.
+     identity, `Name <email>`, or `ui` when git has none.
+   - A header carries no character outside printable ASCII, so each such character becomes `?`, as in `Ji?? Nov?k
+     <jiri@example.com>`. The actor is then cut to 128 characters.
 2. **The answer.** The dialog shows the added, swapped and removed flows, or every problem. Problems end the dialog,
    and nothing has changed on the node.
 3. **Deploy.** The author confirms. The browser sends `{commit, check: false, running}`, with the commit and `running`
@@ -547,26 +557,32 @@ The Dependencies tab reads `package.yaml` and `package.lock` on disk. For each d
 interface Dependency {
   name: string; version: string;                                   // from package.yaml
   pin: { repository: string; commit: string; content: string } | null;  // from package.lock; null: not pinned
-  head: string | null;                                             // the HEAD of the clone pin.repository names; null: missing
-  clone: 'pinned' | 'newer' | 'changed' | 'missing';               // that clone, against the pin
+  candidate: { folder: string; head: string | null } | null;      // the folder rail8 lock would pin; null: none, or several
+  state: 'pinned' | 'unpinned' | 'moved' | 'changed' | 'missing';
   running?: { commit: string; content: string };                  // what the node resolved for it, when it runs the package
 }
 ```
 
+A dependency's candidate is the folder `rail8 lock` would pin: the one folder directly in the working folder whose
+`package.yaml` has the dependency's name and version, the package's own folder aside. It is found by that rule, never
+by the pin's repository, so the folder a lock would pin is the folder the author sees.
+
 | State | Meaning |
 | --- | --- |
-| `pinned` | The clone's `HEAD` is the pinned commit. |
-| `newer` | `HEAD` is a descendant of the pin. |
-| `changed` | The clone's files differ from its `HEAD`, so a lock would refuse it. |
-| `missing` | No clone of that name is in the working folder. |
+| `pinned` | The candidate is the pinned repository, and its `HEAD` is the pinned commit. |
+| `unpinned` | `package.lock` pins nothing for it yet. A lock would pin the candidate. |
+| `moved` | The candidate is another folder, or its `HEAD` another commit, than the pin. A lock would pin it. |
+| `changed` | The candidate's files differ from its `HEAD`, so a lock would refuse it. |
+| `missing` | No folder holds that name and version, or several do. |
 
-**Lock** is `POST …/lock {manifestTag, lockTag, dependencies: [{repository, head}]}`: the tags of `package.yaml` and
-`package.lock`, and the `HEAD` of each dependency clone, as the author saw them.
+**Lock** is `POST …/lock {manifestTag, lockTag, dependencies: [{name, folder, head}]}`. It states what the author
+saw: the tags of `package.yaml` and `package.lock`, and each dependency's candidate folder with its `HEAD`.
 
 - It runs the Rail8 command line, `RAIL8_CLI`, by default the `bin/rail8` of the Rail8 checkout the UI runs from, as
   `lock <package folder> --deps <working folder>`. It goes through the same runner, with its own limits, under the
   working folder's lock.
-- Any of the tags or heads that differs is 412, checked before the command runs.
+- Any tag, candidate folder or head that differs is 412, checked before the command runs.
+- It is refused (409) while a dependency has several candidates, since the command line could pin any of them.
 - Its `problem:` lines come back as a 422.
 - Its pin lines come back as `pins`.
 - `rail8 lock` writes `package.lock` through a temporary file and a rename, so a lock stopped at its deadline leaves the
@@ -586,8 +602,9 @@ it.
   - `branch`, `head` and `upstream` must still be what they were.
   - It resolves `@{upstream}` once, to a commit id, and runs `git merge --ff-only --no-overwrite-ignore
     --end-of-options <id>`.
-  - The server refuses it when the branch has diverged, or when git says a local change or an ignored file would be
-    overwritten.
+  - The server refuses it when the branch has diverged, found with `merge-base --is-ancestor` before the merge. When
+    the merge itself refuses, as when a local change or an ignored file would be overwritten, the answer is 409 with
+    git's lines.
   - The screen refuses it while a tab of the package holds unsaved changes.
   - Afterwards, the clean tabs of the files it changed are reloaded ("The shell's part").
 - **Push** takes `{branch, head, upstream}`. It is `git push --porcelain -- <remote> <head>:refs/heads/<upstream
@@ -703,8 +720,10 @@ Modules still import no other module. The shell gains two contracts, as files di
 ## Tests
 
 - **The runner.** Its suite runs on a fake process for:
-  - every argument vector, with user values only after `--`, after `--end-of-options` or on stdin;
-  - the environment, with inherited `GIT_*` and `RAIL8_*` removed;
+  - every argument vector, with user values only after `--`, after `--end-of-options` or on stdin, and each path as
+    `:(literal)<path>`;
+  - the environment, with inherited `GIT_*` and `RAIL8_*` removed, and `LC_ALL` and `GIT_OPTIONAL_LOCKS` set for reads
+    only;
   - output caps on both streams;
   - the queue's limits;
   - the formatter's redaction of `https://user:secret@` and of the token's value.
@@ -741,12 +760,13 @@ Modules still import no other module. The shell gains two contracts, as files di
     - A save that waits for a commit and is then refused by its recheck.
     - A detached HEAD, a merge in progress and a conflict (409).
   - **Deploy.**
-    - A check, then a deploy, sending 40 hex digits and the actor.
+    - A check, then a deploy, sending 40 hex digits and the actor, with a name outside ASCII, such as `Jiří`.
     - A deploy refused by the node, its problems passed on.
     - A deploy refused because the node's commit changed since the check (412).
     - A deploy the node does not answer (504).
     - The node refusing the token (502).
-  - **Lock.** A lock, and a lock refused because a dependency's `HEAD` moved (412).
+  - **Lock.** A lock; a lock refused because a dependency's `HEAD` moved, or another folder became its candidate
+    (412); and an unpinned dependency with two candidates (`missing`).
   - **Remote.**
     - A fast-forward pull, a diverged one, one that would overwrite a change, and one that would overwrite an ignored
       file.
@@ -793,8 +813,9 @@ Modules still import no other module. The shell gains two contracts, as files di
 3. **The readable change of a flow.** `flowChanges` and the marked picture, with the context of each side's revision,
    in the endpoints module.
 4. **The readable changes of an endpoint and a mapping.** In their modules.
-5. **The working folder's lock.** The lock in `ui/server/workingFolder.ts`, and the `If-Match` recheck under it in the
-   saves of the flow screen, the endpoint form and the mapping studio.
+5. **The working folder's lock.** The lock, made once by `moduleServers` and handed to every half on `DevServer`, with
+   a test that two halves share it. Also the `If-Match` recheck under it in the saves of the flow screen, the endpoint
+   form and the mapping studio.
 6. **Commit.** It builds:
    - `…/commit`, the dialog, the identity and the read-back;
    - the shell's working files, fed by the flow screen, the endpoint form and the mapping studio.

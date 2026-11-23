@@ -14,8 +14,8 @@ end).
 
 ## Rules
 
-- The UI edits files in a working folder and never changes a running node. The only way into operation
-  is a commit in git.
+- The UI edits files in a working folder and changes a running node only through the node's own deploy
+  of a commit, sent at the author's request. The only way into operation is a commit in git.
 - Every package has a git repository of its own. The unit of a deploy is one commit of one package
   repository.
 - A node pool reads its package repositories under one base, set in the node's configuration. A deploy
