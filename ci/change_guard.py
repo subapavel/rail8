@@ -5,8 +5,9 @@ Two checks, each on the added and modified lines only (older lines are left alon
 folders whose comments have been cleaned (CLEANED below), references in comments are checked in every file, on
 every line, whether the change touches it or not.
 
-1. References in comments. A comment or Javadoc in a Java file under platform/, mapping/ or jq/, or a comment in a
-   TypeScript, JavaScript or CSS file under ui/, must explain; it must not point at a task or a decision.
+1. References in comments. A comment or Javadoc in a Java file under platform/, mapping/ or jq/, a comment in a
+   TypeScript, JavaScript or CSS file under ui/, or a `#` comment in a shell, YAML or Python file anywhere, must
+   explain; it must not point at a task or a decision.
    A reference is an upper-case tag, a hyphen and a number, such as D-164, FIX-268, MAP-12b, P2-02D, P0-10 or ADR-0019,
    or a `#` followed by a number, such as #123. Names of standards (UTF-8, SHA-256, ISO-8601 and the like) are not
    references.
@@ -50,6 +51,7 @@ CLEANED = ("platform/api/src/main/", "platform/core/src/main/", "platform/runtim
 UI_ROOT = "ui/"
 SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 STYLE_SUFFIXES = (".css", ".scss")
+HASH_SUFFIXES = (".sh", ".bash", ".yml", ".yaml", ".py")
 COLOUR_SKIPPED = re.compile(r"^site/|(^|/)e2e/|(^|/)generated/|\.(test|spec)\.[a-z]+$")
 
 REFERENCE = re.compile(r"(?<![\w-])([A-Z][A-Z0-9]*-\d{1,4}[a-zA-Z]?)(?![\w-])|(?<![\w&#])(#\d+)(?!\w)")
@@ -88,13 +90,16 @@ TOKEN = "var(--ant-...)"
 def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
     """Splits a source file into (segment kind, text) per line number; kinds are code, comment and string.
 
-    `kind` is java, script or style. Java knows // and /* */ comments, "..." and '...' literals and \"\"\" text
+    `kind` is java, script, style or hash. Java knows // and /* */ comments, "..." and '...' literals and \"\"\" text
     blocks; script knows // and /* */ comments, '...', "..." and `...` literals and regular-expression literals;
-    style knows /* */ comments and '...' and "..." strings. A '...' or "..." literal ends at the line's end.
+    style knows /* */ comments and '...' and "..." strings; hash (shell, YAML, Python) knows a # comment that starts
+    a line or follows whitespace, '...' and "..." strings and Python's \"\"\" and \'\'\' text blocks. A '...' or
+    "..." literal ends at the line's end.
     """
     lines: dict[int, list[tuple[str, str]]] = {}
     line, i, n = 1, 0, len(text)
     state, buf, quote = "code", [], ""
+    triple = '"""'
     last_code = ""  # the last code character that is not whitespace, to tell a regex literal from a division
 
     def flush(new_state: str) -> None:
@@ -115,12 +120,20 @@ def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
             i += 1
             continue
         if state == "code":
+            if kind == "hash" and c == "#" and (i == 0 or text[i - 1].isspace()):
+                flush("line"); buf.append("#"); i += 1; continue
+            if kind == "hash" and text.startswith(("\"\"\"", "\'\'\'"), i):
+                flush("text"); triple = text[i:i + 3]; i += 3; continue
+            if kind == "hash" and c in "'\"":
+                flush("string"); quote = c; i += 1; continue
+            if kind == "hash":
+                buf.append(c); i += 1; continue
             if c == "/" and nxt == "/" and kind != "style":
                 flush("line"); buf.append("//"); i += 2; continue
             if c == "/" and nxt == "*":
                 flush("block"); buf.append("/*"); i += 2; continue
             if kind == "java" and text.startswith('"""', i):
-                flush("text"); i += 3; continue
+                flush("text"); triple = '"""'; i += 3; continue
             if c in "'\"" or (c == "`" and kind == "script"):
                 flush("template" if c == "`" else "string"); quote = c; i += 1; continue
             if c == "/" and kind == "script" and (last_code == "" or last_code in "(,=:[!&|?{};+-*%~^"):
@@ -147,7 +160,7 @@ def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
             if nxt == "\n":
                 buf.append(c); flush(state); line += 1; i += 2; continue
             buf.append(text[i:i + 2]); i += 2; continue
-        if state == "text" and text.startswith('"""', i):
+        if state == "text" and text.startswith(triple, i):
             flush("code"); last_code = '"'; i += 3; continue
         if state in ("string", "template") and c == quote:
             flush("code"); last_code = c; i += 1; continue
@@ -168,12 +181,16 @@ def file_kind(path: str) -> str | None:
         return "script"
     if path.endswith(STYLE_SUFFIXES):
         return "style"
+    if path.endswith(HASH_SUFFIXES):
+        return "hash"
     return None
 
 
 def comment_checked(path: str, kind: str) -> bool:
     if kind == "java":
         return path.startswith(JAVA_ROOTS)
+    if kind == "hash":
+        return True
     return path.startswith(UI_ROOT)
 
 
@@ -209,7 +226,7 @@ def check(path: str, text: str, changed: set[int], whole: bool = False) -> list[
     if kind is None:
         return []
     comments = comment_checked(path, kind)
-    colours = kind != "java" and not COLOUR_SKIPPED.search(path)
+    colours = kind in ("script", "style") and not COLOUR_SKIPPED.search(path)
     if not comments and not colours:
         return []
     findings = []

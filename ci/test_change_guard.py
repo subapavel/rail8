@@ -167,7 +167,6 @@ class ChangeGuardTest(unittest.TestCase):
                 "}",
             ]) + "\n",
             "docs/notes.md": "D-164 in a document\n",
-            "ci/x.py": "# D-164 in a script outside the checked folders\n",
             "bench/B.java": "// D-164 outside platform/, mapping/ and jq/\n",
         })
         self.assertClean(repo)
@@ -188,6 +187,37 @@ class ChangeGuardTest(unittest.TestCase):
             "ui/src/a.tsx:1: a reference in a comment (D-12): say what the code does and why instead",
             "ui/src/a.tsx:3: a reference in a comment (MAP-7): say what the code does and why instead",
             "ui/src/a.tsx:4: a reference in a comment (#44): say what the code does and why instead",
+        ], self.findings(repo, 4))
+
+    def test_hash_comments_in_shell_yaml_and_python_are_checked_anywhere(self):
+        repo = self.repo()
+        repo.change({
+            "jq/scripts/check.sh": "\n".join([
+                "#!/usr/bin/env bash",
+                "# Fails when a test is not run by the workflow (#42).",
+                'echo "$# args, ${#list[@]} items, # D-1 in a string"; x=a#B-2',
+                "run  # MAP-7",
+            ]) + "\n",
+            ".github/workflows/ci.yml": "\n".join([
+                "# the nightly reports (D-164)",
+                "on: push",
+                "env:",
+                "  URL: https://example.com/a#12",
+                "  NOTE: '# FIX-3 in a quoted value'",
+            ]) + "\n",
+            "ci/x.py": "\n".join([
+                '"""The guard: a `#` followed by a number, such as #123, is a reference."""',
+                "x = '#4'  # ADR-0019",
+                "'''",
+                "  # D-5 inside a text block",
+                "'''",
+            ]) + "\n",
+        })
+        self.assertEqual([
+            ".github/workflows/ci.yml:1: a reference in a comment (D-164): say what the code does and why instead",
+            "ci/x.py:2: a reference in a comment (ADR-0019): say what the code does and why instead",
+            "jq/scripts/check.sh:2: a reference in a comment (#42): say what the code does and why instead",
+            "jq/scripts/check.sh:4: a reference in a comment (MAP-7): say what the code does and why instead",
         ], self.findings(repo, 4))
 
     # hard-coded colours ----------------------------------------------------------------------
