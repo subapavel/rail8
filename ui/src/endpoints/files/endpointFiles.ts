@@ -2,7 +2,21 @@ import { readFile, realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { EndpointFileError, readEndpoint, writeConfig, type EndpointDocument } from './endpointYaml.ts';
-import { createFile, etagOf, jsonBody, locate, MAX_FILE_BYTES, Refusal, replaceFile, send, sendFailure, walk } from '../../../server/workingFolder.ts';
+import {
+  admitted,
+  createFile,
+  etagOf,
+  jsonBody,
+  locate,
+  MAX_FILE_BYTES,
+  Refusal,
+  replaceFile,
+  send,
+  sendFailure,
+  walk,
+  type WorkingFolderLock,
+  type WorkingFolderWrites,
+} from '../../../server/workingFolder.ts';
 
 export { etagOf, MAX_FILE_BYTES, MAX_FILES } from '../../../server/workingFolder.ts';
 
@@ -14,6 +28,8 @@ export interface EndpointFilesOptions {
   editable: boolean;
   /** The development server's own origins; a request with any other `Origin` is refused. */
   origins: readonly string[];
+  /** The working folder's writes, which admit every save and create, and whose lock each takes for its write. */
+  writes: WorkingFolderWrites;
 }
 
 /** One endpoint file of the working folder: its path relative to the folder, with `/`, and its envelope or why it cannot be read. */
@@ -69,13 +85,16 @@ function endpointOf(text: string, path: string, editable: boolean): EndpointFile
  *   422 when it cannot be read.
  * - `PUT /files/endpoints/<path>` with `If-Match` and `{"config": {...}}`: writes the file's `config` as
  *   {@link writeConfig} does, to a temporary file renamed over it, and answers 200 as GET does; 403 when not editable,
- *   428 without `If-Match`, 412 when the file changed since that tag, 422 when the edit is refused.
+ *   428 without `If-Match`, 412 when the file changed since that tag (compared again under the working folder's lock,
+ *   just before the rename, where a file that is gone, or a path that now leads to another file, has changed too), 422
+ *   when the edit is refused, 503 when the working folder has too many writes under way.
  * - `PUT /files/endpoints/<path>` with `If-None-Match: *` and `{"text": "..."}`: creates the endpoint file, in a folder
  *   of the working folder that exists, with the text, which must read as an endpoint file, and answers 201 as GET
  *   does; 403 when not editable, 412 when a file of that name exists, 404 when its folder does not, 422 when the text is
- *   no endpoint file, 400 when both preconditions are sent.
+ *   no endpoint file, 400 when both preconditions are sent, 503 when the working folder has too many writes under way.
  *
- * Saves are made one at a time. Every other path goes to `next`.
+ * Saves are made one at a time, each admitted by the working folder's writes before its body is read, and each takes
+ * the working folder's lock for its write. Every other path goes to `next`.
  */
 export function endpointFiles(options: EndpointFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
@@ -95,7 +114,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
     return { file: endpointOf(bytes.toString('utf8'), path, options.editable), etag: etagOf(bytes) };
   };
 
-  const create = async (req: IncomingMessage, path: string) => {
+  const create = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
     const sent = await jsonBody(req);
     if (typeof sent !== 'object' || sent === null || !('text' in sent) || typeof sent.text !== 'string') throw new Refusal(400, 'a create sends {"text": "..."}');
     const text = sent.text;
@@ -106,16 +125,16 @@ export function endpointFiles(options: EndpointFilesOptions) {
     } catch (error) {
       throw error instanceof Refusal && error.status === 404 ? new Refusal(422, 'the text is not an endpoint file') : error;
     }
-    await createFile(await rootOf(), path, isYaml, 'endpoint file', text);
+    await createFile(lock, await rootOf(), path, isYaml, 'endpoint file', text);
     return { file, etag: etagOf(text), created: true };
   };
 
-  const save = async (req: IncomingMessage, path: string) => {
+  const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
     if (!options.editable) throw new Refusal(403, 'this server shows endpoint files read-only');
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
     if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both');
-    if (ifNoneMatch === '*') return create(req, path);
+    if (ifNoneMatch === '*') return create(req, path, lock);
     if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match');
     const sent = await jsonBody(req);
     if (typeof sent !== 'object' || sent === null || !('config' in sent)) throw new Refusal(400, 'a save sends {"config": {...}}');
@@ -123,6 +142,11 @@ export function endpointFiles(options: EndpointFilesOptions) {
     if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Refusal(400, 'config is a JSON object');
     const file = await locate(await rootOf(), path, isYaml, 'endpoint file');
     const bytes = await readFile(file);
+    // under the lock: a file that is gone, or a path that now leads to another file, has changed too
+    const unchanged = async () => {
+      const now = await locate(await rootOf(), path, isYaml, 'endpoint file').catch(() => undefined);
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+    };
     if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
     const text = bytes.toString('utf8');
     endpointOf(text, path, options.editable);
@@ -133,7 +157,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
       if (error instanceof EndpointFileError) throw new Refusal(422, error.message);
       throw error;
     }
-    await replaceFile(file, written);
+    await replaceFile(lock, file, written, unchanged);
     return { file: endpointOf(written, path, options.editable), etag: etagOf(written), created: false };
   };
 
@@ -155,9 +179,11 @@ export function endpointFiles(options: EndpointFilesOptions) {
         const { file, etag } = await read(path);
         send(res, 200, file, etag);
       } else if (path !== '' && req.method === 'PUT') {
-        const done = saves.then(() => save(req, path));
-        saves = done.catch(() => undefined);
-        const { file, etag, created } = await done;
+        const { file, etag, created } = await admitted(options.writes, (lock) => {
+          const done = saves.then(() => save(req, path, lock));
+          saves = done.catch(() => undefined);
+          return done;
+        });
         send(res, created ? 201 : 200, file, etag);
       } else send(res, 405, { error: 'the working folder takes GET, and PUT of one file' });
     };

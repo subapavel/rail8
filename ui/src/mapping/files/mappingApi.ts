@@ -3,7 +3,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, join } from 'node:path';
 import { foreign } from '../../../server/adminProxy.ts';
-import { replaceFile, writeNew } from '../../../server/workingFolder.ts';
+import { admitted, Refusal, replaceFile, writeNew, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import {
   baseFolder,
   bundleFile,
@@ -31,6 +31,8 @@ export interface MappingApiOptions {
   node: { target: string; token?: string };
   /** Makes the signal that ends one call to the node; by default after {@link CALL_SECONDS}. */
   deadline?: () => AbortSignal;
+  /** The working folder's writes, which admit every save and create, and whose lock each takes for its write. */
+  writes: WorkingFolderWrites;
 }
 
 /** How long one call to the node may take. */
@@ -127,8 +129,11 @@ function routeOf(method: string, path: string): Route {
  * - Opening a mapping answers the node's canonical form of the stored file, with `ETag: "sha256:<hex>"` of exactly
  *   those bytes. A save writes the node's canonical form of the body over the file, through a temporary file renamed
  *   over it; with `If-Match`, only when the tag is that of the stored file, compared before the body is parsed, so a
- *   stored file the node refuses matches no tag. A create writes the new file and never one over a file. Saves and
- *   creates are made one at a time.
+ *   stored file the node refuses matches no tag, and only when the file still holds the bytes that tag was made of,
+ *   compared again under the working folder's lock just before the rename. A file that is gone by then, or a path that
+ *   leads to another file by then, has changed too, with or without `If-Match`. A create writes the new file and never
+ *   one over a file. Saves and creates are made one at a time, each admitted by the working folder's writes before its
+ *   body is read, and each takes the working folder's lock for its write only, never while it waits for the node.
  * - When the node needs a call's bundle files, they are read in the order it names them, relative to the mapping's
  *   folder (or the structure's base), and sent once in a second call. A file must stay inside the package that holds the
  *   folder, the nearest folder up with `package.yaml`, or inside the working folder when there is none; the first that
@@ -137,7 +142,8 @@ function routeOf(method: string, path: string): Route {
  *   a create when the folder is shown read-only; 415 for a body that is not JSON; 413 `too-large` when the body, or it
  *   and the bundle files, are over 12 MiB, before the call that would carry them. A node that does not answer within
  *   {@link CALL_SECONDS}, is down, refuses the token, has no such route or answers what it must not is 502
- *   `node-unavailable`; its 503 `busy` is passed on as it is. A call to the node ends when the browser's request closes.
+ *   `node-unavailable`; its 503 `busy` is passed on as it is. A save or a create that finds too many writes of the
+ *   working folder under way is 503 `busy` too. A call to the node ends when the browser's request closes.
  *
  * Every path outside `/api` goes to `next`.
  */
@@ -255,39 +261,52 @@ export function mappingApi(options: MappingApiOptions) {
         return model(await operate('canonical', await storedBytes(file), async () => at, signal, 'stored'));
       }
       case 'save': {
-        const file = await mappingFile(root, route.id);
-        const at = await bundleFolder(root, await mappingFolder(root, route.id));
-        const sent = await bodyOf(req);
-        const ifMatch = req.headers['if-match'];
-        return locked(async () => {
-          if (ifMatch !== undefined) {
-            const stored = await operate('canonical', await storedBytes(file), async () => at, signal, 'stored');
-            if (stored.status === 503) return stored;
-            if (stored.status !== 200 || etagOf(stored.body) !== ifMatch) {
-              throw new Problem(409, mappingProblem('mapping-changed'), 'Mapping changed', 'the mapping changed on disk since the If-Match tag was read; nothing was saved');
+        const { id } = route;
+        return admitted(options.writes, async (lock) => {
+          const file = await mappingFile(root, id);
+          const at = await bundleFolder(root, await mappingFolder(root, id));
+          const sent = await bodyOf(req);
+          const ifMatch = req.headers['if-match'];
+          const changed = (detail = 'the mapping changed on disk since the If-Match tag was read; nothing was saved') =>
+            new Problem(409, mappingProblem('mapping-changed'), 'Mapping changed', detail);
+          return locked(async () => {
+            let read: Buffer | undefined;
+            if (ifMatch !== undefined) {
+              read = await storedBytes(file);
+              const stored = await operate('canonical', read, async () => at, signal, 'stored');
+              if (stored.status === 503) return stored;
+              if (stored.status !== 200 || etagOf(stored.body) !== ifMatch) throw changed();
             }
-          }
-          const saved = await operate('canonical', sent, async () => at, signal, 'sent');
-          if (saved.status === 200) await replaceFile(file, saved.body);
-          return model(saved);
+            const saved = await operate('canonical', sent, async () => at, signal, 'sent');
+            // the path must still lead to the file, and the file still hold the bytes the tag was made of: a file a pull
+            // removed or changed while the node was asked is kept
+            const unchanged = async () => {
+              const now = await mappingFile(root, id).catch(() => undefined);
+              if (now !== file) throw changed('the mapping file is gone, or its path leads to another file now; nothing was saved');
+              if (read !== undefined && !(await readFile(file)).equals(read)) throw changed();
+            };
+            if (saved.status === 200) await replaceFile(lock, file, saved.body, unchanged);
+            return model(saved);
+          });
         });
       }
-      case 'create': {
-        const sent = await bodyOf(req);
-        const id = memberOf(sent, 'id');
-        // The id and its folder are checked before the node is asked; a body that names no id is the node's to refuse.
-        const named = id === '' ? undefined : await mappingFolder(root, id);
-        const folder = async () => named ?? mappingFolder(root, id);
-        const created = await operate('create', sent, async () => bundleFolder(root, await folder()), signal);
-        if (created.status !== 201) return created;
-        const into = join(await folder(), basename(id) + SUFFIX);
-        return locked(async () => {
-          if (!(await writeNew(into, created.body))) {
-            throw new Problem(409, mappingProblem('mapping-exists'), 'Mapping exists', 'a mapping with this id exists');
-          }
-          return model(created, { location: `/api/mappings/${id}` });
+      case 'create':
+        return admitted(options.writes, async (lock) => {
+          const sent = await bodyOf(req);
+          const id = memberOf(sent, 'id');
+          // The id and its folder are checked before the node is asked; a body that names no id is the node's to refuse.
+          const named = id === '' ? undefined : await mappingFolder(root, id);
+          const folder = async () => named ?? mappingFolder(root, id);
+          const created = await operate('create', sent, async () => bundleFolder(root, await folder()), signal);
+          if (created.status !== 201) return created;
+          const into = join(await folder(), basename(id) + SUFFIX);
+          return locked(async () => {
+            if (!(await writeNew(lock, into, created.body))) {
+              throw new Problem(409, mappingProblem('mapping-exists'), 'Mapping exists', 'a mapping with this id exists');
+            }
+            return model(created, { location: `/api/mappings/${id}` });
+          });
         });
-      }
       case 'structure': {
         const sent = await bodyOf(req);
         const at = await bundleFolder(root, await baseFolder(root, memberOf(sent, 'base')));
@@ -333,7 +352,10 @@ export function mappingApi(options: MappingApiOptions) {
       (error: unknown) => {
         if (stop.signal.aborted || res.headersSent) res.destroy();
         else if (error instanceof Problem) reply(res, { status: error.status, body: Buffer.from(JSON.stringify(error.json())) });
-        else {
+        else if (error instanceof Refusal && error.status === 503) {
+          // too many writes of the working folder are under way: nothing was done, and the request may be sent again
+          reply(res, { status: 503, body: Buffer.from(JSON.stringify(new Problem(503, BUSY, 'Busy', error.message).json())) });
+        } else {
           const failed = new Problem(500, 'about:blank', 'Internal Server Error', `the working folder could not be read or written: ${String(error)}`);
           reply(res, { status: 500, body: Buffer.from(JSON.stringify(failed.json())) });
         }

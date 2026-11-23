@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { stringify } from 'yaml';
+import { workingFolderWrites } from '../../../server/workingFolder';
 import { flowFiles, type FlowFile } from '../files/flowFiles';
 import { BUILT_IN, type StepType } from './steps';
 import type { FlowContext, FlowView } from './types';
@@ -54,7 +55,7 @@ describe('view of the flows under examples', () => {
   let base: string;
 
   beforeAll(async () => {
-    const middleware = flowFiles({ workspace: join(repo, 'examples'), editable: false, origins: ['http://localhost:5173'] });
+    const middleware = flowFiles({ workspace: join(repo, 'examples'), editable: false, origins: ['http://localhost:5173'], writes: workingFolderWrites() });
     server = createServer((req, res) => middleware(req, res, () => res.writeHead(404).end()));
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/files/flows`;

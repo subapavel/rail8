@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { flowFiles, type FlowFilesOptions } from './flowFiles';
-import { etagOf, MAX_FILE_BYTES } from '../../../server/workingFolder';
+import { heldWrites } from '../../../server/heldWrites';
+import { etagOf, MAX_FILE_BYTES, MAX_WAITING_WRITES, workingFolderWrites } from '../../../server/workingFolder';
 
 const origins = ['http://localhost:5173'];
 const page = { 'sec-fetch-site': 'same-origin', origin: 'http://localhost:5173' };
@@ -76,7 +77,7 @@ describe('flowFiles', () => {
   });
 
   async function serve(options: Partial<FlowFilesOptions> = {}): Promise<string> {
-    const middleware = flowFiles({ workspace: root, editable: true, origins, ...options });
+    const middleware = flowFiles({ workspace: root, editable: true, origins, writes: workingFolderWrites(), ...options });
     const server = createServer((req, res) => middleware(req, res, () => res.writeHead(404).end('next')));
     servers.push(server);
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -217,6 +218,69 @@ describe('flowFiles', () => {
       expect((await put(base, edited, etagOf(caller), 'demo/flows/missing.yaml')).status).toBe(404);
       expect((await put(base, edited, etagOf('just: notes\n'), 'demo/notes.yaml')).status).toBe(404);
       expect((await put(base, edited, etagOf(caller), 'demo/flows/linked.yaml')).status).toBe(403);
+    });
+
+    it('waits while another write holds the lock, then is refused by its recheck when the file changed meanwhile', async () => {
+      const { writes, waiting, release } = heldWrites();
+      const saving = put(await serve({ writes }), edited);
+      await waiting;
+      await writeFile(join(root, 'demo', 'flows', 'caller.yaml'), partner);
+      release();
+      expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
+      expect(await onDisk()).toBe(partner);
+    });
+
+    it('waits while another write holds the lock, then is written when the file did not change', async () => {
+      const { writes, waiting, release } = heldWrites();
+      const saving = put(await serve({ writes }), edited);
+      await waiting;
+      expect(await onDisk()).toBe(caller);
+      release();
+      expect(await saving).toMatchObject({ status: 200, etag: etagOf(edited) });
+      expect(await onDisk()).toBe(edited);
+    });
+
+    it('is refused with 503 when 8 writes wait for the working folder, and writes nothing', async () => {
+      const { writes, release } = heldWrites();
+      for (let i = 0; i < MAX_WAITING_WRITES; i++) void writes((lock) => lock(async () => undefined));
+      expect(await put(await serve({ writes }), edited)).toMatchObject({ status: 503, body: { error: expect.stringContaining('the working folder is busy') } });
+      release();
+      expect(await onDisk()).toBe(caller);
+    });
+
+    it('counts the saves that wait for the save before them, so a ninth write while eight are under way is refused with 503', async () => {
+      const { writes, admissions, release } = heldWrites();
+      const base = await serve({ writes });
+      // the first waits for the lock, the seven after it for the save before them
+      const saving = Array.from({ length: MAX_WAITING_WRITES }, (_, i) => put(base, edited.replace('caller', `caller${i}`)));
+      await admissions(MAX_WAITING_WRITES);
+      expect(await put(base, edited)).toMatchObject({ status: 503, body: { error: expect.stringContaining('the working folder is busy') } });
+      release();
+      expect((await Promise.all(saving)).map((s) => s.status).sort()).toEqual([200, 412, 412, 412, 412, 412, 412, 412]);
+    });
+
+    it('waits while another write holds the lock, then is refused by its recheck when a pull removed the file meanwhile', async () => {
+      const { writes, waiting, release } = heldWrites();
+      const saving = put(await serve({ writes }), edited);
+      await waiting;
+      await rm(join(root, 'demo', 'flows', 'caller.yaml'));
+      release();
+      expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
+      expect(await readdir(join(root, 'demo', 'flows'))).not.toContain('caller.yaml');
+    });
+
+    it('waits while another write holds the lock, then is refused by its recheck when its path led to another file meanwhile', async () => {
+      const alias = join(root, 'demo', 'flows', 'alias.yaml');
+      await symlink('caller.yaml', alias);
+      const { writes, waiting, release } = heldWrites();
+      const saving = put(await serve({ writes }), edited, etagOf(caller), 'demo/flows/alias.yaml');
+      await waiting;
+      await rm(alias);
+      await symlink('partner.yml', alias);
+      release();
+      expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
+      expect(await onDisk()).toBe(caller);
+      expect(await readFile(join(root, 'demo', 'flows', 'partner.yml'), 'utf8')).toBe(partner);
     });
 
     it('makes saves one at a time, so the second of two with the same ETag is refused', async () => {

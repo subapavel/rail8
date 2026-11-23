@@ -20,6 +20,59 @@ export class Refusal extends Error {
   }
 }
 
+/** At most this many writes of the working folder wait, besides the one that holds its lock; one more is refused with 503. */
+export const MAX_WAITING_WRITES = 8;
+
+/**
+ * The working folder's lock, as an admitted write holds it: it runs `work` once every work given to it before has
+ * settled, first in, first out, and answers what `work` answers. It is not reentrant: a work that asks for the lock
+ * again never ends. It has no deadline of its own.
+ */
+export type WorkingFolderLock = <T>(work: () => Promise<T>) => Promise<T>;
+
+/**
+ * The writes of the working folder, which the editors' saves and the git writes share. It admits `write`, runs it with
+ * the working folder's lock and answers what `write` answers, so the works the writes give the lock run one at a time.
+ * A write counts from the moment it is admitted until it ends, whatever it waits for meanwhile: the write before it in
+ * its own module, the node, or the lock. It answers undefined, and runs nothing, when one write and
+ * {@link MAX_WAITING_WRITES} more are under way already.
+ *
+ * Each half of the development server holds its own copy of this file, so an error class of one copy is not the class
+ * another copy catches. The writes are therefore only a function over promises, and make no error themselves:
+ * {@link admitted}, in the copy of the half that asks, turns a refusal into that half's own.
+ */
+export type WorkingFolderWrites = <T>(write: (lock: WorkingFolderLock) => Promise<T>) => Promise<T> | undefined;
+
+/** New writes of the working folder, with their own lock. The development server makes them once, for every half. */
+export function workingFolderWrites(): WorkingFolderWrites {
+  let last: Promise<unknown> = Promise.resolve();
+  const lock: WorkingFolderLock = (work) => {
+    const done = last.then(() => work());
+    last = done.catch(() => undefined);
+    return done;
+  };
+  let underWay = 0;
+  return (write) => {
+    if (underWay > MAX_WAITING_WRITES) return undefined;
+    underWay += 1;
+    return Promise.resolve()
+      .then(() => write(lock))
+      .finally(() => {
+        underWay -= 1;
+      });
+  };
+}
+
+/**
+ * Runs `write` as one of the working folder's `writes`, with the lock they hand it, and answers what it answers.
+ * Refused with 503, and `write` not run, when one write and {@link MAX_WAITING_WRITES} more are under way already.
+ */
+export async function admitted<T>(writes: WorkingFolderWrites, write: (lock: WorkingFolderLock) => Promise<T>): Promise<T> {
+  const done = writes(write);
+  if (done === undefined) throw new Refusal(503, `the working folder is busy: ${MAX_WAITING_WRITES} writes wait already; nothing was written, try again`);
+  return done;
+}
+
 /** One file the walk found: its path relative to the folder, with `/`, and its text. */
 export interface FoundFile {
   path: string;
@@ -104,33 +157,42 @@ export async function locate(root: string, path: string, takes: (name: string) =
 
 /**
  * Creates the file at `path` (relative, with `/`, each segment percent-encoded) under the real folder `root`, whose name
- * `takes`, holding `text`, and answers its real path. It is written whole to a temporary file beside it and linked to its
- * name, so it never replaces a file. Refused with 400 when the path is malformed, names no such file or a place the walk
- * passes over (a hidden or skipped folder or file, or one too deep), 404 when its folder does not exist, 403 when the
- * folder leads out of the working folder, and 412 when a file, or a link, of that name exists.
+ * `takes`, holding `text`, and answers its real path. Under the working folder's lock, it looks for its folder, then
+ * writes the file whole to a temporary file beside it and links it to its name, so it never replaces a file. Refused
+ * with 400 when the path is malformed, names no such file or a place the walk passes over (a hidden or skipped folder
+ * or file, or one too deep), 404 when its folder does not exist, 403 when the folder leads out of the working folder,
+ * and 412 when a file, or a link, of that name exists.
  */
-export async function createFile(root: string, path: string, takes: (name: string) => boolean, what: string, text: string): Promise<string> {
+export async function createFile(lock: WorkingFolderLock, root: string, path: string, takes: (name: string) => boolean, what: string, text: string): Promise<string> {
   const segments = segmentsOf(path, takes, what);
   const folders = segments.slice(0, -1);
   if (folders.length > MAX_DEPTH || segments.some((s) => s.startsWith('.') || SKIPPED.has(s))) throw new Refusal(400, `the path names no ${what} of the working folder`);
-  let folder: string;
-  try {
-    folder = await realpath(join(root, ...folders));
-  } catch {
-    throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
-  }
-  if (folder !== root && !folder.startsWith(root + sep)) throw new Refusal(403, 'the path leaves the working folder');
-  if (!(await stat(folder)).isDirectory()) throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
-  const file = join(folder, segments.at(-1)!);
-  if (!(await writeNew(file, text))) throw new Refusal(412, 'the file exists already; nothing was written');
-  return file;
+  return lock(async () => {
+    let folder: string;
+    try {
+      folder = await realpath(join(root, ...folders));
+    } catch {
+      throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
+    }
+    if (folder !== root && !folder.startsWith(root + sep)) throw new Refusal(403, 'the path leaves the working folder');
+    if (!(await stat(folder)).isDirectory()) throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
+    const file = join(folder, segments.at(-1)!);
+    if (!(await linkNew(file, text))) throw new Refusal(412, 'the file exists already; nothing was written');
+    return file;
+  });
 }
 
 /**
- * Writes `content` to the new file `file`, whole to a temporary file beside it that is then linked to its name, so it
- * never replaces a file. False, with nothing written, when a file, or a link, of that name exists.
+ * Writes `content` to the new file `file` under the working folder's lock, whole to a temporary file beside it that is
+ * then linked to its name, so it never replaces a file. False, with nothing written, when a file, or a link, of that
+ * name exists.
  */
-export async function writeNew(file: string, content: string | Uint8Array): Promise<boolean> {
+export function writeNew(lock: WorkingFolderLock, file: string, content: string | Uint8Array): Promise<boolean> {
+  return lock(() => linkNew(file, content));
+}
+
+/** {@link writeNew}, for a caller that holds the lock. */
+async function linkNew(file: string, content: string | Uint8Array): Promise<boolean> {
   if (await lstat(file).then(() => true, () => false)) return false;
   const temporary = join(dirname(file), `.${basename(file)}.${randomUUID()}.tmp`);
   try {
@@ -163,19 +225,24 @@ function segmentsOf(path: string, takes: (name: string) => boolean, what: string
 }
 
 /**
- * Writes `text` over `file` through a temporary file beside it, renamed over it, keeping the file's mode. `before`, when
- * given, runs just before the rename, and a failure of it leaves the file as it was.
+ * Writes `text` over `file` under the working folder's lock, through a temporary file beside it, renamed over it,
+ * keeping the file's mode while it is there. `before`, when given, runs under the lock just before the rename, and a
+ * failure of it leaves the file as it was and passes on as it is: it is where a save compares the file with what it
+ * read, and finds the file gone.
  */
-export async function replaceFile(file: string, text: string | Uint8Array, before?: () => Promise<void>): Promise<void> {
-  const temporary = join(dirname(file), `.${basename(file)}.${randomUUID()}.tmp`);
-  try {
-    await writeFile(temporary, text, { flag: 'wx', mode: (await stat(file)).mode & 0o777 });
-    await before?.();
-    await rename(temporary, file);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
+export function replaceFile(lock: WorkingFolderLock, file: string, text: string | Uint8Array, before?: () => Promise<void>): Promise<void> {
+  return lock(async () => {
+    const temporary = join(dirname(file), `.${basename(file)}.${randomUUID()}.tmp`);
+    try {
+      const mode = await stat(file).then((info) => info.mode & 0o777, () => undefined);
+      await writeFile(temporary, text, { flag: 'wx', mode });
+      await before?.();
+      await rename(temporary, file);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+  });
 }
 
 /** The request's body as JSON, refused with 413 over {@link MAX_FILE_BYTES} and 400 when it is no JSON. */

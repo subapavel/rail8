@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer, type Plugin, type ViteDevServer } from 'vite';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { moduleServers, type DevServer } from './modules';
+import { moduleServers } from './modules';
 
-const dev: DevServer = { origins: ['http://localhost:5173'], env: {} };
+const dev = { origins: ['http://localhost:5173'], env: {} };
 const ui = resolve(import.meta.dirname, '..');
 
 let temp: string | undefined;
@@ -46,6 +46,35 @@ describe('moduleServers', () => {
     });
     const plugins = await moduleServers({ origins: [], env: { WHO: 'me' } }, src);
     expect(plugins.map((plugin) => plugin.name)).toEqual(['alpha me', 'zeta', 'rail8-module-servers']);
+  });
+
+  test('hands every half the same writes of the working folder', async () => {
+    const holder = (name: string) => `export default (dev: { writes: unknown }) => ({ name: '${name}', api: dev.writes });\n`;
+    const src = await tree({ 'alpha/module.tsx': '', 'alpha/server.ts': holder('alpha'), 'beta/module.tsx': '', 'beta/server.ts': holder('beta') });
+    const [alpha, beta] = await moduleServers(dev, src);
+    expect(typeof alpha?.api).toBe('function');
+    expect(beta?.api).toBe(alpha?.api);
+
+    // a write through one half waits for the lock while a write through the other holds it
+    type Writes = (write: (lock: (work: () => Promise<unknown>) => Promise<unknown>) => Promise<unknown>) => Promise<unknown>;
+    let release = () => undefined as void;
+    const ran: string[] = [];
+    const first = (alpha?.api as Writes)((lock) => lock(() => new Promise<void>((done) => (release = done)).then(() => ran.push('alpha'))));
+    const second = (beta?.api as Writes)((lock) => lock(async () => ran.push('beta')));
+    await new Promise((done) => setImmediate(done));
+    expect(ran).toEqual([]);
+    release();
+    await Promise.all([first, second]);
+    expect(ran).toEqual(['alpha', 'beta']);
+  });
+
+  test('hands the halves made again, as on a restart, the writes of the halves before', async () => {
+    const holder = "export default (dev: { writes: unknown }) => ({ name: 'alpha', api: dev.writes });\n";
+    const src = await tree({ 'alpha/module.tsx': '', 'alpha/server.ts': holder });
+    const [before] = await moduleServers(dev, src);
+    const [after] = await moduleServers(dev, src);
+    expect(typeof before?.api).toBe('function');
+    expect(after?.api).toBe(before?.api);
   });
 
   test('refuses a folder of src without module.tsx', async () => {

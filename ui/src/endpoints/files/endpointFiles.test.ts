@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { endpointFiles, etagOf, listEndpoints, type EndpointFilesOptions } from './endpointFiles';
+import { heldWrites } from '../../../server/heldWrites';
+import { workingFolderWrites } from '../../../server/workingFolder';
 
 const origins = ['http://localhost:5173'];
 const page = { 'sec-fetch-site': 'same-origin', origin: 'http://localhost:5173' };
@@ -68,7 +70,7 @@ describe('endpointFiles', () => {
   });
 
   async function serve(options: Partial<EndpointFilesOptions> = {}): Promise<string> {
-    const middleware = endpointFiles({ workspace: root, editable: true, origins, ...options });
+    const middleware = endpointFiles({ workspace: root, editable: true, origins, writes: workingFolderWrites(), ...options });
     const server = createServer((req, res) => middleware(req, res, () => res.writeHead(404).end('next')));
     servers.push(server);
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
@@ -140,6 +142,40 @@ describe('endpointFiles', () => {
     expect(answer.etag).toBe(etagOf(text));
     expect(answer.body).toMatchObject({ config: { host: '0.0.0.0', port: 8081, path: '/in' } });
     expect((await readdir(join(root, 'demo', 'endpoints'))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('waits while another write holds the lock, then is refused by its recheck when the file changed meanwhile', async () => {
+    const { writes, waiting, release } = heldWrites();
+    const file = join(root, 'demo', 'endpoints', 'http-in.yaml');
+    const saving = save(`${await serve({ writes })}/files/endpoints/demo/endpoints/http-in.yaml`, { host: '0.0.0.0', port: 1 }, etagOf(httpIn));
+    await waiting;
+    const changed = httpIn.replace('8080', '9090');
+    await writeFile(file, changed);
+    release();
+    expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
+    expect(await readFile(file, 'utf8')).toBe(changed);
+    expect((await readdir(join(root, 'demo', 'endpoints'))).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('waits while another write holds the lock, then is refused by its recheck when a pull removed the file meanwhile', async () => {
+    const { writes, waiting, release } = heldWrites();
+    const saving = save(`${await serve({ writes })}/files/endpoints/demo/endpoints/http-in.yaml`, { host: '0.0.0.0', port: 1 }, etagOf(httpIn));
+    await waiting;
+    await rm(join(root, 'demo', 'endpoints', 'http-in.yaml'));
+    release();
+    expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
+    expect((await readdir(join(root, 'demo', 'endpoints'))).filter((n) => n === 'http-in.yaml' || n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('waits while another write holds the lock, then is written when the file did not change', async () => {
+    const { writes, waiting, release } = heldWrites();
+    const file = join(root, 'demo', 'endpoints', 'http-in.yaml');
+    const saving = save(`${await serve({ writes })}/files/endpoints/demo/endpoints/http-in.yaml`, { host: '0.0.0.0', port: 1 }, etagOf(httpIn));
+    await waiting;
+    expect(await readFile(file, 'utf8')).toBe(httpIn);
+    release();
+    expect((await saving).status).toBe(200);
+    expect(await readFile(file, 'utf8')).toBe(httpIn.replace('8080', '1'));
   });
 
   it('refuses a save without If-Match, or one made over a file that changed since', async () => {
