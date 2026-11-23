@@ -347,7 +347,9 @@ describe('Shell', () => {
 
     await userEvent.keyboard('{Shift>}{F10}{/Shift}');
     await expect.element(item('Close')).toHaveFocus();
-    await userEvent.keyboard('{ArrowDown}{Enter}');
+    await userEvent.keyboard('{ArrowDown}');
+    await expect.element(item('Close other tabs')).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
     await expect.poll(titles).toEqual(['A']);
   });
 
