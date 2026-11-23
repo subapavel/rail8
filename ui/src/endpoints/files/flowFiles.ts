@@ -2,8 +2,10 @@ import { readFile, realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { readFlow, saysFlow } from '../flows/flowYaml.ts';
-import { EndpointFileError, readEndpoint } from './endpointYaml.ts';
+import { contextOf, surveyOf, type FlowContext } from './flowContext.ts';
 import { createFile, etagOf, jsonBody, locate, MAX_FILE_BYTES, Refusal, replaceFile, send, sendFailure, walk } from '../../../server/workingFolder.ts';
+
+export type { FlowContext, FlowItem } from './flowContext.ts';
 
 /** The working folder whose flow files the flow screen draws, and who may reach them. */
 export interface FlowFilesOptions {
@@ -15,22 +17,10 @@ export interface FlowFilesOptions {
   origins: readonly string[];
 }
 
-/** One flow file of the working folder: its path relative to the folder, with `/`, and its id or why it cannot be read. */
-export type FlowItem = { path: string; id: string } | { path: string; problem: string };
+/** The files the node reads as a package's YAML: `*.yaml` and `*.yml`. */
+const isYaml = (name: string) => name.endsWith('.yaml') || name.endsWith('.yml');
 
-/**
- * What a flow refers to in the working folder. `endpoints` are those of the flow's package, the nearest folder above the
- * file that holds `package.yaml`; `address` is the endpoint's own, `overlaid` says an environment changes it, and `addressIn`
- * holds what each environment that changes it sets it to.
- * `flows` are every flow of the working folder, `address` the one their inbound `direct` endpoint serves. `partial` is
- * true when the walk stopped at its limit or a file of the package could not be read, so that what is not found may still
- * exist.
- */
-export interface FlowContext {
-  endpoints: { id: string; path: string; scheme: string; direction: 'in' | 'out'; address?: string; overlaid?: true; addressIn?: Record<string, unknown> }[];
-  flows: { path: string; id: string; mode?: 'sync' | 'at-least-once' | 'at-most-once'; address?: string }[];
-  partial: boolean;
-}
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** What `GET /files/flows/<path>` answers. */
 export interface FlowFile {
@@ -41,61 +31,12 @@ export interface FlowFile {
 }
 
 const PREFIX = '/files/flows';
-const MODES = new Set(['sync', 'at-least-once', 'at-most-once']);
-
-/** The files the node reads as a package's YAML: `*.yaml` and `*.yml`. */
-const isYaml = (name: string) => name.endsWith('.yaml') || name.endsWith('.yml');
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/** The folder of `path`, with `/`; '' for a file at the top of the working folder. */
-const folderOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
-
-interface Endpoint {
-  entry: FlowContext['endpoints'][number];
-  pkg: string;
-}
 
 /** The working folder as one walk reads it: its flows, its endpoints, the folder of each package, and what could not be read. */
 async function survey(root: string, signal?: AbortSignal) {
   const { files, truncated } = await walk(root, isYaml, signal);
   signal?.throwIfAborted();
-  const packages = new Set(files.filter((f) => f.path === 'package.yaml' || f.path.endsWith('/package.yaml')).map((f) => folderOf(f.path)));
-  const packageOf = (path: string) => {
-    for (let folder = folderOf(path); ; folder = folderOf(folder)) {
-      if (packages.has(folder) || folder === '') return folder;
-    }
-  };
-  const flows: { item: FlowItem; from?: string; mode?: string; pkg: string }[] = [];
-  const endpoints: Endpoint[] = [];
-  const unreadable = new Set<string>();
-  for (const { path, text } of files) {
-    const pkg = packageOf(path);
-    const read = readFlow(text);
-    if (read.kind === 'flow') {
-      const from = isRecord(read.value.from) && typeof read.value.from.endpoint === 'string' ? read.value.from.endpoint : undefined;
-      const mode = isRecord(read.value.delivery) && typeof read.value.delivery.mode === 'string' ? read.value.delivery.mode : undefined;
-      flows.push({ item: { path, id: read.id }, from, mode, pkg });
-      continue;
-    }
-    if (read.kind === 'problem') {
-      unreadable.add(pkg);
-      if (saysFlow(text)) flows.push({ item: { path, problem: read.message }, pkg });
-      continue;
-    }
-    try {
-      const doc = readEndpoint(text);
-      if (doc === null) continue;
-      const address = typeof doc.config.address === 'string' ? doc.config.address : undefined;
-      const changing = doc.environments.filter((env) => env.options.includes('address'));
-      const overlay = changing.length === 0 ? {} : { overlaid: true as const, addressIn: Object.fromEntries(changing.map((env) => [env.name, env.config.address])) };
-      endpoints.push({ pkg, entry: { id: doc.id, path, scheme: doc.scheme, direction: doc.direction, ...(address === undefined ? {} : { address }), ...overlay } });
-    } catch (error) {
-      if (!(error instanceof EndpointFileError)) throw error;
-      unreadable.add(pkg);
-    }
-  }
-  return { flows, endpoints, unreadable, truncated, packageOf };
+  return { ...surveyOf(files), truncated };
 }
 
 /**
@@ -139,27 +80,8 @@ export function flowFiles(options: FlowFilesOptions) {
     const text = bytes.toString('utf8');
     const flow = readFlow(text);
     if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, `${path} is not a flow file`);
-    const { flows, endpoints, unreadable, truncated, packageOf } = await survey(root, signal);
-    const pkg = packageOf(path);
-    const served = (f: (typeof flows)[number]) =>
-      endpoints.find((e) => e.pkg === f.pkg && e.entry.id === f.from && e.entry.scheme === 'direct' && e.entry.direction === 'in')?.entry;
-    const context: FlowContext = {
-      endpoints: endpoints.filter((e) => e.pkg === pkg).map((e) => e.entry),
-      flows: flows.flatMap((f) => {
-        if (!('id' in f.item)) return [];
-        const door = served(f);
-        const address = door !== undefined && door.overlaid === undefined ? door.address : undefined;
-        return [
-          {
-            path: f.item.path,
-            id: f.item.id,
-            ...(f.mode !== undefined && MODES.has(f.mode) ? { mode: f.mode as 'sync' } : {}),
-            ...(address === undefined ? {} : { address }),
-          },
-        ];
-      }),
-      partial: truncated || unreadable.has(pkg),
-    };
+    const { truncated, ...found } = await survey(root, signal);
+    const context = contextOf(found, path, truncated);
     return { file: { path, text, editable: options.editable, context } satisfies FlowFile, etag: etagOf(bytes) };
   };
 

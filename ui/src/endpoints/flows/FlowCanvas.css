@@ -85,6 +85,10 @@
 .flow-tile:is([data-type="mapping"],[data-type="xslt"],[data-type="extractKey"],[data-type="jq"]) { --tile-ink: var(--ant-purple-7); --tile-paper: var(--ant-purple-1); }
 .flow-tile:is([data-type="destination"],[data-type="to"]) { --tile-ink: var(--ant-color-success-text); --tile-paper: var(--ant-color-success-bg); }
 .flow-tile[data-type="end"] { --tile-ink: var(--ant-color-text-secondary); --tile-paper: var(--ant-color-bg-layout); }
+.flow-tile[data-change="added"] { box-shadow: 0 0 0 2px var(--ant-color-success); }
+.flow-tile[data-change="changed"] { box-shadow: 0 0 0 2px var(--ant-color-warning); }
+.flow-station-marks .added { color: var(--ant-color-success); }
+.flow-station-marks .changed { color: var(--ant-color-warning); }
 .flow-station [aria-pressed="true"] { outline: 2px solid var(--ant-color-primary); outline-offset: 3px; }
 .flow-caption {
   position: absolute;
