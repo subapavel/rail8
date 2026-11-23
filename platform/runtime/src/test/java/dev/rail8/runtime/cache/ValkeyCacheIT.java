@@ -8,8 +8,11 @@ import dev.rail8.testkit.FakeIds;
 import dev.rail8.testkit.FakeRuntime;
 import dev.rail8.testkit.FakeTimer;
 import io.vertx.core.Vertx;
+import io.vertx.redis.client.Command;
 import io.vertx.redis.client.Redis;
 import io.vertx.redis.client.RedisAPI;
+import io.vertx.redis.client.RedisOptions;
+import io.vertx.redis.client.Request;
 import io.vertx.redis.client.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -45,7 +48,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * The Valkey cache against valkey/valkey:8: the cache contract on one node, then two nodes over one Valkey, each with its
  * own client, clock and timer. Every test works in a package of its own, so no test sees another's keys. A node waiting for
  * another node's load is seen when its only pending timer task is a pause of a poll, and the pause is ended by moving that
- * node's clock; a lock is made to lapse with {@code PEXPIRE} and waited for by polling {@code EXISTS}, never slept.
+ * node's clock; a lock is made to lapse with {@code PEXPIRE}, and a value with a short ttl left to lapse, each waited for by
+ * polling {@code EXISTS}, never slept. {@code CLIENT PAUSE} holds a node's call back, and {@code maxmemory} fills Valkey; each
+ * test that changes them changes them back.
  */
 class ValkeyCacheIT extends CacheContract {
 
@@ -200,6 +205,8 @@ class ValkeyCacheIT extends CacheContract {
             b.awaitPoll();
             loading.release.countDown();
             assertEquals("once", result(loading.call));
+            assertEquals(0, api.exists(List.of(valueKey(pkg, "k"))).await().toInteger(), "a ttl of zero keeps nothing on Valkey");
+            assertEquals(0, api.zcard(base(pkg) + "z").await().toLong(), "nor an entry in the package's share");
             b.endPause();
             assertEquals("own", result(waiting));
         }
@@ -215,6 +222,82 @@ class ValkeyCacheIT extends CacheContract {
             assertEquals("stale", result(loading.call), "its own caller still gets the value it loaded");
             assertEquals("fresh", call(() -> b.scope(pkg).get("k", value("fresh", Duration.ofMinutes(5)))));
             assertEquals("fresh", call(() -> a.scope(pkg).get("k", value("other", Duration.ofMinutes(5)))));
+        }
+    }
+
+    @Test
+    void aRemoveThatValkeyRunsBeforeAnEarlierReadKeepsThatReadsLoadFromBeingKept() throws Exception {
+        try (Node a = new Node("node-a")) {
+            String pkg = freshPackage();
+            Parked loading = park(a.scope(pkg), "k", "stale", Duration.ofMinutes(5));
+            String held = api.get(lockKey(pkg, "k")).await().toString();
+            call(() -> { a.scope(pkg).remove("k"); return null; });
+            api.set(List.of(lockKey(pkg, "k"), held, "PX", "10000")).await();   // as if the read had run after the remove
+            loading.release.countDown();
+            assertEquals("stale", result(loading.call), "its own caller still gets the value it loaded");
+            assertEquals(0, api.exists(List.of(valueKey(pkg, "k"))).await().toInteger(), "the load kept nothing");
+            assertEquals(0, api.exists(List.of(lockKey(pkg, "k"))).await().toInteger(), "and freed its lock");
+            assertEquals("fresh", call(() -> a.scope(pkg).get("k", value("fresh", Duration.ofMinutes(5)))));
+        }
+    }
+
+    @Test
+    void aReadWhoseAnswerIsHeldBackStillHandsItsLoadToTheOtherNodes() throws Exception {
+        try (Node a = new Node("node-a", 1); Node b = new Node("node-b")) {   // one connection: the write follows the read
+            String pkg = freshPackage();
+            a.client.send(Request.cmd(Command.PING)).await();   // connected before the pause
+            CountDownLatch loaded = new CountDownLatch(1);
+            AtomicInteger locksSeen = new AtomicInteger(-1);
+            CompletableFuture<String> got;
+            try {
+                api.client(List.of("PAUSE", "60000", "WRITE")).await();
+                got = async(() -> a.scope(pkg).get("k", () -> {
+                    locksSeen.set(api.exists(List.of(lockKey(pkg, "k"))).await().toInteger());
+                    loaded.countDown();
+                    return new Cache.Entry("token", Duration.ofMinutes(5));
+                }));
+                until(a::calling, "A's read waits for its answer");
+                a.clock.advance(ValkeyCache.CALL);
+                await(loaded);
+            } finally {
+                api.client(List.of("UNPAUSE")).await();
+            }
+            assertEquals("token", result(got));
+            assertEquals(0, locksSeen.get(), "A loaded before Valkey ran its read");
+            assertEquals(0, api.exists(List.of(lockKey(pkg, "k"))).await().toInteger(), "the lock the read took went with A's write");
+            AtomicInteger loadsOnB = new AtomicInteger();
+            assertEquals("token", call(() -> b.scope(pkg).get("k", () -> {
+                loadsOnB.incrementAndGet();
+                return new Cache.Entry("other", Duration.ofMinutes(5));
+            })));
+            assertEquals(0, loadsOnB.get(), "B got A's value without waiting for a lease to lapse");
+            call(() -> { b.scope(pkg).remove("k"); return null; });
+            assertEquals("fresh", call(() -> a.scope(pkg).get("k", value("fresh", Duration.ofMinutes(5)))),
+                    "A kept no copy of its own: Valkey had taken its value");
+        }
+    }
+
+    @Test
+    void aFullValkeyCountsAsDownAndRefusesEachScriptWhole() throws Exception {
+        try (Node a = new Node("node-a")) {
+            String pkg = freshPackage();
+            Cache c = a.scope(pkg);
+            assertEquals("kept", call(() -> c.get("a", value("kept", Duration.ofMinutes(5)))));
+            Parked loading = park(c, "b", "late", Duration.ofMinutes(5));
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("loaded-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            try {
+                api.config(List.of("SET", "maxmemory", "1")).await();
+                assertEquals("loaded-1", call(() -> c.get("a", loader)), "the read is refused: a full Valkey loses its hits");
+                assertEquals("loaded-1", call(() -> c.get("a", loader)), "the node keeps what it loaded meanwhile");
+                loading.release.countDown();
+                assertEquals("late", result(loading.call));
+                assertEquals(1, api.exists(List.of(lockKey(pkg, "b"))).await().toInteger(), "the write did not free the lock");
+                assertEquals(0, api.exists(List.of(valueKey(pkg, "b"))).await().toInteger(), "nor keep the value");
+            } finally {
+                api.config(List.of("SET", "maxmemory", "0")).await();
+            }
+            assertEquals(1, loads.get());
         }
     }
 
@@ -268,6 +351,41 @@ class ValkeyCacheIT extends CacheContract {
     }
 
     @Test
+    void anEntryIsChargedForItsValueKeyExpirySealedValueAndItsNameInTheBookkeeping() throws Exception {
+        try (Node a = new Node("node-a")) {
+            String pkg = freshPackage();
+            call(() -> a.scope(pkg).get("k", value("v", Duration.ofMinutes(5))));
+            String entry = STEP + ":k";
+            long expiry = FakeRuntime.T0.plus(Duration.ofMinutes(5)).toEpochMilli();
+            long sealed = 16 + "v".length() + 16;   // salt, value, tag
+            long charged = valueKey(pkg, "k").length() + Long.toString(expiry).length() + sealed + 2L * entry.length();
+            assertEquals(charged, Long.parseLong(api.hget(base(pkg) + "n", entry).await().toString()));
+            assertEquals(charged, Long.parseLong(api.hget(base(pkg) + "n", "#").await().toString()));
+        }
+    }
+
+    @Test
+    void aTtlAboveTheLimitLivesOnValkeyForTheLimit() throws Exception {
+        try (Node a = new Node("node-a")) {
+            String pkg = freshPackage();
+            call(() -> a.scope(pkg).get("k", value("v", Duration.ofDays(30))));
+            long pttl = api.pttl(valueKey(pkg, "k")).await().toLong();
+            assertTrue(pttl <= Cache.MAX_TTL.toMillis() && pttl > Cache.MAX_TTL.minusMinutes(1).toMillis(), "PTTL " + pttl);
+        }
+    }
+
+    @Test
+    void aValueValkeyDropsAfterItsTtlIsLoadedAgainWhileTheClocksStandStill() throws Exception {
+        try (Node a = new Node("node-a"); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            assertEquals("first", call(() -> a.scope(pkg).get("k", value("first", Duration.ofMillis(300)))));
+            until(() -> api.exists(List.of(valueKey(pkg, "k"))).await().toInteger() == 0, "Valkey drops the value after 300 ms");
+            assertEquals("again", call(() -> b.scope(pkg).get("k", value("again", Duration.ofMinutes(5)))));
+            assertEquals("again", call(() -> a.scope(pkg).get("k", value("unused", Duration.ofMinutes(5)))));
+        }
+    }
+
+    @Test
     void nothingOnValkeyShowsTheValue() throws Exception {
         try (Node a = new Node("node-a")) {
             String pkg = freshPackage();
@@ -299,14 +417,24 @@ class ValkeyCacheIT extends CacheContract {
     private static final class Node implements AutoCloseable {
         final FakeClock clock = FakeClock.at(FakeRuntime.T0);
         final FakeTimer timer = new FakeTimer(clock);
-        final Redis client = Redis.createClient(vertx, uri());
+        final Redis client;
         final ValkeyCache caches;
 
         Node(String id) {
-            this(id, MASTER);
+            this(id, MASTER, Redis.createClient(vertx, uri()));
         }
 
         Node(String id, SecretKey master) {
+            this(id, master, Redis.createClient(vertx, uri()));
+        }
+
+        /** A node whose client has {@code connections} connections. */
+        Node(String id, int connections) {
+            this(id, MASTER, Redis.createClient(vertx, new RedisOptions().setConnectionString(uri()).setMaxPoolSize(connections)));
+        }
+
+        private Node(String id, SecretKey master, Redis client) {
+            this.client = client;
             caches = new ValkeyCache(client, master, id, clock, timer, new FakeIds(id + "-"));
         }
 
@@ -319,6 +447,15 @@ class ValkeyCacheIT extends CacheContract {
             try {
                 return timer.pending() == 1 && timer.nextDelay().compareTo(ValkeyCache.LAST_POLL) <= 0;
             } catch (IllegalStateException cancelledMeanwhile) {   // the bound of a call that has just been answered
+                return false;
+            }
+        }
+
+        /** Whether the node's only pending task is the bound of a call to Valkey. */
+        boolean calling() {
+            try {
+                return timer.pending() == 1 && timer.nextDelay().equals(ValkeyCache.CALL);
+            } catch (IllegalStateException cancelledMeanwhile) {
                 return false;
             }
         }

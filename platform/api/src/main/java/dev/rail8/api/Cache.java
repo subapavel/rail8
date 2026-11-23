@@ -37,9 +37,10 @@ public interface Cache {
      * gets an {@link IllegalStateException} naming the key, with that exception as its cause. A loader that returns
      * {@code null}, or asks for its own key, fails the same way with an {@link IllegalStateException}.
      *
-     * <p>Where the nodes share the cache, a key is also loaded once at a time across them. A caller whose key another node
-     * is loading waits for that load, for a bounded time, and then fails with an {@link IllegalStateException} naming the
-     * key. When that load fails, the caller gets an {@link IllegalStateException} naming the key, without a cause; when it
+     * <p>Where the nodes share the cache, a key is also loaded once at a time across them while the loading node keeps its
+     * claim on the key; a node that stalls past its claim, or a failover of the shared cache, can let a second node load it,
+     * and only the load that still holds the claim is kept. A caller whose key another node is loading waits for that load,
+     * for a bounded time, and then fails with an {@link IllegalStateException} naming the key. When that load fails, the caller gets an {@link IllegalStateException} naming the key, without a cause; when it
      * keeps nothing, is removed, or its node stops, the caller loads the key itself.
      *
      * @throws IllegalArgumentException naming the key when it is not a key

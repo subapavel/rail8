@@ -150,15 +150,17 @@ public abstract class CacheContract {
     @Test
     public void callersOfOneKeyShareOneLoad() throws Exception {
         Cache c = cache();
+        CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger loads = new AtomicInteger();
         Cache.Loader slow = () -> {
             loads.incrementAndGet();
+            started.countDown();
             release.await();
             return new Cache.Entry("shared", Duration.ofMinutes(5));
         };
         Caller first = start(() -> c.get("k", slow));
-        first.awaitBlocked();
+        await(started);
         Caller second = start(() -> c.get("k", slow));
         second.awaitBlocked();
         release.countDown();
@@ -170,10 +172,11 @@ public abstract class CacheContract {
     @Test
     public void aCallerThatWaitedForALoadThatFailedGetsAnIllegalStateWithTheFailureAsCause() throws Exception {
         Cache c = cache();
+        CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         IOException refused = new IOException("the token endpoint refused");
-        Caller first = start(() -> c.get("k", () -> { release.await(); throw refused; }));
-        first.awaitBlocked();
+        Caller first = start(() -> c.get("k", () -> { started.countDown(); release.await(); throw refused; }));
+        await(started);
         Caller second = start(() -> c.get("k", value("unused", Duration.ofMinutes(5))));
         second.awaitBlocked();
         release.countDown();
@@ -186,9 +189,10 @@ public abstract class CacheContract {
     @Test
     public void aLoadOfOneKeyDoesNotHoldUpAnother() throws Exception {
         Cache c = cache();
+        CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        Caller slow = start(() -> c.get("slow", () -> { release.await(); return new Cache.Entry("s", Duration.ofMinutes(5)); }));
-        slow.awaitBlocked();
+        Caller slow = start(() -> c.get("slow", () -> { started.countDown(); release.await(); return new Cache.Entry("s", Duration.ofMinutes(5)); }));
+        await(started);
         try {
             assertEquals("fast", call(() -> c.get("fast", value("fast", Duration.ofMinutes(5)))));
         } finally {
@@ -200,9 +204,10 @@ public abstract class CacheContract {
     @Test
     public void aLoadUnderWayWhenItsKeyIsRemovedIsNotKept() throws Exception {
         Cache c = cache();
+        CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        Caller loading = start(() -> c.get("k", () -> { release.await(); return new Cache.Entry("stale", Duration.ofMinutes(5)); }));
-        loading.awaitBlocked();
+        Caller loading = start(() -> c.get("k", () -> { started.countDown(); release.await(); return new Cache.Entry("stale", Duration.ofMinutes(5)); }));
+        await(started);
         call(() -> { c.remove("k"); return null; });
         release.countDown();
         assertEquals("stale", loading.result(), "its own caller still gets the value it loaded");
@@ -226,6 +231,11 @@ public abstract class CacheContract {
         throw new AssertionError(failure);
     }
 
+    /** Returns once a loader has counted {@code started} down. */
+    private static void await(CountDownLatch started) throws InterruptedException {
+        assertTrue(started.await(PATIENCE_SECONDS, TimeUnit.SECONDS), "the loader did not start within " + PATIENCE_SECONDS + " s");
+    }
+
     private static Caller start(Callable<?> task) {
         Caller caller = new Caller();
         caller.thread = Thread.ofVirtual().start(() -> {
@@ -245,7 +255,7 @@ public abstract class CacheContract {
         volatile Object value;
         final CompletableFuture<Throwable> done = new CompletableFuture<>();
 
-        /** Returns once the caller is parked: in its loader, or waiting for another caller's load. */
+        /** Returns once the caller is parked waiting for another caller's load. */
         void awaitBlocked() {
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(PATIENCE_SECONDS);
             while (!(thread.getState() == Thread.State.WAITING && LockSupport.getBlocker(thread) != null)) {

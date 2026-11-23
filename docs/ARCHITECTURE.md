@@ -239,8 +239,10 @@ node that holds the body (see part 6).
 ### Valkey, S3, ClickHouse
 
 - **Valkey** holds the poller leases (part 6) and the cache of custom code that the nodes share
-  (part 5). It is optional; a node without it warns at start that two nodes would both poll and that
-  each keeps the cache in its own memory.
+  (part 5), each over a client of its own, so the leases never wait behind the cache. Valkey's own
+  eviction stays off (`noeviction`, its default); the cache keeps its own limits. It is optional; a
+  node without it warns at start that two nodes would both poll and that each keeps the cache in its
+  own memory.
 - **S3** is not used: packages are deployed from git.
 - **ClickHouse** is in the compose file but not used by any code. Kafka likewise: a flow asking for a
   Kafka queue is refused.
@@ -741,13 +743,18 @@ script in SAP Integration Suite works with security material.
   a day. Keys are up to 256 characters, values up to 64 KiB. The steps of one type in one package share
   their keys, and no one else sees them; entries stay across a redeploy.
   - With Valkey, the nodes share the cache, so a partner that limits token requests sees one per
-    pool. A key loads on one node at a time; callers on other nodes ask Valkey again, 10 ms apart
-    doubling to 200 ms, for at most 30 s, and fail when the load they waited for failed. The loading
-    node holds a lock that it renews every 3 s and that lapses 10 s after its node stops. A value
-    lives in Valkey for its ttl and is AES-256-GCM under a key derived from the master key. Each
-    package keeps at most 1,000 entries and 8 MiB; the entry nearest its expiry goes first. When
-    Valkey does not answer within 1 s, the node loads on its own and keeps the value for at most a
-    minute.
+    pool. A key loads on one node at a time while that node holds the key's lock, which it renews
+    every 3 s and which lapses 10 s after its node stops. A node that stalls for longer, or a Valkey
+    that fails over to a replica without the lock, can let a second node load; only the load that
+    still holds the lock is kept. Callers on other nodes ask Valkey again, 10 ms apart doubling to
+    200 ms, for at most 30 s, and fail when the load they waited for failed. A value lives in Valkey
+    for its ttl and is AES-256-GCM under a key derived from the master key; a node whose clock runs
+    ahead of the writer's loads it early. Each package keeps at most 1,000 entries and 8 MiB; the
+    entry nearest its expiry goes first. When Valkey does not answer within 1 s, the node loads on
+    its own and keeps the value for at most a minute. A full Valkey counts as not answering: it
+    refuses every read and write of the cache whole, so it also loses the hits on the values it
+    holds. The cache's client has 16 connections and queues at most 256 commands; a full queue fails
+    the call at once.
   - Without Valkey, a node keeps the cache in memory, at most 10,000 entries and 64 MiB, dropping the
     least recently used first. Callers on the node wait for a load under way instead of starting
     their own either way.
