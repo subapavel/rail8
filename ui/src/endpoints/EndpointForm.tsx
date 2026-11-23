@@ -4,6 +4,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
 import { ReadSpinner } from '../ReadSpinner';
 import type { UnsavedChanges } from '../screens';
+import { useWorkingFile } from '../workingFiles';
 import { FieldControl } from './FieldControl';
 import { RawOptions } from './RawOptions';
 import type { EndpointsApi, StoredEndpoint } from './api';
@@ -88,6 +89,8 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const [conflict, setConflict] = useState(false);
   const { notification } = App.useApp();
   const [discarding, setDiscarding] = useState(false);
+  // while a reload reads the file, Edit waits, so a draft always starts from the version it saves over
+  const [reloading, setReloading] = useState(false);
   const tabsId = useId();
 
   const startFrom = (next: StoredEndpoint) => {
@@ -135,7 +138,8 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     };
   }, [api, scheme]);
 
-  const unsaved = editing && stored !== null && !sameValue(present(draft), stored.file.config);
+  // a control that holds text that is no value yet holds an unsaved change too
+  const unsaved = editing && stored !== null && (invalid.size > 0 || !sameValue(present(draft), stored.file.config));
 
   useEffect(() => {
     if (!unsaved) return undefined;
@@ -173,6 +177,22 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     return () => guardClose?.(null);
   });
 
+  const reload = async () => {
+    setConflict(false);
+    setEditing(false);
+    setCheck(null);
+    setReloading(true);
+    try {
+      startFrom(await api.read(path));
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReloading(false);
+    }
+  };
+
+  useWorkingFile(path, () => unsaved, () => void reload());
+
   if (failed !== null) {
     return <Alert showIcon type="error" title={`${path} could not be read`} description={failed} />;
   }
@@ -209,17 +229,6 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     setCheck(null);
     setEditing(false);
     startFrom(stored);
-  };
-
-  const reload = async () => {
-    setConflict(false);
-    setEditing(false);
-    setCheck(null);
-    try {
-      startFrom(await api.read(path));
-    } catch (error) {
-      setFailed(error instanceof Error ? error.message : String(error));
-    }
   };
 
   const shown = settings === null ? new Set<string>() : shownFields(settings, present(options));
@@ -274,7 +283,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
             </>
           ) : (
             canEdit && (
-              <Button type="primary" icon={<EditOutlined aria-hidden />} onClick={() => setEditing(true)}>
+              <Button type="primary" icon={<EditOutlined aria-hidden />} disabled={reloading} onClick={() => setEditing(true)}>
                 Edit
               </Button>
             )

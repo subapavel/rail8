@@ -152,7 +152,11 @@ Every git process, and `rail8 lock`, is started through one runner:
   descendant is an agent the author's tools start on purpose, such as gpg-agent or a credential cache, and it is not
   killed.
 - **Nothing outlives the server.** When the development server closes or restarts, the half kills every process it
-  started, the same way.
+  started, the same way. A commit it stops this way still takes the paths it added out of the index again: that undo
+  makes at most six git calls of 10 s and 1 MiB each, is not stopped, and the close waits for it. While a commit is
+  under way, SIGINT and SIGHUP are caught, and the server ends with the signal only after the commit or its undo. The
+  first signal during an undo prints one line saying it is undoing, and for at most how long; a further signal is
+  ignored until the undo ends.
 - **One formatter for everything it says.** Every text that reaches an answer, from git, a hook or the node, passes
   through one formatter. It replaces the user information in a URL (`https://user:secret@host`) with `***`, removes the
   admin token's value wherever it appears, and keeps at most 40 lines of 200 characters. A hook's words come back this
@@ -171,7 +175,9 @@ The git half runs only these commands:
 - **Writes:**
   - `init` (a new package);
   - `add`, of the untracked files a commit takes;
-  - `rm --cached`, only of the paths that `add` added, when the commit fails;
+  - `rm --cached`, only of the paths that `add` added, that `HEAD` lacks and whose index entry is still the blob the
+    request checked, when the commit fails or the server closes during it. It leaves the file on disk, and git
+    itself refuses it for an entry that is neither `HEAD`'s version nor the one on disk;
   - `commit --only`;
   - `fetch`;
   - `merge --ff-only --no-overwrite-ignore`, of the commit the fetch left in the upstream;
@@ -184,7 +190,7 @@ It never runs:
 - `cherry-pick` or `revert`;
 - `branch`, `tag`, `remote` or `update-ref`;
 - `config` writes, `gc` or submodule commands;
-- `--force`, `--no-verify` or `--amend`.
+- `--force`, `--no-verify` or `--amend`, nor anything else that drops the author's own work.
 
 `rail8 lock` writes `package.lock` and nothing else.
 
@@ -317,7 +323,7 @@ Every refusal is `{error, problems?, output?}`, with the status:
 | 403 | A foreign page. Any write under `RAIL8_READ_ONLY=true` except a deploy check. A path that leaves the package's real folder. |
 | 404 | No working folder, no such package, a path outside it, or a revision the clone lacks. |
 | 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
-| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
+| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
 | 413 | A body over its limit. |
 | 422 | No git identity. Nothing to commit. A hook refused the commit (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
 | node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a failure on the node: of git, of the deploy record's write (or a write whose outcome is unknown), or of a start, which was rolled back. The package's state read after it shows what runs. |
@@ -441,25 +447,80 @@ reviewed.
 1. **Refusals.** It is refused when:
    - the clone is busy, or `HEAD` is detached;
    - git has no identity (422, naming `git config user.name` and `git config user.email`);
-   - a path is not among the package's changes;
+   - a path is no longer among the package's changes (412, as for a stale tag: the dialog reads the state again);
+   - a renamed file is named without the path it was renamed from, or with that path as not on disk while it is on disk
+     again (412). The author reviewed a rename between two paths, and git's rename detection can pair the new path
+     with another old one meanwhile;
    - a path's index `differs` (409): `commit --only` would replace what the author staged.
 2. **What the author saw.** Under the working folder's lock, `branch` and `head` must still be the branch and `HEAD`,
    and each path's `tag` must still be the tag of its bytes on disk (`null` for a deleted file). When any differs, the
    answer is 412 and nothing is done.
 3. **The commit.** `git add -- <the chosen untracked paths>`, then `git commit --only -F - -- <paths>`, with the
    message on stdin.
-   - Only the chosen paths change. A renamed file is chosen with both its paths.
+   - Only the chosen paths change. A renamed file is chosen with both its paths: the dialog names the old one with
+     tag `null`, or with its own tag when its own row is ticked.
    - Whatever the author staged on other paths stays staged.
    - The author's hooks and signing run, as in a terminal.
-   - When the commit fails, the paths this request added are taken out of the index again (`rm --cached`), and the
-     hook's words come back as `output`. A path the author had staged stays staged.
-4. **The read-back.** Every path the new commit changes against its parent is read back. Two things are reported, and
-   neither is undone:
-   - a path that was not chosen, which a hook staged;
-   - a chosen path whose blob is not the `hash-object` of its bytes as they were checked, which a hook rewrote.
+   - When the commit fails, or the development server closes during it, the paths this request added that `HEAD`
+     lacks are taken out of the index again (`rm --cached`), and the hook's words come back as `output` (422). A path
+     leaves only while its index entry is the blob the half hashed under the lock before the add, through the path's
+     clean filters (`hash-object`). A path the author had staged stays staged, as does one another git staged with
+     other content meanwhile; the error names it. git refuses the whole removal when a path's bytes on disk changed
+     since the add, as when a hook rewrote a new file before it refused; the half then hashes the paths again and
+     takes out, in a second removal, those whose bytes did not change. A path that stays staged this way is named in
+     the error with a command that unstages it in a terminal: `git restore --staged -- <paths>`, or
+     `git rm --cached -f -- <paths>` on a branch with no commit yet. Until then it reads `differs`, and the UI cannot
+     commit it. git's own words are added to `output`.
+   - The error says whether `HEAD` moved meanwhile. Git may then have committed before it was stopped, as in a
+     post-commit hook, and the error never says that nothing was committed. It stays an error: a terminal's commit in
+     the same moment looks the same, so the half cannot prove the commit is its own.
+4. **The read-back.** `git commit` names the commit it made on stdout, in its summary line
+   `[<branch> <id>] <subject>`, with a marker such as `(root-commit)` in the author's language between the two on a
+   first commit; the hooks print on stderr. The new commit is read back only when `HEAD` is that commit. When `HEAD`
+   has moved on at once to another, as when a terminal commits or amends right after, or git named no commit,
+   `commit` is null and `problem` names both. When only the later reads fail, `problem` names the commit's short id.
+   It stays an answer of 200: git committed.
+
+   Every path the new commit changes against its parent is read back, and the chosen files are hashed again. Three
+   things are reported, and none is undone:
+   - `staged`: a path that was not chosen, which a hook staged;
+   - `rewritten`: a chosen path whose blob is not the `hash-object` of its bytes as they were checked, which a hook
+     rewrote;
+   - `changedOnDisk`: a chosen path whose bytes on disk after the commit are not those the commit holds, which a hook
+     changed without staging. That is a new change, not a different commit.
 
    Its parent is compared with `head`. A commit made in a terminal in between is reported too: it is the author's own,
    and nothing is lost.
+
+   A hook runs on a temporary index, so what it stages enters the commit but not the author's index. Afterwards each
+   path it touched reads as staged in a terminal with other content (`differs`) until the author commits or unstages
+   it there.
+
+The answer is `{commit, output, package}`, with `problem` when part of it could not be read:
+
+```ts
+interface Committed extends Commit {
+  staged: string[];                       // sorted
+  rewritten: string[];                    // sorted
+  changedOnDisk: string[];                // sorted
+}
+interface CommitAnswer {
+  commit: Committed | null;               // null: git committed, but the commit could not be read back
+  output: string;                         // what git and the hooks said
+  package: PackageState | null;           // null: the state could not be read after the commit
+  problem?: string;                       // why commit or package is null
+}
+```
+
+When Commit is pressed, the dialog reads the open tabs again. A hidden tab can get unsaved changes of its own while the
+dialog is open, as a mapping refreshed on opening does. A ticked path that got them is unticked, a note says so, and
+nothing is committed until Commit is pressed again.
+
+After the commit, the dialog has the open tabs of the `staged`, `rewritten` and `changedOnDisk` paths read their files
+again, those without unsaved changes. So do the tabs of the paths it did not send whose bytes a hook changed: it
+compares the tags of the package's state after the commit with those it showed, and a path whose tag changed, or that
+only one of the two lists, is read again. A commit with none of them, and no commit in between, closes the dialog; any
+other stays in it, with `output`, to say what happened. A refusal reads the package again.
 
 The branch moves by `git commit` itself. Making that move conditional on the reviewed tip would need `commit-tree` and
 `update-ref`, which skip the author's hooks.
@@ -684,11 +745,21 @@ Modules still import no other module. The shell gains two contracts, as files di
   ```
 
 - **Working files.** An editor registers the file its tab holds, whether it has unsaved changes, and how to read it
-  again from disk, with `useWorkingFile(path, dirty, reload)`. `useWorkingFiles()` answers the open files with their
-  state. `reload(paths)` reloads the tabs of those files: it reads each tab's dirty state just before, and leaves a
-  dirty tab as it is. Opening a tab that is already open only selects it, so a reload is the only way a tab shows the
-  new file. The commit dialog and the pull read this registry. Its dirty state is the one the editor's screen gives the
-  shell's question for unsaved changes through `unsaved`, never a second record of it. It holds no tags.
+  again from disk, with `useWorkingFile(path, dirty, reload)`, in `ui/src/workingFiles.tsx`. `useWorkingFiles()`
+  answers `{files(), reload(paths)}`:
+  - `files()` gives each open file by its path as `{path, dirty, show()}`. It asks each editor's `dirty` at the call;
+    a file two tabs hold is dirty when either is, and `show()` selects the tab that has it unsaved, or else the first.
+  - `reload(paths)` reloads the tabs of those files: it reads each tab's dirty state just before, and leaves a dirty
+    tab as it is. A control that holds text that is no value yet, such as half-typed JSON in an endpoint's raw
+    settings, counts as an unsaved change. While a reload reads the file, the flow's and the endpoint's Edit waits,
+    so a working copy always starts from the version whose `ETag` its save sends. The mapping studio, which edits
+    without Edit, keeps an edit made while its reload reads the file and drops what it read; its save then meets the
+    conflict.
+
+  Opening a tab that is already open only selects it, so a reload is the only way a tab shows the new file. The commit
+  dialog and the pull read this registry. Its dirty state is the one the editor's screen gives the shell's question
+  for unsaved changes through `unsaved`, never a second record of it. It holds no tags. Outside the shell, registering
+  does nothing.
 
 ## Limits
 
@@ -705,6 +776,7 @@ Modules still import no other module. The shell gains two contracts, as files di
 | Calls waiting | 8 writes, 32 reads |
 | A git read | 10 s, 4 MiB on each stream |
 | A commit, with its hooks | 60 s, 1 MiB on each stream |
+| Taking a stopped commit's added paths out of the index | at most six git calls, each 10 s and 1 MiB on each stream |
 | Fetch, pull, push | 120 s each, 1 MiB on each stream |
 | `rail8 lock` | 120 s, 1 MiB on each stream |
 | From TERM to KILL | 2 s |
@@ -735,13 +807,16 @@ Modules still import no other module. The shell gains two contracts, as files di
     only;
   - output caps on both streams;
   - the queue's limits;
+  - an undo: its calls admitted while the runner closes, at most six of them, and SIGINT caught until it ends, a second
+    one ignored;
   - the formatter's redaction of `https://user:secret@` and of the token's value.
 
   It also runs on real child processes, with the deadline on the fake timer, never a sleep:
   - a child that never exits, stopped at its deadline;
   - a child that floods both streams;
   - a child whose descendant keeps a pipe open;
-  - a server shut down while a child runs.
+  - a server shut down while a child runs;
+  - a server shut down while a commit runs, whose undo still runs before the close ends.
 - **The git half.** `PackagesApi` (`list`, `get`, `file`, `changes`, `artifacts`, `log`, `create`, `commit`, `deploy`,
   `lock`, `fetch`, `pull`, `push`) has two implementations:
   - `httpPackagesApi`, over the routes, with real git in temporary folders, a bare `file://` upstream, a fake node
@@ -762,10 +837,19 @@ Modules still import no other module. The shell gains two contracts, as files di
   - **Commit.**
     - A commit of chosen paths that leaves other staged paths staged.
     - A chosen path staged with other content (409).
-    - A stale `branch`, `head` or `tag` (412).
-    - A hook that refuses, with only the request's own additions taken out of the index.
+    - A stale `branch`, `head` or `tag`, and a path no longer among the changes (412).
+    - A hook that refuses, with only the request's own additions taken out of the index; one that rewrites an added
+      file first, which stays staged while the other added file leaves, with the command that unstages it, on a
+      branch with commits and on one without; and a terminal that stages an added file before the undo, which stays
+      staged, as the error says.
+    - On the real git half only: that command run in a terminal, and a server closed right after the add.
+    - git stopped by its post-commit hook after it committed: the error says `HEAD` moved.
+    - A renamed file named without its old path, with an old path git no longer pairs it with, and with its old path
+      as not on disk while it is on disk (412).
+    - A commit made in a terminal just before the commit starts, one made just after it, and an amend just after it.
     - No identity.
-    - The read-back after a hook rewrote a file, and after a hook staged another path.
+    - The read-back after a hook rewrote a file, after a hook staged another path, and after a hook changed a chosen
+      file on disk without staging it.
     - A save that waits for a commit and is then refused by its recheck.
     - A detached HEAD, a merge in progress and a conflict (409).
   - **Deploy.**

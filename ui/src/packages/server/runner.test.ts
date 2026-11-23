@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, test } from 'vitest';
 import { Refusal } from '../../../server/workingFolder.ts';
 import { FakeTimer } from './fakeTimer.ts';
-import { DRAIN_MS, KILL_AFTER_MS, MAX_RUNNING, MAX_WAITING, READ_LIMITS, runner, type Call, type Child, type Runner, type Signals, type Spawn } from './runner.ts';
+import { DRAIN_MS, KILL_AFTER_MS, MAX_RUNNING, MAX_WAITING, READ_LIMITS, runner, UNDO_CALLS, UNDO_LIMITS, type Call, type Child, type Runner, type Signals, type Spawn } from './runner.ts';
 
 /** A child process the test drives: what it was started with, its streams, and the signals its group was sent. */
 class FakeChild extends EventEmitter {
@@ -303,6 +303,226 @@ describe('the runner on a fake process', () => {
     expect(signals.raised).toEqual([[77, 'SIGINT']]);
     expect(signals.listenerCount('SIGINT')).toBe(0);
     expect(signals.listenerCount('SIGHUP')).toBe(0);
+  });
+});
+
+const write = (args: string[]): Call => ({ args, clone: '/work/orders', mode: 'write' });
+
+describe('an undoable work of the runner', () => {
+  test('runs its undo once when the work fails, given the failure, then fails as the work did; no undo when it succeeds', async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const undone: unknown[] = [];
+    const failure = new Refusal(422, 'the hook refused');
+
+    const failing = git.undoable(
+      async () => {
+        throw failure;
+      },
+      async (run, why) => {
+        undone.push(why);
+        const ran = run(write(['rm', '--cached']));
+        processes.children.at(-1)!.exit(0);
+        await ran;
+      },
+    );
+    expect(await failing.catch((e: unknown) => e)).toBe(failure);
+    expect(undone).toEqual([failure]);
+    expect(processes.children.map((c) => c.args.slice(3))).toEqual([['rm', '--cached']]);
+
+    expect(await git.undoable(async () => 'done', async () => void undone.push('again'))).toBe('done');
+    expect(undone).toEqual([failure]);
+  });
+
+  test('fails with the undo’s own failure when the undo fails', async () => {
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: fakeProcesses().spawn, signals: new FakeSignals() });
+    const own = new Refusal(422, 'the hook refused; orders/new.txt stays staged');
+
+    const failed = git.undoable(
+      async () => {
+        throw new Refusal(422, 'the hook refused');
+      },
+      async () => {
+        throw own;
+      },
+    );
+
+    expect(await failed.catch((e: unknown) => e)).toBe(own);
+  });
+
+  test('a close while the work runs stops its process and refuses its next call; the undo still runs, is not stopped, and the close waits for it', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    let undoing: Promise<unknown> | undefined;
+
+    const committing = git.undoable(
+      async () => {
+        await git.run(write(['add']));
+        return git.run(write(['commit']));
+      },
+      async (run) => {
+        undoing = run(write(['rm', '--cached']));
+        await undoing;
+      },
+    );
+    let closed = false;
+    const closing = git.close().then(() => (closed = true));
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM']);
+    processes.children[0]!.exit(null);
+    await settle();
+
+    expect(processes.children.map((c) => c.args[3])).toEqual(['add', 'rm']);
+    timer.advance(KILL_AFTER_MS);
+    expect(processes.children[1]!.signals).toEqual([]);
+    await settle();
+    expect(closed).toBe(false);
+    processes.children[1]!.exit(0);
+    await closing;
+    expect((await refusalOf(committing)).status).toBe(503);
+    expect(await undoing).toMatchObject({ code: 0 });
+  });
+
+  test('a close while an undo’s call runs leaves that call running, and waits for it', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+
+    const failing = git.undoable(
+      () => Promise.reject(new Refusal(422, 'the hook refused')),
+      async (run) => {
+        await run(write(['rm', '--cached']));
+      },
+    );
+    await settle();
+    let closed = false;
+    const closing = git.close().then(() => (closed = true));
+    timer.advance(KILL_AFTER_MS);
+    await settle();
+
+    expect(processes.children[0]!.signals).toEqual([]);
+    expect(closed).toBe(false);
+    processes.children[0]!.exit(0);
+    await closing;
+    expect((await refusalOf(failing)).status).toBe(422);
+  });
+
+  test('an undo’s call runs within its own limits, and is stopped at their deadline', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+
+    const failed = git.undoable(
+      async () => {
+        throw new Refusal(422, 'the hook refused');
+      },
+      async (run) => {
+        await run({ ...write(['rm', '--cached']), limits: { ms: 3_600_000, bytes: 1 } });
+      },
+    );
+    await settle();
+    timer.advance(UNDO_LIMITS.ms);
+
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM']);
+    processes.children[0]!.exit(null);
+    expect((await refusalOf(failed)).status).toBe(504);
+  });
+
+  test('an undo’s call is admitted while 8 writes wait, and waits for the write before it', async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const writes = Array.from({ length: 1 + MAX_WAITING.write }, () => git.run(write(['add'])));
+
+    const failed = git.undoable(
+      async () => {
+        throw new Refusal(422, 'the hook refused');
+      },
+      async (run) => {
+        await run(write(['rm', '--cached']));
+      },
+    );
+    await settle();
+    expect(processes.children).toHaveLength(1);
+    for (let n = 0; n <= MAX_WAITING.write; n++) {
+      processes.children[n]!.exit(0);
+      await settle();
+    }
+    expect(processes.children.at(-1)!.args[3]).toBe('rm');
+    processes.children.at(-1)!.exit(0);
+
+    expect((await refusalOf(failed)).status).toBe(422);
+    await Promise.all(writes);
+  });
+
+  test('keeps SIGINT caught while one is under way with no process, says so once, and ends the server with it only after the undo', async () => {
+    const processes = fakeProcesses();
+    const signals = new FakeSignals();
+    const said: string[] = [];
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals, say: (line) => said.push(line) });
+    let open: () => void = () => {};
+    const gate = new Promise<void>((done) => (open = done));
+
+    const committing = git.undoable(
+      async () => {
+        await gate;
+        return git.run(write(['commit']));
+      },
+      async (run) => {
+        await run(write(['rm', '--cached']));
+      },
+    );
+    expect(signals.listenerCount('SIGINT')).toBe(1);
+    signals.emit('SIGINT');
+    open();
+    await settle();
+
+    expect(processes.children.map((c) => c.args[3])).toEqual(['rm']);
+    expect(said).toEqual([`Undoing an unfinished git write before the server ends: at most ${(UNDO_CALLS * UNDO_LIMITS.ms) / 1000} s.`]);
+    signals.emit('SIGINT');
+    signals.emit('SIGHUP');
+    expect(signals.listenerCount('SIGINT')).toBe(1);
+    expect(processes.children[0]!.signals).toEqual([]);
+    expect(signals.raised).toEqual([]);
+    processes.children[0]!.exit(0);
+    expect((await refusalOf(committing)).status).toBe(503);
+    await settle();
+    expect(signals.raised).toEqual([[77, 'SIGINT']]);
+    expect(said).toHaveLength(1);
+    expect(signals.listenerCount('SIGINT')).toBe(0);
+  });
+
+  test(`refuses an undo's call past its ${UNDO_CALLS}th with 503, and starts no process for it`, async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    let refused: unknown;
+
+    const failing = git.undoable(
+      () => Promise.reject(new Refusal(422, 'the hook refused')),
+      async (run) => {
+        for (let n = 0; n < UNDO_CALLS; n++) {
+          const ran = run(read(['ls-files']));
+          await settle();
+          processes.children[n]!.exit(0);
+          await ran;
+        }
+        refused = await run(read(['ls-files'])).catch((error: unknown) => error);
+      },
+    );
+
+    expect((await refusalOf(failing)).status).toBe(422);
+    expect(processes.children).toHaveLength(UNDO_CALLS);
+    expect(refused).toMatchObject({ status: 503, message: `an undo makes at most ${UNDO_CALLS} git calls` });
+  });
+
+  test('is refused with 503 once the runner closes, and runs neither its work nor its undo', async () => {
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: fakeProcesses().spawn, signals: new FakeSignals() });
+    await git.close();
+    const ran: string[] = [];
+
+    const refused = await refusalOf(git.undoable(async () => void ran.push('work'), async () => void ran.push('undo')));
+
+    expect(refused.status).toBe(503);
+    expect(ran).toEqual([]);
   });
 });
 

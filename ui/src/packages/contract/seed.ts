@@ -1,6 +1,6 @@
 import type { PackagesApi } from '../api';
-import { fakePackagesApi, type FakeCommit, type FakeFolder, type FakeState } from '../fake';
-import { GIT_MISSING, gitTooOld } from '../rules';
+import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeState } from '../fake';
+import { GIT_MISSING, gitTooOld, inPackage } from '../rules';
 
 /**
  * A working folder, its git and its node, as data that each world builds the same way: the http world with real git
@@ -25,7 +25,12 @@ export interface Seed {
   git?: 'missing' | 'old';
   /** The calls come from a page of another site. */
   foreignPage?: boolean;
+  /** null: git gives no author identity, so a commit is refused. By default {@link AUTHOR}. */
+  identity?: null;
 }
+
+/** The author identity git gives by default. */
+export const AUTHOR = { name: 'Jiří Novák', email: 'jiri@example.com' } as const;
 
 /** A clone of its own on branch `main`. */
 export interface CloneSeed {
@@ -42,6 +47,24 @@ export interface CloneSeed {
   upstream?: { at: string; more?: string[] };
   /** A merge in progress, with `conflict.txt` in conflict: `main` gains the commit `conflict`, and the branch `side` the commit `side`. */
   conflict?: boolean;
+  /** With `conflict`: the merge's own files are gone, so only the path in conflict is left of it. */
+  unmerged?: true;
+  /** Another git holds the index: `.git/index.lock` exists. */
+  indexLock?: true;
+  /**
+   * A pre-commit hook: it prints `says`, writes and stages each file of `writes`, by path, writes each file of
+   * `unstaged` without staging it, and refuses the commit when `refuses`; with `stopsGit`, a post-commit hook stops git
+   * with TERM once it has committed.
+   */
+  hook?: { says?: string; writes?: Record<string, string>; unstaged?: Record<string, string>; refuses?: true; stopsGit?: true };
+  /** A commit made in a terminal just before the git half's commit starts: it adds `<label>.txt`. */
+  meanwhile?: string;
+  /**
+   * What a terminal does just after the git half's `git commit` ends: the files of `stages` written and staged, by path;
+   * a commit that adds `<commits>.txt`, with the message `<commits>`; and an amend of git's commit that adds
+   * `<amends>.txt`, with the message `<amends>`.
+   */
+  afterwards?: { commits?: string; stages?: Record<string, string>; amends?: string };
   /** `HEAD` detached at the last commit. */
   detached?: boolean;
   /** Files moved with `git mv` after the commits, from path to path. */
@@ -64,11 +87,23 @@ export interface RunningSeed {
   problems?: string[];
 }
 
-/** A world the contract suite asserts on, only through `api`. */
+/** A world the contract suite asserts on, through `api` and an editor's save. */
 export interface World {
   api: PackagesApi;
   /** The id of the commit with `label` in the clone `folder`. */
   id(folder: string, label: string): string;
+  /**
+   * An editor's save of `text` over the file at `path`, relative to the working folder, which the author read with the
+   * git half's `tag`: under the working folder's lock it compares the bytes on disk with that tag once more, and answers
+   * 200 when it wrote, or 412 when they differ.
+   */
+  save(path: string, text: string, tag: string): Promise<200 | 412>;
+  /** Resolves once the next write holds the working folder's lock. */
+  held(): Promise<void>;
+  /** git run with `args` in a terminal in the clone `folder`, as the author would: what it prints. The real git half only. */
+  terminal?(folder: string, args: readonly string[]): string;
+  /** Closes the git half's runner, as the development server does when it ends, once its next `git <command>` ends. The real git half only. */
+  closesAfter?(command: string): void;
   close(): Promise<void>;
 }
 
@@ -140,6 +175,11 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     if (clone.conflict) folder.disk['conflict.txt'] = '<<<<<<< HEAD\nmain\n=======\nside\n>>>>>>> side\n';
     if (clone.detached) folder.head.branch = null;
     if (clone.outside !== undefined || clone.intoGit !== undefined) folder.escapes = [...(clone.outside ?? []), ...Object.keys(clone.intoGit ?? {})];
+    if (clone.conflict && clone.unmerged) folder.operation = null;
+    if (clone.indexLock) folder.indexLocked = true;
+    if (clone.hook !== undefined) folder.hook = clone.hook;
+    if (clone.meanwhile !== undefined) folder.meanwhile = clone.meanwhile;
+    if (clone.afterwards !== undefined) folder.afterwards = clone.afterwards;
     for (const [from, to] of Object.entries(clone.moves ?? {})) {
       folder.index[to] = folder.index[from]!;
       folder.disk[to] = folder.disk[from]!;
@@ -202,18 +242,38 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     writable: !seed.readOnly,
     foreignPage: seed.foreignPage ?? false,
     git: seed.git === 'missing' ? GIT_MISSING : seed.git === 'old' ? gitTooOld(OLD_GIT) : null,
+    identity: seed.identity === null ? null : { ...AUTHOR },
     node,
     folders,
   };
   return { state, ids };
 }
 
-/** The fake world: the fake git half over the state of `seed`. */
+/** The fake world: the fake git half over the state of `seed`, whose saves share the fake working folder's lock with it. */
 export const fakeWorld: Build = async (seed) => {
   const { state, ids } = fakeStateOf(seed);
+  const all = fakeLock();
+  const holding: (() => void)[] = [];
+  const lock: FakeLock = (work) =>
+    all(() => {
+      for (const done of holding.splice(0)) done();
+      return work();
+    });
   return {
-    api: fakePackagesApi(state),
-    id: (folder, label) => ids.get(`${folder}/${label}`)!,
+    api: fakePackagesApi(state, lock),
+    // a commit made since the seed, as by the terminal of `meanwhile`, is found by its subject
+    id: (folder, label) => ids.get(`${folder}/${label}`) ?? state.folders.find((f) => f.name === folder)!.commits.find((c) => c.subject === label)!.id,
+    save: (path, text, tag) =>
+      lock(async () => {
+        const [repository] = path.split('/');
+        const folder = state.folders.find((f) => f.name === repository)!;
+        const { inside } = inPackage(repository!, path) as { inside: string };
+        const now = folder.disk[inside];
+        if (now === undefined || (await tagOf(now)) !== tag) return 412;
+        folder.disk[inside] = text;
+        return 200;
+      }),
+    held: () => new Promise<void>((done) => holding.push(done)),
     close: async () => {},
   };
 };

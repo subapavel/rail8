@@ -1,6 +1,20 @@
-import { PackagesError, type Artifact, type Busy, type Change, type Commit, type Deployed, type FileVersion, type PackageList, type PackageRow, type PackagesApi, type PackageState } from './api';
+import {
+  PackagesError,
+  type Artifact,
+  type Busy,
+  type Change,
+  type Commit,
+  type CommitAnswer,
+  type Deployed,
+  type FileVersion,
+  type PackageList,
+  type PackageRow,
+  type PackagesApi,
+  type PackageState,
+} from './api';
 import {
   artifactsOf,
+  commitBodyOf,
   indexFrom,
   inPackage,
   isCommitId,
@@ -18,6 +32,7 @@ import {
   readForKind,
   REASONS,
   statusCompared,
+  unstageCommand,
   statusOf,
   walked,
   type Compared,
@@ -53,6 +68,31 @@ export interface FakeFolder {
   conflicts: string[];
   /** Paths on disk that are symbolic links out of the package or into its `.git` folder; a path below one is refused too. */
   escapes?: string[];
+  /** Another git holds the index. */
+  indexLocked?: true;
+  /**
+   * A pre-commit hook: it prints `says`, writes and stages each file of `writes`, by path, writes each file of
+   * `unstaged` without staging it, and refuses the commit when `refuses`; with `stopsGit`, git is stopped once it has
+   * committed.
+   */
+  hook?: { says?: string; writes?: Record<string, string>; unstaged?: Record<string, string>; refuses?: true; stopsGit?: true };
+  /** A commit made in a terminal just before the next commit starts: it adds `<label>.txt`. */
+  meanwhile?: string;
+  /** What a terminal does just after the next commit ends: a commit that adds `<commits>.txt`, and files written and staged, by path. */
+  afterwards?: { commits?: string; stages?: Record<string, string>; amends?: string };
+}
+
+/** The fake working folder's lock: it runs each work once every work given to it before has settled, first in, first out. */
+export type FakeLock = <T>(work: () => Promise<T>) => Promise<T>;
+
+/** A new lock of the fake working folder. */
+export function fakeLock(): FakeLock {
+  let last: Promise<unknown> = Promise.resolve();
+  return (work) => {
+    const done = last.then(() => work());
+    last = done.catch(() => undefined);
+    return done;
+  };
 }
 
 /** What the fake node runs of one repository. */
@@ -73,6 +113,8 @@ export interface FakeState {
   foreignPage: boolean;
   /** Why git cannot serve, as every route answers it with 503; null when it serves. */
   git: string | null;
+  /** The author identity git gives; null when it gives none, and a commit is refused. */
+  identity: { name: string; email: string } | null;
   /** The node at RAIL8_ADMIN_URL: its host, and what it runs, or why it gives no answer. */
   node: { host: string; answers: true; running: FakeRunning[] } | { host: string; answers: false; error: string };
   folders: FakeFolder[];
@@ -147,9 +189,26 @@ const sizeOf = (text: string) => encoder.encode(text).length;
 const sorted = (paths: Iterable<string>) => [...paths].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
 /** The git half's tag of the bytes of `text`: the `ETag` of their SHA-256, as the real one gives it. */
-async function tagOf(text: string): Promise<string> {
+export async function tagOf(text: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(text)));
   return `"sha256-${Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')}"`;
+}
+
+/** A commit id for `what`: the SHA-1 of its JSON, as 40 hex digits. */
+async function idOf(what: unknown): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', encoder.encode(JSON.stringify(what))));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** A new commit of `folder` on its `HEAD`, of `files`, with `message`'s first line as its subject, a minute after its parent. */
+async function commitOf(folder: FakeFolder, files: Record<string, string>, message: string, author: string): Promise<FakeCommit> {
+  const parent = folder.commits.find((c) => c.id === folder.head.commit);
+  const at = new Date((parent === undefined ? Date.parse('2026-11-01T09:00:00Z') : Date.parse(parent.at)) + 60_000).toISOString().replace('.000Z', '+00:00');
+  const parents = parent === undefined ? [] : [parent.id];
+  const made = { id: await idOf({ parents, files, message, at }), parents, subject: message.split('\n')[0]!, author, at, files };
+  folder.commits.push(made);
+  folder.head.commit = made.id;
+  return made;
 }
 
 /** The files of the commit `id` of `folder`, or none for null. */
@@ -253,9 +312,10 @@ function artifactsIn(folder: FakeFolder, files: Record<string, string>, changes:
 
 /**
  * The git half in memory, over `state`, which a test may change between calls: the rules of the real one, from the
- * same folder rule to the same relations of the deployed state, for the browser tests and the contract suite.
+ * same folder rule to the same relations of the deployed state, for the browser tests and the contract suite. A commit
+ * holds `lock`, the fake working folder's, from its check to its end.
  */
-export function fakePackagesApi(state: FakeState): PackagesApi {
+export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): PackagesApi {
   const refused = (status: number, error: string) => new PackagesError(status, error);
   /** The package `repository`, refused as the real half refuses it. */
   const packageOf = (repository: string): FakeFolder => {
@@ -278,7 +338,13 @@ export function fakePackagesApi(state: FakeState): PackagesApi {
     const compared = statusCompared(entries);
     const changes = await workChanges(folder, compared, entries, filesOf(folder, folder.head.commit));
     const artifacts = await artifactsIn(folder, folder.disk, changes);
-    return { ...rowOf(state, folder), changes, artifacts: artifacts.artifacts, truncated: compared.length > MAX_LISTED || artifacts.truncated };
+    return {
+      ...rowOf(state, folder),
+      identity: state.identity === null ? null : { ...state.identity },
+      changes,
+      artifacts: artifacts.artifacts,
+      truncated: compared.length > MAX_LISTED || artifacts.truncated,
+    };
   };
 
   return {
@@ -348,6 +414,142 @@ export function fakePackagesApi(state: FakeState): PackagesApi {
         at = commit.parents[0];
       }
       return { items: items.slice(0, limit), next: items[limit]?.id ?? null };
+    },
+    async commit(repository, body): Promise<CommitAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was committed');
+      const asked = commitBodyOf(repository, JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      const folder = packageOf(repository);
+      return lock(async () => {
+        const entries = statusEntries(folder);
+        const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
+        if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal, then commit`);
+        if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
+        if (folder.head.branch === null) throw refused(409, 'HEAD is detached: commit on a branch, which a terminal can switch to');
+        if (state.identity === null) throw refused(422, 'git gives no author identity in this clone: set it in a terminal with git config user.name and git config user.email');
+        if (folder.head.branch !== asked.branch || folder.head.commit !== asked.head) throw refused(412, 'the clone is not at the branch and HEAD you reviewed; nothing was committed');
+        const changed = new Set(statusCompared(entries).flatMap((c) => [c.inside, ...(c.renamedFrom === undefined ? [] : [c.renamedFrom])]));
+        const index = indexFrom(entries);
+        const insides = asked.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
+        asked.paths.forEach((p, n) => {
+          const inside = insides[n]!;
+          if (!changed.has(inside)) throw refused(412, `${p.path} is no longer among the package's changes; nothing was committed`);
+          if (index(inside, inside in folder.disk) === 'differs') throw refused(409, `${p.path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`);
+        });
+        // a renamed change is chosen with the path it was renamed from: not on disk, unless named with a tag of its own
+        const renamedFrom = new Map(statusCompared(entries).flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
+        asked.paths.forEach((p, n) => {
+          const from = renamedFrom.get(insides[n]!);
+          if (from === undefined) return;
+          const source = insides.indexOf(from);
+          if (source < 0) throw refused(412, `${p.path} is renamed from ${folder.name}/${from}, which is not among the paths chosen with it; nothing was committed`);
+          if (asked.paths[source]!.tag === null && from in folder.disk) throw refused(412, `${folder.name}/${from}, which ${p.path} was renamed from, is on disk: choose it too; nothing was committed`);
+        });
+        const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
+        asked.paths.forEach((p, n) => {
+          if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you reviewed it; nothing was committed`);
+        });
+        const checked = Object.fromEntries(insides.map((inside) => [inside, folder.disk[inside]]));
+        if (folder.meanwhile !== undefined) {
+          const label = folder.meanwhile;
+          delete folder.meanwhile;
+          folder.disk[`${label}.txt`] = `${label}\n`;
+          folder.index[`${label}.txt`] = `${label}\n`;
+          await commitOf(folder, { ...filesOf(folder, folder.head.commit), [`${label}.txt`]: `${label}\n` }, label, 'Terminal Author');
+        }
+        // as git commit --only does: the commit is HEAD with the chosen paths as on disk, and what the hook stages
+        const parent = folder.head.commit;
+        const tree = { ...filesOf(folder, parent) };
+        for (const inside of insides) {
+          if (checked[inside] === undefined) delete tree[inside];
+          else tree[inside] = checked[inside];
+        }
+        const says = folder.hook?.says === undefined ? [] : [folder.hook.says];
+        for (const [path, text] of Object.entries(folder.hook?.writes ?? {})) {
+          folder.disk[path] = text;
+          tree[path] = text;
+        }
+        for (const [path, text] of Object.entries(folder.hook?.unstaged ?? {})) folder.disk[path] = text;
+        // the paths the request's add added, which the index did not hold
+        const added = insides.filter((inside) => !(inside in folder.index) && checked[inside] !== undefined);
+        const afterwards = folder.afterwards;
+        delete folder.afterwards;
+        const terminal = async () => {
+          for (const [path, text] of Object.entries(afterwards?.stages ?? {})) {
+            folder.disk[path] = text;
+            folder.index[path] = text;
+          }
+          if (afterwards?.commits !== undefined) {
+            const label = afterwards.commits;
+            folder.disk[`${label}.txt`] = `${label}\n`;
+            folder.index[`${label}.txt`] = `${label}\n`;
+            await commitOf(folder, { ...filesOf(folder, folder.head.commit), [`${label}.txt`]: `${label}\n` }, label, 'Terminal Author');
+          }
+          if (afterwards?.amends !== undefined) {
+            const label = afterwards.amends;
+            const amended = folder.commits.find((c) => c.id === folder.head.commit)!;
+            folder.disk[`${label}.txt`] = `${label}\n`;
+            folder.index[`${label}.txt`] = `${label}\n`;
+            folder.head.commit = amended.parents[0] ?? null;
+            await commitOf(folder, { ...amended.files, [`${label}.txt`]: `${label}\n` }, label, amended.author);
+          }
+        };
+        if (folder.hook?.refuses) {
+          // what the request's add added leaves the index again, as git rm --cached takes it out: unless another git
+          // staged other content meanwhile, or the bytes on disk changed since, as a hook that rewrote the file leaves it
+          await terminal();
+          const kept = added.filter((inside) => inside in folder.index && folder.index[inside] !== checked[inside]);
+          const stuck = added.filter((inside) => !kept.includes(inside) && folder.disk[inside] !== checked[inside]);
+          for (const inside of added.filter((a) => !kept.includes(a))) {
+            if (stuck.includes(inside)) folder.index[inside] = checked[inside]!;
+            else delete folder.index[inside];
+          }
+          const pathsOf = (insides: string[]) => insides.map((k) => `${folder.name}/${k}`).join(', ');
+          const stay = [
+            ...(kept.length === 0 ? [] : [`; ${pathsOf(kept)} stay staged, as another git staged them meanwhile`]),
+            ...(stuck.length === 0 ? [] : [`; ${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, parent === null)}`]),
+          ].join('');
+          const rm = stuck.length === 0 ? [] : [`error: the following files have staged content different from both the\nfile and the HEAD:\n${stuck.map((k) => `    ${k}\n`).join('')}(use -f to force removal)`];
+          throw new PackagesError(422, `git commit failed, as git and the hooks say; nothing was committed${stay}`, undefined, [...says, ...rm].join('\n'));
+        }
+        const made = await commitOf(folder, tree, asked.message, state.identity.name);
+        for (const inside of insides) {
+          if (checked[inside] === undefined) delete folder.index[inside];
+          else folder.index[inside] = checked[inside];
+        }
+        if (folder.hook?.stopsGit) {
+          throw new PackagesError(422, `git commit failed, as git and the hooks say; HEAD moved to ${made.id.slice(0, 7)} meanwhile, so git may have committed: the package's history shows it`, undefined, says.join('\n'));
+        }
+        await terminal();
+        if (folder.head.commit !== made.id) {
+          return {
+            commit: null,
+            output: [...says, `[${folder.head.branch} ${made.id.slice(0, 7)}] ${made.subject}`].join('\n'),
+            package: await stateOf(folder),
+            problem: `git committed ${made.id.slice(0, 7)}, but HEAD moved on at once to ${folder.head.commit!.slice(0, 7)}, as when a terminal commits or amends right after, so the commit HEAD shows is not the one git made`,
+          };
+        }
+        const before = filesOf(folder, parent);
+        const chosen = new Set(insides);
+        const pathOf = (inside: string) => `${folder.name}/${inside}`;
+        const answer: CommitAnswer = {
+          commit: {
+            id: made.id,
+            parents: [...made.parents],
+            subject: made.subject,
+            author: made.author,
+            at: made.at,
+            staged: sorted(Object.keys({ ...before, ...tree }).filter((p) => !chosen.has(p) && before[p] !== tree[p])).map(pathOf),
+            rewritten: sorted(insides.filter((inside) => tree[inside] !== checked[inside])).map(pathOf),
+            changedOnDisk: sorted(insides.filter((inside) => folder.disk[inside] !== tree[inside])).map(pathOf),
+          },
+          output: [...says, `[${folder.head.branch} ${made.id.slice(0, 7)}] ${made.subject}`].join('\n'),
+          package: await stateOf(folder),
+        };
+        return answer;
+      });
     },
     async list(): Promise<PackageList> {
       if (state.foreignPage) throw new PackagesError(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");

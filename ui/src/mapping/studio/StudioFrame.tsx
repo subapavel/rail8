@@ -21,6 +21,7 @@ import type { BrowserStateStore } from './browser-state/browser-state';
 import { DefinitionTab } from './definition/DefinitionTab';
 import { DiscardDialog } from '../../DiscardDialog';
 import type { UnsavedChanges } from '../../screens';
+import { useWorkingFile } from '../../workingFiles';
 import { FunctionsTab } from './functions/FunctionsTab';
 import { MappingOverview } from './overview/MappingOverview';
 import { SaveConflict } from './SaveConflict';
@@ -228,6 +229,10 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
     guardClose?.({ save });
     return () => guardClose?.(null);
   });
+
+  useWorkingFile(`${mappingId}.mapping.json`, () => unsaved, () =>
+    void store.getState().reload().catch((error: unknown) => setNotice(`The mapping could not be read again: ${describeError(error).title}`)),
+  );
 
   // Ctrl+S or Cmd+S saves and F7 checks, as Save and Check do, in the studio shown; a key pressed in a dialog is the
   // dialog's. The studios of the other open mappings sit in hidden tabs.

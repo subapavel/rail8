@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { ArtifactKinds, type ArtifactKind, type Side } from '../artifacts';
 import { Shell } from '../Shell';
-import { fakeStateOf, type Seed } from './contract/seed';
+import { useWorkingFile } from '../workingFiles';
+import { AUTHOR, fakeStateOf, type Seed } from './contract/seed';
 import type { PackagesApi } from './api';
 import { fakePackagesApi } from './fake';
 import { packagesScreen } from './screen';
@@ -13,11 +15,31 @@ const NOW = new Date('2026-11-23T10:00:00Z');
 const FLOW = 'schemaVersion: 1\nkind: flow\nid: orders\nfrom: { endpoint: in }\nsteps:\n  - type: xslt\n    stylesheet: flows/orders.xsl\n';
 const ENDPOINT = 'schemaVersion: 1\nkind: endpoint\nid: in\ntype: http\n';
 
-/** A flow kind as a module registers one: its tab names the file, its change names the two sides' first lines. */
+/** Gives the open flow editor unsaved changes, as an edit the editor makes on its own while it is hidden. */
+let editFlow: (() => void) | undefined;
+
+/** A flow editor as a module's tab holds one: Edit gives it unsaved changes, and it counts how often it read its file again. */
+function FlowEditor({ path }: { path: string }) {
+  const [dirty, setDirty] = useState(false);
+  const [reads, setReads] = useState(0);
+  useWorkingFile(path, () => dirty, () => setReads((n) => n + 1));
+  useEffect(() => {
+    editFlow = () => setDirty(true);
+  });
+  return (
+    <>
+      <p>The flow editor of {path}</p>
+      <button onClick={() => setDirty(true)}>Edit the flow</button>
+      <p>Read again {reads} times</p>
+    </>
+  );
+}
+
+/** A flow kind as a module registers one: its tab edits the file, its change names the two sides' first lines. */
 const sideText = (side: Side | null) => (side === null ? 'none' : `${side.rev === 'work' ? 'work' : 'commit'}: ${side.text.split('\n')[3]}`);
 const FLOW_KIND: ArtifactKind = {
   kind: 'flow',
-  open: (path) => ({ id: `flow:${path}`, title: `Flow ${path}`, render: () => <p>The flow editor of {path}</p> }),
+  open: (path) => ({ id: `flow:${path}`, title: `Flow ${path}`, render: () => <FlowEditor path={path} /> }),
   Change: ({ path, before, after }) => (
     <p>
       The flow change of {path}, {sideText(before)} to {sideText(after)}
@@ -47,9 +69,34 @@ const changes = () => page.getByRole('table', { name: 'Changes' });
 const changeRow = (file: string) => changes().getByRole('row').filter({ hasText: file });
 const expand = (row: ReturnType<typeof changeRow>) => row.getByRole('button', { name: /expand row/i }).click();
 
+const dialog = () => page.getByRole('dialog', { name: 'Commit to main' });
+const box = (file: string) => dialog().getByRole('checkbox', { name: `Commit ${file}`, exact: true });
+const dialogRow = (file: string) => dialog().getByRole('row').filter({ hasText: file });
+const button = (name: string) => page.getByRole('button', { name, exact: true });
+// the button's loading icon may still be leaving, and named, just after a commit
+const commitButton = () => dialog().getByRole('button', { name: /Commit$/ });
+
+/** Opens the flow of the package in its editor from the Artifacts tab, and gives it unsaved changes when `edit`, then shows the package's tab again. */
+async function openFlow(edit: boolean) {
+  await page.getByRole('tab', { name: 'Artifacts' }).click();
+  await page.getByRole('table', { name: 'Flows' }).getByRole('button', { name: 'orders' }).click();
+  await expect.element(page.getByText('The flow editor of orders/flows/orders.yaml')).toBeVisible();
+  if (edit) await button('Edit the flow').click();
+  await page.getByRole('tab', { name: /orders$/ }).click();
+  await page.getByRole('tab', { name: /^Changes/ }).click();
+}
+
+/** Opens the commit dialog and writes `message`. */
+async function startCommit(message: string) {
+  await button('Commit…').click();
+  await expect.element(dialog()).toBeVisible();
+  await dialog().getByLabelText('Message', { exact: true }).fill(message);
+}
+
 afterEach(() => {
   root?.unmount();
   root = undefined;
+  editFlow = undefined;
   document.body.innerHTML = '';
 });
 
@@ -195,6 +242,235 @@ describe('the tab of a package', () => {
     await expect.element(page.getByRole('button', { name: 'Show older commits' })).not.toBeInTheDocument();
     await rows().nth(51).getByRole('button', { name: /expand row/i }).click();
     await expect.element(page.getByText('The first commit of the branch: it adds every file of its tree.')).toBeVisible();
+  });
+
+  test('Commit… commits as git’s identity every change but one unsaved in an open tab, one staged in a terminal with other content and one too large to compare, which the author may tick', async () => {
+    await openOrders({
+      clones: [
+        {
+          folder: 'orders',
+          files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW, 'big.txt': 'small\n', 'mixed.txt': 'mixed\n' },
+          staged: { 'mixed.txt': 'staged\n' },
+          edits: { 'notes.txt': 'two\n', 'flows/orders.yaml': FLOW.replace('in }', 'out }'), 'big.txt': 'x'.repeat(1024 * 1024 + 1), 'mixed.txt': 'disk\n', 'new.txt': 'new\n' },
+        },
+      ],
+    });
+    await openFlow(true);
+    await button('Commit…').click();
+
+    await expect.element(dialog().getByText(`Committing as ${AUTHOR.name} <${AUTHOR.email}>`)).toBeVisible();
+    await expect.element(box('notes.txt')).toBeChecked();
+    await expect.element(box('new.txt')).toBeChecked();
+    await expect.element(box('flows/orders.yaml')).not.toBeChecked();
+    await expect.element(dialogRow('flows/orders.yaml')).toMatchTextContent('unsaved in an open tab');
+    await expect.element(box('mixed.txt')).not.toBeChecked();
+    await expect.element(box('mixed.txt')).toBeDisabled();
+    await expect.element(dialogRow('mixed.txt')).toMatchTextContent('staged in a terminal with other content: commit or unstage it there');
+    await expect.element(box('big.txt')).not.toBeChecked();
+    await expect.element(dialogRow('big.txt')).toMatchTextContent('too large to compare');
+    await expect.element(commitButton()).toBeDisabled();
+
+    await dialog().getByLabelText('Message', { exact: true }).fill('Edit the notes');
+    await box('big.txt').click();
+    await box('new.txt').click();
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByText(/^Committed [0-9a-f]{7} Edit the notes$/)).toBeVisible();
+    await expect.element(page.getByRole('tab', { name: 'Changes (3)' })).toBeVisible();
+    await expect.element(changeRow('new.txt')).toBeVisible();
+    await expect.element(changeRow('notes.txt')).not.toBeInTheDocument();
+    await expect.element(changeRow('big.txt')).not.toBeInTheDocument();
+  });
+
+  test('Show tab closes the dialog and shows the tab that holds the file unsaved, and an open tab without unsaved changes leaves its file ticked', async () => {
+    const seed: Seed = { clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW }, edits: { 'flows/orders.yaml': FLOW.replace('in }', 'out }') } }] };
+    await openOrders(seed);
+    await openFlow(false);
+    await button('Commit…').click();
+    await expect.element(box('flows/orders.yaml')).toBeChecked();
+    await dialog().getByRole('button', { name: 'Cancel' }).click();
+
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await button('Edit the flow').click();
+    await page.getByRole('tab', { name: /orders$/ }).click();
+    await button('Commit…').click();
+    await expect.element(box('flows/orders.yaml')).not.toBeChecked();
+    await dialogRow('flows/orders.yaml').getByRole('button', { name: 'Show tab' }).click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: /^Flow /, selected: true })).toBeVisible();
+  });
+
+  test('a file that gets unsaved changes in an open tab while the dialog is open is unticked when Commit is pressed, and nothing is committed until it is pressed again', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW }, edits: { 'notes.txt': 'two\n', 'flows/orders.yaml': FLOW.replace('in }', 'out }') } }] });
+    await openFlow(false);
+    await startCommit('Edit the notes');
+    await expect.element(box('flows/orders.yaml')).toBeChecked();
+
+    editFlow!();
+    await commitButton().click();
+
+    await expect.element(dialog().getByText('flows/orders.yaml got unsaved changes in an open tab meanwhile, so it is unticked: tick it to commit the version on disk.')).toBeVisible();
+    await expect.element(box('flows/orders.yaml')).not.toBeChecked();
+    await expect.element(dialogRow('flows/orders.yaml')).toMatchTextContent('unsaved in an open tab');
+    await expect.element(page.getByRole('tab', { name: 'Changes (2)' })).toBeInTheDocument();
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
+    await expect.element(changeRow('flows/orders.yaml')).toBeVisible();
+  });
+
+  test('a hook that changes a chosen file on disk without staging it says so, and the open tab without unsaved changes reads it again', async () => {
+    await openOrders({
+      clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW }, edits: { 'flows/orders.yaml': FLOW.replace('in }', 'out }') }, hook: { unstaged: { 'flows/orders.yaml': FLOW.replace('in }', 'by the hook }') } } }],
+    });
+    await openFlow(false);
+    await startCommit('Edit the flow');
+    await commitButton().click();
+
+    const result = page.getByRole('dialog', { name: 'Committed' });
+    await expect.element(result.getByText('A hook changed files you chose on disk')).toBeVisible();
+    await expect.element(result.getByText("The commit holds the version of flows/orders.yaml you reviewed; the file on disk holds the hook's, which is not committed.")).toBeVisible();
+    await result.getByRole('button', { name: 'Close' }).last().click();
+    await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
+
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('a renamed file is committed with the path it was renamed from, which goes along with its own tag when it is on disk and ticked', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'old.txt': 'moved\n' }, moves: { 'old.txt': 'moved/new.txt' } }] });
+    await startCommit('Move the notes');
+    await expect.element(dialogRow('moved/new.txt')).toMatchTextContent('from old.txt');
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
+    root?.unmount();
+    document.body.innerHTML = '';
+
+    await openOrders({ clones: [{ folder: 'orders', files: { 'old.txt': 'moved\n' }, moves: { 'old.txt': 'moved/new.txt' }, edits: { 'old.txt': 'old, written again\n' } }] });
+    await startCommit('Move the notes, keep the old ones');
+    await box('old.txt').click();
+    await commitButton().click();
+    await expect.element(dialog().getByText('orders/old.txt, which orders/moved/new.txt was renamed from, is on disk: choose it too; nothing was committed')).toBeVisible();
+
+    await box('old.txt').click();
+    await commitButton().click();
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
+  });
+
+  test('a file the author did not choose that a hook changed on disk has its open tab without unsaved changes read again', async () => {
+    await openOrders({
+      clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW }, edits: { 'notes.txt': 'two\n', 'flows/orders.yaml': FLOW.replace('in }', 'out }') }, hook: { unstaged: { 'flows/orders.yaml': FLOW.replace('in }', 'by the hook }') } } }],
+    });
+    await openFlow(false);
+    await startCommit('Edit the notes');
+    await box('flows/orders.yaml').click();
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('a file that a hook changed on disk while it had no change has its open tab without unsaved changes read again', async () => {
+    await openOrders({
+      clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW }, edits: { 'notes.txt': 'two\n' }, hook: { unstaged: { 'flows/orders.yaml': FLOW.replace('in }', 'by the hook }') } } }],
+    });
+    await openFlow(false);
+    await startCommit('Edit the notes');
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('a file the author did not choose that nothing changed keeps its open tab as it is', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW }, edits: { 'notes.txt': 'two\n', 'flows/orders.yaml': FLOW.replace('in }', 'out }') } }] });
+    await openFlow(false);
+    await startCommit('Edit the notes');
+    await box('flows/orders.yaml').click();
+    await commitButton().click();
+
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 0 times')).toBeVisible();
+  });
+
+  test('a refused commit says why with what the hooks said, keeps the dialog, and a commit refused for a stale file goes through once the package is read again', async () => {
+    const { folder } = await openOrders({
+      clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n' }, edits: { 'notes.txt': 'two\n' }, hook: { refuses: true, says: 'lint: notes.txt ends without a full stop' } }],
+    });
+    await startCommit('Edit the notes');
+    await commitButton().click();
+
+    await expect.element(dialog().getByText('Nothing was committed')).toBeVisible();
+    await expect.element(dialog().getByText('git commit failed, as git and the hooks say; nothing was committed')).toBeVisible();
+    await expect.element(dialog().getByLabelText('What git and the hooks said')).toHaveTextContent('lint: notes.txt ends without a full stop');
+
+    delete folder.hook;
+    folder.disk['notes.txt'] = 'three\n';
+    await commitButton().click();
+    await expect.element(dialog().getByText('orders/notes.txt changed since you reviewed it; nothing was committed')).toBeVisible();
+    await expect.element(dialog().getByLabelText('Message', { exact: true })).toHaveValue('Edit the notes');
+
+    await commitButton().click();
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
+  });
+
+  test('a commit a hook or a terminal changed says how, with what git and the hooks said, and the open tabs without unsaved changes of the files the hook touched read them again', async () => {
+    const { folder } = await openOrders({
+      clones: [
+        {
+          folder: 'orders',
+          files: { 'notes.txt': 'one\n', 'flows/orders.yaml': FLOW },
+          edits: { 'notes.txt': 'two\n' },
+          hook: { says: 'formatted the flow', writes: { 'notes.txt': 'two, formatted\n', 'flows/orders.yaml': FLOW.replace('in }', 'formatted }') } },
+          meanwhile: 'terminal',
+        },
+      ],
+    });
+    await openFlow(false);
+    await startCommit('Edit the notes');
+    await commitButton().click();
+
+    const result = page.getByRole('dialog', { name: 'Committed' });
+    await expect.element(result.getByText(/^Committed [0-9a-f]{7} Edit the notes$/)).toBeVisible();
+    await expect.element(result.getByText('A commit was made in a terminal in between')).toBeVisible();
+    const terminal = folder.commits.find((c) => c.subject === 'terminal')!.id;
+    await expect.element(result.getByText(`The new commit's parent is ${terminal.slice(0, 7)}`, { exact: false })).toBeVisible();
+    await expect.element(result.getByText('The commit also changes flows/orders.yaml, which you did not choose.')).toBeVisible();
+    await expect.element(result.getByText("The commit holds the hook's version of notes.txt, not the one you reviewed.")).toBeVisible();
+    await expect.element(result.getByLabelText('What git and the hooks said')).toMatchTextContent(/^formatted the flow\s*\[main [0-9a-f]{7}\] Edit the notes$/);
+    await result.getByRole('button', { name: 'Close' }).last().click();
+
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('Commit… is disabled with the reason while the commit route would refuse it', async () => {
+    const cases: [Seed, string][] = [
+      [{ readOnly: true, clones: [{ folder: 'orders', edits: { 'a.txt': 'a\n' } }] }, 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).'],
+      [{ identity: null, clones: [{ folder: 'orders', edits: { 'a.txt': 'a\n' } }] }, 'git gives no author identity here: set git config user.name and git config user.email in a terminal.'],
+      [{ clones: [{ folder: 'orders', detached: true, edits: { 'a.txt': 'a\n' } }] }, 'HEAD is detached: switch to a branch in a terminal.'],
+      [{ clones: [{ folder: 'orders', conflict: true }] }, 'The clone is busy (Merge in progress): finish it in a terminal.'],
+      [{ clones: [{ folder: 'orders' }] }, 'Nothing to commit: no file differs from the last commit.'],
+    ];
+    for (const [seed, reason] of cases) {
+      await openOrders(seed);
+      await expect.element(button('Commit…')).toBeDisabled();
+      await expect.element(button('Commit…')).toHaveAccessibleDescription(reason);
+      root?.unmount();
+      document.body.innerHTML = '';
+    }
   });
 
   test('drops a page of older commits that arrives after the history was read again', async () => {

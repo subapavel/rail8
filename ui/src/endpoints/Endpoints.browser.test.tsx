@@ -1,7 +1,10 @@
+import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import type { Screen } from '../screens';
 import { Shell } from '../Shell';
+import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
 import { EndpointsError, type EndpointFile, type EndpointsApi, type NodeComponents } from './api';
 import { endpointsScreen } from './screen';
 import type { SettingsDescription } from './settings';
@@ -89,16 +92,31 @@ function fakeApi(files: EndpointFile[] = [inbox], overrides: Partial<EndpointsAp
 let root: Root | undefined;
 let host: HTMLElement | undefined;
 
+let working: WorkingFiles | undefined;
+
+/** Gives the test the working files of the shell it is in. */
+function Probe() {
+  const files = useWorkingFiles();
+  useEffect(() => {
+    working = files;
+  });
+  return null;
+}
+
+/** `screen` with the probe of the working files beside what it shows. */
+const probed = (screen: Screen): Screen => ({ ...screen, render: (open) => <><Probe />{screen.render(open)}</> });
+
 function render(api: EndpointsApi) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[endpointsScreen(api)]} start="endpoints" />);
+  root.render(<Shell screens={[probed(endpointsScreen(api))]} start="endpoints" />);
 }
 
 afterEach(() => {
   root?.unmount();
   host?.remove();
+  working = undefined;
 });
 
 const field = (name: string) => page.getByLabelText(name, { exact: false });
@@ -215,6 +233,59 @@ describe('Endpoints', () => {
     await button('Reload').click();
     await expect.element(field('host')).toHaveValue('elsewhere');
     await expect.element(button('Edit')).toBeVisible();
+  });
+
+  test('gives the shell its file, with unsaved changes while its draft differs, and reads it again when the shell asks while it has none', async () => {
+    let reads = 0;
+    const api = fakeApi([inbox], { read: vi.fn(async () => ({ file: reads++ === 0 ? inbox : { ...inbox, config: { host: 'elsewhere' } }, etag: `"v${reads}"` })) });
+    await open(api);
+    await expect.poll(() => working?.files().get('demo/endpoints/inbox.yaml')?.dirty).toBe(false);
+
+    await button('Edit').click();
+    await field('host').fill('other');
+    expect(working!.files().get('demo/endpoints/inbox.yaml')?.dirty).toBe(true);
+    working!.reload(['demo/endpoints/inbox.yaml']);
+    await expect.element(field('host')).toHaveValue('other');
+    expect(api.read).toHaveBeenCalledTimes(1);
+
+    await button('Cancel').click();
+    await button('Discard changes').click();
+    working!.reload(['demo/endpoints/inbox.yaml']);
+    await expect.element(field('host')).toHaveValue('elsewhere');
+  });
+
+  test('text that is not a value yet counts as unsaved: the shell hears of it, and a reload leaves it', async () => {
+    const raw: EndpointFile = { ...inbox, id: 'raw-in', path: 'demo/endpoints/raw.yaml', scheme: 'raw', environments: [], config: { a: 1 } };
+    const api = fakeApi([raw]);
+    await open(api, 'raw-in');
+    await button('Edit').click();
+    await field('Settings').fill('{"a": ');
+    await expect.element(text('is not a JSON object')).toBeVisible();
+
+    expect(working!.files().get('demo/endpoints/raw.yaml')?.dirty).toBe(true);
+    working!.reload(['demo/endpoints/raw.yaml']);
+    await expect.element(field('Settings')).toHaveValue('{"a": ');
+    expect(api.read).toHaveBeenCalledTimes(1);
+  });
+
+  test('Edit waits for the read a reload started, so the draft starts from the file the read gives, with its tag', async () => {
+    let answer: ((read: { file: EndpointFile; etag: string }) => void) | undefined;
+    let reads = 0;
+    const api = fakeApi([inbox], {
+      read: vi.fn(async () => (reads++ === 0 ? { file: inbox, etag: '"v1"' } : new Promise<{ file: EndpointFile; etag: string }>((done) => (answer = done)))),
+    });
+    await open(api);
+    await expect.poll(() => working?.files().get('demo/endpoints/inbox.yaml')?.dirty).toBe(false);
+
+    working!.reload(['demo/endpoints/inbox.yaml']);
+    await expect.element(button('Edit')).toBeDisabled();
+    answer!({ file: { ...inbox, config: { ...inbox.config, host: 'elsewhere' } }, etag: '"v2"' });
+    await expect.element(button('Edit')).toBeEnabled();
+    await button('Edit').click();
+    await field('host').fill('other');
+    await button('Save').click();
+
+    expect(api.save).toHaveBeenCalledWith('demo/endpoints/inbox.yaml', expect.objectContaining({ host: 'other' }), '"v2"');
   });
 
   test('Cancel and closing the tab with unsaved changes ask first', async () => {

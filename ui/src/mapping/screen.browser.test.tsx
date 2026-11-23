@@ -1,7 +1,10 @@
+import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import type { Screen } from '../screens';
 import { Shell } from '../Shell';
+import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
 import type { ApiClient } from './api/client';
 import { fakeApiClient } from './api/fake/fake-api';
 import { mappingsScreen } from './screen';
@@ -10,6 +13,20 @@ import type { BrowserStateStore } from './studio/browser-state/browser-state';
 let root: Root | undefined;
 let host: HTMLElement | undefined;
 let consoleError: ReturnType<typeof vi.spyOn>;
+
+let working: WorkingFiles | undefined;
+
+/** Gives the test the working files of the shell it is in. */
+function Probe() {
+  const files = useWorkingFiles();
+  useEffect(() => {
+    working = files;
+  });
+  return null;
+}
+
+/** `screen` with the probe of the working files beside what it shows. */
+const probed = (screen: Screen): Screen => ({ ...screen, render: (open) => <><Probe />{screen.render(open)}</> });
 
 function memoryBrowserState(): BrowserStateStore {
   const values = new Map<string, unknown>();
@@ -20,7 +37,7 @@ function render(api: ApiClient) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[mappingsScreen(api, memoryBrowserState())]} start="mappings" />);
+  root.render(<Shell screens={[probed(mappingsScreen(api, memoryBrowserState()))]} start="mappings" />);
 }
 
 // the shell's tabs; the studio's own tabs are named Overview and Signature
@@ -48,6 +65,7 @@ afterEach(() => {
   root?.unmount();
   host?.remove();
   root = undefined;
+  working = undefined;
   // every test fails on console.error
   expect(consoleError).not.toHaveBeenCalled();
   consoleError.mockRestore();
@@ -140,6 +158,29 @@ describe('the Mappings screen in the shell', () => {
     await expect.element(shellTab('order-id-copy')).toHaveAttribute('aria-selected', 'true');
     await expect.element(page.getByRole('heading', { name: 'The service does not answer' })).toBeVisible();
     await expect.element(description()).toHaveValue('Copies the order id.');
+  });
+
+  test('a mapping gives the shell its file, with unsaved changes while its working copy differs, and is read again when the shell asks while it has none', async () => {
+    const fake = fakeApiClient();
+    render(fake);
+    await openMapping('order-id-copy');
+    const file = 'mappings/order-id-copy.mapping.json';
+    await expect.poll(() => working?.files().get(file)?.dirty).toBe(false);
+
+    await button('Edit').click();
+    await shellTab('Overview').click();
+    await description().fill('Copies the order id.');
+    expect(working!.files().get(file)?.dirty).toBe(true);
+    // a hook rewrites the file
+    const stored = await fake.getMapping('mappings/order-id-copy');
+    await fake.saveMapping('mappings/order-id-copy', { ...stored.model, description: 'Rewritten by a hook.' }, stored.etag);
+    working!.reload([file]);
+    await expect.element(description()).toHaveValue('Copies the order id.');
+
+    await button('Cancel').click();
+    await button('Discard changes').click();
+    working!.reload([file]);
+    await expect.element(page.getByText('Rewritten by a hook.')).toBeVisible();
   });
 
   test('the tab of a mapping without unsaved changes closes at once', async () => {

@@ -1,8 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
-import { Refusal, send, sendFailure } from '../../../server/workingFolder.ts';
+import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import type { PackageList } from '../api.ts';
+import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
@@ -15,6 +16,8 @@ export interface GitPackagesOptions {
   workspace?: string;
   /** Whether a write is allowed; false under RAIL8_READ_ONLY=true. */
   writable: boolean;
+  /** The working folder's writes, which the editors' saves share: each git write that touches the clone's files is admitted by them and holds their lock. */
+  writes: WorkingFolderWrites;
   /** The development server's own origins; a request with any other `Origin` is refused. */
   origins: readonly string[];
   /** The node whose deployed state the rows show. */
@@ -40,13 +43,17 @@ const PREFIX = '/git';
  * - `GET …/{repository}/changes?from=&to=`: 200 `{changes, truncated}`, the files that differ between two revisions.
  * - `GET …/{repository}/artifacts?rev=`: 200 `{artifacts, truncated}`, the package's artifacts at a revision.
  * - `GET …/{repository}/log?before=&limit=`: 200 `{items, next}`, a page of the first-parent history.
+ * - `POST …/{repository}/commit` `{message, branch, head, paths}`: 200 `{commit, output, package}`, a commit of the
+ *   chosen paths (see {@link commitPaths}), with the package's state after it, or `package: null` and `problem` when
+ *   that cannot be read. Refused with 403 under RAIL8_READ_ONLY=true, with 503 before its body is read while 9 writes of the
+ *   working folder are under way, and with 413 for a body over 1 MiB; a refusal of git or a hook carries its `output`.
  *
  * A revision is `work` or a commit of 40 hex digits, never a name such as `HEAD`. Under a package, 400 refuses a
  * malformed repository name, revision or path, or a path with a `.git` segment; 404 a folder that is no package, a
  * path outside it, no file there or a commit the clone lacks; 403 a path whose real path leaves the package's real
  * folder; 413 a file over the read limit of 1 MiB.
  *
- * Every refusal is `{error}`. Every other path goes to `next`.
+ * Every refusal is `{error}`, or `{error, output}`. Every other path goes to `next`.
  */
 export function gitPackages(options: GitPackagesOptions) {
   const host = hostOf(options.node.target);
@@ -69,9 +76,28 @@ export function gitPackages(options: GitPackagesOptions) {
     return { configured: true, ...shown, ...(await listPackages(options.git, await rootOf(options.workspace), nodeState())) };
   };
 
-  const one = async (repository: string, route: string | undefined, query: URLSearchParams): Promise<{ value: unknown; etag?: string }> => {
+  const cloneIn = async (repository: string) => {
     if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
-    const clone = await cloneOf(options.git, await rootOf(options.workspace), repository);
+    return cloneOf(options.git, await rootOf(options.workspace), repository);
+  };
+
+  const commit = (req: IncomingMessage, repository: string) => {
+    if (!options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was committed');
+    return admitted(options.writes, async (lock) => {
+      const body = commitBodyOf(repository, await jsonBody(req));
+      const clone = await cloneIn(repository);
+      const done = await commitPaths(options.git, lock, clone, repository, body);
+      try {
+        return { ...done, package: await stateOf(options.git, clone, repository, nodeState()) };
+      } catch (error) {
+        const unread = `the package's state could not be read after the commit: ${error instanceof Error ? error.message : String(error)}`;
+        return { ...done, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
+      }
+    });
+  };
+
+  const one = async (repository: string, route: string | undefined, query: URLSearchParams): Promise<{ value: unknown; etag?: string }> => {
+    const clone = await cloneIn(repository);
     const param = (name: string) => query.get(name) ?? undefined;
     const required = (name: string) => {
       const value = query.get(name);
@@ -102,7 +128,8 @@ export function gitPackages(options: GitPackagesOptions) {
     const path = url.pathname;
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
-    if (req.method !== 'GET') throw new Refusal(405, `GET is the only way to call ${path}`);
+    const method = under?.[2] === 'commit' ? 'POST' : 'GET';
+    if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
     if (under === null) return { value: await list() };
     let repository: string;
     try {
@@ -110,6 +137,7 @@ export function gitPackages(options: GitPackagesOptions) {
     } catch {
       throw new Refusal(400, 'the repository name is not well encoded');
     }
+    if (method === 'POST') return { value: await commit(req, repository) };
     return one(repository, under[2], url.searchParams);
   };
 
@@ -127,7 +155,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     answer(req, url).then(
       ({ value, etag }) => send(res, 200, value, etag),
-      (error: unknown) => sendFailure(res, error),
+      (error: unknown) => (error instanceof CommitRefused && !res.headersSent ? send(res, error.status, { error: error.message, output: error.output }) : sendFailure(res, error)),
     );
   };
 }

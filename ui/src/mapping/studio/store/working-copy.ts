@@ -201,7 +201,8 @@ export interface WorkingCopyState {
   save: () => Promise<void>;
   /**
    * Drops the working copy, its history and the preview drafts (`reverts` counts it) and loads the file from disk as the
-   * baseline. Rejects with the port's error, and then drops nothing.
+   * baseline. Rejects with the port's error, and then drops nothing; an edit made while the file is read keeps the
+   * store as it is, and the file read is dropped.
    */
   reload: () => Promise<void>;
   /** Closes a save conflict and keeps the working copy. */
@@ -464,7 +465,10 @@ export function createWorkingCopyStore(opened: StoredMapping, ports: WorkingCopy
       },
 
       reload: async () => {
+        const sent = get().workingCopy;
         const stored = await ports.load();
+        // An edit made while the file was read keeps the store as it is: its save then meets the conflict.
+        if (get().workingCopy !== sent) return;
         set((state) => ({
           baseline: stored.model,
           etag: stored.etag,

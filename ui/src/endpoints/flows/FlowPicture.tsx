@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, t
 import { DiscardDialog } from '../../DiscardDialog';
 import { ReadSpinner } from '../../ReadSpinner';
 import type { UnsavedChanges } from '../../screens';
+import { useWorkingFile } from '../../workingFiles';
 import { FlowCanvas } from './FlowCanvas';
 import { FlowInspector, type InspectorView } from './FlowInspector';
 import { FlowPanel, type PanelEdit } from './FlowPanel';
@@ -72,6 +73,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [steps, setSteps] = useState<ServedSteps>();
   const [ingress, setIngress] = useState<FlowIngress>();
   const [asked, setAsked] = useState(0);
+  // the read that ended last: while a later one is under way, Edit waits, so a working copy always starts from the text it saves over
+  const [readFor, setReadFor] = useState(-1);
   const [selected, setSelected] = useState<Path | null>(null);
   const [searchTarget, setSearchTarget] = useState<{ id: string; sequence: number }>();
   const [inspector, setInspector] = useState<InspectorView>('minimized');
@@ -105,8 +108,16 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     const controller = new AbortController();
     const { signal } = controller;
     api.read(path, signal).then(
-      (stored) => !signal.aborted && setResult({ kind: 'read', stored }),
-      (error: unknown) => !signal.aborted && setResult({ kind: 'failed', message: messageOf(error) }),
+      (stored) => {
+        if (signal.aborted) return;
+        setResult({ kind: 'read', stored });
+        setReadFor(asked);
+      },
+      (error: unknown) => {
+        if (signal.aborted) return;
+        setResult({ kind: 'failed', message: messageOf(error) });
+        setReadFor(asked);
+      },
     );
     api.steps(signal).then(
       (types) => !signal.aborted && setSteps(types),
@@ -181,6 +192,29 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     return () => guardClose?.(null);
   });
 
+  const startAgain = () => {
+    setGeneration((g) => g + 1);
+    setInvalid(new Set());
+    setRefused(null);
+    setCheck(null);
+  };
+
+  const leaveEditing = () => {
+    setDiscarding(false);
+    setSaveFailure(null);
+    if (unsaved && work?.undo.some(previous => previous.movedStep)) setLayoutRevision(r => r + 1);
+    setWork(null);
+    startAgain();
+  };
+
+  const reload = () => {
+    setConflict(false);
+    leaveEditing();
+    refresh();
+  };
+
+  useWorkingFile(path, () => unsaved, reload);
+
   if (result.kind === 'reading') {
     return <ReadSpinner label="Reading the flow file" />;
   }
@@ -236,13 +270,6 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       setWork({ text: next, undo, key });
     }
     return true;
-  };
-
-  const startAgain = () => {
-    setGeneration((g) => g + 1);
-    setInvalid(new Set());
-    setRefused(null);
-    setCheck(null);
   };
 
   const undo = () => {
@@ -378,20 +405,6 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     }
   };
 
-  const leaveEditing = () => {
-    setDiscarding(false);
-    setSaveFailure(null);
-    if (unsaved && work?.undo.some(previous => previous.movedStep)) setLayoutRevision(r => r + 1);
-    setWork(null);
-    startAgain();
-  };
-
-  const reload = () => {
-    setConflict(false);
-    leaveEditing();
-    refresh();
-  };
-
   const header = (
     <div className="rail8-flow-header">
       <div className="rail8-flow-document">
@@ -421,7 +434,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
                 Refresh
               </Button>
               {canEdit && (
-                <Button size="small" type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
+                <Button size="small" type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined || readFor !== asked} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
                   Edit
                 </Button>
               )}
