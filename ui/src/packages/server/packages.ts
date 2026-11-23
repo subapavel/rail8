@@ -25,7 +25,7 @@ const exists = (path: string) => lstat(path).then(() => true, (error: unknown) =
  * package. A package's name is a repository name, its `.git` is a folder, `git rev-parse --show-toplevel` answers the
  * folder itself, and it holds `package.yaml` at its root. A symbolic link is no package: a package is a folder itself.
  */
-async function folderOf(git: Runner, root: string, entry: Dirent): Promise<{ clone: string } | { reason: string }> {
+export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'name' | 'isSymbolicLink'>): Promise<{ clone: string } | { reason: string }> {
   if (!isRepositoryName(entry.name)) return { reason: REASONS.name };
   const folder = join(root, entry.name);
   if (entry.isSymbolicLink()) return { reason: REASONS.link };
@@ -97,9 +97,13 @@ async function deployedOf(git: Runner, clone: string, repository: string, head: 
   return { ...shown, relation: 'other' };
 }
 
-/** The row of the package whose clone is at the real path `clone`. */
-async function rowOf(git: Runner, clone: string, repository: string, node: NodeState): Promise<PackageRow> {
-  const status = parseStatus(await read(git, clone, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--', ':(literal).']));
+/** What `git status` says of the package's folder, the clone at the real path `clone`, untracked files included. */
+export async function statusOf(git: Runner, clone: string): Promise<Status> {
+  return parseStatus(await read(git, clone, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--', ':(literal).']));
+}
+
+/** The row of the package whose clone is at the real path `clone`, whose status is `status`. */
+export async function rowOf(git: Runner, clone: string, repository: string, node: NodeState, status: Status): Promise<PackageRow> {
   const head = status.oid === null ? null : await commitOf(git, clone, status.oid);
   const [manifest, busy, fetchedAt, deployed] = await Promise.all([packageOf(clone), busyOf(clone, status), fetchedAtOf(clone), deployedOf(git, clone, repository, head, node)]);
   return {
@@ -143,7 +147,7 @@ export async function listPackages(git: Runner, root: string, node: NodeState): 
       folders.slice(i, i + AT_ONCE).map(async (entry): Promise<{ row: PackageRow } | { reason: string }> => {
         try {
           const found = await folderOf(git, root, entry);
-          return 'reason' in found ? found : { row: await rowOf(git, found.clone, entry.name, node) };
+          return 'reason' in found ? found : { row: await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone)) };
         } catch (error) {
           if (error instanceof Refusal && error.status === 503) throw error;
           return { reason: `git could not read it: ${error instanceof Error ? error.message : String(error)}` };

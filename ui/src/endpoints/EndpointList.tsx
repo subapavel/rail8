@@ -2,6 +2,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { packageColumn } from '../packageColumn';
 import { ReadSpinner } from '../ReadSpinner';
 import type { EndpointList as Listed, EndpointsApi } from './api';
 
@@ -14,8 +15,8 @@ export interface EndpointListProps {
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; list: Listed };
 
 /**
- * The endpoint files of the working folder: each one's id, scheme, direction and path, the id opening its settings form
- * in a tab of its own; a file that cannot be read shows why. Without a working folder it says how to set one.
+ * The endpoint files of the working folder: each one's id, package, scheme, direction and path, the id opening its
+ * settings form in a tab of its own, with a filter on the package; a file that cannot be read shows why. Without a working folder it says how to set one.
  */
 export function EndpointList({ api, onOpen }: EndpointListProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
@@ -93,6 +94,7 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
                   </Button>
                 ),
             },
+            packageColumn(result.list.items, (item) => item.path),
             { title: 'Scheme', dataIndex: 'scheme' },
             { title: 'Direction', dataIndex: 'direction' },
             { title: 'File', dataIndex: 'path' },

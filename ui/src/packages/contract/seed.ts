@@ -36,14 +36,22 @@ export interface CloneSeed {
   files?: Record<string, string>;
   /** The commits of `main`, oldest first, by label: each adds the file `<label>.txt`. None: no commit yet. By default `first`. */
   commits?: string[];
+  /** Files a labelled commit writes besides `<label>.txt`, by path; null deletes one. */
+  commitFiles?: Record<string, Record<string, string | null>>;
   /** The upstream `origin/main`, fetched: at the commit `at` of main, with the commits `more` of its own on top. */
   upstream?: { at: string; more?: string[] };
   /** A merge in progress, with `conflict.txt` in conflict: `main` gains the commit `conflict`, and the branch `side` the commit `side`. */
   conflict?: boolean;
   /** `HEAD` detached at the last commit. */
   detached?: boolean;
+  /** Files moved with `git mv` after the commits, from path to path. */
+  moves?: Record<string, string>;
+  /** Files written on disk and staged after the moves, by path; null deletes one from disk and index. */
+  staged?: Record<string, string | null>;
   /** Files written on disk last, by path; null deletes one. */
   edits?: Record<string, string | null>;
+  /** Paths of the first commit that are symbolic links to a file outside the package. */
+  outside?: string[];
 }
 
 /** What the node runs of `repository`: the commit of that clone with the label `commit`, or `commit` itself when it is 40 hex digits. */
@@ -96,8 +104,12 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     const manifest = manifestFor(clone);
     let files: Record<string, string> = { ...(manifest === null ? {} : { 'package.yaml': manifest }), ...clone.files };
     folder.disk = { ...files };
-    const commit = (label: string, parent: string | null, add: Record<string, string>): FakeCommit => {
-      files = { ...(parent === null ? {} : folder.commits.find((c) => c.id === parent)!.files), ...add };
+    const commit = (label: string, parent: string | null, add: Record<string, string | null>): FakeCommit => {
+      files = { ...(parent === null ? {} : folder.commits.find((c) => c.id === parent)!.files) };
+      for (const [path, text] of Object.entries(add)) {
+        if (text === null) delete files[path];
+        else files[path] = text;
+      }
       count++;
       const made = { id: count.toString(16).padStart(40, '0'), parents: parent === null ? [] : [parent], subject: label, author: 'Seed Author', at: at(count), files };
       folder.commits.push(made);
@@ -106,7 +118,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     };
     for (const label of clone.commits ?? ['first']) {
       const first = folder.head.commit === null;
-      folder.head.commit = commit(label, folder.head.commit, { ...(first ? folder.disk : {}), [`${label}.txt`]: `${label}\n` }).id;
+      folder.head.commit = commit(label, folder.head.commit, { ...(first ? folder.disk : {}), [`${label}.txt`]: `${label}\n`, ...clone.commitFiles?.[label] }).id;
     }
     if (clone.upstream !== undefined) {
       let tip = ids.get(`${clone.folder}/${clone.upstream.at}`)!;
@@ -125,6 +137,22 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     folder.disk = { ...(head?.files ?? folder.disk) };
     if (clone.conflict) folder.disk['conflict.txt'] = '<<<<<<< HEAD\nmain\n=======\nside\n>>>>>>> side\n';
     if (clone.detached) folder.head.branch = null;
+    if (clone.outside !== undefined) folder.escapes = [...clone.outside];
+    for (const [from, to] of Object.entries(clone.moves ?? {})) {
+      folder.index[to] = folder.index[from]!;
+      folder.disk[to] = folder.disk[from]!;
+      delete folder.index[from];
+      delete folder.disk[from];
+    }
+    for (const [path, text] of Object.entries(clone.staged ?? {})) {
+      if (text === null) {
+        delete folder.index[path];
+        delete folder.disk[path];
+      } else {
+        folder.index[path] = text;
+        folder.disk[path] = text;
+      }
+    }
     for (const [path, text] of Object.entries(clone.edits ?? {})) {
       if (text === null) delete folder.disk[path];
       else folder.disk[path] = text;

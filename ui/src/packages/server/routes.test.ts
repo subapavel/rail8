@@ -51,7 +51,7 @@ describe('the routes of the git half', () => {
   test('answer 404 for a path under /git they do not serve, and 405 for another method', async () => {
     const call = await serve();
     expect(await call('/git/nothing')).toEqual({ status: 404, body: { error: 'the git half has no route /git/nothing' } });
-    expect(await call('/git/packages', 'POST')).toEqual({ status: 405, body: { error: 'GET /git/packages is the only way to call this route' } });
+    expect(await call('/git/packages', 'POST')).toEqual({ status: 405, body: { error: 'GET is the only way to call /git/packages' } });
   });
 
   test('answer 404 when the working folder that is set does not exist', async () => {

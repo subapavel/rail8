@@ -11,11 +11,13 @@ export interface PackageListProps {
   api: PackagesApi;
   /** The clock the ages of commits and fetches are told against. */
   now: () => Date;
+  /** Opens the package whose clone is the folder `repository` in a tab of its own. */
+  onOpen: (repository: string) => void;
 }
 
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; list: Listed; at: Date };
 
-const BUSY: Record<Exclude<Busy, null>, string> = {
+export const BUSY: Record<Exclude<Busy, null>, string> = {
   merge: 'Merge in progress',
   rebase: 'Rebase in progress',
   'cherry-pick': 'Cherry-pick in progress',
@@ -24,15 +26,15 @@ const BUSY: Record<Exclude<Busy, null>, string> = {
   conflict: 'Conflict',
 };
 
-const short = (id: string) => id.slice(0, 7);
+export const short = (id: string) => id.slice(0, 7);
 
 /** When `at` was, as its age with the time itself on hover. */
-function Age({ at, now }: { at: string; now: Date }) {
+export function Age({ at, now }: { at: string; now: Date }) {
   return <span title={at}>{ageOf(at, now)}</span>;
 }
 
 /** What the node runs of the row's repository, in the words of the Packages screen. */
-function DeployedState({ row, now }: { row: PackageRow; now: Date }) {
+export function DeployedState({ row, now }: { row: PackageRow; now: Date }) {
   const deployed = row.deployed;
   if (deployed.node === 'unreachable') return <Typography.Text type="secondary">Unknown</Typography.Text>;
   if (deployed.relation === 'none') return <Typography.Text type="secondary">Not running on {deployed.host}</Typography.Text>;
@@ -74,12 +76,12 @@ function DeployedState({ row, now }: { row: PackageRow; now: Date }) {
 }
 
 /**
- * The packages of the working folder, one row each: the repository, the package's name and version, the branch, the
- * last commit, ahead and behind the upstream as of the last fetch, the changed files, and what the node it names
- * runs of it. The folders that are no package are listed below, each with the reason. Without a working folder it
+ * The packages of the working folder, one row each: the repository, which opens the package's tab, the package's name
+ * and version, the branch, the last commit, ahead and behind the upstream as of the last fetch, the changed files, and
+ * what the node it names runs of it. The folders that are no package are listed below, each with the reason. Without a working folder it
  * says how to set one; a refusal, such as git missing, shows why.
  */
-export function PackageList({ api, now }: PackageListProps) {
+export function PackageList({ api, now, onOpen }: PackageListProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
@@ -148,7 +150,15 @@ export function PackageList({ api, now }: PackageListProps) {
             toolBarRender={false}
             pagination={false}
             columns={[
-              { title: 'Repository', dataIndex: 'repository', render: (_, row) => <Typography.Text strong>{row.repository}</Typography.Text> },
+              {
+                title: 'Repository',
+                dataIndex: 'repository',
+                render: (_, row) => (
+                  <Button type="link" style={{ padding: 0 }} onClick={() => onOpen(row.repository)}>
+                    {row.repository}
+                  </Button>
+                ),
+              },
               {
                 title: 'Package',
                 key: 'package',

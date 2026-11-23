@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { ApiProblem, type ApiClient, type MappingSummary } from '../api/client';
+import { Rail8Theme } from '../../theme';
 import { fakeApiClient } from '../api/fake/fake-api';
 import { MappingList } from './MappingList';
 
@@ -83,19 +84,19 @@ describe('the Mappings screen', () => {
     await expect.element(rows().first().getByRole('cell').first()).toHaveTextContent('map-0');
   });
 
-  test('is a table of the mappings with Name, Package, Source, Target and Description, each with Open in studio', async () => {
+  test('is a table of the mappings with Name, Package, Folder, Source, Target and Description, each with Open in studio', async () => {
     const onOpen = vi.fn();
     render(fakeApiClient(), undefined, onOpen);
 
     await expect.element(page.getByRole('heading', { level: 1, name: 'Mappings' })).toBeVisible();
     const headers = table().getByRole('columnheader');
-    await expect.element(headers).toHaveLength(6);
-    for (const [i, name] of ['Name', 'Package', 'Source', 'Target', 'Description', 'Actions'].entries()) {
+    await expect.element(headers).toHaveLength(7);
+    for (const [i, name] of ['Name', 'Package', 'Folder', 'Source', 'Target', 'Description', 'Actions'].entries()) {
       await expect.element(headers.nth(i)).toHaveTextContent(name);
     }
     await expect.element(rows()).toHaveLength(3);
     const row = rows().nth(0);
-    for (const [i, text] of ['order-id-copy', 'mappings', 'Order', 'Order', '—', 'Open in studio'].entries()) {
+    for (const [i, text] of ['order-id-copy', 'mappings', 'mappings', 'Order', 'Order', '—', 'Open in studio'].entries()) {
       await expect.element(row.getByRole('cell').nth(i)).toHaveTextContent(text);
     }
     await row.getByRole('button', { name: 'Open in studio' }).click();
@@ -113,10 +114,31 @@ describe('the Mappings screen', () => {
     render({ ...fakeApiClient(), listMappings });
 
     await expect.element(rows()).toHaveLength(2);
-    for (const [i, text] of ['top', '—', '—', '—', '—'].entries()) await expect.element(rows().nth(0).getByRole('cell').nth(i)).toHaveTextContent(text);
-    for (const [i, text] of ['b', 'a', 'Order', 'Invoice', 'Orders to invoices'].entries()) {
+    for (const [i, text] of ['top', '—', '—', '—', '—', '—'].entries()) await expect.element(rows().nth(0).getByRole('cell').nth(i)).toHaveTextContent(text);
+    for (const [i, text] of ['b', 'a', 'a', 'Order', 'Invoice', 'Orders to invoices'].entries()) {
       await expect.element(rows().nth(1).getByRole('cell').nth(i)).toHaveTextContent(text);
     }
+  });
+
+  test('the Package column keeps, by its filter, the mappings of one package: the first segment of their ids', async () => {
+    const listMappings = async () => ({
+      mappings: [
+        { id: 'orders/in', name: 'in', package: 'orders' },
+        { id: 'orders/mappings/out', name: 'out', package: 'orders/mappings' },
+        { id: 'billing/invoice', name: 'invoice', package: 'billing' },
+      ] satisfies MappingSummary[],
+      truncated: false,
+    });
+    renderScreen(<Rail8Theme>{() => <MappingList api={{ ...fakeApiClient(), listMappings }} onOpen={() => undefined} onCreated={() => undefined} />}</Rail8Theme>);
+    await expect.element(rows()).toHaveLength(3);
+    await expect.element(rows().nth(1).getByRole('cell').nth(1)).toHaveTextContent('orders');
+
+    await table().getByRole('columnheader', { name: /Package/ }).getByRole('button').click();
+    await page.getByRole('menuitem', { name: 'orders' }).click();
+    await page.getByRole('button', { name: 'OK' }).click();
+
+    await expect.element(rows()).toHaveLength(2);
+    expect(rows().elements().map((r) => r.querySelector('td')?.textContent)).toEqual(['in', 'out']);
   });
 
   test('the search keeps the rows whose name, package, messages or description contain it, ignoring case', async () => {

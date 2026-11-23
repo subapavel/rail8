@@ -1,0 +1,102 @@
+import { Alert, Typography } from 'antd';
+import { useContext, useEffect, useState } from 'react';
+import { ArtifactKinds, type Side } from '../artifacts';
+import { ReadSpinner } from '../ReadSpinner';
+import { PackagesError, type Change, type FileVersion, type PackagesApi } from './api';
+import { LineDiff } from './LineDiff';
+
+export interface FileChangeProps {
+  api: PackagesApi;
+  repository: string;
+  change: Change;
+  /** The commit the older version is read at; null when there is none, as before the first commit. */
+  before: string | null;
+  /** `work` or the commit the newer version is read at. */
+  after: string;
+  /** Told when the file on disk is no longer the one the change was listed with: the package is to be read again. */
+  onStale: () => void;
+}
+
+type Read = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'large' } | { kind: 'read'; before: FileVersion | null; after: FileVersion | null };
+
+const SIZE = new Intl.NumberFormat('en');
+
+/** The version of the file at `path` at `rev`, or null when it has none there. */
+async function versionOf(api: PackagesApi, repository: string, rev: string, path: string): Promise<FileVersion | null> {
+  try {
+    return await api.file(repository, rev, path);
+  } catch (error) {
+    if (error instanceof PackagesError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/** A side of a comparison: the text of one version, and the files of its package at the same revision. */
+function sideOf(api: PackagesApi, repository: string, rev: string, text: string): Side {
+  return {
+    rev,
+    text,
+    artifacts: async () => (await api.artifacts(repository, rev)).artifacts,
+    read: async (path) => {
+      const version = await versionOf(api, repository, rev, path);
+      return version !== null && 'text' in version ? version.text : null;
+    },
+  };
+}
+
+/**
+ * The readable change of one file of a package between two revisions. A flow, an endpoint or a mapping is drawn by
+ * the module that owns its kind; a binary file shows its two sizes; any other file shows its line diff. A file over
+ * the read limit reads "too large to compare". When the version on disk no longer has the tag the change was listed
+ * with, nothing is drawn and `onStale` is told.
+ */
+export function FileChange({ api, repository, change, before, after, onStale }: FileChangeProps) {
+  const kinds = useContext(ArtifactKinds);
+  const [read, setRead] = useState<Read>(change.large ? { kind: 'large' } : { kind: 'reading' });
+
+  useEffect(() => {
+    if (change.large) return;
+    let current = true;
+    const older = change.status === 'added' || before === null ? Promise.resolve(null) : versionOf(api, repository, before, change.renamedFrom ?? change.path);
+    const newer = change.status === 'deleted' ? Promise.resolve(null) : versionOf(api, repository, after, change.path);
+    Promise.all([older, newer]).then(
+      ([b, a]) => {
+        if (!current) return;
+        if (after === 'work' && (a?.etag ?? null) !== change.tag) onStale();
+        else setRead({ kind: 'read', before: b, after: a });
+      },
+      (error: unknown) => {
+        if (!current) return;
+        if (error instanceof PackagesError && error.status === 413) setRead({ kind: 'large' });
+        else setRead({ kind: 'failed', message: error instanceof Error ? error.message : String(error) });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [api, repository, change, before, after, onStale]);
+
+  if (read.kind === 'large') return <Typography.Text type="secondary">too large to compare</Typography.Text>;
+  if (read.kind === 'reading') return <ReadSpinner label={`Reading ${change.path}`} />;
+  if (read.kind === 'failed') return <Alert type="error" showIcon title="The change could not be read" description={read.message} />;
+  const { before: b, after: a } = read;
+  if ((b !== null && 'binary' in b) || (a !== null && 'binary' in a)) {
+    const size = (v: FileVersion | null) => (v === null ? 'none' : `${SIZE.format('binary' in v ? v.size : new TextEncoder().encode(v.text).length)} bytes`);
+    return (
+      <Typography.Text>
+        Binary file: {size(b)} before, {size(a)} after.
+      </Typography.Text>
+    );
+  }
+  const kind = kinds.get(change.kind);
+  if (kind !== undefined) {
+    return (
+      <kind.Change
+        path={change.path}
+        before={b === null || before === null ? null : sideOf(api, repository, before, b.text)}
+        after={a === null ? null : sideOf(api, repository, after, a.text)}
+      />
+    );
+  }
+  return <LineDiff before={b?.text ?? ''} after={a?.text ?? ''} />;
+}

@@ -2,6 +2,7 @@ import { PlusCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Form, Input, Modal, Typography } from 'antd';
 import { useCallback, useEffect, useId, useState } from 'react';
+import { packageColumn } from '../../packageColumn';
 import { ReadSpinner } from '../../ReadSpinner';
 import { FlowsError, type FlowList as Listed, type FlowsApi } from './api';
 import { edit } from './edit';
@@ -54,8 +55,8 @@ export const newFlowText = (id: string, from: string, to: string) =>
   });
 
 /**
- * The flow files of the working folder: each one's id and path, the id opening its picture in a tab of its own; a file
- * that cannot be read shows why, and opens with its text. Without a working folder it says how to set one. New flow
+ * The flow files of the working folder: each one's id, package and path, the id opening its picture in a tab of its
+ * own, with a filter on the package; a file that cannot be read shows why, and opens with its text. Without a working folder it says how to set one. New flow
  * writes a flow file that does not exist yet, and opens it.
  */
 export function FlowList({ api, onOpen }: FlowListProps) {
@@ -186,6 +187,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
                 );
               },
             },
+            packageColumn(result.list.items, (item) => item.path),
             { title: 'File', dataIndex: 'path' },
           ]}
         />
