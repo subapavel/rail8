@@ -1173,4 +1173,6 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Teams, rights and roles; a separate right to see payloads, with a record of who viewed one.
+- Users, five fixed roles and the permission check, named tokens for the command line and for machines, and one
+  audit with its view at a message and the Audit screen (`docs/USERS-AND-ROLES.md`). Seeing a message's body is a
+  role of its own, and every view of a body is recorded. No teams.
