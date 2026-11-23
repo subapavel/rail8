@@ -59,6 +59,10 @@ export const httpWorld: Build = async (seed) => {
       await mkdir(dirname(join(clone, path)), { recursive: true });
       await symlink(join(temp, 'outside', 'secret.txt'), join(clone, path));
     }
+    for (const [path, target] of Object.entries(seeded.intoGit ?? {})) {
+      await mkdir(dirname(join(clone, path)), { recursive: true });
+      await symlink(join(clone, '.git', ...target.split('/').filter((s) => s !== '')), join(clone, path));
+    }
     for (const label of seeded.commits ?? ['first']) {
       await write(join(clone, `${label}.txt`), `${label}\n`);
       for (const [path, text] of Object.entries(seeded.commitFiles?.[label] ?? {})) {

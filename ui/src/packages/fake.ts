@@ -51,7 +51,7 @@ export interface FakeFolder {
   /** The operation git left open, and the paths in conflict. */
   operation: Exclude<Busy, null | 'conflict'> | null;
   conflicts: string[];
-  /** Paths on disk that are symbolic links to a file outside the package. */
+  /** Paths on disk that are symbolic links out of the package or into its `.git` folder; a path below one is refused too. */
   escapes?: string[];
 }
 
@@ -290,7 +290,7 @@ export function fakePackagesApi(state: FakeState): PackagesApi {
       revisionIn(folder, rev, 'rev');
       const found = inPackage(repository, path);
       if ('error' in found) throw refused(found.status, found.error);
-      if (rev === 'work' && folder.escapes?.includes(found.inside)) throw refused(403, `${path} leads out of the package's folder`);
+      if (rev === 'work' && folder.escapes?.some((e) => found.inside === e || found.inside.startsWith(`${e}/`))) throw refused(403, `${path} leads out of the package's folder`);
       const text = rev === 'work' ? folder.disk[found.inside] : filesOf(folder, rev)[found.inside];
       if (text === undefined) throw refused(404, rev === 'work' ? `no file ${path} on disk` : `no file ${path} in the commit ${rev}`);
       if (sizeOf(text) > READ_LIMIT) throw refused(413, `${path} is over 1 MiB, the read limit`);

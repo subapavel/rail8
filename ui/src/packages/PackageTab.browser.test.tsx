@@ -4,6 +4,7 @@ import { page } from 'vitest/browser';
 import { ArtifactKinds, type ArtifactKind, type Side } from '../artifacts';
 import { Shell } from '../Shell';
 import { fakeStateOf, type Seed } from './contract/seed';
+import type { PackagesApi } from './api';
 import { fakePackagesApi } from './fake';
 import { packagesScreen } from './screen';
 
@@ -27,14 +28,14 @@ const FLOW_KIND: ArtifactKind = {
 let root: Root | undefined;
 
 /** The Packages screen over the fake world of `seed`, with the flow kind registered, and the tab of `orders` opened from its row. */
-async function openOrders(seed: Seed) {
+async function openOrders(seed: Seed, wrap: (api: PackagesApi) => PackagesApi = (api) => api) {
   const { state, ids } = fakeStateOf(seed);
   const host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   root.render(
     <ArtifactKinds.Provider value={new Map([['flow', FLOW_KIND]])}>
-      <Shell screens={[packagesScreen(fakePackagesApi(state), () => NOW)]} start="packages" />
+      <Shell screens={[packagesScreen(wrap(fakePackagesApi(state)), () => NOW)]} start="packages" />
     </ArtifactKinds.Provider>,
   );
   await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: 'orders', exact: true }).click();
@@ -184,5 +185,32 @@ describe('the tab of a package', () => {
     await expect.element(page.getByRole('button', { name: 'Show older commits' })).not.toBeInTheDocument();
     await rows().nth(51).getByRole('button', { name: /expand row/i }).click();
     await expect.element(page.getByText('The first commit of the branch: it adds every file of its tree.')).toBeVisible();
+  });
+
+  test('drops a page of older commits that arrives after the history was read again', async () => {
+    const labels = Array.from({ length: 51 }, (_, n) => `c${String(n).padStart(2, '0')}`);
+    let release = () => {};
+    const { folder } = await openOrders({ clones: [{ folder: 'orders', commits: labels }] }, (api) => ({
+      ...api,
+      log: async (repository, at) => {
+        const page = await api.log(repository, at);
+        if (at?.before !== undefined) await new Promise<void>((resolve) => (release = resolve));
+        return page;
+      },
+    }));
+    await page.getByRole('tab', { name: 'History' }).click();
+    const rows = () => page.getByRole('table', { name: 'History' }).getByRole('row').filter({ hasText: /^c\d\d/ });
+    await expect.element(rows()).toHaveLength(50);
+
+    await page.getByRole('button', { name: 'Show older commits' }).click();
+    const head = folder.commits.at(-1)!;
+    folder.commits.push({ ...head, id: 'f'.repeat(40), parents: [head.id], subject: 'c51' });
+    folder.head.commit = 'f'.repeat(40);
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect.element(rows().nth(0)).toMatchTextContent(/^c51/);
+    release();
+
+    await expect.element(page.getByRole('button', { name: 'Show older commits' })).toBeEnabled();
+    await expect.element(rows()).toHaveLength(50);
   });
 });
