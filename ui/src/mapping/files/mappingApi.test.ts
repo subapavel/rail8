@@ -6,6 +6,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { heldWrites } from '../../../server/heldWrites';
+import { MAX_WAITING_WRITES, workingFolderWrites } from '../../../server/workingFolder';
 import { mappingApi, type MappingApiOptions } from './mappingApi';
 
 /** One call the fake node was given: the operation, method, headers and the call's JSON, with its base64 decoded. */
@@ -71,7 +73,14 @@ const listen = (server: Server) =>
   new Promise<number>((done) => server.listen(0, '127.0.0.1', () => done((server.address() as AddressInfo).port)));
 
 async function startFront(options: Partial<MappingApiOptions> = {}) {
-  const middleware = mappingApi({ workspace: root, editable: true, origins: ['http://localhost:5173'], node: { target: nodeUrl, token: 'secret' }, ...options });
+  const middleware = mappingApi({
+    workspace: root,
+    editable: true,
+    origins: ['http://localhost:5173'],
+    node: { target: nodeUrl, token: 'secret' },
+    writes: workingFolderWrites(),
+    ...options,
+  });
   front = createServer((req, res) => {
     req.on('end', () => ended++);
     middleware(req, res, () => res.writeHead(418).end('next'));
@@ -422,6 +431,92 @@ describe('saving a mapping', () => {
     expect((await second).status).toBe(200);
     expect(calls.map((c) => c.request)).toEqual(['{"first": true}', '{"first": true}', '{"second": true}']);
     expect(await read('mappings/order.mapping.json')).toBe('{"second": true}');
+  });
+
+  test('with the stored ETag waits for the lock after the node, and is refused when the file changed meanwhile', async () => {
+    handler = canonicalNode;
+    const { writes, waiting, release } = heldWrites();
+    await new Promise((done) => front.close(done));
+    await startFront({ writes });
+
+    const saving = call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, 'if-match': tagOf(canonical(1)) });
+    await waiting;
+    expect(calls.map((c) => c.reads)).toEqual(['stored', 'sent']);
+    await put('mappings/order.mapping.json', canonical(5));
+    release();
+
+    expectProblem(await saving, 409, `${STUDIO}mapping-changed`);
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(5));
+  });
+
+  test('with the stored ETag waits for the lock after the node, and is written when the file did not change', async () => {
+    handler = canonicalNode;
+    const { writes, waiting, release } = heldWrites();
+    await new Promise((done) => front.close(done));
+    await startFront({ writes });
+
+    const saving = call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, 'if-match': tagOf(canonical(1)) });
+    await waiting;
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(1));
+    release();
+
+    const reply = await saving;
+    expect(reply.status, reply.text).toBe(200);
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(2));
+  });
+
+  test('with the stored ETag waits for the lock after the node, and is refused when a pull removed the file meanwhile', async () => {
+    handler = canonicalNode;
+    const { writes, waiting, release } = heldWrites();
+    await new Promise((done) => front.close(done));
+    await startFront({ writes });
+
+    const saving = call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, 'if-match': tagOf(canonical(1)) });
+    await waiting;
+    await rm(join(root, 'mappings', 'order.mapping.json'));
+    release();
+
+    const reply = await saving;
+    expectProblem(reply, 409, `${STUDIO}mapping-changed`);
+    expect(reply.json.detail).toBe('the mapping file is gone, or its path leads to another file now; nothing was saved');
+    await expect(read('mappings/order.mapping.json')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('with the stored ETag never writes over a file that changed while it waited for the node', async () => {
+    let answer = () => undefined as void;
+    const answered = new Promise<void>((done) => (answer = done));
+    let asked = () => undefined as void;
+    const atNode = new Promise<void>((done) => (asked = done));
+    handler = async (c) => {
+      if (c.reads === 'sent') {
+        asked();
+        await answered;
+      }
+      return canonicalNode(c);
+    };
+
+    const saving = call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, 'if-match': tagOf(canonical(1)) });
+    await atNode;
+    await put('mappings/order.mapping.json', canonical(5));
+    answer();
+
+    expectProblem(await saving, 409, `${STUDIO}mapping-changed`);
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(5));
+  });
+
+  test('is 503 busy when 8 writes wait for the working folder, and writes nothing', async () => {
+    handler = canonicalNode;
+    const { writes, release } = heldWrites();
+    for (let i = 0; i < MAX_WAITING_WRITES; i++) void writes((lock) => lock(async () => undefined));
+    await new Promise((done) => front.close(done));
+    await startFront({ writes });
+
+    const reply = await call('PUT', '/api/mappings/mappings/order', '{}');
+    release();
+
+    expectProblem(reply, 503, 'urn:rail8:admin:problem:busy');
+    expect(reply.json.detail).toBe('the working folder is busy: 8 writes wait already; nothing was written, try again');
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(1));
   });
 
   test('a node call past its time limit is 502 node-unavailable and frees the next save', async () => {

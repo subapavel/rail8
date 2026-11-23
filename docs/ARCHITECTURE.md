@@ -1062,7 +1062,12 @@ the files of its bundles that the node asks for: those inside the mapping's pack
 `package.yaml`), or else inside the working folder. It writes a save or a create in the form the node gives back, one
 at a time, through a temporary file; a node that is down or slower than 30 s is answered 502. Its writes take the same same-origin rule.
 The endpoint forms' `/files/endpoints` and the flow screen's `/files/flows` requests are answered by the development
-server too, all of them under that rule.
+server too, all of them under that rule. Every save and create of the three editors takes the working folder's lock for
+its write. The development server makes this lock once for its process, so a restart keeps it, and shares it among
+the halves of every module, for the git writes to take as well. Under the lock, each save resolves its path again and
+compares the file once more with what its `If-Match` names, just before the rename. A file that changed meanwhile, was
+removed or is now another file is never overwritten. At most 9 writes are under way, one holding the lock and 8
+waiting, counted from each write's arrival, and one more is refused with 503.
 
 The UI's end-to-end scenarios (`ui/e2e/`, Playwright) run nightly: the 20,128-field tree scrolled
 over a fake mapping service on a development-only page, and the `@stack` scenarios against the

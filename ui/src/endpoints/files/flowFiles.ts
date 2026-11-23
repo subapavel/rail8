@@ -3,7 +3,21 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { readFlow, saysFlow } from '../flows/flowYaml.ts';
 import { contextOf, surveyOf, type FlowContext } from './flowContext.ts';
-import { createFile, etagOf, jsonBody, locate, MAX_FILE_BYTES, Refusal, replaceFile, send, sendFailure, walk } from '../../../server/workingFolder.ts';
+import {
+  admitted,
+  createFile,
+  etagOf,
+  jsonBody,
+  locate,
+  MAX_FILE_BYTES,
+  Refusal,
+  replaceFile,
+  send,
+  sendFailure,
+  walk,
+  type WorkingFolderLock,
+  type WorkingFolderWrites,
+} from '../../../server/workingFolder.ts';
 
 export type { FlowContext, FlowItem } from './flowContext.ts';
 
@@ -15,6 +29,8 @@ export interface FlowFilesOptions {
   editable: boolean;
   /** The development server's own origins; a request with any other `Origin` is refused. */
   origins: readonly string[];
+  /** The working folder's writes, which admit every save and create, and whose lock each takes for its write. */
+  writes: WorkingFolderWrites;
 }
 
 /** The files the node reads as a package's YAML: `*.yaml` and `*.yml`. */
@@ -52,13 +68,16 @@ async function survey(root: string, signal?: AbortSignal) {
  *   temporary file renamed over it, and answers 200 as GET does. A text equal to the file's is not written, so its
  *   `ETag` stays. Refused with 403 when not editable, 428 without `If-Match`, 400 when the body is not `{"text": "..."}`,
  *   413 when the text is over 1 MiB, 404 when there is no such flow file, 412 when the file changed since that tag
- *   (compared again just before the rename), and 422 when the text is no YAML or no flow, as the browser reads it.
+ *   (compared again under the working folder's lock, just before the rename, where a file that is gone, or a path that
+ *   now leads to another file, has changed too), 422 when the text is no YAML or no flow, as the browser reads it, and
+ *   503 when the working folder has too many writes under way.
  * - `PUT /files/flows/<path>` with `If-None-Match: *` and `{"text": "..."}`: creates the flow file, a `*.yaml` or
  *   `*.yml` in a folder of the working folder that exists, and answers 201 as GET does. Refused as a save is, with 412
  *   when a file of that name exists, 404 when its folder does not, and 400 when both preconditions are sent; 428 when
  *   neither is.
  *
- * Saves are made one at a time. Every other path goes to `next`.
+ * Saves are made one at a time, each admitted by the working folder's writes before its body is read, and each takes
+ * the working folder's lock for its write. Every other path goes to `next`.
  */
 export function flowFiles(options: FlowFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
@@ -97,17 +116,17 @@ export function flowFiles(options: FlowFilesOptions) {
     return text;
   };
 
-  const create = async (req: IncomingMessage, path: string) => {
-    await createFile(await rootOf(), path, isYaml, 'flow file', await flowText(req));
+  const create = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
+    await createFile(lock, await rootOf(), path, isYaml, 'flow file', await flowText(req));
     return read(path);
   };
 
-  const save = async (req: IncomingMessage, path: string) => {
+  const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
     if (!options.editable) throw new Refusal(403, 'this server shows flow files read-only');
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
     if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both');
-    if (ifNoneMatch === '*') return { ...(await create(req, path)), created: true };
+    if (ifNoneMatch === '*') return { ...(await create(req, path, lock)), created: true };
     if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match, or creates the file with If-None-Match: *');
     const text = await flowText(req);
     const file = await locate(await rootOf(), path, isYaml, 'flow file');
@@ -115,11 +134,13 @@ export function flowFiles(options: FlowFilesOptions) {
     const current = bytes.toString('utf8');
     const old = readFlow(current);
     if (old.kind === 'other' || (old.kind === 'problem' && !saysFlow(current))) throw new Refusal(404, `${path} is not a flow file`);
+    // under the lock: a file that is gone, or a path that now leads to another file, has changed too
     const unchanged = async () => {
-      if (etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+      const now = await locate(await rootOf(), path, isYaml, 'flow file').catch(() => undefined);
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
     };
     if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
-    if (!bytes.equals(Buffer.from(text, 'utf8'))) await replaceFile(file, text, unchanged);
+    if (!bytes.equals(Buffer.from(text, 'utf8'))) await replaceFile(lock, file, text, unchanged);
     return { ...(await read(path)), created: false };
   };
 
@@ -145,9 +166,11 @@ export function flowFiles(options: FlowFilesOptions) {
           send(res, 200, file, etag);
         }
       } else if (path !== '' && req.method === 'PUT') {
-        const done = saves.then(() => save(req, path));
-        saves = done.catch(() => undefined);
-        const { file, etag, created } = await done;
+        const { file, etag, created } = await admitted(options.writes, (lock) => {
+          const done = saves.then(() => save(req, path, lock));
+          saves = done.catch(() => undefined);
+          return done;
+        });
         send(res, created ? 201 : 200, file, etag);
       } else send(res, 405, { error: 'the flow files take GET, and PUT of one file' });
     };

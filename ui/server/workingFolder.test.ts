@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MAX_FILE_BYTES, MAX_FILES, Refusal, replaceFile, walk } from './workingFolder';
+import { heldWrites } from './heldWrites';
+import { admitted, createFile, MAX_FILE_BYTES, MAX_FILES, MAX_WAITING_WRITES, Refusal, replaceFile, walk, workingFolderWrites, writeNew } from './workingFolder';
 
 let root: string;
 
@@ -15,11 +16,99 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+/** A promise the test resolves itself. */
+function gate() {
+  let open = () => undefined as void;
+  const shut = new Promise<void>((done) => (open = done));
+  return { shut, open };
+}
+
+/** Resolves once every promise that can settle now has settled: no timer, no time passes. */
+const settled = () => new Promise((done) => setImmediate(done));
+
+describe('workingFolderWrites', () => {
+  it('runs the works its writes give the lock one at a time, first in, first out, and answers what each answers', async () => {
+    const writes = workingFolderWrites();
+    const ran: string[] = [];
+    const first = gate();
+    const one = admitted(writes, (lock) =>
+      lock(async () => {
+        ran.push('one');
+        await first.shut;
+        return 1;
+      }),
+    );
+    const two = admitted(writes, (lock) => lock(async () => (ran.push('two'), 2)));
+    const three = admitted(writes, (lock) => lock(async () => (ran.push('three'), 3)));
+    await settled();
+    expect(ran).toEqual(['one']);
+    first.open();
+    expect(await Promise.all([one, two, three])).toEqual([1, 2, 3]);
+    expect(ran).toEqual(['one', 'two', 'three']);
+  });
+
+  it('passes on the failure of a work, and runs the next one', async () => {
+    const writes = workingFolderWrites();
+    const failed = admitted(writes, (lock) =>
+      lock(async () => {
+        throw new Refusal(412, 'the file changed');
+      }),
+    );
+    const next = admitted(writes, (lock) => lock(async () => 'next'));
+    await expect(failed).rejects.toThrow(new Refusal(412, 'the file changed'));
+    expect(await next).toBe('next');
+  });
+
+  it('counts a write from its admission to its end, whatever it waits for, and runs nothing once one and 8 more are under way', async () => {
+    const writes = workingFolderWrites();
+    const elsewhere = gate();
+    // none of these has asked for the lock yet: each waits for something else, as a save waits for the node
+    const underWay = Array.from({ length: MAX_WAITING_WRITES + 1 }, (_, i) =>
+      admitted(writes, async () => {
+        await elsewhere.shut;
+        if (i === 0) throw new Refusal(412, 'the file changed');
+        return i;
+      }),
+    );
+    let ran = false;
+    expect(
+      writes(async () => {
+        ran = true;
+      }),
+    ).toBeUndefined();
+    elsewhere.open();
+    await expect(underWay[0]).rejects.toThrow('the file changed');
+    expect(await Promise.all(underWay.slice(1))).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(ran).toBe(false);
+    // a write that failed has ended too: every place is free again
+    expect(await Promise.all(Array.from({ length: MAX_WAITING_WRITES + 1 }, (_, i) => admitted(writes, async () => i)))).toHaveLength(9);
+  });
+});
+
+describe('admitted', () => {
+  it('answers what the write answers, and refuses with 503, running nothing, once one write and 8 more are under way', async () => {
+    const { writes, release } = heldWrites();
+    expect(MAX_WAITING_WRITES).toBe(8);
+    const waiting = Array.from({ length: MAX_WAITING_WRITES - 1 }, () => admitted(writes, (lock) => lock(async () => undefined)));
+    const last = admitted(writes, (lock) => lock(async () => 'the eighth'));
+    let ran = false;
+    const refused = admitted(writes, async () => {
+      ran = true;
+    });
+    await expect(refused).rejects.toThrow(new Refusal(503, 'the working folder is busy: 8 writes wait already; nothing was written, try again'));
+    expect(await refused.catch((error: Refusal) => error.status)).toBe(503);
+    release();
+    await Promise.all(waiting);
+    expect(await last).toBe('the eighth');
+    expect(ran).toBe(false);
+  });
+});
+
 describe('replaceFile', () => {
   it('writes the text through a temporary file renamed over the file', async () => {
     const file = join(root, 'flow.yaml');
     await writeFile(file, 'old\n');
-    await replaceFile(file, 'new\n');
+    await admitted(workingFolderWrites(), (lock) => replaceFile(lock, file, 'new\n'));
     expect(await readFile(file, 'utf8')).toBe('new\n');
     expect(await readdir(root)).toEqual(['flow.yaml']);
   });
@@ -33,10 +122,78 @@ describe('replaceFile', () => {
       await writeFile(file, 'changed by another program\n');
       throw new Refusal(412, 'the file changed since it was read; nothing was saved');
     };
-    await expect(replaceFile(file, 'new\n', changed)).rejects.toThrow('the file changed since it was read');
+    await expect(admitted(workingFolderWrites(), (lock) => replaceFile(lock, file, 'new\n', changed))).rejects.toThrow('the file changed since it was read');
     expect(seen).toEqual(['temporary file written']);
     expect(await readFile(file, 'utf8')).toBe('changed by another program\n');
     expect(await readdir(root)).toEqual(['flow.yaml']);
+  });
+
+  it('writes nothing, not even its temporary file, while another write holds the lock', async () => {
+    const file = join(root, 'flow.yaml');
+    await writeFile(file, 'old\n');
+    const { writes, waiting, release } = heldWrites();
+    const replacing = admitted(writes, (lock) => replaceFile(lock, file, 'new\n'));
+    await waiting;
+    await settled();
+    expect(await readdir(root)).toEqual(['flow.yaml']);
+    expect(await readFile(file, 'utf8')).toBe('old\n');
+    release();
+    await replacing;
+    expect(await readFile(file, 'utf8')).toBe('new\n');
+  });
+
+  it('leaves it to its check when the file is gone by its turn, and writes nothing', async () => {
+    const file = join(root, 'flow.yaml');
+    await writeFile(file, 'old\n');
+    const { writes, waiting, release } = heldWrites();
+    const gone = new Refusal(412, 'the file changed since it was read; nothing was saved');
+    const replacing = admitted(writes, (lock) =>
+      replaceFile(lock, file, 'new\n', async () => {
+        throw gone;
+      }),
+    );
+    await waiting;
+    await rm(file);
+    release();
+    await expect(replacing).rejects.toBe(gone);
+    expect(await readdir(root)).toEqual([]);
+  });
+});
+
+describe('writeNew', () => {
+  it('writes the new file only once the lock is free, and never over a file another write made meanwhile', async () => {
+    const file = join(root, 'flow.yaml');
+    const { writes, waiting, release } = heldWrites();
+    const writing = admitted(writes, (lock) => writeNew(lock, file, 'mine\n'));
+    await waiting;
+    await settled();
+    expect(await readdir(root)).toEqual([]);
+    await writeFile(file, 'made by a pull\n');
+    release();
+    expect(await writing).toBe(false);
+    expect(await readFile(file, 'utf8')).toBe('made by a pull\n');
+    expect(await readdir(root)).toEqual(['flow.yaml']);
+  });
+});
+
+describe('createFile', () => {
+  const isYaml = (name: string) => name.endsWith('.yaml');
+
+  it('looks for its folder under the lock, so a folder removed while it waited is no folder', async () => {
+    await mkdir(join(root, 'flows'));
+    const { writes, waiting, release } = heldWrites();
+    const creating = admitted(writes, (lock) => createFile(lock, root, 'flows/new.yaml', isYaml, 'flow file', 'kind: flow\n'));
+    await waiting;
+    await rm(join(root, 'flows'), { recursive: true });
+    release();
+    await expect(creating).rejects.toThrow(new Refusal(404, 'no folder flows in the working folder'));
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('refuses a malformed path before it asks for the lock', async () => {
+    const { writes, release } = heldWrites();
+    await expect(admitted(writes, (lock) => createFile(lock, root, 'flows/../x.yaml', isYaml, 'flow file', ''))).rejects.toThrow(new Refusal(400, 'the path names no flow file of the working folder'));
+    release();
   });
 });
 

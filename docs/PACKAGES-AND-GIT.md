@@ -204,15 +204,21 @@ At most 4 processes run at once. At most 8 writes and 32 reads wait, and one mor
 The editors' saves and the git writes share one lock of the working folder.
 
 - **Where it lives.** `moduleServers` (`ui/server/modules.ts`) makes the lock once and hands it to every half on
-  `DevServer`, as `writes`. It cannot be a module-level value of `ui/server/workingFolder.ts`, because each half's
-  `server.ts` is loaded on its own and holds its own copy of what it imports. `replaceFile`, `writeNew` and
-  `createFile` take the lock as an argument.
+  `DevServer`, as `writes`: the working folder's writes, which admit each write and hand it the lock. It cannot be a
+  module-level value of `ui/server/workingFolder.ts`, because each half's `server.ts` is loaded on its own and holds
+  its own copy of what it imports. It lasts as long as the development server's process, so the halves made again on
+  a restart get the same lock. `replaceFile`, `writeNew` and `createFile` take the lock as an argument.
 - **Who takes it.** Every save of the flow screen, the endpoint form and the mapping studio, and every git write that
   reads or writes the files of a clone: commit, pull, lock and new package. Fetch and push touch no file and do not
   take it.
 - **The save's recheck.** Under the lock, each save compares its `If-Match` with the bytes on disk once more, just
-  before its rename. The flow save does this already. The endpoint save and the mapping save gain it, the mapping save
-  by comparing the bytes it read for its check.
+  before its rename. The mapping save compares the bytes it read for its check. Each save also resolves its path
+  again. A file that is gone, or a path that now leads to another file, has changed: 412, and 409 `mapping-changed` in
+  the mapping studio.
+- **The queue.** At most 9 writes are under way: the one that holds the lock and 8 that wait, first in, first out. One
+  more is refused with 503 before its body is read. A write counts from its arrival to its end, whatever it waits for:
+  the save before it in the same editor, a mapping save's calls to the node, or the lock. A save holds the lock only
+  for its write. A git write holds it from its check to its end, and a pull fetches before its check.
 
 So no save lands between a commit's check and its end, and no pull lands between a save's check and its rename.
 
