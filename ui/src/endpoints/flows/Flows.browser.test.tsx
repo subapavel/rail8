@@ -503,6 +503,19 @@ describe('Editing a flow', () => {
     await expect.element(nodeOf('validate')).not.toBeInTheDocument();
   });
 
+  test('Save and close saves the flow as it is now, then closes the tab', async () => {
+    const flows = fakeFlows();
+    await open(flows);
+    await button('Edit').click();
+    await nodeOf('validate').click();
+    await button('Delete').click();
+    await button('Close invoice').click();
+    await button('Save and close').click();
+    await expect.element(page.getByRole('heading', { name: 'invoice', level: 1 })).not.toBeInTheDocument();
+    expect(flows.save).toHaveBeenCalledOnce();
+    expect(vi.mocked(flows.save).mock.calls[0]?.[1]).not.toContain('name: validate');
+  });
+
   test('a file the server shows read-only offers no Edit', async () => {
     const flows = fakeFlows();
     const read = flows.read;
@@ -532,8 +545,8 @@ describe('Editing a flow', () => {
     await nodeOf('validate').click();
     await button('Delete').click();
     await button('Close invoice').click();
-    await expect.element(text('Discard changes?')).toBeVisible();
-    await button('Discard changes').click();
+    await expect.element(page.getByRole('dialog', { name: 'Save changes to invoice?' })).toBeVisible();
+    await button('Close without saving').click();
     await expect.element(page.getByRole('heading', { name: 'invoice', level: 1 })).not.toBeInTheDocument();
   });
 

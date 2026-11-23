@@ -4,7 +4,7 @@ import { Alert, App, Button, Collapse, Flex, Form, Input, Menu, Modal, Select, S
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DiscardDialog } from '../../DiscardDialog';
 import { ReadSpinner } from '../../ReadSpinner';
-import type { CloseGuard } from '../EndpointForm';
+import type { UnsavedChanges } from '../../screens';
 import { FlowCanvas } from './FlowCanvas';
 import { FlowInspector, type InspectorView } from './FlowInspector';
 import { FlowPanel, type PanelEdit } from './FlowPanel';
@@ -33,8 +33,8 @@ export interface FlowPictureProps {
   openFlow: (path: string) => void;
   /** Creates the endpoint file at this path with this text, and fails when it exists. */
   createEndpoint: (path: string, text: string) => Promise<unknown>;
-  /** Given the question to ask before the tab closes while it has unsaved changes, and null when it has none. */
-  guardClose?: (guard: CloseGuard | null) => void;
+  /** Given what saves the flow while it has unsaved changes, so that its tab can save them before it closes, and null when it has none. */
+  guardClose?: (changes: UnsavedChanges | null) => void;
 }
 
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; stored: StoredFlow };
@@ -48,8 +48,6 @@ interface Work {
   undo: { text: string; movedStep: boolean }[];
   key: string | null;
 }
-
-type Discarding = { then: 'return to view mode' } | { then: 'close its tab'; close: () => void };
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -66,8 +64,8 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
  * Each change is a new text from `edit`; undo goes back through the last 100. The selection follows its step through
  * every change, and is kept through an undo while its path is in the view. The problems are found again after each
  * change and never block Save, which a field holding text that cannot become a value does. Save sends the text with the
- * version it read; a file changed on disk since opens a dialog. Cancel, or closing the tab, with unsaved changes asks
- * first, and the page asks before it unloads.
+ * version it read; a file changed on disk since opens a dialog. Cancel with unsaved changes asks first; while there
+ * are some, `guardClose` is given the flow's save, and the page asks before it unloads.
  */
 export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, createEndpoint, guardClose }: FlowPictureProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
@@ -99,7 +97,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   const [conflict, setConflict] = useState(false);
   const { notification } = App.useApp();
   const [showProblems, setShowProblems] = useState(false);
-  const [discarding, setDiscarding] = useState<Discarding | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   const ids = useId();
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
 
@@ -145,11 +143,43 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     return () => window.removeEventListener('beforeunload', ask);
   }, [unsaved]);
 
+  /** Saves the working copy: true once it is saved; false when it is not, and the picture says why. */
+  const save = async (): Promise<boolean> => {
+    if (work === null || stored === null) return false;
+    setSaveFailure(null);
+    if (invalid.size > 0) {
+      setSaveFailure('Some fields are not valid. Correct them, then save.');
+      return false;
+    }
+    setSaving(true);
+    try {
+      const next = await api.save(path, work.text, stored.etag);
+      // editing goes on from the text saved, and undo still goes back through it
+      setResult({ kind: 'read', stored: next });
+      const id = drawn?.value.id;
+      notification.success({
+        key: path,
+        title: `Flow ${typeof id === 'string' ? id : path} saved`,
+        duration: 8,
+        role: 'status',
+        closable: { 'aria-label': 'Dismiss save notification' },
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof FlowsError && error.status === 412) setConflict(true);
+      else setSaveFailure(messageOf(error));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // the save handed over is the one of the latest render, which knows the working copy as it is now
   useEffect(() => {
     if (!unsaved) return undefined;
-    guardClose?.((close) => setDiscarding({ then: 'close its tab', close }));
+    guardClose?.({ save });
     return () => guardClose?.(null);
-  }, [guardClose, unsaved]);
+  });
 
   if (result.kind === 'reading') {
     return <ReadSpinner label="Reading the flow file" />;
@@ -349,40 +379,11 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   const leaveEditing = () => {
-    setDiscarding(null);
+    setDiscarding(false);
     setSaveFailure(null);
     if (unsaved && work?.undo.some(previous => previous.movedStep)) setLayoutRevision(r => r + 1);
     setWork(null);
     startAgain();
-  };
-  const discard = () => {
-    if (discarding?.then === 'close its tab') {
-      setDiscarding(null);
-      discarding.close();
-    } else leaveEditing();
-  };
-
-  const save = async () => {
-    if (work === null) return;
-    setSaving(true);
-    setSaveFailure(null);
-    try {
-      const next = await api.save(path, work.text, result.stored.etag);
-      // editing goes on from the text saved, and undo still goes back through it
-      setResult({ kind: 'read', stored: next });
-      notification.success({
-        key: path,
-        title: `Flow ${typeof value.id === 'string' ? value.id : path} saved`,
-        duration: 8,
-        role: 'status',
-        closable: { 'aria-label': 'Dismiss save notification' },
-      });
-    } catch (error) {
-      if (error instanceof FlowsError && error.status === 412) setConflict(true);
-      else setSaveFailure(messageOf(error));
-    } finally {
-      setSaving(false);
-    }
   };
 
   const reload = () => {
@@ -404,7 +405,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         <Flex className="rail8-flow-actions" wrap gap={4} align="center">
           {work !== null ? (
             <>
-              <Button size="small" type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
+              <Button size="small" type="text" onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>
                 Cancel
               </Button>
               <Button size="small" icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(picture.problems)}>
@@ -666,11 +667,11 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         </Form>
       </Modal>
       <DiscardDialog
-        isOpen={discarding !== null}
+        isOpen={discarding}
         name={typeof value.id === 'string' ? value.id : path}
-        then={discarding?.then ?? ''}
-        onDiscard={discard}
-        onKeepEditing={() => setDiscarding(null)}
+        then="return to view mode"
+        onDiscard={leaveEditing}
+        onKeepEditing={() => setDiscarding(false)}
       />
       <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={reload} onCancel={() => setConflict(false)}>
         <p>

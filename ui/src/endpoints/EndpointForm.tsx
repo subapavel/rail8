@@ -3,6 +3,7 @@ import { Alert, App, Button, Flex, Form, Modal, Tabs, Tag, Typography } from 'an
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
 import { ReadSpinner } from '../ReadSpinner';
+import type { UnsavedChanges } from '../screens';
 import { FieldControl } from './FieldControl';
 import { RawOptions } from './RawOptions';
 import type { EndpointsApi, StoredEndpoint } from './api';
@@ -10,15 +11,12 @@ import { inboundAddress, optionsIn, type NodeIngress } from './inbound';
 import { sameValue } from './same-value';
 import { checkOptions, shownFields, type Options, type Problem, type SettingsDescription, type SettingsField } from './settings';
 
-/** Asked before the endpoint's tab closes while it has unsaved changes: it calls `close` once the author agrees. */
-export type CloseGuard = (close: () => void) => void;
-
 export interface EndpointFormProps {
   api: EndpointsApi;
   /** The endpoint file's path in the working folder. */
   path: string;
-  /** Given the question to ask before the tab closes while it has unsaved changes, and null when it has none. */
-  guardClose?: (guard: CloseGuard | null) => void;
+  /** Given what saves the form while it has unsaved changes, so that its tab can save them before it closes, and null when it has none. */
+  guardClose?: (changes: UnsavedChanges | null) => void;
 }
 
 /**
@@ -50,8 +48,6 @@ function ArrivalNote({ url, ingress, overlaid }: { url: string; ingress: NodeIng
   );
 }
 
-type Discarding = { then: 'return to view mode' } | { then: 'close its tab'; close: () => void };
-
 /** The options as they are saved: keys whose value is undefined are left out. */
 function present(options: Options): Options {
   return Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined));
@@ -72,9 +68,9 @@ function undescribed(name: string): SettingsField {
  * and file; the environments that override options; then the description's tabs, each with the fields it holds that
  * serve the endpoint's direction and are shown, and the problems the check finds in them. It opens read-only; Edit, when
  * the file may be edited and the description could be read, then Cancel, Check and Save. Save writes only `config`,
- * sending the version it read, and a file changed on disk since opens a dialog. Cancel, or closing the tab, with unsaved
- * changes asks first, and the page asks before it unloads. Without the description the file's options are shown as
- * JSON, read-only, with the reason.
+ * sending the version it read, and a file changed on disk since opens a dialog. Cancel with unsaved changes asks
+ * first; while there are some, `guardClose` is given the form's save, and the page asks before it unloads. Without the
+ * description the file's options are shown as JSON, read-only, with the reason.
  */
 export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const [stored, setStored] = useState<StoredEndpoint | null>(null);
@@ -91,7 +87,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const { notification } = App.useApp();
-  const [discarding, setDiscarding] = useState<Discarding | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   const tabsId = useId();
 
   const startFrom = (next: StoredEndpoint) => {
@@ -148,11 +144,34 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     return () => window.removeEventListener('beforeunload', ask);
   }, [unsaved]);
 
+  /** Saves the draft: true once it is saved; false when it is not, and the form says why. */
+  const save = async (): Promise<boolean> => {
+    if (stored === null) return false;
+    setSaveFailure(null);
+    if (invalid.size > 0) {
+      setSaveFailure('Some settings are not valid. Correct them, then save.');
+      return false;
+    }
+    setSaving(true);
+    try {
+      startFrom(await api.save(path, present(draft), stored.etag));
+      notification.success({ key: path, title: `Endpoint ${stored.file.id} saved`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss save notification' } });
+      return true;
+    } catch (error) {
+      if (error instanceof Error && 'status' in error && error.status === 412) setConflict(true);
+      else setSaveFailure(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // the save handed over is the one of the latest render, which knows the draft as it is now
   useEffect(() => {
     if (!unsaved) return undefined;
-    guardClose?.((close) => setDiscarding({ then: 'close its tab', close }));
+    guardClose?.({ save });
     return () => guardClose?.(null);
-  }, [guardClose, unsaved]);
+  });
 
   if (failed !== null) {
     return <Alert showIcon type="error" title={`${path} could not be read`} description={failed} />;
@@ -185,31 +204,11 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     });
 
   const leaveEditing = () => {
-    setDiscarding(null);
+    setDiscarding(false);
     setSaveFailure(null);
     setCheck(null);
     setEditing(false);
     startFrom(stored);
-  };
-  const discard = () => {
-    if (discarding?.then === 'close its tab') {
-      setDiscarding(null);
-      discarding.close();
-    } else leaveEditing();
-  };
-
-  const save = async () => {
-    setSaving(true);
-    setSaveFailure(null);
-    try {
-      startFrom(await api.save(path, present(draft), stored.etag));
-      notification.success({ key: path, title: `Endpoint ${file.id} saved`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss save notification' } });
-    } catch (error) {
-      if (error instanceof Error && 'status' in error && error.status === 412) setConflict(true);
-      else setSaveFailure(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSaving(false);
-    }
   };
 
   const reload = async () => {
@@ -263,7 +262,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         <Flex gap="small" wrap style={{ marginInlineStart: 'auto' }}>
           {editing ? (
             <>
-              <Button type="text" onClick={() => (unsaved ? setDiscarding({ then: 'return to view mode' }) : leaveEditing())}>
+              <Button type="text" onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>
                 Cancel
               </Button>
               <Button icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(problems)}>
@@ -384,7 +383,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
           })}
         />
       )}
-      <DiscardDialog isOpen={discarding !== null} name={file.id} then={discarding?.then ?? ''} onDiscard={discard} onKeepEditing={() => setDiscarding(null)} />
+      <DiscardDialog isOpen={discarding} name={file.id} then="return to view mode" onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
       <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={() => void reload()} onCancel={() => setConflict(false)}>
         <p>
           <strong>{file.path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.

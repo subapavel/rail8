@@ -1,10 +1,9 @@
 import { PartitionOutlined } from '@ant-design/icons';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { Screen } from '../screens';
+import type { Screen, UnsavedChanges } from '../screens';
 import type { ApiClient } from './api/client';
 import { MappingList } from './list/MappingList';
 import { Studio } from './studio/Studio';
-import type { CloseGuard } from './studio/StudioFrame';
 import type { BrowserStateStore } from './studio/browser-state/browser-state';
 
 export interface MappingTabOptions {
@@ -16,11 +15,11 @@ export interface MappingTabOptions {
 
 /**
  * The tab of one mapping in the studio: its id is `mapping:` and the mapping's id, its title the mapping's name.
- * Closing it while the mapping has unsaved changes asks first.
+ * Closing it while the mapping has unsaved changes asks first whether to save them.
  */
 export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: string, options: MappingTabOptions = {}): Screen {
-  let guard: CloseGuard | null = null;
-  const guardClose = (next: CloseGuard | null) => {
+  let guard: UnsavedChanges | null = null;
+  const guardClose = (next: UnsavedChanges | null) => {
     guard = next;
   };
   return {
@@ -38,7 +37,7 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
         guardClose={guardClose}
       />
     ),
-    beforeClose: (close) => (guard === null ? close() : guard(close)),
+    unsaved: () => guard,
   };
 }
 

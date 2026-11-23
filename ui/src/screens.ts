@@ -2,9 +2,10 @@ import { createContext, type ReactNode } from 'react';
 
 /**
  * A screen of the application: its id, the title on its tab and in the navigation, and what it shows. `render` is
- * given `open`, which opens another screen in a tab of its own, or shows the tab it already has. `beforeClose`, when
- * present, is asked when the close button of the screen's tab is chosen: the tab closes when it calls `close`, at
- * once or later, and stays open while it does not. Without it the tab closes at once.
+ * given `open`, which opens another screen in a tab of its own, or shows the tab it already has. `unsaved`, when
+ * present, is asked when the screen's tab is about to close: null when the screen has no unsaved changes, and the tab
+ * closes at once; else what saves them, and the shell asks first whether to save them, close without saving or keep
+ * the tab open. Without it the tab closes at once.
  *
  * A screen of the navigation has a plain name as its id, such as `messages`. The tabs a screen opens have ids of
  * the form `<prefix>:<key>`, such as `message:<id>`, so that they never meet the id of a screen of the navigation.
@@ -16,7 +17,16 @@ export interface Screen {
   icon?: ReactNode;
   description?: string;
   render: (open: (screen: Screen) => void) => ReactNode;
-  beforeClose?: (close: () => void) => void;
+  unsaved?: () => UnsavedChanges | null;
+}
+
+/** What a screen with unsaved changes gives the shell, so that closing its tab can save them first. */
+export interface UnsavedChanges {
+  /**
+   * Saves the changes. Resolves true once they are saved, and false when they are not: the screen then shows why, and
+   * its tab stays open.
+   */
+  save: () => Promise<boolean>;
 }
 
 /**

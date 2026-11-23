@@ -30,7 +30,7 @@ const row = (name: string) => page.getByRole('row').filter({ has: page.getByRole
 // a role query finds what is shown only: the tabs not shown are hidden
 const description = () => page.getByRole('textbox', { name: 'Description' });
 const button = (name: string) => page.getByRole('button', { name, exact: true });
-const discardDialog = () => page.getByRole('dialog', { name: 'Discard changes?' });
+const saveQuestion = (name: string) => page.getByRole('dialog', { name: `Save changes to ${name}?` });
 
 /** Opens the mapping `name` from the Mappings tab and waits for its studio. */
 async function openMapping(name: string) {
@@ -86,23 +86,60 @@ describe('the Mappings screen in the shell', () => {
     await expect.element(button('Add source message')).toBeEnabled();
   });
 
-  test('closing the tab of a mapping with unsaved changes asks; Keep editing keeps it, Discard changes closes it', async () => {
-    render(fakeApiClient());
+  test('closing the tab of a mapping with unsaved changes asks; Cancel keeps it, Close without saving closes it', async () => {
+    const fake = fakeApiClient();
+    const saveMapping = vi.fn(fake.saveMapping);
+    render({ ...fake, saveMapping });
     await openMapping('order-id-copy');
     await button('Edit').click();
     await description().fill('Copies the order id.');
 
     await page.getByRole('button', { name: 'Close order-id-copy' }).click();
-    await expect.element(discardDialog()).toMatchTextContent(/Discard your unsaved changes to order-id-copy and close its tab\?/);
-    await discardDialog().getByRole('button', { name: 'Keep editing' }).click();
-    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await expect.element(saveQuestion('order-id-copy')).toMatchTextContent(/order-id-copy has unsaved changes\./);
+    await saveQuestion('order-id-copy').getByRole('button', { name: 'Cancel' }).click();
+    await expect.element(saveQuestion('order-id-copy')).not.toBeInTheDocument();
     await expect.element(description()).toHaveValue('Copies the order id.');
 
     await page.getByRole('button', { name: 'Close order-id-copy' }).click();
-    await discardDialog().getByRole('button', { name: 'Discard changes' }).click();
+    await saveQuestion('order-id-copy').getByRole('button', { name: 'Close without saving' }).click();
 
     await expect.element(shellTab('order-id-copy')).not.toBeInTheDocument();
     await expect.element(shellTab('Mappings')).toHaveAttribute('aria-selected', 'true');
+    expect(saveMapping).not.toHaveBeenCalled();
+  });
+
+  test('Save and close saves the mapping as it is now, then closes its tab', async () => {
+    const fake = fakeApiClient();
+    const saveMapping = vi.fn(fake.saveMapping);
+    render({ ...fake, saveMapping });
+    await openMapping('order-id-copy');
+    await button('Edit').click();
+    await description().fill('Copies');
+    await description().fill('Copies the order id.');
+
+    await page.getByRole('button', { name: 'Close order-id-copy' }).click();
+    await saveQuestion('order-id-copy').getByRole('button', { name: 'Save and close' }).click();
+
+    await expect.element(shellTab('order-id-copy')).not.toBeInTheDocument();
+    expect(saveMapping).toHaveBeenCalledOnce();
+    expect(saveMapping.mock.calls[0]?.[1].description).toBe('Copies the order id.');
+    await expect.element(row('order-id-copy').getByRole('cell', { name: 'Copies the order id.' })).toBeVisible();
+  });
+
+  test('a mapping whose save fails keeps its tab open and says why', async () => {
+    const fake = fakeApiClient();
+    render({ ...fake, saveMapping: vi.fn(async () => Promise.reject(new Error('The service does not answer'))) });
+    await openMapping('order-id-copy');
+    await button('Edit').click();
+    await description().fill('Copies the order id.');
+    await shellTab('Mappings').click();
+
+    await page.getByRole('button', { name: 'Close order-id-copy' }).click();
+    await saveQuestion('order-id-copy').getByRole('button', { name: 'Save and close' }).click();
+
+    await expect.element(shellTab('order-id-copy')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(page.getByRole('heading', { name: 'The service does not answer' })).toBeVisible();
+    await expect.element(description()).toHaveValue('Copies the order id.');
   });
 
   test('the tab of a mapping without unsaved changes closes at once', async () => {
@@ -112,7 +149,7 @@ describe('the Mappings screen in the shell', () => {
     await page.getByRole('button', { name: 'Close order-id-copy' }).click();
 
     await expect.element(shellTab('order-id-copy')).not.toBeInTheDocument();
-    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
   });
 
   test('Ctrl+S saves the mapping of the tab shown and no other, and a save brings the table up to date', async () => {

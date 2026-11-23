@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { home } from './Home';
 import { screenList, type Screen } from './screens';
@@ -38,6 +39,56 @@ async function navigate(name: string) {
 }
 const tab = (name: string) => page.getByRole('tab', { name });
 const tabs = () => page.getByRole('tab');
+const titles = () => tabs().elements().map((element) => element.textContent?.trim());
+const item = (name: string) => page.getByRole('menuitem', { name, exact: true });
+const button = (name: string) => page.getByRole('button', { name, exact: true });
+
+/** Plain screens titled `names`, each saying its title. */
+const plain = (...names: string[]): Screen[] =>
+  names.map((name) => ({ id: name.toLowerCase(), title: name, render: () => <p>{name} screen</p> }));
+
+/**
+ * A screen titled `name` with unsaved changes whose save resolves `saved`, as a spy. A save that fails makes the screen
+ * say why.
+ */
+function edited(name: string, saved = true) {
+  const save = vi.fn(async () => saved);
+  let failed: (() => void) | undefined;
+  function Body() {
+    const [why, setWhy] = useState<string | null>(null);
+    useEffect(() => {
+      failed = () => setWhy(`${name} was not saved: the disk is full`);
+    }, []);
+    return <p>{why ?? `${name} screen`}</p>;
+  }
+  const screen: Screen = {
+    id: name.toLowerCase(),
+    title: name,
+    render: () => <Body />,
+    unsaved: () => ({
+      save: async () => {
+        const done = await save();
+        if (!done) failed?.();
+        return done;
+      },
+    }),
+  };
+  return { screen, save };
+}
+
+/** Renders `list` with every screen of it open in a tab, in its order, and the first one shown. */
+async function renderOpen(list: readonly Screen[]) {
+  render(list, list[0]!.id);
+  for (const screen of list.slice(1)) await navigate(screen.title);
+  await tab(list[0]!.title).click();
+}
+
+/** Chooses `name` in the menu of the tab `title`, opened with a right click. */
+async function fromMenu(title: string, name: string) {
+  await tab(title).click({ button: 'right' });
+  await item(name).click();
+  await expect.element(item(name)).not.toBeInTheDocument();
+}
 
 describe('Shell', () => {
   test('switches workspace theme without losing the active screen', async () => {
@@ -149,27 +200,6 @@ describe('Shell', () => {
     await expect.element(page.getByText('Child screen')).toBeVisible();
   });
 
-  test('asks a screen before its tab closes, and closes it only when the screen says so', async () => {
-    let closeLater: (() => void) | undefined;
-    const guarded: Screen = {
-      id: 'guarded',
-      title: 'Guarded',
-      render: () => <p>Guarded screen</p>,
-      beforeClose: (close) => (closeLater = close),
-    };
-    render([guarded, two[0]!], 'guarded');
-    await navigate('First');
-    await tab('Guarded').click();
-
-    await page.getByRole('button', { name: 'Close Guarded' }).click();
-    await expect.element(page.getByText('Guarded screen')).toBeVisible();
-    expect(tabs().elements()).toHaveLength(2);
-
-    closeLater!();
-    await expect.element(tab('First')).toHaveAttribute('aria-selected', 'true');
-    expect(tabs().elements()).toHaveLength(1);
-  });
-
   test('keeps the tabs in the toolbar row and overlays the navigation without moving the screen', async () => {
     render(two, 'first');
     await expect.element(tab('First')).toBeVisible();
@@ -241,5 +271,171 @@ describe('Shell', () => {
     await expect.element(expand()).toHaveAttribute('aria-expanded', 'false');
     await navigate('Second');
     await expect.element(tab('Second')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  test.each([
+    ['Close', ['A', 'B', 'D', 'E']],
+    ['Close other tabs', ['C']],
+    ['Close tabs to the left', ['C', 'D', 'E']],
+    ['Close tabs to the right', ['A', 'B', 'C']],
+    ['Close all but pinned', []],
+  ])('%s in the menu of a tab closes exactly the tabs it names', async (name, left) => {
+    await renderOpen(plain('A', 'B', 'C', 'D', 'E'));
+    await fromMenu('C', name);
+    await expect.poll(titles).toEqual(left);
+  });
+
+  test('disables the items of a tab menu that would close nothing', async () => {
+    await renderOpen(plain('A', 'B'));
+    await tab('A').click({ button: 'right' });
+    await expect.element(item('Close tabs to the left')).toHaveAttribute('aria-disabled', 'true');
+    await expect.element(item('Close tabs to the right')).not.toHaveAttribute('aria-disabled', 'true');
+    await userEvent.keyboard('{Escape}');
+    await expect.element(item('Close tabs to the right')).not.toBeInTheDocument();
+    await tab('B').click({ button: 'right' });
+    await expect.element(item('Close tabs to the right')).toHaveAttribute('aria-disabled', 'true');
+    await expect.element(item('Close other tabs')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('a pinned tab is marked, moves to the start and survives every action that closes several tabs', async () => {
+    await renderOpen(plain('A', 'B', 'C', 'D', 'E'));
+    await fromMenu('C', 'Pin tab');
+    await expect.poll(titles).toEqual(['C', 'A', 'B', 'D', 'E']);
+    await expect.element(tab('C pinned')).toBeVisible();
+
+    await tab('A').click({ button: 'right' });
+    await expect.element(item('Close tabs to the left')).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.keyboard('{Escape}');
+    await expect.element(item('Close tabs to the left')).not.toBeInTheDocument();
+    await fromMenu('B', 'Close tabs to the left');
+    await expect.poll(titles).toEqual(['C', 'B', 'D', 'E']);
+    await fromMenu('D', 'Close other tabs');
+    await expect.poll(titles).toEqual(['C', 'D']);
+    await navigate('E');
+    await fromMenu('E', 'Close all but pinned');
+    await expect.poll(titles).toEqual(['C']);
+    await tab('C pinned').click({ button: 'right' });
+    for (const name of ['Close other tabs', 'Close tabs to the left', 'Close tabs to the right', 'Close all but pinned']) {
+      await expect.element(item(name)).toHaveAttribute('aria-disabled', 'true');
+    }
+    await item('Close').click();
+    await expect.element(page.getByRole('heading', { name: 'No screen open' })).toBeVisible();
+  });
+
+  test('Unpin tab moves the tab after those still pinned and lets the actions close it again', async () => {
+    await renderOpen(plain('A', 'B', 'C'));
+    await fromMenu('B', 'Pin tab');
+    await fromMenu('C', 'Pin tab');
+    await expect.poll(titles).toEqual(['B', 'C', 'A']);
+    await fromMenu('B pinned', 'Unpin tab');
+    await expect.poll(titles).toEqual(['C', 'B', 'A']);
+    await expect.element(tab('B')).toBeVisible();
+    await fromMenu('A', 'Close all but pinned');
+    await expect.poll(titles).toEqual(['C']);
+  });
+
+  test('the menu key or Shift+F10 on a focused tab opens its menu, and Escape closes it', async () => {
+    await renderOpen(plain('A', 'B'));
+    await tab('A').click();
+    await userEvent.keyboard('{ContextMenu}');
+    await expect.element(item('Close other tabs')).toBeVisible();
+    await expect.element(item('Close')).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    await expect.element(item('Close other tabs')).not.toBeInTheDocument();
+    // a focused tab's name starts with its place in the row
+    await expect.element(page.getByRole('tab', { name: /A$/ })).toHaveFocus();
+
+    await userEvent.keyboard('{Shift>}{F10}{/Shift}');
+    await expect.element(item('Close')).toHaveFocus();
+    await userEvent.keyboard('{ArrowDown}{Enter}');
+    await expect.poll(titles).toEqual(['A']);
+  });
+
+  test('when the row is too narrow, the three dots list the hidden tabs, and choosing one shows it', async () => {
+    const list = plain(...'ABCDEFGHIJ'.split('').map((letter) => `Screen ${letter}`));
+    render(list, list[0]!.id);
+    for (const screen of list.slice(1)) await navigate(screen.title);
+    await button('Hidden tabs').hover();
+    const hidden = page.getByRole('listbox').getByRole('option');
+    await expect.element(hidden.first()).toBeVisible();
+    // the last tab opened is shown, so the row hides some of the first ones
+    const listed = hidden.elements().map((option) => option.textContent);
+    expect(listed).toContain('Screen A');
+    expect(listed).not.toContain('Screen J');
+    await hidden.filter({ hasText: 'Screen A' }).click();
+    await expect.element(tab('Screen A')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(page.getByText('Screen A screen')).toBeVisible();
+  });
+
+  test('closing one tab with unsaved changes asks once: Cancel keeps it, Close without saving closes it unsaved', async () => {
+    const draft = edited('Draft');
+    await renderOpen([...plain('A'), draft.screen]);
+    const question = page.getByRole('dialog', { name: 'Save changes to Draft?' });
+
+    await button('Close Draft').click();
+    await expect.element(question).toMatchTextContent(/Draft has unsaved changes\./);
+    await question.getByRole('button', { name: 'Cancel' }).click();
+    await expect.element(question).not.toBeInTheDocument();
+    await expect.poll(titles).toEqual(['A', 'Draft']);
+
+    await fromMenu('Draft', 'Close');
+    await question.getByRole('button', { name: 'Close without saving' }).click();
+    await expect.poll(titles).toEqual(['A']);
+    expect(draft.save).not.toHaveBeenCalled();
+  });
+
+  test('Save and close saves the screen of one tab, then closes it', async () => {
+    const draft = edited('Draft');
+    await renderOpen([...plain('A'), draft.screen]);
+    await button('Close Draft').click();
+    await page.getByRole('dialog', { name: 'Save changes to Draft?' }).getByRole('button', { name: 'Save and close' }).click();
+    await expect.poll(titles).toEqual(['A']);
+    expect(draft.save).toHaveBeenCalledOnce();
+  });
+
+  test('closing several tabs closes those without unsaved changes at once and asks one question for the others', async () => {
+    const one = edited('One');
+    const two = edited('Two');
+    await renderOpen([...plain('A'), one.screen, ...plain('B'), two.screen]);
+    const question = page.getByRole('dialog', { name: 'Save changes to 2 tabs?' });
+
+    await fromMenu('A', 'Close other tabs');
+    await expect.element(question.getByRole('list', { name: 'Tabs with unsaved changes' })).toMatchTextContent('OneTwo');
+    await expect.poll(titles).toEqual(['A', 'One', 'Two']);
+    await question.getByRole('button', { name: 'Cancel' }).click();
+    await expect.poll(titles).toEqual(['A', 'One', 'Two']);
+
+    await fromMenu('A', 'Close other tabs');
+    await question.getByRole('button', { name: 'Close without saving' }).click();
+    await expect.poll(titles).toEqual(['A']);
+    expect(one.save).not.toHaveBeenCalled();
+    expect(two.save).not.toHaveBeenCalled();
+  });
+
+  test('Save all and close saves every listed screen, then closes their tabs', async () => {
+    const one = edited('One');
+    const two = edited('Two');
+    await renderOpen([...plain('A'), one.screen, two.screen]);
+    await fromMenu('A', 'Close all but pinned');
+    await page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }).click();
+    await expect.element(page.getByRole('heading', { name: 'No screen open' })).toBeVisible();
+    expect(one.save).toHaveBeenCalledOnce();
+    expect(two.save).toHaveBeenCalledOnce();
+  });
+
+  test('a tab whose save fails stays open and is shown, saying why, while the others close', async () => {
+    const failing = edited('Failing', false);
+    const fine = edited('Fine');
+    await renderOpen([...plain('A'), failing.screen, fine.screen]);
+    await fromMenu('A', 'Close tabs to the right');
+    await page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }).click();
+    await expect.element(tab('Failing')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(page.getByText('Failing was not saved: the disk is full')).toBeVisible();
+    await expect.poll(titles).toEqual(['A', 'Failing']);
+
+    await button('Close Failing').click();
+    await page.getByRole('dialog', { name: 'Save changes to Failing?' }).getByRole('button', { name: 'Save and close' }).click();
+    await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
+    await expect.poll(titles).toEqual(['A', 'Failing']);
   });
 });
