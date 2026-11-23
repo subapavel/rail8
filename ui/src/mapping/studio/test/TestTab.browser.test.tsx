@@ -152,26 +152,6 @@ describe('the Test tab', () => {
     await expect.element(log()).toMatchTextContent('Error unknown-function: no function named foo');
   });
 
-  test('the expanded XML editor writes to the same source used by the simulation', async () => {
-    const api = scenario({ test: { [MAPPING]: output } });
-    const runTest = vi.spyOn(api, 'runTest');
-    await renderTest({ api });
-    const input = source().getByRole('textbox', { name: 'Input XML' });
-    await input.fill('<Order/>');
-    await source().getByRole('button', { name: 'Open XML editor' }).click();
-    const dialog = page.getByRole('dialog', { name: 'XML editor' });
-    const editor = dialog.getByRole('textbox', { name: /XML source document/ });
-    await expect.element(editor).toBeVisible();
-    (editor.element() as HTMLElement).focus();
-    await expect.element(editor).toHaveFocus();
-    await userEvent.keyboard('{Home}{ArrowRight}Purchase');
-    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
-    await expect.element(source().getByRole('button', { name: 'Open XML editor' })).toHaveFocus();
-    await expect.element(input).toHaveValue('<PurchaseOrder/>');
-    await runButton().click();
-    await expect.poll(() => runTest.mock.calls[0]?.[1].input).toBe('<PurchaseOrder/>');
-  });
-
   test('the result shows as a tree of its fields and values', async () => {
     await renderTest({ api: scenario({ test: { [MAPPING]: output } }) });
     await source().getByRole('textbox', { name: 'Input XML' }).fill(INPUT);

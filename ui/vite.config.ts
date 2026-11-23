@@ -23,10 +23,10 @@ function adminApi(): Plugin {
 }
 
 export default defineConfig({
-  // These entries are reached through ProComponents and the lazy XML editor. Prebundle them
-  // before opening an editor so Vite can keep its working copy mounted.
+  // This entry is reached through ProComponents. Prebundle it before a screen opens so Vite does not
+  // reload the page, which would drop an editor's working copy.
   optimizeDeps: {
-    include: ['antd/locale/en_US', 'monaco-editor/editor/editor.api', 'monaco-editor/languages/definitions/xml/register'],
+    include: ['antd/locale/en_US'],
   },
   // the modules of the UI bring their own halves of the development server
   plugins: [react(), adminApi(), moduleServers({ origins, env: process.env })],

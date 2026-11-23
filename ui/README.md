@@ -17,7 +17,7 @@ Open `http://localhost:5173`. On Windows, run Vite in the same WSL distribution 
 
 Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. ProTable fits file listings and monitor results. The owner approved the exact ProComponents v3 prerelease pinned in the lockfile for its Ant Design 6 peer support. The workspace uses Ant Layout with Rail8's own tab lifecycle.
 
-`Rail8Theme` configures the Ant application context, English locale, compact theme and component size. The theme initially follows the OS preference. The switch stores the chosen mode in `rail8.theme`. Use `theme.useToken()` in components and `var(--ant-...)` in CSS. Both graph editors keep their React Flow layouts. The virtualized schema pane uses native table rows and token-styled field buttons to limit rendering work while scrolling. The mapping Test view loads Monaco and its worker locally when the XML editor opens.
+`Rail8Theme` configures the Ant application context, English locale, compact theme and component size. The theme initially follows the OS preference. The switch stores the chosen mode in `rail8.theme`. Use `theme.useToken()` in components and `var(--ant-...)` in CSS. Both graph editors keep their React Flow layouts. The virtualized schema pane uses native table rows and token-styled field buttons to limit rendering work while scrolling.
 
 ### Migration inventory and sequence
 
