@@ -10,6 +10,9 @@ product: `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md` (the sections the ques
 `docs/DECISIONS.md`, the open GitHub issues, and the closed GitHub issues labelled
 `owner-question`.
 
+- Rail8 is a professional integration platform for teams that run integrations in production, never
+  a prototype. Recommend and decide what such a team expects, also when it is the larger step, and
+  name what the cheaper choice leaves open.
 - Decide everything except money: anything that spends money (a paid service, a licence purchase,
   rented hardware) goes back unanswered, marked `needs the owner`.
 - Where the owner's picture covers the question, answer and quote the passage you relied on.

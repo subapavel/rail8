@@ -504,8 +504,9 @@ on the node. That change is a step of its own, designed first, and the owner see
 - Each node writes, in Postgres, a row per package it runs: the repository, the commit, its state, and why it is
   behind. It writes the row when it installs or undeploys a package, and when a tick fails to install one.
 - `GET /admin/pool/packages` answers those rows for every node whose lease holds.
-- Its design also weighs an expected pool generation on a deploy, for when a shared server lets several authors deploy
-  at once.
+- A deploy names the state it expects, and the node refuses it, changing nothing, when the pool holds another. Two
+  authors, or an author and CI, then never replace each other's deploy unseen. The design settles what names that
+  state: the commit the package runs, or the pool's generation.
 
 The deployed state then gains one entry per node, with the same relations. Until then, it shows the node at
 `RAIL8_ADMIN_URL`, and names it.
@@ -533,7 +534,8 @@ always checks first:
 
 The check first is the screen's rule. The node's own order is the guarantee: every problem of a deploy is answered
 before anything stops. A pool runs one deploy at a time, so the window between the second read and the deploy is the
-only one left.
+only one left. It closes once the node takes the expected state with a deploy ("Every node of the pool"): the git half
+then sends `running` with the deploy, and the node compares it as it applies.
 
 In a deployed environment, the node takes only a commit reachable from its `RAIL8_GIT_REF` on the git host. The check
 fetches the commit, proves that, and refuses it before anything changes.
