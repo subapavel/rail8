@@ -66,14 +66,14 @@ end
 
 case regex-sub/flag-n
 arg -c
-filter sub("a.b"; "y"; "n")
-stdin "a\\nb"\n
+filter gsub("x*"; "-"; "n")
+stdin "abxc"\n
 end
 
 case regex-sub/flag-n-not-given
 arg -c
-filter sub("a.b"; "y")
-stdin "a\\nb"\n
+filter gsub("x*"; "-")
+stdin "abxc"\n
 end
 
 case regex-sub/flag-gi
