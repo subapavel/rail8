@@ -79,6 +79,7 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 | `token.read` | `GET /admin/tokens` | administrator, the key |
 | `token.issue` | `POST /admin/users/{name}/tokens`, for a technical account only | administrator logged in |
 | `token.revoke` | `POST /admin/tokens/{id}/revoke` | administrator logged in, the key |
+| `token.ceiling` | `POST /admin/tokens/ceiling` | administrator logged in |
 | `audit.read` | `GET /admin/audit` | administrator |
 | `secret.list` | the secret store's list: names, never a value | developer, secret-administrator |
 | `secret.write` | the secret store's create and overwrite | secret-administrator |
@@ -86,7 +87,8 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 | `self.read` | `GET /admin/me` | every caller, the key included |
 | `self.password` | `POST /admin/me/password` | a person logged in |
 | `self.logout` | `POST /admin/me/logout` | a session |
-| `self.tokens` | `GET`, `POST /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | a person; issuing only when logged in |
+| `self.tokens` | `GET /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | a person |
+| `self.token-issue` | `POST /admin/me/tokens` | a person logged in |
 
 "Logged in" means a session, never a token. A token of an administrator may do the reads (`user.read`, `token.read` and
 `audit.read`), but an action that needs a session is 403 `session-required`.
@@ -185,6 +187,8 @@ package asks again inside the deploy, once the manifest names the package.
   - `login-refused`, for a refused login, with one text for every reason. The audit holds the reason.
 - 403 `{error, code, needs}`. The codes:
   - `not-allowed`, with `needs` the roles that grant the action.
+  - `wrong-password`, for a wrong current password asked again by the password change or the issue of a personal token.
+    The session goes on.
   - `session-required`, for a token.
   - `password-change-required`.
   - `browser`, from the guard.
@@ -243,8 +247,9 @@ has just ended.
   - stored as a PHC string, `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`.
   A login whose stored parameters differ from the current ones hashes the password again, so the parameters can change
   without a migration.
-- **Cost.** A node hashes at most 2 passwords at once, with no queue. Logins use at most 2 cores and 38 MiB. A third login
-  at the same moment is 503 `busy` with `Retry-After: 1`. An unknown name, a technical account and a blocked user still
+- **Cost.** A node hashes at most 2 passwords at once, with no queue. Logins use at most 2 cores and 38 MiB. One of the
+  two places takes only a login that presents a valid device credential, so a flood of logins from unknown browsers
+  cannot keep a user's known browser out. A login that finds no place it may take is 503 `busy` with `Retry-After: 1`. An unknown name, a technical account and a blocked user still
   cost one hash of a fixed dummy, so the time does not tell them apart.
 - **Rules.** A password is 12 to 128 characters after NFC normalisation, must not contain the user's name and must differ
   from the current one. A login's body is at most 1 KiB. There are no rules of composition.
@@ -252,8 +257,8 @@ has just ended.
 ### The limit of login attempts
 
 A login goes in this order:
-1. It takes one of the node's two places to hash, or answers 503 `busy`, counting nothing.
-2. It reads the user, if one has the name, with its generation.
+1. It reads the user, if one has the name, with its generation, and the device credential if the login presents one.
+2. It takes a place to hash that it may take, or answers 503 `busy`, counting nothing.
 3. It picks the row of `login_limits` to count on:
    - the name's row, `(name, '')`. The name is taken as typed and lowercased, and an unknown name has a row too, so a
      refusal does not tell which names exist;
@@ -334,7 +339,8 @@ list):
 
 The `/admin` proxy refuses `/admin/sessions` (403), so no page script ever sees a session's secret. It passes JSON
 bodies of POST requests up to 64 KiB, which the users' routes, the password change and a cancel's reason need. It
-passes `Retry-After` back. On a 401 from the node, it clears the session's cookie.
+passes `Retry-After` back. It clears the session's cookie when the node answers 401 `unknown-credential`,
+`session-ended` or `blocked`, and on no other answer.
 
 **A write names its session.** The page keeps the id of the session it was shown. Every request other than `GET` that
 it sends to the node, through the proxy, the git half or the mapping half, names that id in the header
@@ -374,13 +380,18 @@ A UI server outside development, when it comes, runs in session mode only and ho
 
 ## Tokens
 
-- **Personal.** A person issues their own tokens for the command line (`self.tokens`). A token carries its user's roles as
+- **Personal.** A person issues their own tokens for the command line (`self.token-issue`). A token carries its user's roles as
   they are at each request, but never changes an account. Issuing one needs a session and asks the password again, so a
   stolen session or token cannot mint a lasting credential.
 - **Technical.** An administrator, logged in, creates a technical account, gives it roles, and issues its tokens
   (`token.issue`).
-- **Form.** A name (`^[a-z0-9][a-z0-9-]{0,63}$`, unique among the user's live tokens) and an expiry of 1 to 365 days,
-  90 by default. Every token expires.
+- **Form.** A name, `^[a-z0-9][a-z0-9-]{0,63}$`, unique among the user's unrevoked tokens. A new token that takes the name
+  of the user's expired token revokes it in the same transaction.
+- **Expiry.** Every token expires: 90 days by default and 365 at most, for a person's tokens and a technical account's
+  alike.
+- **The ceiling.** An administrator may lower the ceiling for the whole installation (`token.ceiling`), to 1 to 365 days,
+  and raise it again up to 365, never beyond. A lower ceiling holds for live tokens too: a token older than the ceiling
+  is 401 `token-expired`. The default is 90 days, or the ceiling when it is lower. The change is in the audit.
 - **Shown once.** The 201 that issues it carries the token, `{id, name, expiresAt, token}`. Postgres keeps only its
   fingerprint.
 - **Revoked at once.** The user revokes their own; an administrator and the emergency key revoke any. The next request
@@ -389,9 +400,11 @@ A UI server outside development, when it comes, runs in session mode only and ho
   them to an administrator.
 - **Limits.** At most 20 live tokens per user.
 
-The command line sends `Authorization: Bearer $RAIL8_TOKEN`. When `RAIL8_TOKEN` is not set, it sends the emergency key
-from `RAIL8_ADMIN_TOKEN`, which is how `rail8 user add` makes the first administrator. CI holds the token of a technical
-account in `RAIL8_TOKEN`, such as `ci-deploy` with the developer role. `rail8 deploy` does not change.
+The command line sends `Authorization: Bearer $RAIL8_TOKEN`. Only `rail8 user` and `rail8 bootstrap` send
+`RAIL8_ADMIN_TOKEN`, which is how `rail8 user add` makes the first administrator. No other command ever sends a value of
+the emergency key's form. During the bridge, another command without `RAIL8_TOKEN` sends a shared token from
+`RAIL8_ADMIN_TOKEN`, as today. CI holds the token of a technical account in `RAIL8_TOKEN`, such as `ci-deploy` with the
+developer role. `rail8 deploy` does not change.
 
 ## The emergency key
 
@@ -406,8 +419,10 @@ rescues an installation whose administrators are locked out.
   a secret, change any role but administrator, or issue a token. It acts on users only. Any path from it to a deploy or
   to a body goes through an account it creates, promotes or resets, and through a login to that account, all in the
   audit.
-- **Its form.** `rail8k_` and 43 base64url characters, printed by `rail8 key new`. The node does not start with any other
-  value. It compares the key as `MessageDigest.isEqual(sha256(presented), sha256(key))`.
+- **Its form.** `rail8k_` and 43 base64url characters, printed by `rail8 key new`. From step 1, a value of this form is
+  the emergency key and nothing more, even during the bridge. During the bridge, a value of any other form is the shared
+  token. After the cut, the node does not start with a value of another form. The node compares the key as
+  `MessageDigest.isEqual(sha256(presented), sha256(key))`.
 - **Its audit.** Every request with it, refused or not, first writes an `emergency-key.use` row with the method, the path,
   the remote address and whether it was allowed. When that row cannot be written, the answer is 503 and nothing runs. Its
   acts are audited with the actor `emergency-key`.
@@ -437,6 +452,11 @@ One `audit` table, two views:
 - at a message, `GET /admin/messages/{id}/audit` (operator): who retried it, cancelled it or viewed its body;
 - the Audit screen, `GET /admin/audit?user&action&from&to&after&limit` (administrator), newest first, at most 500 a page
   and 50 by default.
+
+The audit can always be taken out of the platform:
+- A program reads it through `GET /admin/audit`, filtered by user, action and time, page by page.
+- The Audit screen exports the filtered list as a CSV file (UTF-8, every column), with every page of it, up to 100,000
+  rows. A longer list asks for a narrower time.
 
 **Who.** `actor` is the user's name; names never change and users are never deleted, so it keeps its meaning. Next to it:
 - `user_id`;
@@ -468,7 +488,7 @@ refused deploy changes nothing, and its row is written after the fact, as today.
 
 **New entries:** `login`, `login.refused`, `logout`, `password.change`, `user.create`, `user.block`, `user.unblock`,
 `user.password-reset`, `user.roles`, `session.end`, `token.issue`, `token.revoke`, `emergency-key.use` and
-`message.body.view`.
+`message.body.view`, and `token.ceiling` with `{from, to}`.
 - `user.roles` carries `{added, removed, self}`, so assigning oneself the message bodies role is marked.
 - A release of a held item (`work.release`) and an undeploy (`undeploy`) are audited too. They join the deploy, the
   discard, the retry and the cancel, which already are.
@@ -480,12 +500,13 @@ During the bridge, a view with the shared token or on the open loopback API is w
 - A row of `login_limits` writes a `login.refused` row for the first failure of a run, then at most one an hour, carrying
   the count of failures since.
 - Attempts refused with 429 write nothing.
-- The whole installation writes at most 1,000 `login.refused` rows an hour. The row `('*', '')` of `login_limits`
-  counts them: `failures` is the count and `last_failure_at` the start of the hour. Beyond the 1,000, a refusal is
-  counted there and not written.
+- The whole installation writes at most 1,000 `login.refused` rows an hour. The row `('*', '*')` of `login_limits`
+  counts them: `failures` is the count and `last_failure_at` the start of the hour. No login lands on that row, because a
+  device's id is 16 hex digits. Beyond the 1,000, a refusal is counted there and not written.
 
-**Retention.** `RAIL8_AUDIT_MAX_AGE`, ISO-8601, from P30D to P3660D, P365D by default. The node's retention job deletes, in
-its batches:
+**Retention.** `RAIL8_AUDIT_MAX_AGE`, ISO-8601, from P30D to P3660D, P365D by default. It may not be shorter than
+`RAIL8_RETENTION_MAX_AGE`, or the node does not start: a message's status reads its cancel from the audit, so the audit
+outlives the messages. The node's retention job deletes, in its batches:
 - audit rows older than that;
 - ended sessions, devices and tokens that expired or were revoked longer ago than that;
 - `login_limits` rows without a failure for 24 hours.
@@ -540,8 +561,9 @@ create table sessions (
   created_at timestamptz not null, last_seen_at timestamptz not null, expires_at timestamptz not null);
 create index sessions_user on sessions (user_id);
 create table login_limits (
-  name text not null,                                    -- lowercased; '*' counts the installation's refused-login rows
-  device text not null default '',                       -- '' for the name's own row, else a device's id
+  name text not null,                                    -- lowercased as typed
+  device text not null default '',                       -- '' for the name's row, a device's id, or '*' for ('*', '*'),
+                                                         -- which counts the installation's refused-login rows
   failures int not null, last_failure_at timestamptz not null, audited_at timestamptz,
   primary key (name, device));
 create table admin_bridge (                              -- one row: open until the cut
@@ -575,6 +597,10 @@ create table tokens (
   last_used_at timestamptz, revoked_at timestamptz, revoked_by text);
 create unique index tokens_live_name on tokens (user_id, name) where revoked_at is null;
 create index tokens_expiring on tokens (expires_at) where revoked_at is null;
+create table token_ceiling (                             -- one row: the installation's longest token, in days
+  only_row boolean primary key default true check (only_row),
+  max_days int not null check (max_days between 1 and 365));
+insert into token_ceiling values (true, 365);
 
 -- the cut (2d)
 update admin_bridge set open = false;
@@ -589,15 +615,16 @@ A session ends by deleting its row. At most 10,000 users; one more is 409.
 | --- | --- |
 | `POST /admin/sessions {name, password, device?}` | 201 `{session, expiresAt, idleSeconds, device?, me}`; 401 `login-refused`, one text for every failure; 429; 503 `busy` |
 | `GET /admin/me` | `{name, kind, roles, actions, via, firstPassword, expiresAt, emergencyKey}` |
-| `POST /admin/me/password {current, next}` | 204; 401 for a wrong current password; 400 for a password the rules refuse; 429 |
+| `POST /admin/me/password {current, next}` | 204; 403 `wrong-password`; 400 for a password the rules refuse; 429 |
 | `POST /admin/me/logout` | 204 |
-| `GET /admin/me/tokens`; `POST /admin/me/tokens {name, days, password}`; `POST /admin/me/tokens/{id}/revoke` | the list; 201 `{id, name, expiresAt, token}`; 204 |
+| `GET /admin/me/tokens`; `POST /admin/me/tokens {name, days, password}`; `POST /admin/me/tokens/{id}/revoke` | `{tokens, maxDays, defaultDays}`; 201 `{id, name, expiresAt, token}`, 403 `wrong-password`; 204 |
 | `GET /admin/users`; `GET /admin/users/{name}` | the users with their kind, roles and who granted them, block, live sessions and tokens (never a secret) |
 | `POST /admin/users {name, kind, roles}` | 201 `{name, firstPassword}` for a person, `{name}` for a technical account; 409 for a name taken |
 | `POST /admin/users/{name}/roles {add, remove}` | 200 `{name, roles, added, removed}` |
 | `POST /admin/users/{name}/block`, `/unblock`, `/password-reset`, `/sessions/end` | 200; `/password-reset` answers `{firstPassword}` |
-| `POST /admin/users/{name}/tokens {name, days}` | 201 `{id, name, expiresAt, token}`; 422 for a person |
-| `GET /admin/tokens?expiringWithin=…`; `POST /admin/tokens/{id}/revoke` | the live tokens; 204 |
+| `POST /admin/users/{name}/tokens {name, days}` | 201 `{id, name, expiresAt, token}`; 409 for a person |
+| `POST /admin/tokens/ceiling {maxDays}` | 200 `{maxDays, defaultDays}`; 400 beyond 1 to 365 |
+| `GET /admin/tokens?expiringWithin=…`; `POST /admin/tokens/{id}/revoke` | `{tokens, maxDays, defaultDays}`, the live tokens and the ceiling; 204 |
 | `GET /admin/audit?…`; `GET /admin/messages/{id}/audit` | the two views of the audit |
 
 Bodies of these routes are at most 4 KiB. A login's `device` is the device credential the browser holds, or an empty
@@ -629,8 +656,8 @@ each item of both `{id, flow}`.
 **The bridge** lasts from step 1 to the cut. Both ways work:
 - Users, sessions and roles exist, and the admin API enforces the roles of every session, the message bodies role
   included.
-- `RAIL8_ADMIN_TOKEN` is the shared token as today. It must not have the form of the emergency key, or the node does not
-  start.
+- `RAIL8_ADMIN_TOKEN` of the emergency key's form is the key alone. A value of any other form is the shared token, as
+  today:
   - It may do the actions that exist before step 1, and the emergency key's actions. Those are audited as the key's,
     except `self.read`.
   - The audit takes its actor from `X-Rail8-Actor`, with `via` `shared-token`.
@@ -641,8 +668,8 @@ each item of both `{id, flow}`.
 - Step 1 is a rolling upgrade. The audit's `via` keeps its default, so the writers of an older node go on working.
 - The command line, CI and the compose stacks do not change until step 2.
 - The development server runs in token mode with the shared token, or in session mode without one.
-- The first administrator is made with `rail8 user add` and `RAIL8_ADMIN_TOKEN`, which during the bridge is the shared
-  token and serves as the key too.
+- The first administrator is made with `rail8 user add` and `RAIL8_ADMIN_TOKEN`: a key from `rail8 key new`, or a
+  shared token, which during the bridge serves as the key too.
 
 **The cut** ends the bridge. It is the last change of step 2, after every caller of this repository moved to named
 tokens:
@@ -651,7 +678,7 @@ tokens:
 - It drops the default of the audit's `via`, so a node older than step 1 fails every audited write. The upgrade note
   says to stop such nodes before the cut.
 - `X-Rail8-Actor` is not read any more.
-- `RAIL8_ADMIN_TOKEN` is the emergency key and nothing more, in the form `rail8k_…`. The value that was the shared token
+- `RAIL8_ADMIN_TOKEN` must have the emergency key's form, or the node does not start. The value that was the shared token
   cannot carry over: it has another form.
 - The role assignments granted through the shared token are listed for an administrator to review.
 - The rule that a bind other than loopback needs a token gives way to the rule of encryption: a certificate, or
@@ -663,7 +690,8 @@ The two steps follow each other closely: until the cut, the shared token can do 
 ## Limits
 
 These are accepted:
-- Sensitive data can be in an error's text and in headers, which an operator sees without the message bodies role.
+- Sensitive data can be in an error's text, in headers, in a message's properties and keys, and in the lines its steps
+  logged. An operator sees all of them without the message bodies role, and custom code can fill them from the body.
 - A developer can deploy any package of the installation.
 - The audit does not protect against a person with access to Postgres.
 - Until the cut, the shared token can do everything that exists today, so the first step and the tokens follow each
@@ -681,6 +709,11 @@ These are accepted:
   reset are not held off.
 - Up to 100,000 names are limited; the logins in flight can pass that cap by their number.
 - A request admitted before a revoke, a block or a role taken away runs to its end.
+- A flood of logins from browsers without a device credential keeps one place to hash busy on every node. Logins from
+  new browsers are then 503 `busy` for as long as it lasts. Known browsers, sessions and tokens already held still work.
+- A node older than step 1 that is still running after the cut keeps the old shared token's powers. Its writes of a
+  retry, a cancel and a discard fail, but a deploy only logs a WARNING when its audit row fails. The upgrade note says to
+  stop such nodes before the cut; nothing in Postgres can stop them.
 - No script manages users: a token never changes an account.
 - When Postgres is down, every admin request is 503, the emergency key's included.
 - A script injected into the UI acts as the logged-in user for as long as the page is open. `HttpOnly` keeps the secret
@@ -700,7 +733,7 @@ These are accepted:
 | a node left on the bridge's powers after the cut | the marker in Postgres, read at every such authentication |
 | the open loopback API through a flow that calls `127.0.0.1:8081` | it ends at the cut: every request needs a credential |
 | guessing one user's password | 5 free failures, then a wait up to 300 s, claimed before the hash, the same on every node |
-| keeping a known user out | the device's own row; a busy node counts nothing |
+| keeping a known user out | the device's own row and a place to hash kept for known browsers; a busy node counts nothing |
 | spraying a few common passwords over many names | 12 characters at least, first passwords generated by the node, 2 hashes at once per node |
 | telling names apart by time or by answer | a dummy hash and a dummy fingerprint, one 401 text for every refused login, a row for unknown names too |
 | filling the audit with refused logins under random names | one row per name per hour, 1,000 an hour for the installation |
@@ -734,15 +767,17 @@ These are accepted:
   limit, the 7 days of a first password, a device's 90 days and a token's expiry are tested the same way. No test
   sleeps.
 - A fake password hash is instant and counts its calls, which proves the dummy hash for unknown names. A variant blocks
-  on a latch and holds both places, so the third login is 503 at once, with nothing counted.
+  on a latch. With the shared place held, a login without a device credential is 503 at once with nothing counted,
+  while one with a valid device credential still hashes.
 - `Access.fixed(caller)` authenticates every request as one caller, so the existing route tests state who calls.
 - A test walks the router: every `/admin` route is mounted with an action, and the `Action` enum matches this
   document's table. A table test calls every route as each role, through a session and through a token, as the
   emergency key, as the shared token and the open loopback API with the marker open and closed, and as a
   first-password session. It expects 403 or not by the table.
+- An ArchUnit rule: outside tests, only `Caller.acting` constructs an `Actor`.
 - A deploy whose audit row fails to write leaves no record and runs what ran before.
 - The UI server:
-  - `bearerOf` and `forward` stay pure functions, tested on headers;
+  - `forward` and the choice of the credential for each mode are pure functions, tested on headers;
   - in each mode, a request without its credential is answered without a call to the node;
   - a write naming another session is 409;
   - the session routes take the node's client as an argument, as the git half's client does.
@@ -771,9 +806,9 @@ Each step is one issue, built and merged on its own. Step 1 and step 2 are group
   - The login with its limit by name, the first password and its change, and the session with its idle time and its end.
   - The account's generation, the roles changed by difference, and the locks.
   - The message bodies role and the record of every view.
-  - `rail8 user add` with `RAIL8_ADMIN_TOKEN`, which makes the first administrator.
+  - `rail8 user add` with `RAIL8_ADMIN_TOKEN`, which makes the first administrator, and `rail8 key new`.
   - The retention of the audit, the ended sessions and the login limit's rows.
-  - The audit carries the real name of a session's user. The release and the undeploy are audited.
+  - The audit carries the real name of a session's user. The release is audited.
 - **1b. Encryption on the admin port.** `class:C`. The certificate on the admin listener, the rule for clients and the
   rule for a node during the bridge. It is independent of 1a and may come first.
 - **1c. The deploy's audit with its record.** `class:B`. The rows of a deploy and an undeploy written in the
@@ -786,18 +821,20 @@ Each step is one issue, built and merged on its own. Step 1 and step 2 are group
 
 **Step 2, named tokens and the cut.**
 - **2a. Named tokens.** `class:C`. The tokens' migration, personal and technical tokens: issue, list, revoke, the warning
-  of their expiry. A token never changes an account. The shared token still works.
+  of their expiry, and the installation's ceiling. A token never changes an account. The shared token still works.
 - **2b. Tokens at the command line and in the development server.** `class:B`. `RAIL8_TOKEN` in the command line and in
-  the development server's token mode, `rail8 key new` and `rail8 bootstrap`.
+  the development server's token mode, and `rail8 bootstrap`. The UI's screens of tokens: a person's own, a technical
+  account's on the Users screen, the ceiling, and the tokens that expire within 14 days.
 - **2c. This repository's callers on named tokens.** `class:A`. CI, the compose stacks, the quickstart and the
-  end-to-end scenarios: a key generated for each run, `rail8 bootstrap`, and `RAIL8_TOKEN`.
+  end-to-end scenarios: a key generated for each run, `rail8 bootstrap`, and `RAIL8_TOKEN`. Each stack runs on one host's
+  own network, so its nodes and its clients set `RAIL8_ADMIN_TLS=off`.
 - **2d. The cut.** `class:C`, merged last so `main` stays green. The marker closed, the key's form enforced,
   `X-Rail8-Actor` and the open loopback API gone, the default of `via` dropped, the rule of encryption at the node's
   start, and the list of grants through the shared token.
 
 **3. The audit at a message.** `class:B`. The audit view at a message, and `{id, flow}` in both searches.
 
-**4. The Audit screen.** `class:B`. Filtered by user, action and time.
+**4. The Audit screen.** `class:B`. Filtered by user, action and time, and its export of the filtered list as a file.
 
 **5. Sign-in through OIDC** with one provider, roles assigned by hand. `class:C`, labelled `later`; it has a design of its
 own.
