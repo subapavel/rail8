@@ -1,5 +1,4 @@
-import { Alert, Button, Card, Empty, Flex, Input, Spin, Table, Tag } from 'antd';
-import { MountedModal } from '../../../MountedModal';
+import { Alert, Button, Card, Empty, Flex, Input, Table, Tag } from 'antd';
 import {
   AlignLeftOutlined,
   BranchesOutlined,
@@ -10,7 +9,7 @@ import {
   PlusSquareOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { PreviewBadge } from '../mock/PreviewBadge';
 import { PARAMETERS_ISSUE } from '../mock/signature-mock';
 import { zipInstance } from '../mock/test-instances';
@@ -20,7 +19,6 @@ import { downloadFile } from '../shared/download';
 import { FieldTypeIcon } from '../shared/FieldTypeIcon';
 import { Tool } from '../shared/Tool';
 
-const XmlEditor = lazy(() => import('./XmlEditor'));
 
 /** A pane's view of its document. */
 export const DOCUMENT_MODES = ['Tree', 'Text'] as const;
@@ -88,7 +86,6 @@ export function TestDocument({
   const [section, setSection] = useState<Section>('Document');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const [selection, select] = useState<string | null>(null);
-  const [xmlEditor, setXmlEditor] = useState(false);
   const [fullPath, setFullPath] = useState(false);
   const [formatted, setFormatted] = useState<{ original: string; text: string } | null>(null);
   const [error, setError] = useState('');
@@ -235,9 +232,6 @@ export function TestDocument({
               ) : (
                 <>
                   <Tool label="Pretty Print" icon={AlignLeftOutlined} disabled={!available || readOnly} onClick={prettyPrint} />
-                  {format === 'XML' && (
-                    <Tool label={input ? 'Open XML editor' : 'Open XML viewer'} icon={CodeOutlined} disabled={!available} onClick={() => setXmlEditor(true)} />
-                  )}
                 </>
               )}
               <Tool label="Save Document Source" icon={DownloadOutlined} disabled={!available} onClick={download} />
@@ -310,18 +304,6 @@ export function TestDocument({
         </div>
       )}
       {toggles(`${side} panel`, SECTIONS, section, setSection)}
-      {xmlEditor && (
-        <MountedModal
-          title={input ? 'XML editor' : 'XML viewer'}
-          width="min(90vw, 1000px)"
-          onCancel={() => setXmlEditor(false)}
-          footer={<Button onClick={() => setXmlEditor(false)}>Close</Button>}
-        >
-          <Suspense fallback={<Spin aria-label="Loading XML editor" />}>
-            <XmlEditor value={displayed} readOnly={!input || readOnly} onChange={edit} label={input ? 'XML source document' : 'XML result document'} />
-          </Suspense>
-        </MountedModal>
-      )}
     </Card>
   );
 }
