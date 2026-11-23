@@ -55,7 +55,24 @@ function modelOf(text: string): MappingModel | string {
   }
   if (!isRecord(value)) return 'the file is not a mapping: it holds no JSON object';
   if (value.formatVersion !== 1) return `the file is not a mapping of format 1: its formatVersion is ${JSON.stringify(value.formatVersion) ?? 'missing'}`;
-  return value as unknown as MappingModel;
+  return shapeProblem(value) ?? (value as unknown as MappingModel);
+}
+
+/**
+ * What keeps `model` from the shape {@link mappingChanges} reads, or null when it has it: its target field mappings
+ * and UDFs are objects of objects, every box is an object, and every list of inputs a list.
+ */
+function shapeProblem(model: Record<string, unknown>): string | null {
+  const { targetFieldMappings: fields, udfs } = model;
+  if (fields !== undefined && (!isRecord(fields) || !Object.values(fields).every(isRecord))) return 'the file is not a mapping: its targetFieldMappings are not objects';
+  if (udfs !== undefined && (!isRecord(udfs) || !Object.values(udfs).every(isRecord))) return 'the file is not a mapping: its udfs are not objects';
+  for (const [path, field] of Object.entries((fields ?? {}) as Record<string, Record<string, unknown>>)) {
+    const boxes = field.boxes ?? {};
+    if (!isRecord(boxes) || !Object.values(boxes).every((box) => isRecord(box) && (box.inputs === undefined || Array.isArray(box.inputs)))) {
+      return `the file is not a mapping: the boxes of ${path} are not objects with lists of inputs`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -109,14 +126,26 @@ function paramValue(value: unknown): string {
 class Formulas {
   private readonly numbers = new Map<string, number>();
 
-  /** The canonical number of the formula from `result` down, and its text, cut at {@link MAX_FORMULA} characters. */
+  /**
+   * The canonical number of the formula from `result` down, with the boxes not connected to it, and its text, cut at
+   * {@link MAX_FORMULA} characters. The boxes not connected are written after the formula, each with the boxes that
+   * feed it, as `; not connected: upper(_)`.
+   */
   of(mapping: TargetFieldMapping | undefined): { canonical: number; text: string } {
     if (mapping === undefined) return { canonical: -1, text: 'none' };
     const boxes = isRecord(mapping.boxes) ? (mapping.boxes as Record<string, Box>) : {};
     const memo = new Map<string, number>();
-    const canonical = this.canonical(boxes, mapping.result, memo, new Set());
-    const text = mapping.result === null ? 'nothing connected' : this.text(boxes, mapping.result, new Set(), { left: MAX_FORMULA });
-    return { canonical, text };
+    const result = this.canonical(boxes, mapping.result, memo, new Set());
+    const formula = mapping.result === null ? 'nothing connected' : this.text(boxes, mapping.result, new Set(), { left: MAX_FORMULA });
+    const connected = reached(boxes, mapping.result);
+    const loose = Object.keys(boxes).filter((id) => !connected.has(id));
+    if (loose.length === 0) return { canonical: result, text: formula };
+    const fed = new Set(loose.flatMap((id) => inputsOf(boxes[id]!)));
+    const tops = loose.filter((id) => !fed.has(id));
+    const shown = (tops.length > 0 ? tops : loose).map((id) => this.text(boxes, id, new Set(), { left: MAX_FORMULA })).sort();
+    const canonical = this.number(JSON.stringify([result, loose.map((id) => this.canonical(boxes, id, memo, new Set())).sort((x, y) => x - y)]));
+    const text = `${formula}; not connected: ${shown.join(', ')}`;
+    return { canonical, text: text.length > MAX_FORMULA ? `${text.slice(0, MAX_FORMULA - 1)}…` : text };
   }
 
   private number(form: string): number {
@@ -169,21 +198,34 @@ class Formulas {
   }
 }
 
-/** Where the target and each box of a target field mapping are placed, the boxes in the order the formula reaches them from its result, each once. */
-function placesOf(mapping: TargetFieldMapping): unknown[] {
-  const boxes = isRecord(mapping.boxes) ? (mapping.boxes as Record<string, Box>) : {};
-  const at = isRecord(mapping.layout?.boxes) ? mapping.layout.boxes : {};
-  const places: unknown[] = [mapping.layout?.target ?? null];
+/** The inputs of a box, none for a source field. */
+const inputsOf = (box: Box) => ('inputs' in box && Array.isArray(box.inputs) ? box.inputs : []);
+
+/** The ids of the boxes the formula reaches from `result`, each once, in the order it reaches them. */
+function reached(boxes: Record<string, Box>, result: string | null): Set<string> {
   const seen = new Set<string>();
   const visit = (id: string | null | undefined) => {
     if (id === null || id === undefined || seen.has(id) || boxes[id] === undefined) return;
     seen.add(id);
-    places.push(at[id] ?? null);
-    const box = boxes[id];
-    if ('inputs' in box && Array.isArray(box.inputs)) box.inputs.forEach(visit);
+    inputsOf(boxes[id]).forEach(visit);
   };
-  visit(mapping.result);
-  return places;
+  visit(result);
+  return seen;
+}
+
+/**
+ * Where the target and each box of a target field mapping are placed: the boxes the formula reaches in the order it
+ * reaches them, then the positions of the boxes not connected to it, sorted.
+ */
+function placesOf(mapping: TargetFieldMapping): unknown[] {
+  const boxes = isRecord(mapping.boxes) ? (mapping.boxes as Record<string, Box>) : {};
+  const at = isRecord(mapping.layout?.boxes) ? mapping.layout.boxes : {};
+  const connected = reached(boxes, mapping.result);
+  const loose = Object.keys(boxes)
+    .filter((id) => !connected.has(id))
+    .map((id) => JSON.stringify(at[id] ?? null))
+    .sort();
+  return [mapping.layout?.target ?? null, ...[...connected].map((id) => at[id] ?? null), ...loose];
 }
 
 /** A structure's root on one line: an element's EQName, a WSDL operation's interface, operation and direction, or a JSON root. */

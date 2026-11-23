@@ -86,6 +86,30 @@ describe('mappingChanges', () => {
     expect(result.rows.map((r) => r.field)).toEqual(['/Out/C']);
   });
 
+  test('lists a box added that is not connected to the result, and counts one that only moved', () => {
+    const loose = (x: number): TargetFieldMapping => {
+      const m = concatId();
+      return { ...m, boxes: { ...m.boxes, u: { kind: 'function', fn: 'upper', inputs: [null] } }, layout: { ...m.layout, boxes: { ...m.layout!.boxes, u: { x, y: 90 } } } };
+    };
+    const before = model({ targetFieldMappings: { '/Out/Id': concatId(), '/Out/B': loose(0) } });
+    const after = model({ targetFieldMappings: { '/Out/Id': loose(0), '/Out/B': loose(50) } });
+
+    expect(changes(before, after)).toMatchObject({
+      rows: [{ field: '/Out/Id', before: 'concat(/Orders/Order/Id, "-")', after: 'concat(/Orders/Order/Id, "-"); not connected: upper(_)', status: 'changed' }],
+      moved: 1,
+    });
+  });
+
+  test('reads a version whose fields, boxes, inputs or UDFs are not of their shape as no mapping', () => {
+    const broken = [
+      '{"formatVersion": 1, "targetFieldMappings": {"/x": null}}',
+      '{"formatVersion": 1, "udfs": {"f": null}}',
+      '{"formatVersion": 1, "targetFieldMappings": {"/x": {"id": "m", "result": "b", "boxes": {"b": {"kind": "function", "fn": "f", "inputs": "b"}}}}}',
+      '{"formatVersion": 1, "targetFieldMappings": {"/x": {"id": "m", "result": "b", "boxes": {"b": 1}}}}',
+    ];
+    for (const after of broken) expect(mappingChanges(PATH, text(model()), after, NO_SOURCES)).toMatchObject({ status: 'unreadable', unreadable: [{ side: 'after' }] });
+  });
+
   test('says "structure changed" when a fingerprint differs, and lists a root or bundle that changed', () => {
     const after = model({ source: structure('Orders', 'sha256:bbb'), target: { ...structure('Invoice'), bundle: ['common@1.0.0:/invoice.xsd'] } });
 
