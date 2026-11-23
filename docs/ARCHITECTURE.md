@@ -1070,6 +1070,10 @@ development server and the quickstart's node in Docker. The admin API answers JS
 public web page.
 
 **Planned**
+- A Packages screen over git (`docs/PACKAGES-AND-GIT.md`): each package of the working folder with its artifacts, its
+  changes since the last commit read by meaning (a flow as its picture, a mapping by its target fields), a commit, the
+  commit the node runs, a deploy of a commit with its check first, the lock of its dependencies, and push and pull,
+  through the author's own git in the development server.
 - A server for the UI outside development, holding the token and talking to the node the same way.
 - Helper actions on a field of an endpoint's settings form. No screens of a plugin's own.
 - Editing endpoint files on a shared server, written to git with an author, with deploy from git and sign-in.
