@@ -64,13 +64,13 @@ filter gsub("a  b"; "y"; "x")
 stdin "abab"\n
 end
 
-case regex-sub/flag-n
+case regex-sub/flag-n-empty-match
 arg -c
 filter gsub("x*"; "-"; "n")
 stdin "abxc"\n
 end
 
-case regex-sub/flag-n-not-given
+case regex-sub/flag-n-empty-match-not-given
 arg -c
 filter gsub("x*"; "-")
 stdin "abxc"\n

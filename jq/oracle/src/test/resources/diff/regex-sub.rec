@@ -70,15 +70,15 @@ stdout "yy"\n
 stderr
 end
 
-case regex-sub/flag-n
-def 494d00afaaa0
+case regex-sub/flag-n-empty-match
+def ba57ab777ea5
 rc 0
 stdout "ab-c"\n
 stderr
 end
 
-case regex-sub/flag-n-not-given
-def 927b83688838
+case regex-sub/flag-n-empty-match-not-given
+def 35b8b1c7706e
 rc 0
 stdout "-a-b--c-"\n
 stderr
