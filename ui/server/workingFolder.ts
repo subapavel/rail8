@@ -191,7 +191,10 @@ export function writeNew(lock: WorkingFolderLock, file: string, content: string 
   return lock(() => linkNew(file, content));
 }
 
-/** {@link writeNew}, for a caller that holds the lock. */
+/**
+ * Writes `content` to the new file `file`, whole to a temporary file beside it that is then linked to its name; false,
+ * with nothing written, when a file, or a link, of that name exists. The caller holds the working folder's lock.
+ */
 async function linkNew(file: string, content: string | Uint8Array): Promise<boolean> {
   if (await lstat(file).then(() => true, () => false)) return false;
   const temporary = join(dirname(file), `.${basename(file)}.${randomUUID()}.tmp`);

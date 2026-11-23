@@ -72,7 +72,11 @@ describe('moduleServers', () => {
     const holder = "export default (dev: { writes: unknown }) => ({ name: 'alpha', api: dev.writes });\n";
     const src = await tree({ 'alpha/module.tsx': '', 'alpha/server.ts': holder });
     const [before] = await moduleServers(dev, src);
-    const [after] = await moduleServers(dev, src);
+    // a restart evaluates vite.config.ts, and the modules.ts it imports, again
+    vi.resetModules();
+    const again = await import('./modules');
+    expect(again.moduleServers).not.toBe(moduleServers);
+    const [after] = await again.moduleServers(dev, src);
     expect(typeof before?.api).toBe('function');
     expect(after?.api).toBe(before?.api);
   });
