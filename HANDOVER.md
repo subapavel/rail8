@@ -35,6 +35,7 @@ Services: `rail8` (the node), `postgres`, `valkey`, `sftp` + `sftp-keys`,
 ## 2. Run the flows by hand
 
 ```sh
+# the deploy account reads messages and bodies, and retries, once an administrator gives it the roles operator and message-bodies (Users in the UI)
 A="Authorization: Bearer $RAIL8_TOKEN"
 INV=../../examples/demo/fixtures/sample-invoice.xml
 
