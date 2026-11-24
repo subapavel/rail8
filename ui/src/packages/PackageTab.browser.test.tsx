@@ -9,7 +9,7 @@ import { Shell } from '../Shell';
 import { useWorkingFile } from '../workingFiles';
 import { AUTHOR, fakeStateOf, type Seed } from './contract/seed';
 import type { PackagesApi } from './api';
-import { fakePackagesApi } from './fake';
+import { fakeLock, fakePackagesApi, tagOf, type FakeLock } from './fake';
 import { packagesScreen } from './screen';
 
 const NOW = new Date('2026-11-23T10:00:00Z');
@@ -67,16 +67,17 @@ const NO_DEPLOYMENTS: Me = {
 
 /**
  * The Packages screen over the fake world of `seed`, with the flow kind registered, and the tab of `orders` opened from
- * its row. With `me`, the screen is behind the session gate of a session that `GET /session` answers with `me`.
+ * its row. With `me`, the screen is behind the session gate of a session that `GET /session` answers with `me`. The
+ * fake git half's writes take `lock`, the fake working folder's.
  */
-async function openOrders(seed: Seed, wrap: (api: PackagesApi) => PackagesApi = (api) => api, me?: Me) {
+async function openOrders(seed: Seed, wrap: (api: PackagesApi) => PackagesApi = (api) => api, me?: Me, lock: FakeLock = fakeLock()) {
   const { state, ids } = fakeStateOf(seed);
   const host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   const shell = (
     <ArtifactKinds.Provider value={new Map([['flow', FLOW_KIND]])}>
-      <Shell screens={[packagesScreen(wrap(fakePackagesApi(state)), () => NOW)]} start="packages" />
+      <Shell screens={[packagesScreen(wrap(fakePackagesApi(state, lock)), () => NOW)]} start="packages" />
     </ArtifactKinds.Provider>
   );
   if (me === undefined) root.render(shell);
@@ -589,5 +590,136 @@ describe('the tab of a package', () => {
 
     await expect.element(page.getByRole('button', { name: 'Show older commits' })).toBeEnabled();
     await expect.element(rows()).toHaveLength(50);
+  });
+});
+
+describe('the remote of a package', () => {
+  const FLOW_UPSTREAM = FLOW.replace('stylesheet: flows/orders.xsl', 'stylesheet: flows/upstream.xsl');
+  const FLOW_SAVED = FLOW.replace('stylesheet: flows/orders.xsl', 'stylesheet: flows/saved.xsl');
+  /** orders, whose upstream has a commit not fetched yet that changes the flow. */
+  const behind: Seed = {
+    clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW }, upstream: { at: 'first', unfetched: ['second'] }, commitFiles: { second: { 'flows/orders.yaml': FLOW_UPSTREAM } } }],
+  };
+  /** The tab of orders, whose facts the Packages screen's row repeats. */
+  const inTab = () => page.getByLabelText('orders', { exact: true });
+  /** A lock of the fake working folder that, while `hold` is set, keeps the next work that takes it waiting for `release`. */
+  const gated = () => {
+    const all = fakeLock();
+    const gate = { hold: false, entered: () => {}, release: () => {} };
+    const lock: FakeLock = (work) =>
+      all(async () => {
+        if (gate.hold) {
+          gate.hold = false;
+          gate.entered();
+          await new Promise<void>((done) => (gate.release = done));
+        }
+        return work();
+      });
+    return { lock, gate };
+  };
+  /** A save of the flow from a second window: under the lock, it writes `text` when the bytes on disk still have `tag`, else 412. */
+  const saveIn = (folder: Awaited<ReturnType<typeof openOrders>>['folder'], lock: FakeLock) => (text: string, tag: string) =>
+    lock(async () => {
+      if ((await tagOf(folder.disk['flows/orders.yaml']!)) !== tag) return 412;
+      folder.disk['flows/orders.yaml'] = text;
+      return 200;
+    });
+
+  test('Fetch brings the upstream’s commits and says how far behind the branch is', async () => {
+    await openOrders(behind);
+    await expect.element(inTab().getByText('Up to date with origin/main')).toBeVisible();
+
+    await button('Fetch').click();
+
+    await expect.element(page.getByText('Fetched origin/main: 1 behind, 0 ahead')).toBeVisible();
+    await expect.element(inTab().getByText('0 ahead, 1 behind origin/main')).toBeVisible();
+  });
+
+  test('Pull is refused while an open tab holds a file of the package with unsaved changes, and Show tab shows it', async () => {
+    const { folder, ids } = await openOrders(behind);
+    await openFlow(true);
+
+    await button('Pull').click();
+
+    await expect.element(page.getByText('Save or discard the unsaved changes first')).toBeVisible();
+    await expect.element(page.getByText(/A pull may change flows\/orders\.yaml, which an open tab holds with unsaved changes; nothing was pulled\./)).toBeVisible();
+    expect(folder.head.commit).toBe(ids.get('orders/first'));
+    await button('Show tab').click();
+    await expect.element(page.getByText('The flow editor of orders/flows/orders.yaml')).toBeVisible();
+  });
+
+  test('a save from a second window while a pull holds the lock is refused by its recheck; the pull reads the open tab again', async () => {
+    const { lock, gate } = gated();
+    const { folder, ids } = await openOrders(behind, undefined, undefined, lock);
+    await openFlow(false);
+    const save = saveIn(folder, lock);
+    const tag = await tagOf(FLOW);
+    const entered = new Promise<void>((done) => (gate.entered = done));
+    gate.hold = true;
+
+    await button('Pull').click();
+    await entered;
+    const saved = save(FLOW_SAVED, tag);
+    gate.release();
+
+    expect(await saved).toBe(412);
+    await expect.element(page.getByText(/^Pulled to [0-9a-f]{7}: 2 files changed$/)).toBeVisible();
+    expect(folder.head.commit).toBe(ids.get('orders/second'));
+    expect(folder.disk['flows/orders.yaml']).toBe(FLOW_UPSTREAM);
+    await page.getByRole('tab', { name: /^Flow orders/ }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('a pull that waits for a save from a second window is refused, with git lines, and the saved file stays', async () => {
+    const { lock, gate } = gated();
+    const { folder, ids } = await openOrders(behind, undefined, undefined, lock);
+    const save = saveIn(folder, lock);
+    const entered = new Promise<void>((done) => (gate.entered = done));
+    gate.hold = true;
+
+    const saved = save(FLOW_SAVED, await tagOf(FLOW));
+    await entered;
+    await button('Pull').click();
+    gate.release();
+
+    expect(await saved).toBe(200);
+    await expect.element(page.getByText('The pull was refused')).toBeVisible();
+    await expect.element(page.getByLabelText('What git said')).toMatchTextContent(/Your local changes to the following files would be overwritten by merge:\s+flows\/orders\.yaml/);
+    expect(folder.head.commit).toBe(ids.get('orders/first'));
+    expect(folder.disk['flows/orders.yaml']).toBe(FLOW_SAVED);
+  });
+
+  test('Push sends the branch’s commits, and a push the remote rejects says why with git’s lines', async () => {
+    await openOrders({ clones: [{ folder: 'orders', commits: ['first', 'local'], upstream: { at: 'first' } }] });
+    await expect.element(inTab().getByText('1 ahead, 0 behind origin/main')).toBeVisible();
+    await button('Push').click();
+    await expect.element(page.getByText(/^Pushed [0-9a-f]{7} to origin\/main$/)).toBeVisible();
+    await expect.element(inTab().getByText('Up to date with origin/main')).toBeVisible();
+    root?.unmount();
+    document.body.innerHTML = '';
+
+    await openOrders({ clones: [{ folder: 'orders', commits: ['first', 'local'], upstream: { at: 'first', unfetched: ['second'] } }] });
+    await button('Push').click();
+    await expect.element(page.getByText('The push was refused')).toBeVisible();
+    await expect.element(page.getByText('the remote rejected the push, as git says; nothing was pushed')).toBeVisible();
+    await expect.element(page.getByLabelText('What git said')).toMatchTextContent(/\[rejected\] \(fetch first\)/);
+  });
+
+  test('Fetch, Pull and Push are disabled with the reason while their routes would refuse them', async () => {
+    const cases: [Seed, string, string[]][] = [
+      [{ readOnly: true, clones: [{ folder: 'orders', upstream: { at: 'first' } }] }, 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).', ['Fetch', 'Pull', 'Push']],
+      [{ clones: [{ folder: 'orders' }] }, 'The branch has no upstream: push it once in a terminal with git push -u <remote> <branch>.', ['Fetch', 'Pull', 'Push']],
+      [{ clones: [{ folder: 'orders', detached: true, upstream: { at: 'first' } }] }, 'HEAD is detached: switch to a branch in a terminal.', ['Fetch', 'Pull', 'Push']],
+      [{ clones: [{ folder: 'orders', upstream: { at: 'first' } }] }, 'Nothing to push: the branch has no commit that origin/main lacks.', ['Push']],
+    ];
+    for (const [seed, reason, names] of cases) {
+      await openOrders(seed);
+      for (const name of names) {
+        await expect.element(button(name)).toBeDisabled();
+        await expect.element(button(name)).toHaveAttribute('title', reason);
+      }
+      root?.unmount();
+      document.body.innerHTML = '';
+    }
   });
 });

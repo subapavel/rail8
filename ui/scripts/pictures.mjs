@@ -66,6 +66,7 @@ const SCENES = {
   'package-deploy': [menu('Packages'), pkg('orders'), press('Deploy…')],
   'package-deployed': [menu('Packages'), pkg('orders'), press('Deploy…'), press('Deploy')],
   'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],
+  'package-push-refused': [menu('Packages'), pkg('orders'), press('Push')],
   'packages-get': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/invoices.git')],
   'packages-get-refused': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/payroll.git'), press('Get')],
   'packages-got': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/invoices.git'), press('Get')],

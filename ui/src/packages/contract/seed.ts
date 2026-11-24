@@ -86,10 +86,16 @@ export interface CloneSeed {
   commits?: string[];
   /** The time zone the seeded commits are made in, one without summer time. By default UTC. */
   zone?: Zone;
-  /** Files a labelled commit writes besides `<label>.txt`, by path; null deletes one. */
+  /** Files a labelled commit, of main or of the upstream, writes besides `<label>.txt`, by path; null deletes one. */
   commitFiles?: Record<string, Record<string, string | null>>;
-  /** The upstream `origin/main`, fetched: at the commit `at` of main, with the commits `more` of its own on top. */
-  upstream?: { at: string; more?: string[] };
+  /**
+   * The upstream `origin/main`: at the commit `at` of main, with the commits `more` of its own on top, fetched, and then
+   * the commits `unfetched` on top of those, which the clone has not fetched yet. With `signIn`, its remote is an https
+   * address of the world's git host that asks for credentials (401), which the git half's git has none of.
+   */
+  upstream?: { at: string; more?: string[]; unfetched?: string[]; signIn?: true };
+  /** After everything else, `HEAD` is on a new branch of this name, with no upstream, at the same commit. */
+  switchedTo?: string;
   /** A merge in progress, with `conflict.txt` in conflict: `main` gains the commit `conflict`, and the branch `side` the commit `side`. */
   conflict?: boolean;
   /** With `conflict`: the merge's own files are gone, so only the path in conflict is left of it. */
@@ -239,8 +245,11 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     }
     if (clone.upstream !== undefined) {
       let tip = ids.get(`${clone.folder}/${clone.upstream.at}`)!;
-      for (const label of clone.upstream.more ?? []) tip = commit(label, tip, { [`${label}.txt`]: `${label}\n` }).id;
+      for (const label of clone.upstream.more ?? []) tip = commit(label, tip, { [`${label}.txt`]: `${label}\n`, ...clone.commitFiles?.[label] }).id;
       folder.upstream = { name: 'origin/main', commit: tip, fetchedAt: at(count + 1) };
+      const fetchedCount = folder.commits.length;
+      for (const label of clone.upstream.unfetched ?? []) tip = commit(label, tip, { [`${label}.txt`]: `${label}\n`, ...clone.commitFiles?.[label] }).id;
+      folder.remote = { commit: tip, commits: folder.commits.splice(fetchedCount), ...(clone.upstream.signIn ? { signIn: true as const } : {}) };
     }
     if (clone.conflict) {
       const first = folder.commits[0]!.id;
@@ -278,6 +287,11 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     for (const [path, text] of Object.entries(clone.edits ?? {})) {
       if (text === null) delete folder.disk[path];
       else folder.disk[path] = text;
+    }
+    if (clone.switchedTo !== undefined) {
+      folder.head.branch = clone.switchedTo;
+      folder.upstream = null;
+      delete folder.remote;
     }
     return folder;
   };

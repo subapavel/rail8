@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -60,6 +60,8 @@ export const httpWorld: Build = async (seed) => {
   git(outer, 'init', '-q');
 
   const ids = new Map<string, string>();
+  // the clones whose upstream's remote asks for credentials, at /sign-in/<folder>.git of the git host
+  const signIns: string[] = [];
   const commit = (clone: string, folder: string, label: string) => {
     git(clone, 'add', '-A');
     zoned(zones.get(folder) ?? 'UTC', clone, 'commit', '-q', '--allow-empty', '-m', label);
@@ -96,19 +98,32 @@ export const httpWorld: Build = async (seed) => {
       git(bare, 'init', '-q', '--bare', '-b', 'main');
       git(clone, 'remote', 'add', 'origin', pathToFileURL(bare).href);
       git(clone, 'push', '-q', 'origin', `${ids.get(`${seeded.folder}/${seeded.upstream.at}`)}:refs/heads/main`);
-      if ((seeded.upstream.more ?? []).length > 0) {
-        const side = join(temp, 'pushers', seeded.folder);
+      // another author's clone, which pushes the upstream's own commits
+      const side = join(temp, 'pushers', seeded.folder);
+      const pushed = async (labels: readonly string[]) => {
+        if (labels.length === 0) return;
         await mkdir(dirname(side), { recursive: true });
-        git(temp, 'clone', '-q', pathToFileURL(bare).href, side);
-        for (const label of seeded.upstream.more ?? []) {
+        if (!existsSync(side)) git(temp, 'clone', '-q', pathToFileURL(bare).href, side);
+        for (const label of labels) {
           await write(join(side, `${label}.txt`), `${label}\n`);
+          for (const [path, text] of Object.entries(seeded.commitFiles?.[label] ?? {})) {
+            if (text === null) await rm(join(side, path));
+            else {
+              await write(join(side, path), text);
+              // a file the clone's .gitignore names is committed all the same, as another author may
+              git(side, 'add', '-f', '--', path);
+            }
+          }
           commit(side, seeded.folder, label);
         }
         git(side, 'push', '-q', 'origin', 'main');
-      }
+      };
+      await pushed(seeded.upstream.more ?? []);
       git(clone, 'fetch', '-q', 'origin');
       git(clone, 'config', 'branch.main.remote', 'origin');
       git(clone, 'config', 'branch.main.merge', 'refs/heads/main');
+      await pushed(seeded.upstream.unfetched ?? []);
+      if (seeded.upstream.signIn) signIns.push(seeded.folder);
     }
     if (seeded.conflict) {
       const first = ids.get(`${seeded.folder}/${(seeded.commits ?? ['first'])[0]}`)!;
@@ -158,6 +173,7 @@ export const httpWorld: Build = async (seed) => {
         await chmod(join(clone, '.git', 'hooks', 'post-commit'), 0o755);
       }
     }
+    if (seeded.switchedTo !== undefined) git(clone, 'checkout', '-q', '-b', seeded.switchedTo);
     if (seeded.indexLock) await writeFile(join(clone, '.git', 'index.lock'), '');
   };
 
@@ -263,6 +279,10 @@ export const httpWorld: Build = async (seed) => {
     hostRequests += 1;
     const url = new URL(req.url ?? '', 'https://localhost');
     const source = (seed.sources ?? []).find((s) => decodeURIComponent(url.pathname).startsWith(`/${s.path}/`));
+    if (url.pathname.startsWith('/sign-in/')) {
+      res.writeHead(401, { 'www-authenticate': 'Basic realm="rail8"' }).end();
+      return;
+    }
     void (async () => {
       if (source?.held) {
         waited = true;
@@ -291,6 +311,7 @@ export const httpWorld: Build = async (seed) => {
   const hostPort = await listen(host);
   // the author's git trusts the host's certificate through their own config, as for a host of their company
   await appendFile(join(home, '.gitconfig'), `[http "https://localhost:${hostPort}"]\n\tsslCAInfo = ${join(tls, 'host.crt')}\n`);
+  for (const folder of signIns) git(join(work, folder), 'remote', 'set-url', 'origin', `https://localhost:${hostPort}/sign-in/${folder}.git`);
   if (seed.author?.config !== undefined) await appendFile(join(home, '.gitconfig'), `${seed.author.config.replaceAll('{port}', String(hostPort))}\n`);
 
   // the node: what it runs, by repository, as a deploy changes it

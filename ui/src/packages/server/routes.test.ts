@@ -90,6 +90,16 @@ describe('the routes of the git half', () => {
     expect(await call('/git/packages/orders/log', 'POST')).toMatchObject({ status: 405, body: { error: 'GET is the only way to call /git/packages/orders/log' } });
   });
 
+  test('take a fetch, a pull and a push by POST alone; a pull waits among the writes of the working folder, a fetch and a push do not', async () => {
+    const busy: WorkingFolderWrites = () => undefined;
+    const call = await serve({ writes: busy });
+    for (const route of ['fetch', 'pull', 'push']) {
+      expect(await call(`/git/packages/orders/${route}`)).toMatchObject({ status: 405, body: { error: `POST is the only way to call /git/packages/orders/${route}` } });
+    }
+    expect(await call('/git/packages/orders/pull', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
+    expect(await call('/git/packages/orders/push', 'POST', '{}')).toMatchObject({ status: 400, body: { error: 'the request names no branch' } });
+  });
+
   test('refuse a commit with 403 while the working folder is read-only, before its body is read', async () => {
     const call = await serve({ writable: false });
     expect(await call('/git/packages/orders/commit', 'POST', 'not json')).toMatchObject({

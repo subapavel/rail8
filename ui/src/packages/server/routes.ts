@@ -3,14 +3,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
 import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
-import type { CloneAnswer, PackageList } from '../api.ts';
-import { cloneSourceOf, CLONE_REFUSALS } from '../rules.ts';
+import type { CloneAnswer, PackageList, PackageState } from '../api.ts';
+import { cloneSourceOf, CLONE_REFUSALS, REMOTE_REFUSALS } from '../rules.ts';
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
+import { fetchRemote, pullRemote, pushRemote, remoteBodyOf, RemoteRefused } from './remote.ts';
 import type { Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
 
@@ -63,6 +64,16 @@ const PREFIX = '/git';
  *   working folder; 503 when the server is closing; 422 with git's `output` when git fails, and over the size limit;
  *   504 past 300 s. It holds one admission of the working folder's writes for its whole run, and the lock only for
  *   the move into place.
+ * - `POST …/{repository}/fetch` `{}`: 200 `{package}`, a fetch of the branch's remote (see {@link fetchRemote}).
+ * - `POST …/{repository}/pull` `{branch, head, upstream}`: 200 `{head, changed, package}`, a fetch and a fast-forward
+ *   to the upstream under the working folder's lock (see {@link pullRemote}), with 503 before its body is read while
+ *   9 writes of the working folder are under way.
+ * - `POST …/{repository}/push` `{branch, head, upstream}`: 200 `{pushed, package}`, a push of `head` to the upstream's
+ *   branch (see {@link pushRemote}).
+ *
+ *   Each of the three is refused with 403 under RAIL8_READ_ONLY=true and with 413 for a body over 1 MiB, and answers
+ *   `package: null` and `problem` when the package's state cannot be read after it; a refusal of git carries its
+ *   `output`. Fetch and push take no lock of the working folder, as they change no file of it.
  *
  * A revision is `work` or a commit of 40 hex digits, never a name such as `HEAD`. Under a package, 400 refuses a
  * malformed repository name, revision or path, or a path with a `.git` segment; 404 a folder that is no package, a
@@ -114,6 +125,37 @@ export function gitPackages(options: GitPackagesOptions) {
         return { ...done, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
       }
     });
+  };
+
+  /** `done` with the package's state after `what`, or `package: null` and the reason when that cannot be read. */
+  const withState = async <T extends object>(req: IncomingMessage, clone: string, repository: string, what: string, done: T): Promise<T & { package: PackageState | null; problem?: string }> => {
+    try {
+      return { ...done, package: await stateOf(options.git, clone, repository, nodeState(req)) };
+    } catch (error) {
+      const unread = `the package's state could not be read after ${what}: ${error instanceof Error ? error.message : String(error)}`;
+      const before = (done as { problem?: string }).problem;
+      return { ...done, package: null, problem: before === undefined ? unread : `${before}; ${unread}` };
+    }
+  };
+
+  const remote = async (req: IncomingMessage, repository: string, route: 'fetch' | 'pull' | 'push') => {
+    if (!options.writable) throw new Refusal(403, REMOTE_REFUSALS.readOnly(route === 'fetch' ? 'fetched' : route === 'pull' ? 'pulled' : 'pushed'));
+    if (route === 'pull') {
+      return admitted(options.writes, async (lock) => {
+        const body = remoteBodyOf(await jsonBody(req));
+        const clone = await cloneIn(repository);
+        return withState(req, clone, repository, 'the pull', await pullRemote(options.git, lock, clone, repository, body));
+      });
+    }
+    const body = await jsonBody(req);
+    if (route === 'fetch') {
+      const clone = await cloneIn(repository);
+      await fetchRemote(options.git, clone);
+      return withState(req, clone, repository, 'the fetch', {});
+    }
+    const asked = remoteBodyOf(body);
+    const clone = await cloneIn(repository);
+    return withState(req, clone, repository, 'the push', { pushed: await pushRemote(options.git, clone, asked) });
   };
 
   let cloning = false;
@@ -196,7 +238,8 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
-    const method = under?.[2] === 'commit' || under?.[2] === 'deploy' ? 'POST' : 'GET';
+    const writes = ['commit', 'deploy', 'fetch', 'pull', 'push'];
+    const method = under?.[2] !== undefined && writes.includes(under[2]) ? 'POST' : 'GET';
     if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
     if (under === null) return { value: await list(req) };
     let repository: string;
@@ -205,6 +248,7 @@ export function gitPackages(options: GitPackagesOptions) {
     } catch {
       throw new Refusal(400, 'the repository name is not well encoded');
     }
+    if (under[2] === 'fetch' || under[2] === 'pull' || under[2] === 'push') return { value: await remote(req, repository, under[2]) };
     if (method === 'POST') return { value: await (under[2] === 'commit' ? commit(req, repository) : deploy(req, repository)) };
     return one(req, repository, under[2], url.searchParams);
   };
@@ -226,7 +270,7 @@ export function gitPackages(options: GitPackagesOptions) {
       (error: unknown) => {
         if (res.headersSent) sendFailure(res, error);
         else if (isSessionRefused(error)) refusedSession(res, error);
-        else if (error instanceof CommitRefused || error instanceof CloneRefused) send(res, error.status, { error: error.message, output: error.output });
+        else if (error instanceof CommitRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { error: error.message, output: error.output });
         else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });
         else sendFailure(res, error);
       },

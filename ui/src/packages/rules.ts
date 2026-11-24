@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Kind, PackageRow } from './api';
+import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Kind, PackageRow, RemoteBody } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -127,6 +127,32 @@ export function deployBodyOf(body: unknown): DeployBody | { status: 400; error: 
   }
   return { commit, check, expect };
 }
+
+/**
+ * `body` as a pull or a push takes it, or its refusal (400): the branch is text; `head` is 40 hex digits; `upstream` is
+ * the upstream's name as the package's state gave it, such as `origin/main`, or null when it gave none.
+ */
+export function remoteBodyOf(body: unknown): RemoteBody | { status: 400; error: string } {
+  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+  const { branch, head, upstream } = body;
+  if (typeof branch !== 'string' || branch === '') return { status: 400, error: 'the request names no branch' };
+  if (typeof head !== 'string' || !isCommitId(head)) return { status: 400, error: 'head is no commit of 40 hex digits' };
+  if (upstream !== null && (typeof upstream !== 'string' || upstream === '')) return { status: 400, error: 'upstream is neither null nor a name' };
+  return { branch, head, upstream };
+}
+
+/** What a fetch, a pull and a push answer when they are refused, in both halves. */
+export const REMOTE_REFUSALS = {
+  readOnly: (what: 'fetched' | 'pulled' | 'pushed') => `this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was ${what}`,
+  detached: 'HEAD is detached: fetch, pull and push work on a branch, which a terminal can switch to',
+  stale: 'the clone is no longer at the branch, HEAD and upstream you saw; nothing was done',
+  noUpstream: 'the branch has no upstream: push it once in a terminal with git push -u <remote> <branch>, then fetch, pull and push here',
+  diverged: 'the branch and its upstream have diverged: merge or rebase in a terminal; nothing was pulled',
+  overwrites: 'git would not fast-forward, as git says, as when it would overwrite a file on disk: commit, move or remove that file, then pull again; nothing was pulled',
+  rejected: 'the remote rejected the push, as git says; nothing was pushed',
+  failed: (what: 'fetch' | 'push') =>
+    `git could not ${what}, as git says: if git could not sign in or does not know the host's key, run git ${what} in a terminal, where it can ask, then try again`,
+} as const;
 
 /** The longest actor a header names, as the node takes it. */
 export const MAX_ACTOR = 128;

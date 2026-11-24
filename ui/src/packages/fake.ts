@@ -8,11 +8,15 @@ import {
   type CommitAnswer,
   type DeployAnswer,
   type Deployed,
+  type FetchAnswer,
   type FileVersion,
   type PackageList,
   type PackageRow,
   type PackagesApi,
   type PackageState,
+  type PullAnswer,
+  type PushAnswer,
+  type RemoteBody,
 } from './api';
 import {
   actorOf,
@@ -37,6 +41,8 @@ import {
   READ_LIMIT,
   readForKind,
   REASONS,
+  REMOTE_REFUSALS,
+  remoteBodyOf,
   statusCompared,
   unstageCommand,
   statusOf,
@@ -66,6 +72,11 @@ export interface FakeFolder {
   head: { branch: string | null; commit: string | null };
   /** The branch's upstream: its name, the commit its remote-tracking branch names, and the time of the last fetch. */
   upstream: { name: string; commit: string; fetchedAt: string | null } | null;
+  /**
+   * The upstream's remote, as a fetch and a push find it (by default, at the commit the upstream names): the commit its
+   * branch names, the commits it holds that the clone lacks, and whether it asks for credentials, which git has none of.
+   */
+  remote?: FakeRemote;
   /** The files of the index and of the disk, by path. */
   index: Record<string, string>;
   disk: Record<string, string>;
@@ -86,6 +97,13 @@ export interface FakeFolder {
   meanwhile?: string;
   /** What a terminal does just after the next commit ends: a commit that adds `<commits>.txt`, and files written and staged, by path. */
   afterwards?: { commits?: string; stages?: Record<string, string>; amends?: string };
+}
+
+/** The remote of a fake clone's upstream. */
+export interface FakeRemote {
+  commit: string;
+  commits: FakeCommit[];
+  signIn?: true;
 }
 
 /** The fake working folder's lock: it runs each work once every work given to it before has settled, first in, first out. */
@@ -192,6 +210,9 @@ function reach(folder: FakeFolder, id: string): Set<string> {
   }
   return reached;
 }
+
+/** `folder` with the commits of its remote too, which a push and a fetch compare against. */
+const withRemote = (folder: FakeFolder): FakeFolder => ({ ...folder, commits: [...folder.commits, ...(folder.remote?.commits ?? [])] });
 
 /** How many commits `from` reaches that `to` does not. */
 function beyond(folder: FakeFolder, from: string, to: string): number {
@@ -404,6 +425,31 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       artifacts: artifacts.artifacts,
       truncated: compared.length > MAX_LISTED || artifacts.truncated,
     };
+  };
+
+  /** The package `repository` for a fetch, a pull or a push, refused as the real half refuses it before it reads the clone. */
+  const remoteOf = (repository: string, what: 'fetched' | 'pulled' | 'pushed'): FakeFolder => {
+    if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+    if (state.git !== null) throw refused(503, state.git);
+    if (!state.writable) throw refused(403, REMOTE_REFUSALS.readOnly(what));
+    return packageOf(repository);
+  };
+  /** The remote of `folder`'s upstream once the clone is checked as the real half checks it, with the body of a pull or a push. */
+  const remoteChecked = (folder: FakeFolder, body: RemoteBody | null): FakeRemote => {
+    const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
+    if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal first`);
+    if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
+    if (folder.head.branch === null) throw refused(409, REMOTE_REFUSALS.detached);
+    const upstream = folder.head.commit === null ? null : folder.upstream;
+    if (body !== null && (folder.head.branch !== body.branch || folder.head.commit !== body.head || (upstream?.name ?? null) !== body.upstream)) throw refused(412, REMOTE_REFUSALS.stale);
+    if (upstream === null) throw refused(409, REMOTE_REFUSALS.noUpstream);
+    return (folder.remote ??= { commit: upstream.commit, commits: [] });
+  };
+  /** A fetch of `remote` into `folder`: its commits, its branch's commit as the upstream's, and the time of the fetch. */
+  const fetched = (folder: FakeFolder, remote: FakeRemote) => {
+    if (remote.signIn) throw new PackagesError(422, REMOTE_REFUSALS.failed('fetch'), undefined, "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled");
+    for (const commit of remote.commits.splice(0)) if (!folder.commits.some((c) => c.id === commit.id)) folder.commits.push(commit);
+    folder.upstream = { ...folder.upstream!, commit: remote.commit, fetchedAt: new Date().toISOString() };
   };
 
   let cloning = false;
@@ -712,6 +758,65 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         replaces,
         package: await stateOf(folder),
       };
+    },
+    async fetch(repository): Promise<FetchAnswer> {
+      const folder = remoteOf(repository, 'fetched');
+      const remote = remoteChecked(folder, null);
+      fetched(folder, remote);
+      return { package: await stateOf(folder) };
+    },
+    async pull(repository, body): Promise<PullAnswer> {
+      const folder = remoteOf(repository, 'pulled');
+      const asked = remoteBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      fetched(folder, remoteChecked(folder, asked));
+      return lock(async () => {
+        remoteChecked(folder, asked);
+        const target = folder.upstream!.commit;
+        if (reach(folder, asked.head).has(target)) return { head: asked.head, changed: [], package: await stateOf(folder) };
+        if (!reach(folder, target).has(asked.head)) throw refused(409, REMOTE_REFUSALS.diverged);
+        const [older, newer] = [filesOf(folder, asked.head), filesOf(folder, target)];
+        const paths = sorted(new Set([...Object.keys(older), ...Object.keys(newer)])).filter((p) => older[p] !== newer[p]);
+        // as git merge --ff-only --no-overwrite-ignore refuses: a path it changes that differs from HEAD on disk or in the index
+        const changedHere = paths.filter((p) => p in older && (folder.disk[p] !== older[p] || folder.index[p] !== older[p]));
+        const inTheWay = paths.filter((p) => !(p in older) && p in folder.disk);
+        if (changedHere.length > 0 || inTheWay.length > 0) {
+          const said = [
+            ...(changedHere.length === 0 ? [] : ['error: Your local changes to the following files would be overwritten by merge:', ...changedHere.map((p) => `\t${p}`), 'Please commit your changes or stash them before you merge.']),
+            ...(inTheWay.length === 0 ? [] : ['error: The following untracked working tree files would be overwritten by merge:', ...inTheWay.map((p) => `\t${p}`), 'Please move or remove them before you merge.']),
+            'Aborting',
+          ];
+          throw new PackagesError(409, REMOTE_REFUSALS.overwrites, undefined, said.join('\n'));
+        }
+        for (const p of paths) {
+          if (p in newer) {
+            folder.disk[p] = newer[p]!;
+            folder.index[p] = newer[p]!;
+          } else {
+            delete folder.disk[p];
+            delete folder.index[p];
+          }
+        }
+        folder.head.commit = target;
+        return { head: target, changed: paths.map((p) => `${folder.name}/${p}`), package: await stateOf(folder) };
+      });
+    },
+    async push(repository, body): Promise<PushAnswer> {
+      const folder = remoteOf(repository, 'pushed');
+      const asked = remoteBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      const remote = remoteChecked(folder, asked);
+      const upstream = folder.upstream!;
+      const ref = `refs/heads/${upstream.name.slice(upstream.name.indexOf('/') + 1)}`;
+      if (remote.signIn) throw new PackagesError(422, REMOTE_REFUSALS.failed('push'), undefined, "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled");
+      if (!reach(withRemote(folder), asked.head).has(remote.commit)) {
+        const why = remote.commit === upstream.commit ? 'non-fast-forward' : 'fetch first';
+        throw new PackagesError(409, REMOTE_REFUSALS.rejected, undefined, `To https://git.example.com/${folder.name}.git\n!\t${asked.head}:${ref}\t[rejected] (${why})\nDone\nerror: failed to push some refs to 'https://git.example.com/${folder.name}.git'`);
+      }
+      const from = upstream.commit;
+      remote.commit = asked.head;
+      upstream.commit = asked.head;
+      return { pushed: { ref, from, to: asked.head }, package: await stateOf(folder) };
     },
     async list(): Promise<PackageList> {
       if (state.foreignPage) throw new PackagesError(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
