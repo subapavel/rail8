@@ -158,7 +158,7 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
   const { send, reload, timer } = deps;
   let current: SessionState = { kind: 'starting' };
   const listeners = new Set<() => void>();
-  // the id the page names, and whether it does: false until a session-mode answer, and in token mode
+  // the id the page names: null until a session-mode answer, and in token mode
   let id: string | null = null;
   // set by the first 401 of a call: from then on nothing new is sent
   let stopped = false;

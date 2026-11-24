@@ -1,6 +1,6 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard } from '@ant-design/pro-components';
-import { Alert, Badge, Button, Col, Descriptions, Empty, Flex, Row, Statistic, Tag, theme, Typography } from 'antd';
+import { Alert, Badge, Button, Col, Descriptions, Empty, Flex, Row, Statistic, Tag, theme, Tooltip, Typography } from 'antd';
 import { useId, useState, type ReactNode } from 'react';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
@@ -180,7 +180,9 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
               {readable === true ? (
                 <Statistic title="Deployed" value={deployed.text} prefix={<Badge status={deployed.status} />} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
               ) : (
-                <Statistic title="Deployed" value="-" suffix={<Typography.Text type="secondary">{readable}</Typography.Text>} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+                <Tooltip title={readable}>
+                  <Statistic title="Deployed" value="-" styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+                </Tooltip>
               )}
               <Statistic title="Changed files" value={state.changes.length} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
             </Flex>

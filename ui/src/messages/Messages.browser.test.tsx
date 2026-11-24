@@ -1,6 +1,8 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import { SessionGate } from '../SessionGate';
+import { sessionClient, type Me } from '../session';
 import { Shell } from '../Shell';
 import { AdminError, type AdminApi, type Listed, type ListQuery, type StepRecord, type Timeline } from './admin';
 import { messagesScreen } from './screen';
@@ -77,6 +79,40 @@ function render(api: AdminApi) {
   document.body.append(host);
   root = createRoot(host);
   root.render(<Shell screens={[messagesScreen(api, () => NOW)]} start="messages" />);
+}
+
+/** An operator whose session may read messages but neither restart them nor see their bodies. */
+const READER: Me = {
+  name: 'anna',
+  kind: 'person',
+  roles: ['viewer'],
+  actions: ['message.read'],
+  refused: {
+    'message.retry': { code: 'not-allowed', needs: ['operator', 'administrator'] },
+    'message.body': { code: 'not-allowed', needs: ['operator', 'administrator'] },
+  },
+  via: 'session',
+  firstPassword: false,
+  expiresAt: '2026-11-19T20:00:00Z',
+  emergencyKey: false,
+  session: '0123456789abcdef',
+};
+
+/** The screen behind the session gate, for a session that `GET /session` answers with `me`. */
+function renderAs(api: AdminApi, me: Me) {
+  const client = sessionClient({
+    send: (async () => new Response(JSON.stringify(me), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
+    reload: () => undefined,
+    timer: () => new Promise(() => undefined),
+  });
+  host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+  root.render(
+    <SessionGate client={client}>
+      <Shell screens={[messagesScreen(api, () => NOW)]} start="messages" />
+    </SessionGate>,
+  );
 }
 
 afterEach(() => {
@@ -268,6 +304,14 @@ describe('Messages', () => {
     await page.getByRole('button', { name: 'Restart' }).click();
     await expect.element(page.getByText('The restart was refused', { exact: false })).toBeVisible();
     await expect.element(page.getByText('flow demo/orders is not at-least-once')).toBeVisible();
+  });
+
+  test('disables Restart and the payloads for a session that may not use them', async () => {
+    const api = fakeApi();
+    renderAs(api, READER);
+    await page.getByRole('button', { name: 'm-1' }).click();
+    await expect.element(page.getByRole('button', { name: 'Restart' })).toBeDisabled();
+    await expect.element(page.getByRole('button', { name: 'Show the payload after step 1 of attempt 1' })).toBeDisabled();
   });
 
   test('offers no restart when the latest attempt went through', async () => {
