@@ -1,5 +1,6 @@
 import { PartitionOutlined } from '@ant-design/icons';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Page } from '../Page';
 import type { Screen, UnsavedChanges } from '../screens';
 import type { ApiClient } from './api/client';
 import { MappingList } from './list/MappingList';
@@ -57,11 +58,13 @@ export function mappingsScreen(api: ApiClient, browserState: BrowserStateStore):
     title: 'Mappings',
     render: (open) => (
       <QueryClientProvider client={queryClient}>
-        <MappingList
-          api={api}
-          onOpen={(id) => open(mappingTab(api, browserState, id, { onSaved }))}
-          onCreated={(id) => open(mappingTab(api, browserState, id, { editing: true, onSaved }))}
-        />
+        <Page title={false}>
+          <MappingList
+            api={api}
+            onOpen={(id) => open(mappingTab(api, browserState, id, { onSaved }))}
+            onCreated={(id) => open(mappingTab(api, browserState, id, { editing: true, onSaved }))}
+          />
+        </Page>
       </QueryClientProvider>
     ),
   };

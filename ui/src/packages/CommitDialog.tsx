@@ -4,7 +4,7 @@ import { useId, useState } from 'react';
 import { MountedModal } from '../MountedModal';
 import { useWorkingFiles, type WorkingFile } from '../workingFiles';
 import { PackagesError, type Change, type CommitAnswer, type PackagesApi, type PackageState } from './api';
-import { short } from './PackageList';
+import { short } from './parts';
 
 export interface CommitDialogProps {
   api: PackagesApi;
