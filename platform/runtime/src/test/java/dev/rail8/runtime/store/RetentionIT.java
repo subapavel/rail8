@@ -438,7 +438,7 @@ class RetentionIT {
         assertEquals(cutoff, run.cutoff(), "the injected clock minus the max age");
         assertEquals(List.of(3L, 2L, 4L, 1000L, 0L), List.of(run.messages(), run.keys(), run.bodies(), run.bodyBytes(), run.kept()),
                 "messages, keys, bodies, bodyBytes, kept");
-        assertEquals(5, run.batches(), "one batch per phase, five phases: each scans fewer rows than the batch");
+        assertEquals(6, run.batches(), "one batch per phase, six phases: each scans fewer rows than the batch");
         Retention.Totals t = r.totals();
         assertEquals(List.of(1L, 0L, 0L, 3L, 2L, 4L, 1000L), List.of((long) t.runs(), (long) t.skipped(), (long) t.failed(), (long) t.messages(),
                 (long) t.keys(), (long) t.bodies(), (long) t.bodyBytes()),
@@ -596,8 +596,8 @@ class RetentionIT {
                 "two rows per transaction, one table per transaction, phase after phase: the batch bounds every delete");
         long unlocked = db.query("select count(*) from deleted_in where not advisory").execute().await().iterator().next().getLong(0);
         assertEquals(0L, unlocked, "every deleting transaction held the advisory lock while it deleted");
-        assertEquals(9, run.batches(), "3 batches per phase of messages and bodies: 2 rows, 2 rows, then 0 rows (fewer than the batch ends "
-                + "the phase); one empty batch for each of the audit, the sessions and the login limit");
+        assertEquals(10, run.batches(), "3 batches per phase of messages and bodies: 2 rows, 2 rows, then 0 rows (fewer than the batch ends "
+                + "the phase); one empty batch for each of the audit, the sessions, the tokens and the login limit");
     }
 
     /**
@@ -634,8 +634,8 @@ class RetentionIT {
                 "each message's two messages rows and its key row are deleted in one transaction, never split across batches");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(4L, 2L, 0L), List.of(run.messages(), run.keys(), run.kept()), "messages, keys, kept");
-        assertEquals(6, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
-                + "one for bodies, one for each of the audit, the sessions and the login limit");
+        assertEquals(7, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
+                + "one for bodies, one for each of the audit, the sessions, the tokens and the login limit");
     }
 
     @Test
@@ -652,8 +652,8 @@ class RetentionIT {
         assertEquals(seededWithout("messages d-1@0", "messages d-2@0"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(2L, 3L), List.of(run.messages(), run.kept()), "messages, kept");
-        assertEquals(7, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies, then one "
-                + "for each of the audit, the sessions and the login limit");
+        assertEquals(8, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies, then one "
+                + "for each of the audit, the sessions, the tokens and the login limit");
     }
 
     /** The bodies phase passes kept rows the same way: its cursor moves past the head it keeps. */
@@ -671,8 +671,8 @@ class RetentionIT {
         assertEquals(seededWithout("body o-1/0/body", "body o-2/0/body"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(0L, 2L), List.of(run.messages(), run.bodies()), "messages, bodies");
-        assertEquals(7, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
-                + "a cursor that went back would scan more batches; then one for each of the audit, the sessions and the login limit");
+        assertEquals(8, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
+                + "a cursor that went back would scan more batches; then one for each of the audit, the sessions, the tokens and the login limit");
     }
 
     /**

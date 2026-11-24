@@ -11,18 +11,21 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The forms of the admin API's credentials: {@code rail8s_<id>_<secret>} a session, {@code rail8k_<secret>} the emergency key;
+ * The forms of the admin API's credentials: {@code rail8s_<id>_<secret>} a session, {@code rail8t_<id>_<secret>} a token,
+ * {@code rail8k_<secret>} the emergency key;
  * {@code <id>} is 16 lowercase hex digits, {@code <secret>} 43 base64url characters (256 random bits). Each is stored only as
  * its fingerprint: SHA-256 of the whole string in UTF-8.
  */
 final class Credentials {
 
     static final String SESSION = "rail8s_";
+    static final String TOKEN = "rail8t_";
     static final String KEY = "rail8k_";
     /** The fingerprint an unknown id is compared with, so both paths take the same time. */
     static final String DUMMY_FINGERPRINT = "0".repeat(64);
 
     private static final Pattern SESSION_FORM = Pattern.compile("rail8s_([0-9a-f]{16})_[A-Za-z0-9_-]{43}");
+    private static final Pattern TOKEN_FORM = Pattern.compile("rail8t_([0-9a-f]{16})_[A-Za-z0-9_-]{43}");
     private static final Pattern KEY_FORM = Pattern.compile("rail8k_[A-Za-z0-9_-]{43}");
 
     private Credentials() {}
@@ -40,6 +43,12 @@ final class Credentials {
     /** The id of a session credential, read by position; empty for any other form. */
     static Optional<String> sessionId(String value) {
         Matcher m = SESSION_FORM.matcher(value);
+        return m.matches() ? Optional.of(m.group(1)) : Optional.empty();
+    }
+
+    /** The id of a token, read by position; empty for any other form. */
+    static Optional<String> tokenId(String value) {
+        Matcher m = TOKEN_FORM.matcher(value);
         return m.matches() ? Optional.of(m.group(1)) : Optional.empty();
     }
 

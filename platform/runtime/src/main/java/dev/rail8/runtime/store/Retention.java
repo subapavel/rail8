@@ -23,7 +23,7 @@ import java.util.Set;
 
 /**
  * The retention job: deletes what is older than the max age, in keyset batches, in the background. A run fixes its
- * cutoffs once — the injected clock minus the max ages, never the server's {@code now()} — and runs five phases, each in batches of
+ * cutoffs once — the injected clock minus the max ages, never the server's {@code now()} — and runs six phases, each in batches of
  * at most {@link Config#batch} scanned rows, one transaction per batch whose first statement tries the advisory lock
  * {@link #LOCK_KEY} without waiting:
  * <ol>
@@ -40,6 +40,7 @@ import java.util.Set;
  *   <li>{@code audit}: a row whose {@code at} is older than the clock minus {@link Config#auditMaxAge}.</li>
  *   <li>{@code sessions}: a session that expired longer ago than the audit's max age (a session that ended otherwise has no
  *       row any more).</li>
+ *   <li>{@code tokens}: a token that expired, or was revoked, longer ago than the audit's max age.</li>
  *   <li>{@code login_limits}: a row without a failure for {@link #LIMITS_KEPT}; its longest wait is far shorter.</li>
  * </ol>
  * A phase ends with the batch that scanned fewer rows than the batch size. The lock found taken ends the run {@link Outcome#SKIPPED}
@@ -149,12 +150,13 @@ public final class Retention {
      * @param kept messages rows older than the cutoff the run kept (a newer row of the message, a work or a DLQ row)
      * @param audit audit rows deleted
      * @param sessions expired sessions deleted
+     * @param tokens expired or revoked tokens deleted
      * @param limits rows of the login limit deleted
      * @param batches transactions the run began, the last, short one of each phase included
      * @since 0.1
      */
     public record Run(Instant cutoff, Outcome outcome, long messages, long keys, long bodies, long bodyBytes, long kept,
-                      long audit, long sessions, long limits, int batches) {}
+                      long audit, long sessions, long tokens, long limits, int batches) {}
 
     /**
      * The sums over every run that ended since the job was built.
@@ -283,6 +285,12 @@ public final class Retention {
                 with gone as (
                     delete from sessions s using (select id from sessions where expires_at < $1 limit $2) x
                      where s.id = x.id and s.expires_at < $1
+                     returning 1)
+                select count(*) from gone"""),
+        TOKENS("""
+                with gone as (
+                    delete from tokens t using (select id from tokens where expires_at < $1 or revoked_at < $1 limit $2) x
+                     where t.id = x.id and (t.expires_at < $1 or t.revoked_at < $1)
                      returning 1)
                 select count(*) from gone"""),
         LIMITS("""
@@ -453,7 +461,7 @@ public final class Retention {
         }
         LOG.log(System.Logger.Level.INFO, "retention run " + outcome + " (cutoff " + cutoff + "): deleted " + run.messages() + " messages rows, "
                 + run.keys() + " key rows, " + run.bodies() + " bodies of " + run.bodyBytes() + " bytes, " + run.audit() + " audit rows, "
-                + run.sessions() + " expired sessions, " + run.limits() + " login limit rows; kept " + run.kept() + " messages rows; "
+                + run.sessions() + " expired sessions, " + run.tokens() + " tokens, " + run.limits() + " login limit rows; kept " + run.kept() + " messages rows; "
                 + run.batches() + " batches");
         return run;
     }
@@ -536,7 +544,7 @@ public final class Retention {
             int m = Phase.MESSAGES.ordinal();
             int b = Phase.BODIES.ordinal();
             return new Run(cutoff, outcome, deleted[m], extra[m], deleted[b], extra[b], kept[m], swept[Sweep.AUDIT.ordinal()],
-                    swept[Sweep.SESSIONS.ordinal()], swept[Sweep.LIMITS.ordinal()], batches);
+                    swept[Sweep.SESSIONS.ordinal()], swept[Sweep.TOKENS.ordinal()], swept[Sweep.LIMITS.ordinal()], batches);
         }
     }
 }
