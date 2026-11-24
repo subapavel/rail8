@@ -180,9 +180,12 @@ class BuiltinsMathV1Test {
 
   @Test
   void theDrawsReachEveryEdgeEveryKindAndRandomBits() {
-    String all = String.join("\n", generated.stream().map(BuiltinsMathV1.Generated::filter).toList());
-    for (String edge : BuiltinsMathV1.EDGES) assertThat(all).as(edge).contains(edge);
-    for (String kind : BuiltinsMathV1.KINDS) assertThat(all).as(kind).contains(kind);
-    assertThat(Pattern.compile("[0-9]E-?[0-9]").matcher(all).results().count()).as("doubles from random bits").isGreaterThan(200);
+    Set<String> drawn = new HashSet<>();
+    for (BuiltinsMathV1.Generated g : generated) {
+      drawn.addAll(g.values());
+      for (String v : g.values()) assertThat(body(g)).as("seed %d", g.seed()).contains(v);
+    }
+    assertThat(drawn).containsAll(BuiltinsMathV1.EDGES).containsAll(BuiltinsMathV1.KINDS);
+    assertThat(drawn.stream().filter(v -> v.contains("E"))).as("doubles from random bits").hasSizeGreaterThan(200);
   }
 }
