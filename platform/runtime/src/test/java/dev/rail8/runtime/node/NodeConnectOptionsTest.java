@@ -74,7 +74,7 @@ class NodeConnectOptionsTest {
      * session in {@code pg_stat_activity} names the pool or connection it belongs to.
      */
     @ParameterizedTest(name = "role {0}")
-    @ValueSource(strings = {"intake", "work", "membership", "listen"})
+    @ValueSource(strings = {"intake", "work", "access", "membership", "listen"})
     void everyRoleCarriesThePinsTlsAndItsName(String role) {
         PgConnectOptions options = Node.connectOptions(TLS, role, "node-7");
         Map<String, String> startup = options.getProperties();

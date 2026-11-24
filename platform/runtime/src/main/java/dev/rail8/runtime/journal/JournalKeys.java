@@ -13,6 +13,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.InvalidKeyException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Map;
@@ -109,8 +110,7 @@ public final class JournalKeys implements IntFunction<SecretKey> {
         byte[] nonce = new byte[NONCE_BYTES];
         random.nextBytes(nonce);
         try {
-            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-            c.init(Cipher.ENCRYPT_MODE, master, new GCMParameterSpec(TAG_BITS, nonce));
+            Cipher c = cipher(Cipher.ENCRYPT_MODE, new GCMParameterSpec(TAG_BITS, nonce));
             c.updateAAD(aad(id, tenant));
             byte[] sealed = c.doFinal(key);
             return ByteBuffer.allocate(NONCE_BYTES + sealed.length).put(nonce).put(sealed).array();
@@ -119,12 +119,22 @@ public final class JournalKeys implements IntFunction<SecretKey> {
         }
     }
 
+    /**
+     * AES/GCM under the master key in {@code mode}. A master key that is no AES key is refused here, whatever providers the
+     * JVM holds: one that takes any key's bytes as AES never sees it.
+     */
+    private Cipher cipher(int mode, GCMParameterSpec spec) throws GeneralSecurityException {
+        if (!"AES".equalsIgnoreCase(master.getAlgorithm())) throw new InvalidKeyException("the master key is no AES key: " + master.getAlgorithm());
+        Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+        c.init(mode, master, spec);
+        return c;
+    }
+
     private SecretKey unwrap(int id, String tenant, byte[] wrapped) throws JournalKeyException {
         byte[] key = null;
         try {
             if (wrapped.length != NONCE_BYTES + KEY_BYTES + TAG_BITS / 8) throw new GeneralSecurityException("a wrapped key of " + wrapped.length + " bytes");
-            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-            c.init(Cipher.DECRYPT_MODE, master, new GCMParameterSpec(TAG_BITS, wrapped, 0, NONCE_BYTES));
+            Cipher c = cipher(Cipher.DECRYPT_MODE, new GCMParameterSpec(TAG_BITS, wrapped, 0, NONCE_BYTES));
             c.updateAAD(aad(id, tenant));
             key = c.doFinal(wrapped, NONCE_BYTES, wrapped.length - NONCE_BYTES);
             return new SecretKeySpec(key, "AES");

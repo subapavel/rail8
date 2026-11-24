@@ -2,6 +2,7 @@ package dev.rail8.runtime;
 
 import dev.rail8.components.http.HttpComponent;
 import dev.rail8.core.flow.FlowWorker;
+import dev.rail8.runtime.access.Argon2id;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.GitRepos;
@@ -44,6 +45,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -690,6 +692,36 @@ class NodePoolWaitIT {
             HttpResponse<String> listed = NodeIT.send(client, "GET", node.adminPort(), "/admin/packages", new byte[0], "application/json");
             assertTrue(listed.statusCode() == 200 && new JsonObject(listed.body()).getJsonArray("items").stream()
                     .noneMatch(p -> "demo".equals(((JsonObject) p).getString("name"))), "demo is not listed: " + listed.body());
+        }
+    }
+
+    /**
+     * The work pool held by two parks, {@code RAIL8_PG_POOL_WAIT} PT0.2S: a person's login answers 201 with a session, and a
+     * request of that session answers 200 naming her, while the parks still hold the pool: the admin API's door reads its users
+     * and sessions on a pool of its own.
+     */
+    @Test
+    void aLoginAndARequestOfItsSessionAnswerWhileTheWorkPoolIsHeld() throws Exception {
+        try (HttpClient client = NodeIT.http()) {
+            Node node = startDeployed(client, env("RAIL8_PG_POOL_WAIT", "PT0.2S"));
+            String password = "a password of anna's own";
+            observer.preparedQuery("insert into users (name, kind, source, password, password_set_at, created_at, created_by)"
+                    + " values ('anna', 'person', 'rail8', $1, now(), now(), 'test')").execute(Tuple.of(new Argon2id(new SecureRandom()).hash(password))).await();
+
+            PgConnection locker = lock("dlq");
+            holdTheWorkPool(client, node.httpPort());
+            byte[] login = new JsonObject().put("name", "anna").put("password", password).toBuffer().getBytes();
+            HttpResponse<String> created = NodeIT.send(client, "POST", node.adminPort(), "/admin/sessions", login, "application/json");
+            assertEquals(201, created.statusCode(), "the login does not wait for the work pool: " + created.body());
+            HttpRequest me = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + node.adminPort() + "/admin/me")).timeout(Duration.ofSeconds(20))
+                    .header("authorization", "Bearer " + new JsonObject(created.body()).getString("session")).GET().build();
+            HttpResponse<String> read = client.send(me, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, read.statusCode(), "the session's request does not wait for the work pool: " + read.body());
+            assertEquals("anna", new JsonObject(read.body()).getString("name"), read.body());
+            assertEquals(2, waitingOnALock(WORK), "both answered while the parks still held the work pool");
+
+            locker.query("rollback").execute().await();
+            NodeIT.until(() -> count("select count(*) from dlq") == 2, "the parks go through once the lock is gone");
         }
     }
 

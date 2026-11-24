@@ -44,6 +44,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
+import java.security.Security;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -55,6 +56,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -190,6 +192,21 @@ class SftpRedeliveryIT {
         assertEquals(2, worker.poll().await(), "the worker runs both items");
         assertEquals(List.of("sd-1", "sd-2"), partner.sentTo("partner").stream().map(Envelope::id).sorted().toList(), "two sends to the partner");
         assertEquals(0, count("select count(*) from work"), "both items are completed");
+    }
+
+    /**
+     * Bouncy Castle is on the node's classpath for the hash of the admin API's passwords. After a file went over SFTP no
+     * provider of that name is registered with the JVM, so SSHD, and every cipher the node asks for, stay on the JDK's.
+     */
+    @Test
+    void aFileOverSftpRegistersNoBouncyCastleProvider() throws Exception {
+        Class.forName("org.bouncycastle.jce.provider.BouncyCastleProvider");   // fixture: the jar SSHD would register is here
+        sftp.drop("/inbox", "order.xml", Buffer.buffer("<order id=\"1\"/>"));
+
+        round();
+
+        assertEquals(List.of(new Ack.Accepted("sd-1")), answers, "fixture: the file went over SFTP, saved as sd-1");
+        assertNull(Security.getProvider("BC"), "no Bouncy Castle provider: " + List.of(Security.getProviders()));
     }
 
     @Test

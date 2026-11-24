@@ -216,6 +216,12 @@ Postgres holds everything whose loss would lose a message, and the message histo
 
 Migrations run at node start (Flyway).
 
+A node holds at most `RAIL8_PG_POOL_SIZE` + 4 connections to Postgres, and one more while it deploys or undeploys. The
+intake pool holds the at-least-once saves, and the work pool everything else; the two together make `RAIL8_PG_POOL_SIZE`.
+The admin API checks users and sessions in a pool of two connections of its own, so it lets a deploy or an undeploy in
+while the work pool is busy. The membership and the LISTEN connection have one connection each. Check `max_connections`
+against the number of nodes before upgrading.
+
 ### The body journal
 
 Bodies do not go into Postgres. Each node writes them to an append-only journal on its local disk:
