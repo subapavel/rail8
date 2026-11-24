@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * TLS material made at test time with the JDK's own {@code keytool} (no committed key, no new dependency): a CA and the
- * server certificates it signs, as PEM files a server and its clients read. Keys are EC P-256, valid two days. Nothing here
+ * server certificates it signs, as PEM files a server and its clients read. Keys are EC on secp256r1, valid two days. Nothing here
  * is a secret worth keeping: each run makes fresh material under the caller's directory.
  */
 public final class TestCertificates {
