@@ -2,16 +2,18 @@
 
 A demo stack for GATE checks 1-2 (D-085), not production: the node runs `RAIL8_ENV=dev`. Services: `postgres`, `valkey`
 (persistence off), `sftp-keys` (one-shot: the SFTP host key), `sftp`, `netns` (holds the published ports and the network namespace of the node and the echo), `rail8` (the node), `echo` (the demo's partner),
-`deploy` (one-shot: `rail8 deploy rail8 HEAD --check` reads the state the pool records, then `rail8 deploy rail8 HEAD --expect` it), `clickhouse` under the `history` profile (not wired), and `kafka` (KRaft, the optional event-broker add-on) under the
+`deploy` (one-shot, profile `deploy`: `rail8 deploy rail8 HEAD --check` reads the state the pool records, then `rail8 deploy rail8 HEAD --expect` it), `clickhouse` under the `history` profile (not wired), and `kafka` (KRaft, the optional event-broker add-on) under the
 `kafka` profile, off by default and not wired: a plain `up` does not start it.
 
 ```sh
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am   # the jars the node image and `deploy` use, with the engines they need
 cd deploy/compose
-export RAIL8_ADMIN_TOKEN=$(openssl rand -hex 16)    # required: compose refuses to start without it
+export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency key, required: compose refuses to start without it
 docker compose up -d --build                           # returns once the node is healthy
-docker compose ps -a deploy                            # exited (0) after the demo is deployed
-curl -H "Authorization: Bearer $RAIL8_ADMIN_TOKEN" localhost:8081/admin/packages
+../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
+export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token: it deploys, and reads the deployed packages
+docker compose run --rm deploy                         # exits 0 after the demo is deployed
+curl -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages
 curl -X POST --data-binary @../../examples/demo/fixtures/sample-invoice.xml localhost:8080/http/in   # flow invoice-sync: the reply is the ACK
 curl -X POST --data-binary @../../examples/demo/fixtures/sample-invoice.xml localhost:8080/http/invoice/async   # flow invoice-async: 202 after the durable save
 docker compose --profile history up -d clickhouse      # optional
@@ -32,7 +34,7 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
 
 - The package: the node reads this checkout as the git repository `rail8` (the repository's root mounted read-only at
   `/repos/rail8`, `RAIL8_GIT_BASE=file:///repos/`) and deploys its folder `examples/demo` (`RAIL8_GIT_PATH`). `deploy` deploys
-  the checkout's `HEAD`: a change to the demo is deployed once it is committed, by `docker compose up deploy`. The checkout
+  the checkout's `HEAD`: a change to the demo is deployed once it is committed, by `docker compose run --rm deploy`. The checkout
   needs its full history and its own `.git` folder: a shallow clone or a `git worktree` of Rail8 cannot be deployed from.
 - Admin API and `/health`: `localhost:8081`, plain HTTP under `RAIL8_ADMIN_TLS=off` on the node and on `deploy`, which calls
   `http://rail8:8081` (the node logs a WARNING at its start): the port is published on the host's loopback only. A node other

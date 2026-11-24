@@ -62,7 +62,8 @@ services:
       # the URL senders call that port at, through the port published above; the UI shows it before each endpoint's path
       RAIL8_HTTP_ORIGIN: http://localhost:8080
       RAIL8_ADMIN_HOST: 0.0.0.0
-      # an admin API off loopback needs a token: the node refuses to start without one (export it, docs/QUICKSTART.md)
+      # an admin API off loopback needs a token: the node refuses to start without one. It is the emergency key `rail8 key new` prints
+      # (export it, docs/QUICKSTART.md)
       RAIL8_ADMIN_TOKEN: ${RAIL8_ADMIN_TOKEN:-}
       # plain HTTP on 0.0.0.0, stated: the admin port is published on the host's loopback only, and the stack's network is this
       # host's own; the node logs a WARNING at its start. A node other hosts reach gets RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY

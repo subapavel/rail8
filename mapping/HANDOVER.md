@@ -19,10 +19,11 @@ The Rail8 UI's development server answers the studio's `/api` over its working f
 the engine. The node runs in Docker with its admin API published on `127.0.0.1:8081` only. Build and start it:
 
 ```bash
-./mvnw -B -ntp -q package -DskipTests -pl :rail8-node -am
-export RAIL8_ADMIN_TOKEN=rail8-local
+./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
+export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)
 docker compose up -d --build
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
+bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once
 ```
 
 Copy the corpus into the working folder once, and start the UI in the same terminal. Vite serves on port 5173:
@@ -31,8 +32,11 @@ Copy the corpus into the working folder once, and start the UI in the same termi
 mkdir -p ~/rail8-workspace && cp -r mapping/corpus ~/rail8-workspace/mapping-corpus
 cd ui
 npm ci
-RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
+RAIL8_TOKEN=$(cat ~/.rail8-deploy-token) RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
 ```
+
+The UI runs without a login, as the account `deploy` that `bootstrap` made: its developer role is what the studio's calls
+to the node's mapping module need.
 
 To check that the studio's API answers, print the status code of two GETs in another terminal (each gives `200`):
 

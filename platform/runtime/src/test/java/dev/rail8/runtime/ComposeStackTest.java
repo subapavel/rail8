@@ -140,8 +140,8 @@ class ComposeStackTest {
         services().fields().forEachRemaining(e -> {
             if (!e.getValue().has("profiles")) unprofiled.add(e.getKey());
         });
-        assertEquals(new java.util.TreeSet<>(Set.of("postgres", "valkey", "sftp-keys", "sftp", "netns", "rail8", "echo", "deploy")),
-                unprofiled, "a plain `docker compose up` starts exactly these: everything but kafka and clickhouse");
+        assertEquals(new java.util.TreeSet<>(Set.of("postgres", "valkey", "sftp-keys", "sftp", "netns", "rail8", "echo")),
+                unprofiled, "a plain `docker compose up` starts exactly these: everything but kafka, clickhouse and the deploy one-shot");
     }
 
     @Test
@@ -196,7 +196,8 @@ class ComposeStackTest {
         assertEquals("0.0.0.0", env.get("RAIL8_ADMIN_HOST"));
         String token = env.getOrDefault("RAIL8_ADMIN_TOKEN", "");
         assertTrue(token.startsWith("${RAIL8_ADMIN_TOKEN:?") && token.endsWith("}"),
-                "the token is required from the environment (${RAIL8_ADMIN_TOKEN:?...}), was '" + token + "'");
+                "the emergency key is required from the environment (${RAIL8_ADMIN_TOKEN:?...}), was '" + token + "'");
+        assertFalse(token.contains("rail8k_"), "no fixed key is written in the file: " + token);
         JsonNode dependsOn = node.path("depends_on");
         for (String dependency : List.of("postgres", "valkey")) {
             assertEquals("service_healthy", dependsOn.path(dependency).path("condition").asText(), "the node waits for " + dependency + " healthy");
@@ -231,8 +232,11 @@ class ComposeStackTest {
         assertTrue(command.contains("http://rail8:8081"), "deploy targets the node's admin port: " + command);
         assertEquals("service_healthy", deploy.path("depends_on").path("rail8").path("condition").asText());
         assertEquals("no", deploy.path("restart").asText("no"), "a one-shot is not restarted");
-        assertTrue(environment(deploy).getOrDefault("RAIL8_ADMIN_TOKEN", "").startsWith("${RAIL8_ADMIN_TOKEN:?"),
-                "the CLI reads the same required token");
+        Map<String, String> env = environment(deploy);
+        assertEquals("${RAIL8_TOKEN:-}", env.get("RAIL8_TOKEN"), "the CLI sends the deploy account's token, which the stack's user makes after the node runs");
+        assertFalse(env.containsKey("RAIL8_ADMIN_TOKEN"), "the one-shot never holds the emergency key");
+        assertEquals("off", env.get("RAIL8_ADMIN_TLS"), "plain HTTP to http://rail8:8081 is stated");
+        assertEquals("deploy", deploy.path("profiles").path(0).asText(), "the one-shot waits for the token: it is not part of a plain up");
         assertEquals("service:netns", service("echo").path("network_mode").asText(), "FIX-105: the echo joins the holder's namespace, not the node's");
     }
 
