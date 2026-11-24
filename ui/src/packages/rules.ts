@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
+import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, DiscardBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -107,6 +107,86 @@ export function commitBodyOf(repository: string, body: unknown): CommitBody | { 
   }
   if (chosen.length === 0) return { status: 422, error: 'nothing to commit: no path is chosen' };
   return { message, branch, head, paths: chosen };
+}
+
+/**
+ * `body` as a discard of the package `repository` takes it, or its refusal: 400 when it is malformed (a head that is
+ * neither null nor 40 hex digits; an index other than `clean`, `staged` or null; more than 1000 paths, a path twice, or a
+ * path that is malformed or has a `.git` segment), 404 for a path outside the package, and 422 for no path at all.
+ */
+export function discardBodyOf(repository: string, body: unknown): DiscardBody | { status: 400 | 404 | 422; error: string } {
+  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+  const { head, paths } = body;
+  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return { status: 400, error: 'head is neither null nor a commit of 40 hex digits' };
+  if (!Array.isArray(paths)) return { status: 400, error: 'paths is no list' };
+  if (paths.length > MAX_CHOSEN) return { status: 400, error: `a discard takes at most ${MAX_CHOSEN} paths` };
+  const chosen: DiscardBody['paths'] = [];
+  for (const entry of paths as unknown[]) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.path !== 'string' ||
+      (entry.tag !== null && typeof entry.tag !== 'string') ||
+      (entry.index !== null && entry.index !== 'clean' && entry.index !== 'staged')
+    ) {
+      return { status: 400, error: 'each path is {path, tag, index}, its tag a text or null, its index clean, staged or null' };
+    }
+    const found = inPackage(repository, entry.path);
+    if ('error' in found) return found;
+    if (chosen.some((c) => c.path === entry.path)) return { status: 400, error: `${entry.path} is chosen twice` };
+    chosen.push({ path: entry.path, tag: entry.tag, index: entry.index });
+  }
+  if (chosen.length === 0) return { status: 422, error: 'nothing to discard: no path is chosen' };
+  return { head, paths: chosen };
+}
+
+/**
+ * The paths of a discard of the changes `picked`, taken from `changes`, the package's state the dialog shows, in the
+ * order picked: each with its tag and index; a renamed change brings the path it was renamed from right after it, with
+ * the tag and index of that path's own row when `changes` lists one, else tag null and index null. Each path once. A
+ * row whose index `differs`, which a discard refuses whatever the request says of it, is named `clean`.
+ */
+export function chosenPaths(picked: readonly Change[], changes: readonly Change[]): DiscardBody['paths'] {
+  const paths: DiscardBody['paths'] = [];
+  const add = (path: string, tag: string | null, index: Change['index'] | null) => {
+    if (paths.some((p) => p.path === path)) return;
+    paths.push({ path, tag, index: index === 'differs' ? 'clean' : index });
+  };
+  for (const change of picked) {
+    add(change.path, change.tag, change.index);
+    if (change.renamedFrom === undefined) continue;
+    const own = changes.find((c) => c.path === change.renamedFrom);
+    add(change.renamedFrom, own?.tag ?? null, own?.index ?? null);
+  }
+  return paths;
+}
+
+/** One chosen path of a commit or a discard: as the request names it, within the package, its tag as the author saw it, and whether it is on disk now. */
+export interface Chosen {
+  path: string;
+  inside: string;
+  tag: string | null;
+  onDisk: boolean;
+}
+
+/**
+ * Why a commit or a discard of `chosen` is stale (412), as `compared`, the paths that differ from `HEAD` now, shows it;
+ * null when it is not: a path no longer among the changes; a renamed change named without the path it was renamed from;
+ * or that path named as not on disk while it is on disk. Each reason ends with `nothing`, such as "nothing was committed".
+ */
+export function staleChoice(repository: string, chosen: readonly Chosen[], compared: readonly Compared[], nothing: string): string | null {
+  const changed = new Set(compared.flatMap((c) => [c.inside, ...(c.renamedFrom === undefined ? [] : [c.renamedFrom])]));
+  for (const c of chosen) if (!changed.has(c.inside)) return `${c.path} is no longer among the package's changes; ${nothing}`;
+  // a renamed change is chosen with the path it was renamed from, as the author saw it: not on disk, unless the request
+  // names that path with a tag of its own
+  const renamedFrom = new Map(compared.flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
+  for (const c of chosen) {
+    const from = renamedFrom.get(c.inside);
+    if (from === undefined) continue;
+    const source = chosen.find((s) => s.inside === from);
+    if (source === undefined) return `${c.path} is renamed from ${repository}/${from}, which is not among the paths chosen with it; ${nothing}`;
+    if (source.tag === null && source.onDisk) return `${repository}/${from}, which ${c.path} was renamed from, is on disk: choose it too; ${nothing}`;
+  }
+  return null;
 }
 
 /** A deploy and its check wait this long for the node's answer: the wait of `rail8 deploy`. */

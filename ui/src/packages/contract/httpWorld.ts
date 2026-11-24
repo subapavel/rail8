@@ -209,8 +209,16 @@ export const httpWorld: Build = async (seed) => {
       }
     }
     for (const [path, text] of Object.entries(seeded.edits ?? {})) {
-      if (text === null) await rm(join(clone, path));
-      else await write(join(clone, path), text);
+      if (text === null) {
+        await rm(join(clone, path));
+        // the folders it emptied go too, as git rm removes them
+        for (let folder = dirname(join(clone, path)); folder !== clone && (await readdir(folder)).length === 0; folder = dirname(folder)) await rm(folder, { recursive: true });
+      } else await write(join(clone, path), text);
+    }
+    for (const path of seeded.linkedOut ?? []) {
+      await write(join(temp, 'outside', 'secret.txt'), 'not of the package\n');
+      await mkdir(dirname(join(clone, path)), { recursive: true });
+      await symlink(join(temp, 'outside', 'secret.txt'), join(clone, path));
     }
     if (seeded.hook !== undefined) {
       const lines = ['#!/bin/sh'];
@@ -601,6 +609,10 @@ export const httpWorld: Build = async (seed) => {
       running.set(folder, { commit: ids.get(`${folder}/${label}`)!, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
     },
     terminal: (folder, args) => git(join(work, folder), ...args),
+    async stage(path) {
+      const [folder, ...inside] = path.split('/');
+      git(join(work, folder!), 'add', '-A', '--', `:(literal)${inside.join('/')}`);
+    },
     link: (folder, path, target) => symlink(target, join(work, folder, path)),
     closesAfter(command) {
       closing = command;

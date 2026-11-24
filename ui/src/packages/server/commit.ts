@@ -3,7 +3,7 @@ import { access, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { CommitBody, Committed } from '../api.ts';
-import { commitBodyOf as commitBodyRules, indexFrom, inPackage, statusCompared, unstageCommand } from '../rules.ts';
+import { commitBodyOf as commitBodyRules, indexFrom, inPackage, staleChoice, statusCompared, unstageCommand } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import { catFile, GitSaid, LOG_FORMAT, parseDiffTree, parseLog, read } from './git.ts';
 import { diskAt, identityOf } from './package.ts';
@@ -97,26 +97,11 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
     if (status.branch !== body.branch || status.oid !== body.head) {
       throw new Refusal(412, `the clone is now at ${status.branch} ${status.oid ?? '(no commit yet)'}, not at the branch and HEAD you reviewed; nothing was committed`);
     }
-    const compared = statusCompared(status.entries);
-    const changed = new Set(compared.flatMap((c) => [c.inside, ...(c.renamedFrom === undefined ? [] : [c.renamedFrom])]));
     const indexOf = indexFrom(status.entries);
     const named = body.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
     const disk = await Promise.all(named.map((inside) => diskAt(clone, inside)));
-    body.paths.forEach((p, n) => {
-      if (!changed.has(named[n]!)) throw new Refusal(412, `${p.path} is no longer among the package's changes; nothing was committed`);
-    });
-    // a renamed change is chosen with the path it was renamed from, as the author reviewed it: not on disk, unless the
-    // request names that path with a tag of its own
-    const renamedFrom = new Map(compared.flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
-    body.paths.forEach((p, n) => {
-      const from = renamedFrom.get(named[n]!);
-      if (from === undefined) return;
-      const source = named.indexOf(from);
-      if (source < 0) throw new Refusal(412, `${p.path} is renamed from ${repository}/${from}, which is not among the paths chosen with it; nothing was committed`);
-      if (body.paths[source]!.tag === null && disk[source] !== null) {
-        throw new Refusal(412, `${repository}/${from}, which ${p.path} was renamed from, is on disk: choose it too; nothing was committed`);
-      }
-    });
+    const stale = staleChoice(repository, body.paths.map((p, n) => ({ path: p.path, inside: named[n]!, tag: p.tag, onDisk: disk[n] !== null })), statusCompared(status.entries), 'nothing was committed');
+    if (stale !== null) throw new Refusal(412, stale);
     body.paths.forEach((p, n) => {
       if ((disk[n]?.tag ?? null) !== p.tag) throw new Refusal(412, `${p.path} changed since you reviewed it; nothing was committed`);
     });

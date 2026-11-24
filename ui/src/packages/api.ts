@@ -189,6 +189,29 @@ export interface CommitAnswer {
 }
 
 /**
+ * A discard of chosen changes, stating what the author saw: `HEAD` (null: the branch has no commit yet), and each chosen
+ * path, relative to the working folder, with the git half's tag of its bytes on disk (null: not on disk) and its row's
+ * index state (null: the path a renamed change was renamed from, with no row of its own). A renamed change is named
+ * with the path it was renamed from too. The paths named are exactly the paths the discard may change.
+ */
+export interface DiscardBody {
+  head: string | null;
+  paths: { path: string; tag: string | null; index: 'clean' | 'staged' | null }[];
+}
+
+/**
+ * What a discard did, read back for the chosen paths alone: `discarded`, the paths that now read as in the last commit,
+ * in the index and on disk, and `left`, those that do not, each sorted; and the package's state after it (null when it
+ * could not be read). `problem` says why a path is left, or why `package` is null.
+ */
+export interface DiscardAnswer {
+  discarded: string[];
+  left: string[];
+  package: PackageState | null;
+  problem?: string;
+}
+
+/**
  * A deploy of a commit of the package to the node at RAIL8_ADMIN_URL, or its check: the commit as 40 hex digits from
  * the package's state; whether this is the check, which changes nothing on the node; and, for the deploy, the state it
  * expects the node to replace, the `replaces` its check answered: a commit of 40 hex digits, or `none`.
@@ -321,6 +344,12 @@ export interface PackagesApi {
    */
   commit(repository: string, body: CommitBody): Promise<CommitAnswer>;
   /**
+   * Puts the chosen paths back as they are in the last commit, in the index and on disk, once it has checked under the
+   * working folder's lock that `HEAD`, each path's tag and its index state are still the ones the author saw. What is
+   * discarded is gone: nothing keeps a copy.
+   */
+  discard(repository: string, body: DiscardBody): Promise<DiscardAnswer>;
+  /**
    * Checks or deploys a commit the clone holds on the node at RAIL8_ADMIN_URL, as git's identity in the clone. A deploy
    * is refused, changing nothing, when the node's state of the package is no longer its `expect`.
    */
@@ -414,6 +443,7 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     artifacts: (repository, rev) => json(of(repository, '/artifacts', { rev })),
     log: (repository, page = {}) => json<LogPage>(of(repository, '/log', { before: page.before, limit: page.limit?.toString() })),
     commit: (repository, body) => post<CommitAnswer>(of(repository, '/commit'), body),
+    discard: (repository, body) => post<DiscardAnswer>(of(repository, '/discard'), body),
     deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
     clone: (address) => post<CloneAnswer>('/git/clone', { address }),
     lock: (repository, body) => post<LockAnswer>(of(repository, '/lock'), body),
