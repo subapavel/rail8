@@ -257,7 +257,6 @@ export function Shell({ screens, start }: ShellProps) {
               >
                 Quick open
               </Button>,
-              <SessionActions key="session" />,
               <Button
                 key="theme"
                 size="small"
@@ -266,6 +265,7 @@ export function Shell({ screens, start }: ShellProps) {
                 aria-label={dark ? 'Use light theme' : 'Use dark theme'}
                 onClick={toggle}
               />,
+              <SessionActions key="session" />,
             ]}
             menu={{ type: 'group' }}
             route={{

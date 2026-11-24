@@ -38,12 +38,14 @@ const expand = (table, text) => (page) =>
 const press = (name) => (page) => page.getByRole('button', { name, exact: true }).click();
 /** Collapses the side menu to its icons. */
 const collapse = (page) => page.getByRole('button', { name: 'Collapse menu' }).click();
-/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first or in). */
+/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first, in, none or failed). */
 const visit = (scene) => (page) => page.goto(`${page.url().split('?')[0]}?session=${scene}`);
 /** Types `text` into the field labelled `label`. */
 const fill = (label, text) => (page) => page.getByLabel(label, { exact: true }).fill(text);
 /** Ends the session of the page, so the login shows over its tabs. */
 const end = (page) => page.evaluate(() => window.endSession());
+/** Opens the message `id` from its row on the Messages screen. */
+const message = (id) => (page) => shown(page).getByRole('table', { name: 'Messages' }).getByRole('button', { name: id, exact: true }).click();
 /** Opens the first mapping of the Mappings screen in its studio. */
 const studio = (page) => shown(page).getByRole('button', { name: 'Open in studio' }).first().click();
 
@@ -64,6 +66,11 @@ const SCENES = {
   'first-password': [visit('first')],
   'session-home': [visit('in')],
   'session-asking': [visit('in'), menu('Packages'), end],
+  'session-failed': [visit('failed')],
+  'session-refused-tab': [visit('in&start=mappings')],
+  'session-no-body': [visit('in'), menu('Messages'), message('m-7f3a')],
+  'session-no-deployments': [visit('none'), menu('Packages')],
+  'session-no-deployment': [visit('none'), menu('Packages'), pkg('orders')],
 };
 
 /** The page of the Ant Design Pro demo that matches each picture taken of it, and whether its menu is collapsed. */

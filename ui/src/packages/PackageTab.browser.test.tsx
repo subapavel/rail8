@@ -3,6 +3,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { ArtifactKinds, type ArtifactKind, type Side } from '../artifacts';
+import { sessionClient, type Me } from '../session';
+import { SessionGate } from '../SessionGate';
 import { Shell } from '../Shell';
 import { useWorkingFile } from '../workingFiles';
 import { AUTHOR, fakeStateOf, type Seed } from './contract/seed';
@@ -49,17 +51,43 @@ const FLOW_KIND: ArtifactKind = {
 
 let root: Root | undefined;
 
-/** The Packages screen over the fake world of `seed`, with the flow kind registered, and the tab of `orders` opened from its row. */
-async function openOrders(seed: Seed, wrap: (api: PackagesApi) => PackagesApi = (api) => api) {
+/** A session that may read packages but not what the node runs. */
+const NO_DEPLOYMENTS: Me = {
+  name: 'bob',
+  kind: 'person',
+  roles: [],
+  actions: [],
+  refused: { 'deployment.read': { code: 'not-allowed', needs: ['developer', 'operator'] } },
+  via: 'session',
+  firstPassword: false,
+  expiresAt: '2026-11-23T20:00:00Z',
+  emergencyKey: false,
+  session: '0123456789abcdef',
+};
+
+/**
+ * The Packages screen over the fake world of `seed`, with the flow kind registered, and the tab of `orders` opened from
+ * its row. With `me`, the screen is behind the session gate of a session that `GET /session` answers with `me`.
+ */
+async function openOrders(seed: Seed, wrap: (api: PackagesApi) => PackagesApi = (api) => api, me?: Me) {
   const { state, ids } = fakeStateOf(seed);
   const host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(
+  const shell = (
     <ArtifactKinds.Provider value={new Map([['flow', FLOW_KIND]])}>
       <Shell screens={[packagesScreen(wrap(fakePackagesApi(state)), () => NOW)]} start="packages" />
-    </ArtifactKinds.Provider>,
+    </ArtifactKinds.Provider>
   );
+  if (me === undefined) root.render(shell);
+  else {
+    const client = sessionClient({
+      send: (async () => new Response(JSON.stringify(me), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
+      reload: () => undefined,
+      timer: () => new Promise(() => undefined),
+    });
+    root.render(<SessionGate client={client}>{shell}</SessionGate>);
+  }
   await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: 'orders', exact: true }).click();
   await expect.element(page.getByRole('heading', { level: 1, name: 'orders' })).toBeVisible();
   return { state, ids, folder: state.folders.find((f) => f.name === 'orders')! };
@@ -115,6 +143,23 @@ describe('the tab of a package', () => {
     await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
     await expect.element(page.getByText('No file differs from the last commit.')).toBeVisible();
     await expect.element(page.getByText('Uncommitted changes are never deployed.')).not.toBeInTheDocument();
+  });
+
+  test('shows why, in place of what the node runs, to a session that may not read deployments', async () => {
+    await openOrders({ clones: [{ folder: 'orders', commits: ['first', 'second'] }], node: [{ repository: 'orders', commit: 'first' }] }, undefined, NO_DEPLOYMENTS);
+
+    const why = 'Needs the role developer or operator';
+    const tab = page.getByLabelText('orders', { exact: true });
+    await expect.element(tab.getByText('Deployed on 127.0.0.1:8081')).toBeVisible();
+    await expect.element(tab.getByText(why)).toBeVisible();
+    await expect.element(tab.getByText('Behind 1')).not.toBeInTheDocument();
+    await tab.getByText('-', { exact: true }).hover();
+    await expect.element(page.getByRole('tooltip')).toHaveTextContent(why);
+
+    await page.getByRole('tab', { name: 'Packages' }).click();
+    const row = page.getByRole('table', { name: 'Packages' }).getByRole('row').filter({ hasText: 'orders' });
+    await expect.element(row).toMatchTextContent(why);
+    await expect.element(row.getByText('Behind 1')).not.toBeInTheDocument();
   });
 
   test('keeps each of its own tabs as it was left while another one is shown', async () => {

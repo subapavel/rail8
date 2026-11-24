@@ -138,9 +138,11 @@ function Progress({ timeline, restart, onRestart, onShow }: ProgressProps) {
           title={`Step ${state.failed.step} (${state.failed.name}) of attempt ${state.attempt} failed`}
           description={state.failed.error ?? 'The step recorded no error message.'}
           action={
-            <Button onClick={onRestart} disabled={restart.kind === 'running' || restart.kind === 'done'}>
-              Restart
-            </Button>
+            <Allowed action="message.retry">
+              <Button onClick={onRestart} disabled={restart.kind === 'running' || restart.kind === 'done'}>
+                Restart
+              </Button>
+            </Allowed>
           }
         />
       )}

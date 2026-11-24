@@ -1,6 +1,6 @@
 import { LockOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginForm, ProFormText } from '@ant-design/pro-components';
-import { Alert, Button, Flex, Modal, Spin, Tooltip, Typography } from 'antd';
+import { Alert, Button, Flex, Modal, Tooltip, Typography } from 'antd';
 import {
   cloneElement,
   createContext,
@@ -12,6 +12,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { ReadSpinner } from './ReadSpinner';
 import { pageSession, PasswordRefused, reasonOf, type Me, type Refused, type SessionClient, type SessionState } from './session';
 import { Rail8Theme } from './theme';
 
@@ -238,7 +239,7 @@ function gated(client: SessionClient, state: SessionState, children: ReactNode):
     case 'starting':
       return (
         <GatePage>
-          <Spin aria-label="Reading the session" delay={200} />
+          <ReadSpinner label="Reading the session" />
         </GatePage>
       );
     case 'failed':

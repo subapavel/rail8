@@ -343,7 +343,7 @@ async function loginOf(req: IncomingMessage): Promise<{ name: string; password: 
   return { name: body.name, password: body.password };
 }
 
-/** Where the gate sends the node's answers it reads itself, and what it needs to call the node. */
+/** The gate's mode, the origins it accepts, the node it calls, and the `send` and `deadline` of its own calls to the node. */
 export interface UiSessionOptions {
   mode: Mode;
   /** The development server's own origins; a request with any other `Origin` is refused. */
