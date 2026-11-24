@@ -11,6 +11,8 @@ COPY platform/node/target/lib/ lib/
 COPY platform/node/target/rail8-node-*.jar ./
 # exactly one node jar, under a name that does not carry the version
 RUN set -- rail8-node-*.jar && [ "$#" -eq 1 ] && [ -f "$1" ] && mv "$1" rail8-node.jar
+# the compose stacks' health check: GET /health over plain HTTP, or over HTTPS when RAIL8_ADMIN_TLS_CERT is set
+COPY --chmod=755 deploy/quickstart/health.sh ./
 
 USER rail8
 ENV RAIL8_DATA_DIR=/var/lib/rail8

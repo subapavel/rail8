@@ -105,7 +105,9 @@ over an existing file.
 
 The node migrates its database itself and serves `/health` on `localhost:8081`. Postgres is published on the host's
 loopback port 5432; if that is taken, prefix the `up` with `RAIL8_PG_HOST_PORT=55432`. Without a token the node exits
-with "the admin API on 0.0.0.0 is not loopback-only: it needs a token" (`docker compose logs rail8`).
+with "the admin API on 0.0.0.0 is not loopback-only: it needs a token" (`docker compose logs rail8`). Its log
+starts with a WARNING that `RAIL8_ADMIN_TLS=off` lets the admin API take credentials over plain HTTP: the stack publishes
+that port on the host's loopback only.
 
 ## Every morning
 
