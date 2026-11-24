@@ -1,7 +1,7 @@
 # Hand-over
 
 This file tells you how to start the Mapping studio, draw and run a mapping, and run the gates
-and benchmarks. It covers GATE check 9. You need only JDK 25, Node 22 (22.12 or newer,
+and benchmarks. It covers GATE check 9. You need only JDK 25, Node 22 (22.19 or newer,
 `../ui/package.json`) and Docker with Compose v2. The studio is part of the Rail8 UI, the repository's `ui/`.
 
 ## Start the stack on Linux

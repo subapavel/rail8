@@ -18,7 +18,7 @@ root of a Rail8 checkout.
 
 ## Prerequisites
 
-A JDK 25, Maven 3.9 for the adapter's own build (the checkout builds itself with its `./mvnw`), Node.js 22.12 or newer
+A JDK 25, Maven 3.9 for the adapter's own build (the checkout builds itself with its `./mvnw`), Node.js 22.19 or newer
 with npm, Docker, and `curl`. On Windows run everything inside WSL 2.
 
 Build the kit once, and again after a `git pull`:
