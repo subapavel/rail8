@@ -845,6 +845,8 @@ class DeploymentsPoolIT {
         a.follow();
         assertEquals(List.of("node-a"), a.answer(), "the next tick wrote what the node runs: nothing");
         assertEquals(3, records.writes.get());
+        a.follow();
+        assertEquals(3, records.writes.get(), "a tick that changed nothing writes nothing");
     }
 
     /** The work rows of {@code flow} in the pool's work table. */
