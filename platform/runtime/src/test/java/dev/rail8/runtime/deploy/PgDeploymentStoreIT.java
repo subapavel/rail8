@@ -78,7 +78,41 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
     protected DeploymentStore emptyStore() {
         pool.query("truncate deployments, retiring").execute().await();
         pool.query("delete from work").execute().await();
+        pool.query("delete from audit where action in ('deploy', 'undeploy')").execute().await();
         return store(pool, connect);
+    }
+
+    @Override
+    protected List<InMemoryDeploymentStore.Audited> audited() {
+        List<InMemoryDeploymentStore.Audited> rows = new java.util.ArrayList<>();
+        pool.query("select actor, action, subject, detail from audit where action in ('deploy', 'undeploy') order by id").execute().await()
+                .forEach(r -> rows.add(new InMemoryDeploymentStore.Audited(r.getString(0), r.getString(1), r.getString(2), new JsonObject(r.getValue(3).toString()))));
+        return rows;
+    }
+
+    /**
+     * A save and a delete whose audit row the database refuses fail and write nothing: the record, the marks and the generation
+     * stay as they were, and the lock writes on once the row can be written.
+     */
+    @Test
+    void aWriteWhoseAuditRowIsRefusedWritesNothing() {
+        DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
+        save(shop);
+        DeploymentStore.Snapshot before = store.read().await();
+        DeploymentStore.PoolLock lock = lock();
+        try {
+            pool.query("alter table audit add constraint no_deploy_rows check (action not in ('deploy', 'undeploy')) not valid").execute().await();
+            try {
+                assertTrue(failsLater(lock.save(record("shop", "2.0.0", C_2, SHA_2, AT), BY, new JsonObject())), "the save fails with its row");
+                assertTrue(failsLater(lock.delete("shop", BY, new JsonObject())), "the delete fails with its row");
+            } finally {
+                pool.query("alter table audit drop constraint no_deploy_rows").execute().await();
+            }
+            assertEquals(before, store.read().await(), "nothing written: the record, its marks and the generation as they were");
+            assertEquals(before.generation() + 1, lock.delete("shop", BY, new JsonObject()).await(), "the lock writes on once the row can be written");
+        } finally {
+            lock.close().await();
+        }
     }
 
     /** A store over {@code on}, its lock on a connection of its own opened with {@code options}, kept in {@link #opened}. */
@@ -100,7 +134,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
         DeploymentStore.PoolLock next = s.lock().await().orElseThrow(() -> new AssertionError("the lock went with its connection"));
         next.close().await();
-        assertTrue(held.save(record("shop", "1.0.0", C_1, SHA_1, AT)).transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
+        assertTrue(held.save(record("shop", "1.0.0", C_1, SHA_1, AT), BY, new JsonObject()).transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
                 "the lost lock writes nothing");
     }
 
@@ -115,9 +149,9 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         long read = held.snapshot().generation();
         pool.query("update deploy_pool set generation = generation + 1").execute().await();
 
-        assertTrue(held.save(record("billing", "1.0.0", C_2, SHA_2, AT)).transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
+        assertTrue(held.save(record("billing", "1.0.0", C_2, SHA_2, AT), BY, new JsonObject()).transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
                 "the save under the stale generation fails");
-        assertTrue(held.delete("shop").transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
+        assertTrue(held.delete("shop", BY, new JsonObject()).transform(done -> io.vertx.core.Future.succeededFuture(done.failed())).await(),
                 "the delete under it too");
         held.close().await();
 
@@ -202,15 +236,16 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
     }
 
     /**
-     * An audit row of a deploy: the actor's name, user, via and credential, the action {@code deploy}, the subject
-     * {@code repository/<name>} and the detail as given.
+     * An audit row of a refused deploy: the actor's name, user, via and credential, the action {@code deploy}, the subject
+     * {@code repository/<name>} and the detail as given. A save's and a delete's rows carry the user, the via and the credential
+     * too.
      */
     @Test
     void anAuditRowIsWritten() {
-        pool.query("delete from audit where action = 'deploy'").execute().await();
-        JsonObject detail = new JsonObject().put("repository", "shop").put("commit", C_1).put("outcome", "deployed");
-        emptyStore().audit(new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7"), "shop", detail)
-                .await();
+        DeploymentStore s = emptyStore();
+        JsonObject detail = new JsonObject().put("repository", "shop").put("commit", C_1).put("outcome", "refused");
+        Actor alice = new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7");
+        s.audit(alice, "shop", detail).await();
 
         Row row = pool.query("select actor, action, subject, detail, user_id, via, credential from audit where action = 'deploy'").execute()
                 .await().iterator().next();
@@ -218,6 +253,19 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         assertEquals(detail, new JsonObject(row.getValue(3).toString()), "the detail as given");
         assertEquals(List.of(7L, "session", "0123456789abcdef"), List.of(row.getLong(4), row.getString(5), row.getString(6)),
                 "the user, how they proved who they are, and the session's id");
+
+        DeploymentStore.PoolLock lock = lock();
+        try {
+            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), alice, new JsonObject()).await();
+            lock.delete("shop", alice, new JsonObject()).await();
+        } finally {
+            lock.close().await();
+        }
+        List<List<Object>> written = new java.util.ArrayList<>();
+        pool.query("select action, user_id, via, credential from audit where action in ('deploy', 'undeploy') order by id").execute().await()
+                .forEach(r -> written.add(List.of(r.getString(0), r.getLong(1), r.getString(2), r.getString(3))));
+        assertEquals(List.of(List.of("deploy", 7L, "session", "0123456789abcdef"), List.of("deploy", 7L, "session", "0123456789abcdef"),
+                List.of("undeploy", 7L, "session", "0123456789abcdef")), written, "the save's and the delete's rows name the user, the via and the credential");
     }
 
     /**
@@ -249,7 +297,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
             assertEquals(new DeploymentStore.Snapshot(0, List.of()), store.read().await(), "the row is deleted; the generation starts at 0");
             DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
             DeploymentStore.PoolLock lock = store.lock().await().orElseThrow();
-            assertEquals(1L, lock.save(shop).await());
+            assertEquals(1L, lock.save(shop, BY, new JsonObject()).await());
             lock.close().await();
             assertEquals(new DeploymentStore.Snapshot(1, List.of(shop)), store.read().await(), "a row naming its at-least-once flows saves and reads");
         } finally {

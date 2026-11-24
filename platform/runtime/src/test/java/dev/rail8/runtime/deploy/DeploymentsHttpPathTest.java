@@ -167,7 +167,7 @@ class DeploymentsHttpPathTest {
     void anUndeployFreesItsPaths() throws Exception {
         deploy(at(pkg("billing"), "invoices", "/orders"));
 
-        OnVirtualThread.call(() -> deployments.undeploy("billing"));
+        OnVirtualThread.call(() -> deployments.undeploy("billing", TestActors.named("test")));
 
         assertFalse(deployments.serves("/post/orders"), "an undeployed flow serves nothing");
         deploy(at(pkg("shop"), "orders", "/orders"));

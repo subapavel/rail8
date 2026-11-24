@@ -150,7 +150,10 @@ The order:
    dependencies, listeners and calls between flows. Every problem is one line of one answer (422), and nothing has stopped. A check ends here.
 6. **Apply.** Today's swap: the changed and removed flows stop, the added and changed ones start, the
    record is written (the commit point), and a failed start rolls back.
-7. **Audit.** One audit row: the actor, `deploy`, the repository and the commit, and the outcome.
+7. **Audit.** One audit row: the actor, `deploy`, the repository, the commit, the commit's author as
+   git holds it (`Name <email>`), and the outcome. A deploy that writes its record writes the row in
+   the record's transaction: when the row cannot be written, neither is the record, and the deploy
+   rolls back as after any other failed save. A refused deploy writes its row after the refusal.
 
 The answer is today's deploy answer, with the repository and the commit in place of the revision and
 the archive.
@@ -158,7 +161,9 @@ the archive.
 A listener or a node-local address that moves from one package to another takes two deploys: first
 the one that removes it, then the one that adds it.
 
-**Undeploy** stays `DELETE /admin/packages/{name}`. A package whose at-least-once flows hold items is
+**Undeploy** stays `DELETE /admin/packages/{name}`. Its audit row, `undeploy` with the subject
+`package/<name>` and the package's version, repository and commit, is written in the transaction that
+deletes the record: when the row cannot be written, nothing is undeployed. A package whose at-least-once flows hold items is
 undeployed all the same: its items run on the flows' drains ("Retiring" below). Today's refusal of a package another record pins goes: a pin brings
 its own files from its own commit, so a dependent runs on after its dependency is undeployed. **Rollback** is a
 deploy of an earlier commit of the same repository.

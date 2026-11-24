@@ -24,7 +24,8 @@ import java.util.function.Supplier;
  * generation, shared by the pool's nodes. A save is an upsert that replaces every column, the pins included (a JSON array of
  * {@code {"name", "version", "content", "repository", "commit"}}); a read is sorted here, by {@link String#compareTo}, since the
  * database's collation (en_US ignores a dash) is not the order {@code Deployments} lists its packages in. The audit row of a
- * deploy goes into the {@code audit} table, stamped with the database's {@code now()}.
+ * deploy or an undeploy goes into the {@code audit} table, stamped with the database's {@code now()}: a save's or a delete's as
+ * the last statement of its transaction, a refused deploy's on {@code pool}.
  *
  * <p>The flows the pool retires are rows of {@code retiring}, one per flow, each with a copy of the record it ran under: a save
  * marks each flow the replaced row ran at-least-once and the new one does not, by an {@code insert ... select} from the old row
@@ -64,13 +65,13 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String TRY_FLOW = "select pg_try_advisory_xact_lock(295, hashtext($1))";
     private static final String END = "delete from retiring where flow = $1 and not exists (select 1 from work where flow = $1)";
     private static final String AUDIT = "insert into audit (at, actor, action, subject, detail, user_id, via, credential)"
-            + " values (now(), $1, 'deploy', $2, $3, $4, $5, $6)";
+            + " values (now(), $1, $2, $3, $4, $5, $6, $7)";
 
     private final Pool pool;
     private final Supplier<Future<SqlConnection>> connect;
 
     /**
-     * @param pool where the reads and the audit rows go
+     * @param pool where the reads and the audit rows of the deploys that wrote no record go
      * @param connect opens a fresh connection for one holder of the pool's lock, its own to close
      */
     public PgDeploymentStore(Pool pool, Supplier<Future<SqlConnection>> connect) {
@@ -108,8 +109,12 @@ public final class PgDeploymentStore implements DeploymentStore {
 
     @Override
     public Future<Void> audit(Actor by, String repository, JsonObject detail) {
-        return pool.preparedQuery(AUDIT).execute(Tuple.of(by.name(), "repository/" + repository, detail, by.userOrNull(), by.via(),
-                by.credential().orElse(null))).mapEmpty();
+        return pool.preparedQuery(AUDIT).execute(audit(by, "deploy", "repository/" + repository, detail)).mapEmpty();
+    }
+
+    /** The parameters of {@link #AUDIT}: who acted, the action, its subject and its detail. */
+    private static Tuple audit(Actor by, String action, String subject, JsonObject detail) {
+        return Tuple.of(by.name(), action, subject, detail, by.userOrNull(), by.via(), by.credential().orElse(null));
     }
 
     /** The generation of a {@link #READ} and its records, sorted by name; no row means no {@code deploy_pool} row: a failure. */
@@ -154,7 +159,7 @@ public final class PgDeploymentStore implements DeploymentStore {
         }
 
         @Override
-        public Future<Long> save(DeploymentRecord r) {
+        public Future<Long> save(DeploymentRecord r, Actor by, JsonObject detail) {
             JsonArray pins = new JsonArray();
             for (DeploymentRecord.Pin p : r.dependencies()) {
                 pins.add(new JsonObject().put("name", p.name()).put("version", p.version()).put("content", p.content()).put("repository", p.repository())
@@ -162,12 +167,14 @@ public final class PgDeploymentStore implements DeploymentStore {
             }
             String[] runs = r.atLeastOnce().toArray(String[]::new);
             return write(List.of(Map.entry(MARK, Tuple.of(r.name(), (Object) runs)), Map.entry(REVIVE, Tuple.of((Object) runs)),
-                    Map.entry(SAVE, Tuple.of(r.name(), r.version(), r.repository(), r.commit(), r.content(), r.deployedAt().atOffset(ZoneOffset.UTC), pins, runs))));
+                    Map.entry(SAVE, Tuple.of(r.name(), r.version(), r.repository(), r.commit(), r.content(), r.deployedAt().atOffset(ZoneOffset.UTC), pins, runs)),
+                    Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))));
         }
 
         @Override
-        public Future<Long> delete(String name) {
-            return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name))));
+        public Future<Long> delete(String name, Actor by, JsonObject detail) {
+            return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name)),
+                    Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))));
         }
 
         /**

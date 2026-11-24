@@ -201,9 +201,11 @@ import java.util.stream.Stream;
  * what it built is stopped as below, every flow phase A stopped is listed FAILED, and the Error is a problem line and is added to
  * the refusal as suppressed.
  *
- * <p>Every deploy that held the lock, refused or not ({@link #check} excepted), ends with one audit row
- * ({@link DeploymentStore#audit}): the actor, the repository, the commit (its id once read, else as the deploy named it) and the
- * outcome; a row that is not written is a WARNING and changes nothing of the deploy.
+ * <p>Every deploy that held the lock, refused or not ({@link #check} excepted), writes one audit row: the actor, the repository,
+ * the commit (its id once read, else as the deploy named it), the commit's author once the commit is read, and the outcome. A
+ * deploy that writes its record writes its row in the same transaction ({@link PoolLock#save}): a row that cannot be written
+ * fails the save, and the deploy is refused as after any other failed save. A refused deploy writes its row after the refusal
+ * ({@link DeploymentStore#audit}); one that is not written is a WARNING and changes nothing more.
  *
  * <p>Whatever refuses the deploy after the write began stops every flow it built and did not close yet (zero deadline), then
  * closes their deliveries' producers and asks their workers to close theirs, a worker's once the items it still runs finished
@@ -234,7 +236,8 @@ import java.util.stream.Stream;
  * <p>{@link #undeploy} blocks too. Its order: a bad name ({@link Kind#BAD_REQUEST}); the node's lock held by a deploy, an undeploy or a restore
  * ({@link Kind#CONFLICT}, or {@link Kind#STOPPING} while closing), or by a tick, waited for as a deploy waits; a closing node
  * ({@link Kind#STOPPING}); the pool's lock, taken and caught up with as a deploy takes it; a package the node does
- * not list ({@link Kind#NOT_FOUND}). Then, under the pool's lock, its record is deleted in one transaction that raises the pool's generation, as a save does: the commit point. A delete
+ * not list ({@link Kind#NOT_FOUND}). Then, under the pool's lock, its record is deleted in one transaction that raises the pool's generation, as a save does, and writes
+ * the undeploy's audit row (who undeployed, the package's version, repository and commit): the commit point. A delete
  * that fails is the node's {@link IOException} ("whether the deploy record ... was deleted is unknown: ..." when it did not answer in
  * time), and changes nothing else; the node's next tick follows whatever the pool's records hold.
  * Then every flow of it that runs stops and closes as phase A stops a flow (a stop that fails is a WARNING and counts as settled),
@@ -606,8 +609,11 @@ public final class Deployments {
     /** Where {@code holder} — a flow and its in endpoint, or the node's admin API — listens. */
     private record Listener(String holder, InetSocketAddress at) {}
 
-    /** The repository and the commit a package's folder was written from. */
-    private record Origin(String repository, String commit) {}
+    /**
+     * The repository and the commit a package's folder was written from; for a deploy, who deploys it and the commit's author,
+     * which its record's audit row names. Both null for a check, a restore and a tick, which write no record.
+     */
+    private record Origin(String repository, String commit, Actor by, String author) {}
 
     /** A version an off-node validate holds: its manifest's name and version, its content digest, and its folder. */
     private record Held(String name, String version, String content, Path dir) {}
@@ -763,21 +769,18 @@ public final class Deployments {
         lockForChange();
         try {
             if (closing) throw stopping();
-            String[] read = {commitOrRef};   // the commit's id once it is read: what the audit row names
+            // the commit's id and its author once it is read: what the audit row names
+            String[] read = {commitOrRef, null};
             try {
                 if (actor != null) poolLocked();   // a check writes nothing: it takes no pool lock
-                DeployResult result;
                 try (PackageRepositories repos = cache.open()) {
-                    result = fromCommit(repos, repository, commitOrRef, read, actor == null);
+                    return fromCommit(repos, repository, commitOrRef, read, actor);   // its record's save wrote its audit row
                 }
-                if (actor != null) audit(actor, repository, read[0], new JsonObject().put("outcome", "deployed").put("package", result.pkg().name())
-                        .put("version", result.pkg().version()));
-                return result;
             } catch (DeployRefusedException refused) {
-                if (actor != null) audit(actor, repository, read[0], new JsonObject().put("outcome", "refused").put("error", refused.error()));
+                if (actor != null) audit(actor, repository, read, new JsonObject().put("outcome", "refused").put("error", refused.error()));
                 throw refused;
             } catch (IOException | RuntimeException failed) {
-                if (actor != null) audit(actor, repository, read[0], new JsonObject().put("outcome", "failed").put("error", reason(failed)));
+                if (actor != null) audit(actor, repository, read, new JsonObject().put("outcome", "failed").put("error", reason(failed)));
                 throw failed;
             } finally {
                 releasePool();
@@ -790,10 +793,12 @@ public final class Deployments {
     /**
      * Reads {@code commitOrRef} of {@code repository} through {@code repos}, writes its package folder into {@code .incoming}, checks
      * its manifest's name and the repository the package is recorded from, then installs it ({@link #install}) with its pins read
-     * through {@code repos} too; {@code read[0]} is set to the commit's id once it is read.
+     * through {@code repos} too; {@code read[0]} is set to the commit's id once it is read, {@code read[1]} to its author. A deploy
+     * names who deploys ({@code by}), a check none.
      */
-    private DeployResult fromCommit(PackageRepositories repos, String repository, String commitOrRef, String[] read, boolean check)
+    private DeployResult fromCommit(PackageRepositories repos, String repository, String commitOrRef, String[] read, Actor by)
             throws DeployRefusedException, IOException {
+        boolean check = by == null;
         Commit commit;
         try {
             commit = repos.forDeploy(repository, commitOrRef);
@@ -801,6 +806,7 @@ public final class Deployments {
             throw refused(failed, "");
         }
         read[0] = commit.id();
+        read[1] = commit.author();
         Path folder = checkout(commit, "");
         return installed(folder, () -> {
             String name = named(folder, commit);
@@ -815,7 +821,8 @@ public final class Deployments {
                 throw refused(Kind.BUSY, "this node does not run what the pool recorded for " + lagging + ": " + lagging.stream().map(behind::get).toList()
                         + "; try again once it does");
             }
-            return install(name, Optional.of(new Origin(repository, commit.id())), folder, hex(Package.content(folder)), repos::forDeploy, repos, null, check);
+            return install(name, Optional.of(new Origin(repository, commit.id(), by, commit.author())), folder, hex(Package.content(folder)), repos::forDeploy,
+                    repos, null, check);
         });
     }
 
@@ -871,13 +878,23 @@ public final class Deployments {
         return refused(kind, of + failed.getMessage());
     }
 
-    /** Writes the audit row of a deploy; one that is not written is a WARNING. */
-    private void audit(Actor actor, String repository, String commit, JsonObject outcome) {
-        JsonObject detail = new JsonObject().put("repository", repository).put("commit", commit).mergeIn(outcome);
+    /**
+     * Writes the audit row of a deploy that wrote no record; one that is not written is a WARNING. {@code read} is the commit as
+     * the deploy read it, and its author, null until the commit was read.
+     */
+    private void audit(Actor actor, String repository, String[] read, JsonObject outcome) {
+        JsonObject detail = detail(repository, read[0], read[1], outcome);
         Future<Void> written = Future.future(done -> records.audit(actor, repository, detail).onComplete(done));
         written.otherwiseEmpty().await();
-        if (written.failed()) LOG.log(System.Logger.Level.WARNING, "the audit row of a deploy of " + repository + " at " + commit + " was not written: "
+        if (written.failed()) LOG.log(System.Logger.Level.WARNING, "the audit row of a deploy of " + repository + " at " + read[0] + " was not written: "
                 + reason(written.cause()), written.cause());
+    }
+
+    /** The detail of a deploy's audit row: the repository, the commit, its author unless it is null, then {@code outcome}. */
+    private static JsonObject detail(String repository, String commit, String author, JsonObject outcome) {
+        JsonObject detail = new JsonObject().put("repository", repository).put("commit", commit);
+        if (author != null) detail.put("author", author);
+        return detail.mergeIn(outcome);
     }
 
     /**
@@ -935,11 +952,13 @@ public final class Deployments {
     /**
      * Undeploys the package {@code name}; see the class comment for the order. Blocking: on a virtual thread.
      *
+     * @param by who undeploys, as the audit row names them
      * @return the package undeployed, the version it was listed with and its flows, by qualified id
      * @throws DeployRefusedException what the admin API answers with its own status
      * @throws IOException the package's record could not be deleted: the node's failure, and nothing else changed
      */
-    public UndeployResult undeploy(String name) throws DeployRefusedException, IOException {
+    public UndeployResult undeploy(String name, Actor by) throws DeployRefusedException, IOException {
+        Objects.requireNonNull(by, "by");
         if (!NAME.matcher(name).matches()) throw badName(name);
         lockForChange();   // closing read where the lock decides, as a deploy reads it
         try {
@@ -953,7 +972,9 @@ public final class Deployments {
                 if (listed.record() != null) {   // a deploy with no origin wrote none
                     // the commit point: the record is deleted before anything stops; a delete that fails changes nothing else
                     PoolLock pool = poolLock;
-                    Future<Long> deleted = bounded(Future.future(done -> pool.delete(name).onComplete(done)), "the delete of the deploy record");
+                    DeploymentRecord record = listed.record();
+                    JsonObject audited = new JsonObject().put("version", record.version()).put("repository", record.repository()).put("commit", record.commit());
+                    Future<Long> deleted = bounded(Future.future(done -> pool.delete(name, by, audited).onComplete(done)), "the delete of the deploy record");
                     deleted.otherwiseEmpty().await();
                     if (deleted.failed()) {   // nothing else changed; the node's next tick follows whatever the pool holds
                         String undeleted = (deleted.cause() instanceof TimeoutException ? "whether the deploy record of package '" + name + "' was deleted is unknown: "
@@ -1421,7 +1442,7 @@ public final class Deployments {
                     throw refused(Kind.FAILED, row.repository() + " at " + row.commit() + " holds the content " + content + ", its record " + row.content()
                             + ": the node reads another RAIL8_GIT_BASE or RAIL8_GIT_PATH than the deploy did");
                 }
-                install(row.name(), Optional.of(new Origin(row.repository(), row.commit())), folder, hex(content), commits, repos, row, false);
+                install(row.name(), Optional.of(new Origin(row.repository(), row.commit(), null, null)), folder, hex(content), commits, repos, row, false);
                 behind.remove(row.name());
                 return true;
             }
@@ -1583,7 +1604,10 @@ public final class Deployments {
                 DeploymentRecord saving = new DeploymentRecord(name, version, origin.get().repository(), origin.get().commit(), deployedPackage.content(),
                         deployedAt, pins, now.stream().filter(f -> AT_LEAST_ONCE.equals(f.flow().delivery())).map(Flow::id).toList());
                 PoolLock pool = poolLock;
-                Future<Long> saved = bounded(Future.future(done -> pool.save(saving).onComplete(done)), "the write of the deploy record");
+                Origin from = origin.get();
+                JsonObject audited = detail(from.repository(), from.commit(), from.author(),
+                        new JsonObject().put("outcome", "deployed").put("package", name).put("version", version));
+                Future<Long> saved = bounded(Future.future(done -> pool.save(saving, from.by(), audited).onComplete(done)), "the write of the deploy record");
                 saved.otherwiseEmpty().await();
                 if (saved.failed()) {
                     // the generation this node applied stays behind: its next tick installs whatever the pool holds

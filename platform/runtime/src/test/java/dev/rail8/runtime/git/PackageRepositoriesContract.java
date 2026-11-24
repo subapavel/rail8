@@ -183,6 +183,7 @@ abstract class PackageRepositoriesContract {
         Commit commit = repositories.forDeploy("orders", id);
         assertEquals("orders", commit.repository());
         assertEquals(id, commit.id());
+        assertEquals("Rail8 test <test@rail8.invalid>", commit.author(), "the author as the source committed it");
         Path dir = empty("orders");
         commit.write(dir);
 
@@ -472,6 +473,7 @@ abstract class PackageRepositoriesContract {
 
         Commit commit = cache.open().recorded("orders", id);
         assertEquals(id, commit.id());
+        assertEquals("Rail8 test <test@rail8.invalid>", commit.author(), "the author as the source committed it");
         Path dir = empty("orders");
         commit.write(dir);
         assertEquals(Set.of("package.yaml", "flows/in.yaml"), files(dir).keySet());

@@ -54,16 +54,17 @@ public interface DeploymentStore {
     Future<Optional<PoolLock>> lock();
 
     /**
-     * Appends the audit row of one deploy: when (the store's clock), who deployed ({@code by}: the actor, the user, how they
-     * proved who they are and the id of their credential), the action {@code deploy}, the subject {@code repository/<repository>}
-     * and {@code detail}, which names the commit and the outcome. Never a body or a credential's secret.
+     * Appends the audit row of one deploy that wrote no record, a refused or a failed one: when (the store's clock), who deployed
+     * ({@code by}: the actor, the user, how they proved who they are and the id of their credential), the action {@code deploy},
+     * the subject {@code repository/<repository>} and {@code detail}, which names the commit and the outcome. Never a body or a
+     * credential's secret.
      */
     Future<Void> audit(Actor by, String repository, JsonObject detail);
 
     /**
-     * The pool's lock, held: the one way to write records. Each write is one transaction that changes one record and raises the
-     * generation by one, and only while the generation is the one this lock read or last wrote: otherwise it fails and writes
-     * nothing.
+     * The pool's lock, held: the one way to write records. Each write is one transaction that changes one record, raises the
+     * generation by one and appends the write's audit row, and only while the generation is the one this lock read or last wrote:
+     * otherwise it fails and writes nothing. A row that cannot be appended fails the write, and nothing of it is written.
      */
     interface PoolLock {
 
@@ -73,15 +74,24 @@ public interface DeploymentStore {
         /**
          * Writes {@code record} as its package's one row (a row the package had is replaced whole); answers the new generation. In
          * the same transaction each flow the replaced row runs at-least-once and {@code record} does not is marked, with a copy of
-         * that row, and the mark of each flow {@code record} runs at-least-once ends.
+         * that row, the mark of each flow {@code record} runs at-least-once ends, and the deploy's audit row is appended: as
+         * {@link #audit} appends one, with the subject {@code repository/<record's repository>}.
+         *
+         * @param by who deployed
+         * @param detail the commit, its author and the outcome
          */
-        Future<Long> save(DeploymentRecord record);
+        Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail);
 
         /**
          * Deletes the row of the package {@code name}, and no other, marking each flow it ran at-least-once with a copy of it, in one
-         * transaction; answers the new generation, raised whether a row was there or not.
+         * transaction with the undeploy's audit row: who undeployed ({@code by}, as {@link #audit} records it), the action
+         * {@code undeploy}, the subject {@code package/<name>} and {@code detail}; answers the new generation, raised whether a row
+         * was there or not.
+         *
+         * @param by who undeployed
+         * @param detail the version, the repository and the commit the package ran
          */
-        Future<Long> delete(String name);
+        Future<Long> delete(String name, Actor by, JsonObject detail);
 
         /** Frees the lock; never fails. */
         Future<Void> close();

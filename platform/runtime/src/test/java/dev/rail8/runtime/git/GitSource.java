@@ -64,8 +64,9 @@ final class GitSource implements PackageRepositoriesContract.Source {
         return new FileRepositoryBuilder().setGitDir(at.toFile()).setBare().setMustExist(true).build();
     }
 
-    private PersonIdent who() {
-        return new PersonIdent("Rail8 test", "test@rail8.invalid", Instant.parse("2026-11-19T08:00:00Z").plusSeconds(commits), ZoneOffset.UTC);
+    /** {@code name <email>} at a time that moves with each commit: the author, or a committer who is someone else. */
+    private PersonIdent who(String name, String email) {
+        return new PersonIdent(name, email, Instant.parse("2026-11-19T08:00:00Z").plusSeconds(commits), ZoneOffset.UTC);
     }
 
     @Override
@@ -76,8 +77,8 @@ final class GitSource implements PackageRepositoriesContract.Source {
             Ref tip = repo.exactRef(Constants.R_HEADS + branch);
             if (tip != null) commit.setParentId(tip.getObjectId());
             commits++;
-            commit.setAuthor(who());
-            commit.setCommitter(who());
+            commit.setAuthor(who("Rail8 test", "test@rail8.invalid"));
+            commit.setCommitter(who("Rail8 committer", "committer@rail8.invalid"));
             commit.setMessage("commit " + commits + "\n");
             ObjectId id = inserter.insert(commit);
             inserter.flush();
@@ -141,7 +142,7 @@ final class GitSource implements PackageRepositoriesContract.Source {
             TagBuilder builder = new TagBuilder();
             builder.setObjectId(ObjectId.fromString(commit), Constants.OBJ_COMMIT);
             builder.setTag(tag);
-            builder.setTagger(who());
+            builder.setTagger(who("Rail8 test", "test@rail8.invalid"));
             builder.setMessage("tag " + tag + "\n");
             ObjectId id = inserter.insert(builder);
             inserter.flush();

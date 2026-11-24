@@ -1,10 +1,17 @@
 package dev.rail8.runtime.deploy;
 
+import java.util.List;
+
 /** P1-09c3a: the in-memory record store (dev, tests, and {@code Deployments}' old constructor) passes the store contract. */
 class InMemoryDeploymentStoreTest extends DeploymentStoreContract {
 
     @Override
     protected DeploymentStore emptyStore() {
         return new InMemoryDeploymentStore();
+    }
+
+    @Override
+    protected List<InMemoryDeploymentStore.Audited> audited() {
+        return ((InMemoryDeploymentStore) store).audited();
     }
 }

@@ -108,7 +108,7 @@ final class Ledger implements DeploymentStore {
     static void copy(DeploymentStore from, DeploymentStore to) {
         PoolLock lock = to.lock().await().orElseThrow(() -> new IllegalStateException("the pool's lock is held"));
         try {
-            for (DeploymentRecord r : from.read().await().records()) lock.save(r).await();
+            for (DeploymentRecord r : from.read().await().records()) lock.save(r, TestActors.named("test"), new JsonObject()).await();
         } finally {
             lock.close().await();
         }
@@ -123,7 +123,7 @@ final class Ledger implements DeploymentStore {
     Future<Void> save(DeploymentRecord record) {
         return lock().compose(held -> {
             PoolLock lock = held.orElseThrow(() -> new IllegalStateException("the pool's lock is held"));
-            return lock.save(record).eventually(lock::close).mapEmpty();
+            return lock.save(record, TestActors.named("test"), new JsonObject()).eventually(lock::close).mapEmpty();
         });
     }
 
@@ -166,7 +166,7 @@ final class Ledger implements DeploymentStore {
         }
 
         @Override
-        public Future<Long> save(DeploymentRecord record) {
+        public Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail) {
             saves.add(record);
             trace.accept("save " + record.name() + " " + record.version());
             Throwable failure = failNext;
@@ -174,13 +174,13 @@ final class Ledger implements DeploymentStore {
             if (failure != null) return Future.failedFuture(failure);
             Hold held = holdNext;
             holdNext = null;
-            if (held == null) return lock.save(record);
+            if (held == null) return lock.save(record, by, detail);
             held.reached.countDown();
-            return held.gate.future().compose(v -> lock.save(record));
+            return held.gate.future().compose(v -> lock.save(record, by, detail));
         }
 
         @Override
-        public Future<Long> delete(String name) {
+        public Future<Long> delete(String name, Actor by, JsonObject detail) {
             deletes.add(name);
             trace.accept("delete " + name);
             Throwable failure = failNextDelete;
@@ -188,9 +188,9 @@ final class Ledger implements DeploymentStore {
             if (failure != null) return Future.failedFuture(failure);
             Hold held = holdNextDelete;
             holdNextDelete = null;
-            if (held == null) return lock.delete(name);
+            if (held == null) return lock.delete(name, by, detail);
             held.reached.countDown();
-            return held.gate.future().compose(v -> lock.delete(name));
+            return held.gate.future().compose(v -> lock.delete(name, by, detail));
         }
 
         @Override

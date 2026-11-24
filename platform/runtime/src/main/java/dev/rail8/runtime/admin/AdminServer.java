@@ -600,7 +600,7 @@ public final class AdminServer {
             admin.get("/admin/dlq", Action.MESSAGE_READ, (c, who) -> dlq(c));
             deployments.ifPresent(d -> {
                 admin.post("/admin/deploy", Action.PACKAGE_DEPLOY, DEPLOY_BODY_MAX, (c, who) -> AdminServer.deploy(c, who, d));
-                admin.delete("/admin/packages/:name", Action.PACKAGE_UNDEPLOY, (c, who) -> undeployed(c, d));
+                admin.delete("/admin/packages/:name", Action.PACKAGE_UNDEPLOY, (c, who) -> undeployed(c, who, d));
                 admin.get("/admin/flows", Action.DEPLOYMENT_READ, (c, who) -> flows(d));
                 admin.get("/admin/packages", Action.DEPLOYMENT_READ, (c, who) -> packages(d));
                 admin.get("/admin/targets", Action.DEPLOYMENT_READ, (c, who) -> targets(d));
@@ -1580,9 +1580,10 @@ public final class AdminServer {
      * {@code DELETE /admin/packages/{name}}: the undeploy's result, or its refusal (the pool's refusal of its queue question or its
      * record delete included: 503); a record delete or a queue question that fails otherwise throws, a 500.
      */
-    private static Reply undeployed(RoutingContext ctx, Deployments deployments) throws IOException {
+    private static Reply undeployed(RoutingContext ctx, Caller who, Deployments deployments) throws IOException {
+        Actor by = who.acting(Action.PACKAGE_UNDEPLOY, PackageRef.ANY, remote(ctx));
         try {
-            UndeployResult r = deployments.undeploy(ctx.pathParam("name"));
+            UndeployResult r = deployments.undeploy(ctx.pathParam("name"), by);
             return Json.of(200, new JsonObject().put("name", r.name()).put("version", r.version()).put("flowsRemoved", new JsonArray(r.flowsRemoved())));
         } catch (DeployRefusedException refused) {
             return refusal(refused);
