@@ -288,6 +288,7 @@ export const httpWorld: Build = async (seed) => {
     },
     held: () => new Promise<void>((done) => holding.push(done)),
     terminal: (folder, args) => git(join(work, folder), ...args),
+    link: (folder, path, target) => symlink(target, join(work, folder, path)),
     closesAfter(command) {
       closing = command;
     },

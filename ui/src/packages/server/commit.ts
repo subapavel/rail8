@@ -1,4 +1,5 @@
-import { access, lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { CommitBody, Committed } from '../api.ts';
@@ -124,14 +125,13 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
       }
     });
 
-    const insides = named;
-    // the blob each chosen file makes now, through git's own filters, against which the commit is read back and the
-    // undo knows the index entries the add made: none for a path not on disk; a symbolic link, or anything else that is
-    // no file, is not read back
-    const expected = new Map([...(await blobsOf(git, clone, insides))].filter(([, blob]) => blob !== 'other'));
+    // the blob each chosen path makes now, as git would store it, against which the commit is read back and the undo
+    // knows the index entries the add made: none for a path not on disk; anything that is neither a file nor a symbolic
+    // link is not read back
+    const expected = new Map([...(await blobsOf(git, clone, named))].filter(([, blob]) => blob !== 'other'));
 
     const untracked = new Set(status.entries.filter((e) => e.kind === 'untracked').map((e) => e.path));
-    const added = insides.filter((inside) => untracked.has(inside));
+    const added = named.filter((inside) => untracked.has(inside));
     // HEAD as git commit starts on it, and as the undo finds it
     let before: string | null | undefined;
     let after: string | null | undefined;
@@ -148,7 +148,7 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
             if (adding.code !== 0) throw new CommitRefused(422, 'git add failed', saidBy(adding));
           }
           before = (await catFile(git, clone, ['HEAD^{commit}'], true))[0]?.oid ?? null;
-          const committing = await git.run({ args: ['commit', '--only', '-F', '-', '--', ...insides.map(literal)], clone, mode: 'write', stdin: body.message, limits: COMMIT_LIMITS });
+          const committing = await git.run({ args: ['commit', '--only', '-F', '-', '--', ...named.map(literal)], clone, mode: 'write', stdin: body.message, limits: COMMIT_LIMITS });
           if (committing.code !== 0) throw new CommitRefused(422, 'git commit failed, as git and the hooks say', saidBy(committing));
           return committing;
         },
@@ -196,13 +196,13 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
             ? "HEAD could not be read again, so git may have committed: the package's history shows it"
             : `HEAD moved to ${after === null ? 'no commit' : after.slice(0, 7)} meanwhile, so git may have committed: the package's history shows it`,
         ...(kept.length === 0 ? [] : [`${pathsOf(kept)} stay staged, as another git staged them meanwhile`]),
-        ...(stuck.length === 0 ? [] : [`${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, after === null)}`]),
+        ...(stuck.length === 0 ? [] : [`${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, (after === undefined ? status.oid : after) === null)}`]),
       ];
       throw noted(failure, notes.join('; '), said);
     }
 
     try {
-      return { commit: await readBack(git, clone, repository, status.branch, ran.stdout.toString('utf8'), insides, expected), output: saidBy(ran) };
+      return { commit: await readBack(git, clone, repository, status.branch, ran.stdout.toString('utf8'), named, expected), output: saidBy(ran) };
     } catch (error) {
       return { commit: null, output: saidBy(ran), problem: textOf(error) };
     }
@@ -277,16 +277,33 @@ async function readBack(
 }
 
 /**
- * The blob each of `insides` makes on disk in the clone at `clone`, through git's own filters: null for a path not on
- * disk, and `other` for a symbolic link or anything else that is no file.
+ * The blob each of `insides` makes on disk in the clone at `clone`, as git would store it: a file through git's own
+ * filters, a symbolic link as the text of its target; null for a path not on disk, and `other` for anything else.
  */
 async function blobsOf(git: Pick<Runner, 'run'>, clone: string, insides: readonly string[]): Promise<Map<string, string | null>> {
-  const files = await Promise.all(insides.map((inside) => lstat(join(clone, ...inside.split('/'))).then((info) => (info.isFile() ? true : 'other'), () => false)));
-  const hashing = insides.filter((_, n) => files[n] === true);
+  // true: a file, which git hashes; otherwise the blob of a symbolic link, null when not on disk, or 'other'
+  const found = await Promise.all(
+    insides.map(async (inside): Promise<true | string | null> => {
+      const path = join(clone, ...inside.split('/'));
+      const info = await lstat(path).catch(() => null);
+      if (info === null) return null;
+      if (info.isFile()) return true;
+      return info.isSymbolicLink() ? readlink(path, { encoding: 'buffer' }).then(linkBlob, () => 'other') : 'other';
+    }),
+  );
+  const hashing = insides.filter((_, n) => found[n] === true);
   const hashed = hashing.length === 0 ? [] : (await read(git, clone, ['hash-object', '--', ...hashing])).split('\n');
-  const blobs = new Map<string, string | null>(insides.flatMap((inside, n) => (files[n] === true ? [] : [[inside, files[n] === false ? null : 'other'] as const])));
+  const blobs = new Map<string, string | null>(insides.flatMap((inside, n) => (found[n] === true ? [] : [[inside, found[n] as string | null] as const])));
   hashing.forEach((inside, n) => blobs.set(inside, hashed[n] ?? ''));
   return blobs;
+}
+
+/**
+ * The blob git stores for a symbolic link to `target`: the target's bytes as a blob, in SHA-1, the object format whose
+ * ids of 40 hex digits the git half reads. `hash-object` would hash the file the link leads to instead.
+ */
+function linkBlob(target: Buffer): string {
+  return createHash('sha1').update(`blob ${target.length}\0`).update(target).digest('hex');
 }
 
 /** Whether another git holds the index of the clone at `clone`: its `index.lock` exists. */

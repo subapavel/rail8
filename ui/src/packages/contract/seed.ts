@@ -102,6 +102,8 @@ export interface World {
   held(): Promise<void>;
   /** git run with `args` in a terminal in the clone `folder`, as the author would: what it prints. The real git half only. */
   terminal?(folder: string, args: readonly string[]): string;
+  /** Makes a symbolic link at `path` of the clone `folder` whose target is the text `target`, as the author would on disk. The real git half only. */
+  link?(folder: string, path: string, target: string): Promise<void>;
   /** Closes the git half's runner, as the development server does when it ends, once its next `git <command>` ends. The real git half only. */
   closesAfter?(command: string): void;
   close(): Promise<void>;

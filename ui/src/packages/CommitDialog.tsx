@@ -151,7 +151,7 @@ export function CommitDialog({ api, repository, state, onState, onClose }: Commi
           <Alert
             type="error"
             showIcon
-            title="Nothing was committed"
+            title="The commit was refused"
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>

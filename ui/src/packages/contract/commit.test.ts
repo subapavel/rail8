@@ -128,6 +128,10 @@ describe.each<[string, Build]>([
     expect(changeOf(before, 'a.txt')?.index).toBe('differs');
 
     expect((await refusalOf(api.commit('orders', bodyOf(before, ['b.txt', 'a.txt'])))).status).toBe(409);
+    // a tag that is stale as well is the 412 of the tags, which are checked first
+    const stale = bodyOf(before, ['b.txt', 'a.txt']);
+    stale.paths[1]!.tag = '"stale"';
+    expect((await refusalOf(api.commit('orders', stale))).status).toBe(412);
     expect(await api.get('orders')).toEqual(before);
   });
 
@@ -193,6 +197,29 @@ describe.each<[string, Build]>([
     expect(refused.message).toBe(
       'git commit failed, as git and the hooks say; nothing was committed; orders/new.txt stay staged, since git would not take them out of the index: unstage them in a terminal with git rm --cached -f -- new.txt',
     );
+  });
+
+  test.runIf(name === 'http')('an added symbolic link leaves the index again when a hook refuses', async () => {
+    const { api, link, terminal } = await one({ hook: { refuses: true } });
+    await link!('orders', 'link.txt', 'first.txt');
+    const before = await api.get('orders');
+
+    const refused = await refusalOf(api.commit('orders', bodyOf(before, ['link.txt'])));
+
+    expect(refused).toMatchObject({ status: 422, message: 'git commit failed, as git and the hooks say; nothing was committed' });
+    expect(terminal!('orders', ['ls-files', '--', 'link.txt'])).toBe('');
+    expect(view(changeOf(await api.get('orders'), 'link.txt'))).toEqual({ status: 'added', index: 'clean' });
+  });
+
+  test.runIf(name === 'http')('a committed symbolic link is read back as git stores it: neither rewritten nor changed on disk', async () => {
+    const { api, link, terminal } = await one({});
+    await link!('orders', 'link.txt', 'first.txt');
+    const before = await api.get('orders');
+
+    const answer = await api.commit('orders', bodyOf(before, ['link.txt']));
+
+    expect(answer.commit).toMatchObject({ staged: [], rewritten: [], changedOnDisk: [] });
+    expect(terminal!('orders', ['ls-files', '-s', '--', 'link.txt'])).toMatch(/^120000 /);
   });
 
   test.runIf(name === 'http')('the command the error names unstages, in a terminal, each file git would not take out of the index', async () => {

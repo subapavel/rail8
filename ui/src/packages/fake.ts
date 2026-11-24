@@ -436,7 +436,6 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         asked.paths.forEach((p, n) => {
           const inside = insides[n]!;
           if (!changed.has(inside)) throw refused(412, `${p.path} is no longer among the package's changes; nothing was committed`);
-          if (index(inside, inside in folder.disk) === 'differs') throw refused(409, `${p.path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`);
         });
         // a renamed change is chosen with the path it was renamed from: not on disk, unless named with a tag of its own
         const renamedFrom = new Map(statusCompared(entries).flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
@@ -450,6 +449,9 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
         asked.paths.forEach((p, n) => {
           if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you reviewed it; nothing was committed`);
+        });
+        insides.forEach((inside, n) => {
+          if (index(inside, inside in folder.disk) === 'differs') throw refused(409, `${asked.paths[n]!.path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`);
         });
         const checked = Object.fromEntries(insides.map((inside) => [inside, folder.disk[inside]]));
         if (folder.meanwhile !== undefined) {
