@@ -308,12 +308,13 @@ describe('flowFiles', () => {
       const { writes, waiting, release } = heldWrites();
       const saving = put(await serve({ writes }), edited);
       await waiting;
+      await writeFile(join(root, 'demo', 'flows', 'copy.yaml'), caller);
       await rm(file);
-      await symlink('partner.yml', file);
+      await symlink('copy.yaml', file);
       release();
       expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
       expect((await lstat(file)).isSymbolicLink()).toBe(true);
-      expect(await readFile(join(root, 'demo', 'flows', 'partner.yml'), 'utf8')).toBe(partner);
+      expect(await readFile(join(root, 'demo', 'flows', 'copy.yaml'), 'utf8')).toBe(caller);
     });
 
     it('makes saves one at a time, so the second of two with the same ETag is refused', async () => {
