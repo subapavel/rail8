@@ -263,7 +263,8 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
         <IssueTokenDialog
           title={`New token of ${dialog.name}`}
           password={false}
-          read={() => tokens.ceiling()}
+          // the administrator who issues it is a person in a session, whose own list carries the ceiling
+          read={() => tokens.mine()}
           issue={(name, days) => tokens.issue(dialog.name, name, days)}
           onClose={() => {
             setDialog(null);

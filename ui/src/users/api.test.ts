@@ -102,9 +102,8 @@ describe('httpTokensApi', () => {
     ]);
   });
 
-  it("lists every user's tokens, those expiring within days, the ceiling, and issues, revokes and sets the ceiling", async () => {
+  it("lists every user's tokens and those expiring within days, and issues, revokes and sets the ceiling", async () => {
     const { send, calls } = fakeFetch(
-      json(200, listed),
       json(200, listed),
       json(200, listed),
       json(201, ISSUED),
@@ -114,14 +113,12 @@ describe('httpTokensApi', () => {
     const api = httpTokensApi(send);
     expect(await api.list()).toEqual(listed);
     expect(await api.list(14)).toEqual(listed);
-    expect(await api.ceiling()).toEqual({ maxDays: 365, defaultDays: 90 });
     expect(await api.issue('ci deploy', 'nightly', 30)).toEqual(ISSUED);
     await api.revoke('fedcba9876543210');
     expect(await api.setCeiling(30)).toEqual({ maxDays: 30, defaultDays: 30 });
     expect(calls).toEqual([
       { url: '/admin/tokens', init: get },
       { url: '/admin/tokens?expiringWithin=P14D', init: get },
-      { url: '/admin/tokens?expiringWithin=P1D', init: get },
       { url: '/admin/users/ci%20deploy/tokens', init: post({ name: 'nightly', days: 30 }) },
       { url: '/admin/tokens/fedcba9876543210/revoke', init: bare },
       { url: '/admin/tokens/ceiling', init: post({ maxDays: 30 }) },
