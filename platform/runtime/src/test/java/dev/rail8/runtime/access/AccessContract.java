@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -716,28 +717,54 @@ abstract class AccessContract {
         assertEquals(List.of(idOf(after)), devices("anna").stream().map(Tx.DeviceRow::id).toList(), "every dead one went");
     }
 
-    /** Two nodes issuing a user's tenth device at once leave ten. */
+    /**
+     * Two nodes issuing a user's tenth device at once leave ten. The two logins' hashes meet and leave together, so both go on to
+     * issue at once, while the user holds no session to end; ten users, one round each.
+     */
     @Test
     void twoNodesIssuingTheTenthDeviceAtOnceLeaveTen() throws Exception {
-        changed(a, "anna", person("anna"));
-        for (int i = 0; i < 9; i++) device(a, "anna", NEW_PASSWORD, "");
-        CountDownLatch start = new CountDownLatch(1);
-        List<Thread> logins = new ArrayList<>();
-        AtomicReference<Throwable> failed = new AtomicReference<>();
-        for (Access node : List.of(a, b)) {
-            logins.add(Thread.ofVirtual().start(() -> {
+        for (int round = 0; round < 10; round++) {
+            String name = "dora-" + round;
+            a.logout(changed(a, name, person(name)).acting(Action.SELF_LOGOUT, PackageRef.ANY, REMOTE));
+            for (int i = 0; i < 9; i++) {   // each session ends, so the two logins below race only on the devices
+                Access.Login held = a.login(name, NEW_PASSWORD, Optional.of(""), REMOTE);
+                a.logout(a.authenticate(bearer(held.session()), Optional.empty()).acting(Action.SELF_LOGOUT, PackageRef.ANY, REMOTE));
+            }
+            CountDownLatch second = new CountDownLatch(1);
+            CyclicBarrier bothHashing = new CyclicBarrier(2);
+            Runnable meet = () -> {
                 try {
-                    assertTrue(start.await(20, TimeUnit.SECONDS));
-                    device(node, "anna", NEW_PASSWORD, "");
+                    bothHashing.await(20, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            };
+            hash.duringNextMatch(() -> {
+                hash.duringNextMatch(meet);
+                second.countDown();
+                meet.run();
+            });
+            AtomicReference<Throwable> failed = new AtomicReference<>();
+            Thread onA = Thread.ofVirtual().start(() -> {
+                try {
+                    device(a, name, NEW_PASSWORD, "");
                 } catch (Throwable t) {
                     failed.set(t);
                 }
-            }));
+            });
+            Thread onB = Thread.ofVirtual().start(() -> {
+                try {
+                    assertTrue(second.await(20, TimeUnit.SECONDS));
+                    device(b, name, NEW_PASSWORD, "");
+                } catch (Throwable t) {
+                    failed.set(t);
+                }
+            });
+            onA.join();
+            onB.join();
+            assertEquals(null, failed.get(), "round " + round);
+            assertEquals(10, devices(name).size(), "round " + round);
         }
-        start.countDown();
-        for (Thread t : logins) t.join();
-        assertEquals(null, failed.get());
-        assertEquals(10, devices("anna").size());
     }
 
     /**
