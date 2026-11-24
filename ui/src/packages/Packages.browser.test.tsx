@@ -148,6 +148,8 @@ describe('the Packages screen', () => {
 
     await expect.element(page.getByRole('heading', { level: 2, name: 'No packages' })).toBeVisible();
     await expect.element(page.getByRole('table', { name: 'Folders that are no package' })).toBeVisible();
+    await packages().getByRole('button', { name: 'Get a package…' }).click();
+    await expect.element(page.getByRole('dialog', { name: 'Get a package' })).toBeVisible();
   });
 
   test('is marked read-only under RAIL8_READ_ONLY, and says when not every folder is listed', async () => {
@@ -162,11 +164,13 @@ describe('Get a package', () => {
   const address = 'https://git.example.com/acme/orders.git';
   const dialog = () => page.getByRole('dialog', { name: 'Get a package' });
   const field = () => dialog().getByLabelText('Address', { exact: true });
+  // the toolbar's, which comes before the one an empty table offers
+  const getButton = () => page.getByRole('button', { name: 'Get a package…' }).first();
 
   test('clones the address into the folder of its name, lists it, and opens its tab', async () => {
     open({ clones: [{ folder: 'billing' }], sources: [{ path: 'acme/orders.git', commits: ['first', 'second'] }] });
 
-    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await getButton().click();
     await expect.element(dialog().getByRole('button', { name: 'Get', exact: true })).toBeDisabled();
     await field().fill('https://git.example.com/acme/my orders.git');
     await expect.element(dialog().getByText('paste only the address', { exact: false })).toBeVisible();
@@ -184,7 +188,7 @@ describe('Get a package', () => {
   test('says why git could not clone, with what git said, and keeps the address to try again', async () => {
     open({ sources: [{ path: 'acme/orders.git', fails: 'credentials' }] });
 
-    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await getButton().click();
     await field().fill(address);
     await userEvent.type(field(), '{Enter}');
 
@@ -198,7 +202,7 @@ describe('Get a package', () => {
   test('says when the clone is no package, and lists it among the folders that are no package', async () => {
     open({ clones: [{ folder: 'billing' }], sources: [{ path: 'acme/orders.git', manifest: null, files: { 'README.md': 'orders\n' } }] });
 
-    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await getButton().click();
     await field().fill(address);
     await dialog().getByRole('button', { name: 'Get', exact: true }).click();
 
@@ -212,6 +216,6 @@ describe('Get a package', () => {
   test('is off on a server that takes no writes', async () => {
     open({ readOnly: true, clones: [{ folder: 'billing' }] });
 
-    await expect.element(page.getByRole('button', { name: 'Get a package…' })).toBeDisabled();
+    await expect.element(getButton()).toBeDisabled();
   });
 });

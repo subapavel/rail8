@@ -51,6 +51,12 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
     </Button>
   );
 
+  const getButton = (writable: boolean, key = 'get') => (
+    <Button key={key} type="primary" icon={<CloudDownloadOutlined aria-hidden />} disabled={!writable} onClick={() => setGetting(true)}>
+      Get a package…
+    </Button>
+  );
+
   let body;
   if (result.kind === 'reading') {
     body = <ReadSpinner label="Reading the packages" />;
@@ -95,9 +101,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           headerTitle={<h2>Packages of the working folder</h2>}
           toolBarRender={() => [
             refreshButton,
-            <Button key="get" type="primary" icon={<CloudDownloadOutlined aria-hidden />} disabled={!list.writable} onClick={() => setGetting(true)}>
-              Get a package…
-            </Button>,
+            getButton(list.writable),
           ]}
           locale={{
             emptyText: (
@@ -105,10 +109,12 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
                 description={
                   <>
                     <Typography.Title level={2}>No packages</Typography.Title>
-                    The working folder holds no clone with <code>package.yaml</code> at its root.
+                    The working folder holds no clone with <code>package.yaml</code> at its root. Get one from its git host with Get a package….
                   </>
                 }
-              />
+              >
+                {list.writable && getButton(true, 'get-empty')}
+              </Empty>
             ),
           }}
           columns={[

@@ -12,7 +12,7 @@ export const CLONE_LIMITS: Limits = { ms: 300_000, bytes: 1024 * 1024 };
 /** How often the size of a clone under way is looked at. */
 export const WATCH_MS = 1_000;
 
-/** The name of a hidden folder a clone is made in, before a number of mkdtemp's own. */
+/** The name of a hidden folder a clone is made in, before the six random characters mkdtemp adds. */
 export const HIDDEN_PREFIX = '.rail8-clone-';
 
 /** A refused clone: its status, its error, and what git said. */
