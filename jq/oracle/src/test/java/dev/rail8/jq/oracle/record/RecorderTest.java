@@ -8,6 +8,7 @@ import dev.rail8.jq.oracle.diff.CaseFormat;
 import dev.rail8.jq.oracle.diff.DiffCase;
 import dev.rail8.jq.oracle.diff.Outcome;
 import dev.rail8.jq.oracle.diff.Recording;
+import dev.rail8.jq.oracle.gen.BuiltinsMathV1;
 import dev.rail8.jq.oracle.gen.CoreV1;
 import dev.rail8.jq.oracle.gen.ValuesV1;
 import java.io.ByteArrayOutputStream;
@@ -132,6 +133,26 @@ class RecorderTest {
     assertThat(Files.exists(diff.resolve("gen/values-v1.cases"))).isFalse();
   }
 
+  /** {@code --generate builtins-math-v1} records builtins-math-v1's own blocks into its own family. */
+  @Test
+  void generateBuiltinsMathV1WritesItsOwnFamily(@TempDir Path tmp) throws Exception {
+    Path diff = tmp.resolve("diff");
+    PrintStream out = System.out;
+    ByteArrayOutputStream captured = new ByteArrayOutputStream();
+    System.setOut(new PrintStream(captured, true, UTF_8));
+    int rc;
+    try {
+      rc = Recorder.generate(List.of(BuiltinsMathV1.NAME, "50", "53", diff.toString()), new Fake(c -> c.id().endsWith("/51") ? null : OK));
+    } finally {
+      System.setOut(out);
+    }
+
+    assertThat(rc).isZero();
+    assertThat(captured.toString(UTF_8)).isEqualTo("recorded 2 seeds of builtins-math-v1, dropped 1\n");
+    assertThat(Files.readString(diff.resolve("gen/builtins-math-v1.cases"))).isEqualTo(BuiltinsMathV1.file(50, 53, Map.of(51L, "timeout")));
+    assertThat(Recording.read(diff.resolve("gen/builtins-math-v1.rec"))).containsOnlyKeys("gen/builtins-math-v1/50", "gen/builtins-math-v1/52");
+  }
+
   @Test
   void aMalformedGenerateIsAUsageError(@TempDir Path diff) throws Exception {
     String dir = diff.toString();
@@ -148,7 +169,7 @@ class RecorderTest {
     } finally {
       System.setErr(err);
     }
-    assertThat(captured.toString(UTF_8).lines()).hasSize(6).allMatch(l -> l.contains("--generate values-v1|core-v1 <from> <to>"));
+    assertThat(captured.toString(UTF_8).lines()).hasSize(6).allMatch(l -> l.contains("--generate values-v1|core-v1|builtins-math-v1 <from> <to>"));
     try (var left = Files.list(diff)) {
       assertThat(left).isEmpty();
     }

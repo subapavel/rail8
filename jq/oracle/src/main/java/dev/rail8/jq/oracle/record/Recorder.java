@@ -7,6 +7,7 @@ import dev.rail8.jq.oracle.diff.CaseFormat;
 import dev.rail8.jq.oracle.diff.DiffCase;
 import dev.rail8.jq.oracle.diff.Outcome;
 import dev.rail8.jq.oracle.diff.Recording;
+import dev.rail8.jq.oracle.gen.BuiltinsMathV1;
 import dev.rail8.jq.oracle.gen.CoreV1;
 import dev.rail8.jq.oracle.gen.ValuesV1;
 import java.io.IOException;
@@ -30,7 +31,7 @@ import java.util.function.LongFunction;
  * <pre>
  *   Recorder &lt;family.cases&gt;...          writes &lt;family&gt;.rec beside each case file
  *   Recorder --verify &lt;family.rec&gt;...    re-records in memory and fails on any byte difference
- *   Recorder --generate values-v1|core-v1 &lt;from&gt; &lt;to&gt; &lt;diff-dir&gt;
+ *   Recorder --generate values-v1|core-v1|builtins-math-v1 &lt;from&gt; &lt;to&gt; &lt;diff-dir&gt;
  *                                        writes gen/&lt;generator&gt;.cases and .rec below diff-dir for the seeds [from, to)
  * </pre>
  *
@@ -82,7 +83,8 @@ public final class Recorder {
   private static final List<Generator> GENERATORS =
       List.of(
           new Generator(ValuesV1.NAME, seed -> ValuesV1.generate(seed).block(), ValuesV1::file),
-          new Generator(CoreV1.NAME, seed -> CoreV1.generate(seed).block(), CoreV1::file));
+          new Generator(CoreV1.NAME, seed -> CoreV1.generate(seed).block(), CoreV1::file),
+          new Generator(BuiltinsMathV1.NAME, seed -> BuiltinsMathV1.generate(seed).block(), BuiltinsMathV1::file));
 
   /**
    * A generated family: its name, the text of its case file and the recordings of the seeds that were not dropped.
@@ -160,7 +162,7 @@ public final class Recorder {
   static int generate(List<String> args, Reference reference) throws IOException, InterruptedException {
     long[] range = range(args);
     if (range == null) {
-      System.err.println("usage: scripts/oracle-record.sh --generate values-v1|core-v1 <from> <to>, 0 <= from < to");
+      System.err.println("usage: scripts/oracle-record.sh --generate values-v1|core-v1|builtins-math-v1 <from> <to>, 0 <= from < to");
       return 2;
     }
     long from = range[0];

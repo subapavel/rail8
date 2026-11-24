@@ -282,7 +282,8 @@ Accepted 2026-11-12, architect under `/run-spec` #56, on the designer's draft fo
 - `builtins-regex-v1` draws only constructs that ADR-0053's matrix shows identical.
 - `builtins-math-v1` prints an exact builtin's result raw. A computed one's, when normal, prints as
   `[logb, (significand * 4294967296 | rint)]`, made of exact functions only (ADR-0051). It never
-  calls the 12 of the last math ticket. A computed result that is not normal prints as
+  calls the 10 of the last math ticket (`gamma`, `lgamma`, `lgamma_r`, `tgamma`, `j0`, `j1`, `jn`,
+  `y0`, `y1`, `yn`); it calls `erf` and `erfc` (#389). A computed result that is not normal prints as
   `[class, copysign(1; .)]` for zero, subnormal and infinite, and as `"nan"` for NaN, so its sign
   is checked too.
 - Each generator ticket records enough seeds to keep 200 after drops.
