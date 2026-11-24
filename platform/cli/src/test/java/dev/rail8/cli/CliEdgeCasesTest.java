@@ -57,7 +57,7 @@ class CliEdgeCasesTest {
     static Stream<List<String>> blankOrRepeated() {
         String demo = DEMO.toString();
         return Stream.of(List.of("validate", demo, "--env", ""), List.of("validate", demo, "--env", " "), List.of("validate", demo, "--env", "dev", "--env", "prod"),
-                List.of("deploy", "demo", "HEAD", "--admin", ""), List.of("deploy", "demo", "HEAD", "--admin", "http://a", "--admin", "http://b"));
+                List.of("deploy", "demo", "HEAD", "--expect", "none", "--admin", ""), List.of("deploy", "demo", "HEAD", "--expect", "none", "--admin", "http://a", "--admin", "http://b"));
     }
 
     /** An option's value may not be blank and an option is given once: a usage error, nothing on stdout, nothing sent. */
@@ -93,7 +93,7 @@ class CliEdgeCasesTest {
     @ParameterizedTest(name = "{0}")
     @ValueSource(strings = {"ftp://127.0.0.1/", "not a url", "localhost:8081", "http:///admin"})
     void anAdminUrlThatIsNoHttpUrlIsAUsageError(String url) {
-        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--admin", url);
+        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--expect", "none", "--admin", url);
 
         assertEquals(2, ran.exit(), ran.toString());
         assertEquals("", ran.out(), ran.toString());
@@ -102,7 +102,7 @@ class CliEdgeCasesTest {
 
     @Test
     void aBlankTokenSendsNoHeader() {
-        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", "  "), "deploy", "demo", "HEAD", "--admin", admin.url());
+        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", "  "), "deploy", "demo", "HEAD", "--expect", "none", "--admin", admin.url());
 
         assertEquals(0, ran.exit(), ran.toString());
         assertEquals(List.of(), admin.only().header("authorization"), "a blank RAIL8_ADMIN_TOKEN is none");
@@ -110,7 +110,7 @@ class CliEdgeCasesTest {
 
     @Test
     void aTrailingSlashOnTheAdminUrlIsDropped() {
-        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--admin", admin.url() + "//");
+        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--expect", "none", "--admin", admin.url() + "//");
 
         assertEquals(0, ran.exit(), ran.toString());
         assertEquals("/admin/deploy", admin.only().path());
@@ -119,13 +119,14 @@ class CliEdgeCasesTest {
     /** A repository or commit that is no name goes in the JSON body as it is given, never in the URL: the node judges and refuses it. */
     @Test
     void aRepositoryAndCommitGoAsGivenInTheBody() {
-        Ran ran = run(Map.of(), "deploy", "a b/c", "r 1&x=y", "--admin", admin.url());
+        Ran ran = run(Map.of(), "deploy", "a b/c", "r 1&x=y", "--expect", "none", "--admin", admin.url());
 
         assertEquals(0, ran.exit(), ran.toString());
         StubAdmin.Request post = admin.only();
         assertEquals("/admin/deploy", post.path());
         assertNull(post.query());
-        assertEquals(new JsonObject().put("repository", "a b/c").put("commit", "r 1&x=y"), new JsonObject(new String(post.body(), StandardCharsets.UTF_8)));
+        assertEquals(new JsonObject().put("repository", "a b/c").put("commit", "r 1&x=y").put("expect", "none"),
+                new JsonObject(new String(post.body(), StandardCharsets.UTF_8)));
     }
 
     /** A 204 has no body: an empty line is printed, exit 0. */
@@ -133,7 +134,7 @@ class CliEdgeCasesTest {
     void noContentPrintsAnEmptyAnswer() {
         admin.answer(204, "");
 
-        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--admin", admin.url());
+        Ran ran = run(Map.of(), "deploy", "demo", "HEAD", "--expect", "none", "--admin", admin.url());
 
         assertEquals(0, ran.exit(), ran.toString());
         assertEquals(List.of(""), ran.outLines(), ran.toString());

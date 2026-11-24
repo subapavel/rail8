@@ -204,7 +204,7 @@ class DeploymentsRollbackTest {
     OnVirtualThread.Call<DeployResult> deploying(Map<String, byte[]> files, String label) {
         String id = repos.commit("shop", files);
         commits.put(label, id);
-        return OnVirtualThread.start(() -> deployments.deploy("shop", id, TestActors.named("test")));
+        return OnVirtualThread.start(() -> deployments.deploy("shop", id, Deployments.ANY, TestActors.named("test")));
     }
 
     DeployRefusedException refused(PackageDraft p, String label) throws Exception {

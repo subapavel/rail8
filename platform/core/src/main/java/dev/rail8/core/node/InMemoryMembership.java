@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.SortedMap;
 import java.util.TreeMap;
 
 /**
@@ -84,6 +85,19 @@ public final class InMemoryMembership implements Membership {
     public synchronized boolean live(String node) {
         Member m = members.get(node);
         return m != null && m.leaseUntil() != null;
+    }
+
+    /**
+     * The nodes whose lease holds now, by id as {@link String#compareTo} sorts, each with its current epoch: not released, and live
+     * up to and including its end.
+     */
+    public synchronized SortedMap<String, Long> leased() {
+        Instant now = clock.instant();
+        SortedMap<String, Long> leased = new TreeMap<>();
+        members.forEach((node, m) -> {
+            if (m.leaseUntil() != null && !m.leaseUntil().isBefore(now)) leased.put(node, m.epoch());
+        });
+        return leased;
     }
 
     /** {@code node}'s current epoch; 0 for a node that never joined. */

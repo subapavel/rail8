@@ -186,7 +186,8 @@ services:
 
   deploy:
     # one-shot: `rail8 deploy rail8 HEAD` with the host-built CLI jar, then exit 0 (no healthcheck, no restart): the node deploys
-    # examples/demo as committed at the checkout's HEAD
+    # examples/demo as committed at the checkout's HEAD. The stack keeps its database between starts, so the one-shot first reads
+    # the state the pool records (`--check` answers it as replaces: none on the first start), then deploys expecting it
     image: eclipse-temurin:25.0.4.1_1-jre-noble
     restart: "no"
     environment:
@@ -195,7 +196,14 @@ services:
       RAIL8_ADMIN_TLS: "off"
     volumes:
       - ../../platform/cli/target:/cli:ro
-    entrypoint: ["sh", "-c", "jar=$$(ls /cli/rail8-cli-*.jar | grep -v -E -- '-(sources|javadoc|tests)[.]jar$$' | head -n 1) && exec java -jar \"$$jar\" deploy rail8 HEAD --admin http://rail8:8081"]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        jar=$$(ls /cli/rail8-cli-*.jar | grep -v -E -- '-(sources|javadoc|tests)[.]jar$$' | head -n 1)
+        check=$$(java -jar "$$jar" deploy rail8 HEAD --check --admin http://rail8:8081) || { printf '%s\n' "$$check"; exit 1; }
+        replaces=$$(printf '%s' "$$check" | sed -n 's/.*"replaces":"\([0-9a-z]*\)".*/\1/p')
+        exec java -jar "$$jar" deploy rail8 HEAD --expect "$$replaces" --admin http://rail8:8081
     depends_on:
       rail8:
         condition: service_healthy

@@ -171,7 +171,7 @@ class DeploymentsHashTest {
     Map<String, String> deploy(Deployments node, PackageDraft p) throws Exception {
         String name = p.name();
         String commit = repos.commit(p);
-        OnVirtualThread.call(() -> node.deploy(name, commit, TestActors.named("test")));
+        OnVirtualThread.call(() -> node.deploy(name, commit, Deployments.ANY, TestActors.named("test")));
         Map<String, String> hashes = new TreeMap<>();
         for (DeployedFlow f : node.flows()) {
             if (!f.pkg().equals(name)) continue;

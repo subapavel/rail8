@@ -2,7 +2,7 @@
 
 A demo stack for GATE checks 1-2 (D-085), not production: the node runs `RAIL8_ENV=dev`. Services: `postgres`, `valkey`
 (persistence off), `sftp-keys` (one-shot: the SFTP host key), `sftp`, `netns` (holds the published ports and the network namespace of the node and the echo), `rail8` (the node), `echo` (the demo's partner),
-`deploy` (one-shot: `rail8 deploy rail8 HEAD`), `clickhouse` under the `history` profile (not wired), and `kafka` (KRaft, the optional event-broker add-on) under the
+`deploy` (one-shot: `rail8 deploy rail8 HEAD --check` reads the state the pool records, then `rail8 deploy rail8 HEAD --expect` it), `clickhouse` under the `history` profile (not wired), and `kafka` (KRaft, the optional event-broker add-on) under the
 `kafka` profile, off by default and not wired: a plain `up` does not start it.
 
 ```sh

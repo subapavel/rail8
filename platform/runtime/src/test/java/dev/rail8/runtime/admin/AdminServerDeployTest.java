@@ -75,10 +75,11 @@ import static org.junit.jupiter.api.Assertions.fail;
 /**
  * The deploy routes of the admin API over a real {@link Deployments} (in-memory stores, a fake runtime, the {@link Doors}
  * component, package repositories under a {@code file://} base). {@code POST /admin/deploy} takes the body
- * {@code {"repository", "commit"}} — above {@code DEPLOY_BODY_MAX} bytes it is 413, by Content-Length before a byte is read, or once
- * a chunked body passes it — deploys that commit, or with {@code ?check=true} checks it, and maps each refusal kind to its status;
- * {@code GET /admin/flows} and {@code GET /admin/packages} list what is deployed and {@code DELETE /admin/packages/{name}}
- * undeploys; all need the token and are 404 without a {@code Deployments}.
+ * {@code {"repository", "commit", "expect"}} — above {@code DEPLOY_BODY_MAX} bytes it is 413, by Content-Length before a byte is
+ * read, or once a chunked body passes it — deploys that commit, or with {@code ?check=true} checks it, and maps each refusal kind
+ * to its status; {@code GET /admin/flows} and {@code GET /admin/packages} list what is deployed, {@code GET /admin/pool/packages}
+ * what each node runs, and {@code DELETE /admin/packages/{name}} undeploys; all need the token and are 404 without a
+ * {@code Deployments}.
  */
 class AdminServerDeployTest {
 
@@ -209,9 +210,14 @@ class AdminServerDeployTest {
         return new Running(gate, answer);
     }
 
-    /** The body of a deploy of {@code commit} of {@code repository}. */
+    /** The body of a deploy of {@code commit} of {@code repository} that replaces whatever the pool records. */
     static byte[] body(String repository, String commit) {
-        return new JsonObject().put("repository", repository).put("commit", commit).encode().getBytes(StandardCharsets.UTF_8);
+        return body(repository, commit, "any");
+    }
+
+    /** The body of a deploy of {@code commit} of {@code repository} that expects {@code expect}. */
+    static byte[] body(String repository, String commit, String expect) {
+        return new JsonObject().put("repository", repository).put("commit", commit).put("expect", expect).encode().getBytes(StandardCharsets.UTF_8);
     }
 
     /** {@code POST /admin/deploy<query>} with {@code body} on the server at {@code at}. */
@@ -358,7 +364,9 @@ class AdminServerDeployTest {
 
         assertJson(200, a, "a deploy");
         JsonObject body = a.json();
-        assertEquals(Set.of("package", "version", "repository", "commit", "flows", "added", "swapped", "removed"), body.fieldNames(), "the 200 body: " + body);
+        assertEquals(Set.of("package", "version", "repository", "commit", "flows", "added", "swapped", "removed", "replaces"), body.fieldNames(),
+                "the 200 body: " + body);
+        assertEquals("none", body.getString("replaces"), "a first deploy replaces no record");
         assertEquals("shop", body.getString("package"));
         assertEquals("1.2.3", body.getString("version"));
         assertEquals("shop", body.getString("repository"));
@@ -382,7 +390,9 @@ class AdminServerDeployTest {
      */
     @Test
     void aCheckAnswersAsTheDeployWouldAndChangesNothing() throws Exception {
-        assertJson(200, deploy(pkg("shop", "1.0.0", Map.of("orders", "sync"))), "fixture: v1 runs");
+        Answer deployed = deploy(pkg("shop", "1.0.0", Map.of("orders", "sync")));
+        assertJson(200, deployed, "fixture: v1 runs");
+        String v1 = deployed.json().getString("commit");
         JsonObject flows = get("/admin/flows").json();
         JsonObject packages = get("/admin/packages").json();
         List<String> events = doors.events();
@@ -394,7 +404,7 @@ class AdminServerDeployTest {
         assertJson(200, a, "a check");
         assertEquals(new JsonObject().put("package", "shop").put("version", "1.1.0").put("repository", "shop").put("commit", commit)
                 .put("flows", new JsonArray().add("shop/orders").add("shop/ping")).put("added", new JsonArray().add("shop/ping"))
-                .put("swapped", new JsonArray()).put("removed", new JsonArray()), a.json(), "what the deploy would answer");
+                .put("swapped", new JsonArray()).put("removed", new JsonArray()).put("replaces", v1), a.json(), "what the deploy would answer");
         assertEquals(flows, get("/admin/flows").json(), "the flows listed are v1's");
         assertEquals(packages, get("/admin/packages").json(), "the package listed is v1");
         assertTrue(doors.events().stream().skip(events.size()).noneMatch(e -> e.startsWith("start")), "no consumer started: " + doors.events());
@@ -473,18 +483,101 @@ class AdminServerDeployTest {
         }
     }
 
-    /** A body other than {@code {"repository", "commit"}}, both strings and nothing else, is 400 before anything is fetched. */
+    /**
+     * A body other than {@code {"repository", "commit", "expect"}}, each a string and nothing else, is 400 before anything is
+     * fetched: a deploy without {@code expect}, with a null one or one that is no string, or with another key beside it, among
+     * them. An {@code expect} of another form, upper case included, is the deploy's 400. A check may leave {@code expect} out.
+     */
     @Test
     void aBodyOfAnotherShapeIs400() throws Exception {
         String commit = repos.commit(shop());
-        for (String body : List.of("", "not json", "[]", "{\"repository\":\"shop\"}", "{\"repository\":\"shop\",\"commit\":7}",
-                "{\"repository\":\"shop\",\"commit\":\"" + commit + "\",\"actor\":\"me\"}")) {
-            Answer a = request(port, HttpMethod.POST, "/admin/deploy", AUTH, body.isEmpty() ? null : body.getBytes(StandardCharsets.UTF_8));
-            assertError(400, a, "the body '" + body + "'");
-            assertTrue(a.json().getString("error").contains("the body is {\"repository\": \"<name>\", \"commit\": \"<commit or ref>\"}"), a.json().encode());
+        String head = "{\"repository\":\"shop\",\"commit\":\"" + commit + "\"";
+        for (String body : List.of("", "not json", "[]", "{\"repository\":\"shop\"}", "{\"repository\":\"shop\",\"commit\":7,\"expect\":\"any\"}",
+                head + ",\"actor\":\"me\"}", head + "}", head + ",\"expect\":null}", head + ",\"expect\":7}", head + ",\"expect\":\"any\",\"actor\":\"me\"}")) {
+            for (String query : List.of("", "?check=true")) {
+                if (query.equals("?check=true") && body.equals(head + "}")) continue;   // a check without expect: below
+                Answer a = request(port, HttpMethod.POST, "/admin/deploy" + query, AUTH, body.isEmpty() ? null : body.getBytes(StandardCharsets.UTF_8));
+                assertError(400, a, "the body '" + body + "'" + query);
+                assertTrue(a.json().getString("error").contains("the body is {\"repository\": \"<name>\", \"commit\": \"<commit or ref>\", \"expect\": \"<commit>\""
+                        + " | \"none\" | \"any\"}"), a.json().encode());
+            }
+        }
+        for (String expect : List.of("ANY", "None", commit.toUpperCase(java.util.Locale.ROOT), commit.substring(1), "")) {
+            Answer a = post(port, "", body("shop", commit, expect));
+            assertError(400, a, "expect '" + expect + "'");
+            assertTrue(a.json().getString("error").contains("expect is the commit of the package's record as 40 lower-case hex digits, none or any, was '"
+                    + expect + "'"), a.json().encode());
         }
         assertEquals(List.of(), doors.events(), "nothing was deployed");
         assertEquals(List.of(), entries(deployments.incomingDir()), "nothing was written");
+        assertJson(200, request(port, HttpMethod.POST, "/admin/deploy?check=true", AUTH, (head + "}").getBytes(StandardCharsets.UTF_8)),
+                "a check without expect compares nothing");
+    }
+
+    /**
+     * A deploy, or a check, that expects another state than the pool records is 412 {@code {error, replaces}}, {@code replaces}
+     * the commit the pool records or {@code none}, and nothing changes: no flow starts or stops, the package listed is as it was,
+     * nothing is left in {@code .incoming}. The deploy that expects what the pool records is applied and answers it as
+     * {@code replaces}.
+     */
+    @Test
+    void aDeployOrACheckThatExpectsAnotherStateIs412WithWhatThePoolRecords() throws Exception {
+        String v1 = repos.commit(shop());
+        assertStale(post(port, "", body("shop", v1, v1)), "none", "a deploy expecting a commit where the pool records none");
+        assertEquals(List.of(), names(get("/admin/packages")), "nothing was deployed");
+        assertJson(200, post(port, "", body("shop", v1, "none")), "fixture: v1 deploys expecting none");
+        List<String> events = doors.events();
+        String v2 = repos.commit(pkg("shop", "1.1.0", Map.of("orders", "sync", "ping", "sync")));
+
+        assertStale(post(port, "", body("shop", v2, "none")), v1, "a deploy expecting none where the pool records v1");
+        assertStale(post(port, "?check=true", body("shop", v2, "none")), v1, "a check with a stale expect");
+
+        assertEquals(events, doors.events(), "no flow started or stopped");
+        assertEquals("1.0.0", get("/admin/packages").json().getJsonArray("items").getJsonObject(0).getString("version"), "v1 runs on");
+        assertEquals(List.of(), entries(deployments.incomingDir()), "nothing is left in .incoming");
+        Answer applied = post(port, "", body("shop", v2, v1));
+        assertJson(200, applied, "v2 expecting v1");
+        assertEquals(v1, applied.json().getString("replaces"), "it replaced v1");
+    }
+
+    /** A 412 {@code {error, replaces}}, {@code replaces} the state the pool records. */
+    static void assertStale(Answer a, String replaces, String what) {
+        assertJson(412, a, what);
+        assertEquals(Set.of("error", "replaces"), a.json().fieldNames(), what + ": " + a.json());
+        assertEquals(replaces, a.json().getString("replaces"), what + ": " + a.json());
+        assertTrue(a.json().getString("error").contains(", but this deploy expects "), what + ": " + a.json());
+    }
+
+    /**
+     * {@code GET /admin/pool/packages} answers the pool's records and what each node runs: each package of a node with its version,
+     * repository, commit, deployedAt, state and why it is behind. A store that cannot read them is 500 {@code {error}} naming why.
+     */
+    @Test
+    void poolPackagesAnswersTheRecordsAndWhatEachNodeRuns() throws Exception {
+        String commit = repos.commit(shop());
+        assertJson(200, post(port, "", body("shop", commit, "none")), "fixture: shop deploys");
+
+        Answer a = get("/admin/pool/packages");
+
+        assertJson(200, a, "GET /admin/pool/packages");
+        JsonObject record = new JsonObject().put("name", "shop").put("version", "1.0.0").put("repository", "shop").put("commit", commit);
+        JsonObject runs = record.copy().put("deployedAt", rt.clock().instant().toString()).put("state", "RUNNING").put("behind", new JsonArray());
+        assertEquals(new JsonObject().put("records", new JsonArray().add(record))
+                .put("nodes", new JsonArray().add(new JsonObject().put("node", "node-1").put("packages", new JsonArray().add(runs)))), a.json());
+
+        InMemoryDeploymentStore rows = new InMemoryDeploymentStore();
+        DeploymentStore unreadable = new DeploymentStore() {
+            @Override public Future<Snapshot> read() { return rows.read(); }
+            @Override public Future<Optional<PoolLock>> lock() { return rows.lock(); }
+            @Override public Future<Void> audit(dev.rail8.core.audit.Actor by, String repository, JsonObject detail) { return rows.audit(by, repository, detail); }
+            @Override public Future<Void> endMarks() { return rows.endMarks(); }
+            @Override public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) { return rows.writeListing(node, epoch, packages); }
+            @Override public Future<Listings> listings() { return Future.failedFuture(new IllegalStateException("connection reset by peer")); }
+        };
+        int at = serve(Optional.of(deployments(tmp.resolve("node-2"), unreadable, true)));
+        Answer failed = request(at, HttpMethod.GET, "/admin/pool/packages", AUTH, null);
+        assertError(500, failed, "a store that cannot read them");
+        assertEquals("what each node runs could not be read: connection reset by peer", failed.json().getString("error"));
     }
 
     /**
@@ -541,6 +634,8 @@ class AdminServerDeployTest {
         assertJson(200, running.answer().await(20, TimeUnit.SECONDS), "fixture: the deploy that held the lock completes");
         Answer fork = post(port, "", body("shop-fork", repos.commit("shop-fork", shop())));
         assertError(409, fork, "CONFLICT: shop is deployed from another repository");
+        String recorded = get("/admin/packages").json().getJsonArray("items").getJsonObject(0).getString("commit");
+        assertStale(post(port, "", body("shop", repos.commit(shop()), "none")), recorded, "STALE: the pool records shop");
         assertEquals("package 'shop' is deployed from the repository 'shop', not 'shop-fork': a package comes from one repository; undeploy it first to deploy"
                 + " it from another", fork.json().getString("error"));
 
@@ -609,7 +704,9 @@ class AdminServerDeployTest {
 
         assertJson(200, a, "the redeploy");
         JsonObject body = a.json();
-        assertEquals(Set.of("package", "version", "repository", "commit", "flows", "added", "swapped", "removed"), body.fieldNames(), "the 200 body: " + body);
+        assertEquals(Set.of("package", "version", "repository", "commit", "flows", "added", "swapped", "removed", "replaces"), body.fieldNames(),
+                "the 200 body: " + body);
+        assertEquals(first.json().getString("commit"), body.getString("replaces"), "the redeploy replaced v1's record");
         assertEquals("shop", body.getString("package"));
         assertEquals("1.1.0", body.getString("version"));
         assertEquals(commit, body.getString("commit"));
@@ -874,9 +971,9 @@ class AdminServerDeployTest {
         Deployments first = deployments(tmp.resolve("node-1"), rows, true);
         String alpha = repos.commit(pkg("alpha", "2.0.0", Map.of("orders", "sync")));
         String zeta = repos.commit(pkg("zeta", "3.0.0", Map.of("beta", "sync")));
-        OnVirtualThread.call(() -> first.deploy("alpha", alpha, TestActors.named("test")));
+        OnVirtualThread.call(() -> first.deploy("alpha", alpha, Deployments.ANY, TestActors.named("test")));
         rt.clock().advance(Duration.ofHours(1));
-        OnVirtualThread.call(() -> first.deploy("zeta", zeta, TestActors.named("test")));
+        OnVirtualThread.call(() -> first.deploy("zeta", zeta, Deployments.ANY, TestActors.named("test")));
         OnVirtualThread.call(() -> { first.close(); return null; });
         repos.delete("zeta");
         DeploymentRecord zetaRow = rows.read().await().records().get(1);
@@ -1083,10 +1180,12 @@ class AdminServerDeployTest {
             }
             @Override public Future<Void> audit(dev.rail8.core.audit.Actor by, String repository, JsonObject detail) { return rows.audit(by, repository, detail); }
             @Override public Future<Void> endMarks() { return rows.endMarks(); }
+            @Override public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) { return rows.writeListing(node, epoch, packages); }
+            @Override public Future<Listings> listings() { return rows.listings(); }
         };
         Deployments failing = deployments(tmp.resolve("node-3"), failingDelete, true);
         String solo = repos.commit(pkg("solo", "1.0.0", Map.of("one", "sync")));
-        OnVirtualThread.call(() -> failing.deploy("solo", solo, TestActors.named("test")));
+        OnVirtualThread.call(() -> failing.deploy("solo", solo, Deployments.ANY, TestActors.named("test")));
         int at = serve(Optional.of(failing));
 
         assertError(500, delete(at, "/admin/packages/solo", AUTH), "a record delete that fails");

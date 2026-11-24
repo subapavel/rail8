@@ -338,7 +338,7 @@ class NodeTakeoverLedgerIT {
     /** Commits the package with in-flight limit {@code maxInFlight} to the repository {@code ledger} and deploys it on {@code child}; its flow runs there. */
     void deploy(Child child, int maxInFlight) throws Exception {
         String commit = GitRepos.shared().commit("ledger", ledgerPackage(maxInFlight));
-        byte[] body = new JsonObject().put("repository", "ledger").put("commit", commit).encode().getBytes(StandardCharsets.UTF_8);
+        byte[] body = new JsonObject().put("repository", "ledger").put("commit", commit).put("expect", "any").encode().getBytes(StandardCharsets.UTF_8);
         HttpResponse<String> deployed = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + child.admin() + "/admin/deploy"))
                 .timeout(BOUND).header("content-type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(),
                 HttpResponse.BodyHandlers.ofString());

@@ -50,13 +50,15 @@ public final class Cli {
                   --deps, else of the package folder's parent, whose package.yaml loads (the package's own excluded),
                   matched by name and version; each must be the root of a git working tree whose files are its HEAD's;
                   validate and test read each pinned commit from the same folders; print one line per entry
-              deploy <repository> <commit|ref> [--check] [--admin <url>]
+              deploy <repository> <commit|ref> (--expect <commit|none|any> | --check [--expect <state>]) [--admin <url>]
                   ask the node at <url>/admin/deploy to deploy that commit of the package repository <repository>, which
-                  it reads under its RAIL8_GIT_BASE (a ref such as HEAD or main in dev and ci only); with --check it
-                  answers what the deploy would do and changes nothing (url: --admin, else $RAIL8_ADMIN, else
-                  http://localhost:8081; plain http:// only to localhost, 127.0.0.0/8 or ::1 unless $RAIL8_ADMIN_TLS=off;
-                  https:// trusts the system's certificates, or those of the PEM file $RAIL8_ADMIN_CA only; bearer token:
-                  $RAIL8_ADMIN_TOKEN only)
+                  it reads under its RAIL8_GIT_BASE (a ref such as HEAD or main in dev and ci only), over the state
+                  --expect names: the commit the pool records for the package, none when it records none, or any to
+                  replace whatever it records; another state is refused (412) and nothing changes; with --check it
+                  answers what the deploy would do, the state it replaces as replaces, and changes nothing (url:
+                  --admin, else $RAIL8_ADMIN, else http://localhost:8081; plain http:// only to localhost, 127.0.0.0/8
+                  or ::1 unless $RAIL8_ADMIN_TLS=off; https:// trusts the system's certificates, or those of the PEM
+                  file $RAIL8_ADMIN_CA only; bearer token: $RAIL8_ADMIN_TOKEN only)
               user add <name> [--role <role>] [--admin <url>]
                   ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
                   print the first password it answers, once; the person chooses a password of their own at the first login

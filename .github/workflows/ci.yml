@@ -260,7 +260,7 @@ jobs:
             if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; exit 1; fi
             sleep 2
           done
-          bin/rail8 deploy demo HEAD
+          bin/rail8 deploy demo HEAD --expect none
       - name: Start the UI as the quickstart does
         run: |
           set -euo pipefail

@@ -36,6 +36,8 @@ import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.scope.MessageContext;
 import dev.rail8.ingress.SharedHttpPort;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
+import dev.rail8.runtime.deploy.DeploymentStore.Listings;
+import dev.rail8.runtime.deploy.DeploymentStore.NodePackage;
 import dev.rail8.runtime.deploy.DeploymentStore.PoolLock;
 import dev.rail8.runtime.deploy.DeploymentStore.Snapshot;
 import dev.rail8.runtime.git.Commit;
@@ -102,8 +104,9 @@ import java.util.stream.Stream;
  * whose effective hash changed; a deploy of a package listed {@link DeployedPackage.State#FAILED} (no install of its record
  * succeeded on this node) is a first deploy.
  *
- * <p>{@link #deploy(String, String, Actor)} blocks: call it on a virtual thread. Its order: a bad repository name or commit, or
- * a ref in a deployed environment ({@link Kind#BAD_REQUEST}); a node without {@code RAIL8_GIT_BASE} ({@link Kind#FORBIDDEN}); a
+ * <p>{@link #deploy(String, String, String, Actor)} blocks: call it on a virtual thread. Its order: a bad repository name or commit,
+ * a ref in a deployed environment, or an expected state that is none of a commit's 40 lower-case hex digits, {@link #NONE} and
+ * {@link #ANY} ({@link Kind#BAD_REQUEST}); a node without {@code RAIL8_GIT_BASE} ({@link Kind#FORBIDDEN}); a
  * closing node
  * ({@link Kind#STOPPING}); another deploy, an undeploy or a restore holding the node's lock ({@link Kind#CONFLICT}: one deploy at
  * a time per node, whatever the package), or a tick holding it, which the deploy waits for within the stop deadline
@@ -119,7 +122,10 @@ import java.util.stream.Stream;
  * {@link Kind#FAILED}, each the failure's one line. The package's folder in the commit is written into a folder of
  * {@code <dataDir>/.incoming} (a tree the seam refuses is {@link Kind#INVALID}), and its {@code package.yaml}'s name is checked
  * against the package-name pattern ({@link Kind#INVALID}) before it names a directory; a package of that name recorded from
- * another repository is {@link Kind#CONFLICT}. The folder is moved atomically to
+ * another repository is {@link Kind#CONFLICT}. Then the state the deploy expects to replace — the commit of the package's record,
+ * {@link #NONE} for no record, or {@link #ANY} for whatever the pool records — is compared with the package's record as the
+ * pool's lock read it: another state is {@link Kind#STALE}, naming the commit the pool records ({@link #check} compares it with
+ * the records it reads, with no lock). The folder is moved atomically to
  * {@code <dataDir>/packages/<name>/<content hex>/}, the hex of its content digest ({@code Package.content}; a directory an
  * earlier node left there is replaced), unless that directory is one this node keeps for the package (below) and holds the
  * files recorded when it was written, path and SHA-256 alike: then it is used as it is and the folder is deleted. A kept
@@ -284,6 +290,11 @@ public final class Deployments {
     /** How often a node follows the pool's records ({@link #startFollowing}). */
     static final Duration FOLLOW_EVERY = Duration.ofSeconds(5);
     private static final String AT_LEAST_ONCE = "at-least-once";
+    /** The state a deploy expects when the pool records no package of its name: the package's first deploy. */
+    public static final String NONE = "none";
+    /** The state a blind overwrite expects: the deploy replaces whatever the pool records of its package. */
+    public static final String ANY = "any";
+    private static final Pattern EXPECT = Pattern.compile("[0-9a-f]{40}|none|any");
     /** The consumer options the deploy sets on every in endpoint: a package that sets one itself is refused. */
     private static final List<String> RESERVED = List.of("flow", "maxBodyBytes");
 
@@ -311,6 +322,19 @@ public final class Deployments {
     private final BooleanSupplier fence;
     private final Workers workers;
     private final WorkSignals signals;
+    /** The node's epoch in the pool's membership: the incarnation its rows of what it runs are written as. */
+    private final long epoch;
+    /** One write of what this node runs at a time ({@link #writeListing}): each takes the listing once it holds this lock. */
+    private final ReentrantLock listing = new ReentrantLock();
+    /** The rows the last write of what this node runs wrote; null before the first and once one failed. Under {@link #listing}. */
+    private List<NodePackage> listed;
+    /** Why the last write of what this node runs failed; null once one succeeded. Under {@link #listing}. */
+    private String unlisted;
+    /**
+     * The store's answer to the last write of what this node runs, unbounded: done before the first. A write that did not answer
+     * within the stop deadline may still run; no other starts until it ends. Under {@link #listing}.
+     */
+    private Future<Boolean> writing = Future.succeededFuture(true);
     /** Numbers the owners of the leased consumers built here: {@code <nodeId>#<n>}. */
     private final AtomicLong owners = new AtomicLong();
     /** One deploy, undeploy or restore at a time; {@link #close} takes it to wait for the one running. */
@@ -334,7 +358,7 @@ public final class Deployments {
      * The packages whose listing is not what their record names, by name, each with why its install was refused: each is tried
      * again at every tick of {@link #follow}; written under {@link #deploying}, read by {@link #health}.
      */
-    private final Map<String, String> behind = new ConcurrentSkipListMap<>();
+    private final Map<String, List<String>> behind = new ConcurrentSkipListMap<>();
     /** Why the last tick could not read the pool's records; null once a tick read them. */
     private volatile String unread;
     /** Why the last tick that read the pool's records failed to bring this node to them; null once one did. */
@@ -381,15 +405,22 @@ public final class Deployments {
      */
     public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
                        List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records) {
-        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, new Workers());
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, 0);
+    }
+
+    /** As the constructor above, the rows of what this node runs written as the node's {@code epoch} in the pool's membership: tests. */
+    public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
+                       List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records, long epoch) {
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, new Workers(), epoch);
     }
 
     private Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
                         List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
-                        Workers workers) {
+                        Workers workers, long epoch) {
         this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records,
                 new SequentialIntake(messages, queue, workers, config.nodeId()), new InMemoryPollerLeases(clock),
-                new Targets(config.targets().defaults(), config.targets().overrides(), timer), () -> true, workers);
+                new Targets(config.targets().defaults(), config.targets().overrides(), timer), () -> true, workers, WorkSignals.NONE,
+                new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES), epoch);
     }
 
     /** Deployments whose poller leases are held in this process's memory, on {@code clock}: one node alone. */
@@ -475,6 +506,19 @@ public final class Deployments {
                        List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
                        Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
                        WorkSignals signals, Caches caches) {
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, intake, leases, targets, fence,
+                workers, signals, caches, 0);
+    }
+
+    /**
+     * Deployments whose rows of what this node runs ({@link DeploymentStore#writeListing}) are written as {@code epoch}, the node's
+     * in the pool's membership: the node's. The other constructors write them as epoch 0.
+     */
+    public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
+                       List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
+                       Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
+                       WorkSignals signals, Caches caches, long epoch) {
+        this.epoch = epoch;
         this.workers = Objects.requireNonNull(workers, "workers");
         this.signals = Objects.requireNonNull(signals, "signals");
         this.config = Objects.requireNonNull(config, "config");
@@ -611,10 +655,11 @@ public final class Deployments {
 
     /**
      * The repository and the commit a package's folder was written from; for a deploy, who deploys it and the commit's author,
-     * which its record's audit row names. {@code by} is null for a check, both are null for a restore and a tick: they write no
+     * which its record's audit row names, the state the deploy expected ({@code expect}) and the commit of the record it replaces,
+     * or {@link #NONE} ({@code replaces}). {@code by} is null for a check; all four are null for a restore and a tick: they write no
      * record.
      */
-    private record Origin(String repository, String commit, Actor by, String author) {}
+    private record Origin(String repository, String commit, Actor by, String author, String expect, String replaces) {}
 
     /** A version an off-node validate holds: its manifest's name and version, its content digest, and its folder. */
     private record Held(String name, String version, String content, Path dir) {}
@@ -734,35 +779,45 @@ public final class Deployments {
      * comment for the order. In {@code dev} and {@code ci} the commit may be a ref ({@code HEAD}, a branch or tag name, or a full name
      * under {@code refs/heads/} or {@code refs/tags/}), resolved in the repository at the fetch. Blocking: on a virtual thread.
      *
+     * @param expect the state the deploy expects to replace: the commit of the package's record as 40 lower-case hex digits,
+     *               {@link #NONE} when the pool records no such package, or {@link #ANY} to replace whatever it records
      * @param by who deploys, as the audit row names them
-     * @return the package deployed and the flows added, swapped and removed
+     * @return the package deployed, the flows added, swapped and removed, and the commit of the record it replaced or {@link #NONE}
      * @throws DeployRefusedException what the admin API answers with its own status
      * @throws IOException the data directory or the git cache cannot be written: the node's failure, not the package's
      */
-    public DeployResult deploy(String repository, String commitOrRef, Actor by) throws DeployRefusedException, IOException {
-        return fromGit(repository, commitOrRef, Objects.requireNonNull(by, "by"));
+    public DeployResult deploy(String repository, String commitOrRef, String expect, Actor by) throws DeployRefusedException, IOException {
+        return fromGit(repository, commitOrRef, Objects.requireNonNull(expect, "expect"), Objects.requireNonNull(by, "by"));
     }
 
     /**
-     * What {@link #deploy(String, String, Actor)} of {@code commitOrRef} of {@code repository} would do, with every problem: the
+     * What {@link #deploy(String, String, String, Actor)} of {@code commitOrRef} of {@code repository} would do, with every problem: the
      * same refusals, fetch, write, dependencies and checks, then the flows it built are stopped and closed and the directories it
      * wrote deleted. Nothing that runs changes, no record and no audit row is written; the commits fetched stay in the git cache.
-     * Blocking: on a virtual thread.
+     * {@code expect} is compared with the package's record as the check reads the records, with no lock; {@link #ANY} compares
+     * nothing. Blocking: on a virtual thread.
      *
-     * @return the package as the deploy would list it, and the flows it would add, swap and remove
-     * @throws DeployRefusedException as {@link #deploy(String, String, Actor)}
-     * @throws IOException as {@link #deploy(String, String, Actor)}
+     * @return the package as the deploy would list it, the flows it would add, swap and remove, and the commit of the record it
+     *         would replace or {@link #NONE}
+     * @throws DeployRefusedException as {@link #deploy(String, String, String, Actor)}
+     * @throws IOException as {@link #deploy(String, String, String, Actor)}
      */
-    public DeployResult check(String repository, String commitOrRef) throws DeployRefusedException, IOException {
-        return fromGit(repository, commitOrRef, null);
+    public DeployResult check(String repository, String commitOrRef, String expect) throws DeployRefusedException, IOException {
+        return fromGit(repository, commitOrRef, Objects.requireNonNull(expect, "expect"), null);
     }
 
-    /** A deploy from git ({@code actor} given) or its check ({@code actor} null). */
-    private DeployResult fromGit(String repository, String commitOrRef, Actor actor) throws DeployRefusedException, IOException {
+    /**
+     * A deploy from git ({@code actor} given) or its check ({@code actor} null); once a deploy freed the node's lock and the pool's,
+     * the rows of what this node runs are written ({@link #writeListing}).
+     */
+    private DeployResult fromGit(String repository, String commitOrRef, String expect, Actor actor) throws DeployRefusedException, IOException {
         try {
             PackageRepositories.checkNames(repository, commitOrRef, config.deployed());
         } catch (IllegalArgumentException refused) {
             throw refused(Kind.BAD_REQUEST, refused.getMessage());
+        }
+        if (!EXPECT.matcher(expect).matches()) {
+            throw refused(Kind.BAD_REQUEST, "expect is the commit of the package's record as 40 lower-case hex digits, none or any, was '" + expect + "'");
         }
         GitCache cache = git.orElseThrow(() -> refused(Kind.FORBIDDEN, "the node has no RAIL8_GIT_BASE: it deploys nothing"));
         // closing is read where the lock decides: a close that holds the lock (stopping) or took it before this deploy (closed)
@@ -775,19 +830,22 @@ public final class Deployments {
             try {
                 if (actor != null) poolLocked();   // a check writes nothing: it takes no pool lock
                 try (PackageRepositories repos = cache.open()) {
-                    return fromCommit(repos, repository, commitOrRef, read, actor);   // its record's save wrote its audit row
+                    return fromCommit(repos, repository, commitOrRef, expect, read, actor);   // its record's save wrote its audit row
                 }
             } catch (DeployRefusedException refused) {
-                if (actor != null) audit(actor, repository, read, new JsonObject().put("outcome", "refused").put("error", refused.error()));
+                if (actor != null) {
+                    audit(actor, repository, read, new JsonObject().put("expect", expect).put("outcome", "refused").put("error", refused.error()));
+                }
                 throw refused;
             } catch (IOException | RuntimeException failed) {
-                if (actor != null) audit(actor, repository, read, new JsonObject().put("outcome", "failed").put("error", reason(failed)));
+                if (actor != null) audit(actor, repository, read, new JsonObject().put("expect", expect).put("outcome", "failed").put("error", reason(failed)));
                 throw failed;
             } finally {
                 releasePool();
             }
         } finally {
             deploying.unlock();
+            if (actor != null) writeListing();
         }
     }
 
@@ -795,9 +853,10 @@ public final class Deployments {
      * Reads {@code commitOrRef} of {@code repository} through {@code repos}, writes its package folder into {@code .incoming}, checks
      * its manifest's name and the repository the package is recorded from, then installs it ({@link #install}) with its pins read
      * through {@code repos} too; {@code read[0]} is set to the commit's id once it is read, {@code read[1]} to its author. A deploy
-     * names who deploys ({@code by}), a check none.
+     * names who deploys ({@code by}), a check none. Once the package is named, {@code expect} is compared with its record
+     * ({@link #replaces}): another state is {@link Kind#STALE}, unless it is {@link #ANY}.
      */
-    private DeployResult fromCommit(PackageRepositories repos, String repository, String commitOrRef, String[] read, Actor by)
+    private DeployResult fromCommit(PackageRepositories repos, String repository, String commitOrRef, String expect, String[] read, Actor by)
             throws DeployRefusedException, IOException {
         boolean check = by == null;
         Commit commit;
@@ -817,14 +876,47 @@ public final class Deployments {
                 throw refused(Kind.CONFLICT, "package '" + name + "' is deployed from the repository '" + recorded.get() + "', not '" + repository
                         + "': a package comes from one repository; undeploy it first to deploy it from another");
             }
+            String replaces = replaces(name, check);
+            if (!expect.equals(ANY) && !expect.equals(replaces)) throw stale(name, expect, replaces, commit.id());
             List<String> lagging = behind.keySet().stream().filter(other -> !other.equals(name) && runs(other)).toList();
             if (!check && !lagging.isEmpty()) {   // the checks would run against a version the pool no longer records
                 throw refused(Kind.BUSY, "this node does not run what the pool recorded for " + lagging + ": " + lagging.stream().map(behind::get).toList()
                         + "; try again once it does");
             }
-            return install(name, Optional.of(new Origin(repository, commit.id(), by, commit.author())), folder, hex(Package.content(folder)), repos::forDeploy,
-                    repos, null, check);
+            return install(name, Optional.of(new Origin(repository, commit.id(), by, commit.author(), expect, replaces)), folder,
+                    hex(Package.content(folder)), repos::forDeploy, repos, null, check);
         });
+    }
+
+    /**
+     * The commit of the pool's record of package {@code name}, or {@link #NONE} when it records none: for a deploy, as the pool's
+     * lock read it; for a check, from the records it reads, within the stop deadline, with no lock.
+     *
+     * @throws IOException a check whose read of the records fails or does not answer in time: the node's failure
+     */
+    private String replaces(String name, boolean check) throws IOException {
+        Snapshot pool;
+        if (check) {
+            Future<Snapshot> read = bounded(records.read(), "the read of the pool's records");
+            read.otherwiseEmpty().await();
+            if (read.failed()) throw new IOException("the pool's records could not be read: " + reason(read.cause()), read.cause());
+            pool = read.result();
+        } else {
+            pool = poolLock.snapshot();
+        }
+        return pool.records().stream().filter(r -> r.name().equals(name)).map(DeploymentRecord::commit).findFirst().orElse(NONE);
+    }
+
+    /**
+     * The refusal of a deploy of package {@code name} that expects {@code expect} while the pool records {@code replaces}: it names
+     * what the pool records, and says so when that is {@code commit}, the commit the deploy names, as after a retry of a deploy
+     * whose answer was lost.
+     */
+    private static DeployRefusedException stale(String name, String expect, String replaces, String commit) {
+        String records = replaces.equals(NONE) ? "the pool records no package '" + name + "'" : "the pool records package '" + name + "' at " + replaces;
+        String landed = replaces.equals(commit) ? "; that is the commit this deploy names: an earlier try of it may have landed" : "";
+        return new DeployRefusedException(Kind.STALE, records + ", but this deploy expects " + expect + landed
+                + "; check again, and deploy expecting what the pool records", List.of(), Optional.of(replaces));
     }
 
     /**
@@ -904,13 +996,13 @@ public final class Deployments {
      * while the deploy or its flows run changes nothing of them. No record and no audit row is written, so a restore never installs
      * it, and the package lists no repository and no commit. Its dependencies are read only from the directories the node has
      * with the content their lock pins: nothing is fetched. Otherwise its order is the one of
-     * {@link #deploy(String, String, Actor)}: a bad name ({@link Kind#BAD_REQUEST}); a deployed environment ({@link Kind#FORBIDDEN}:
+     * {@link #deploy(String, String, String, Actor)}: a bad name ({@link Kind#BAD_REQUEST}); a deployed environment ({@link Kind#FORBIDDEN}:
      * a deploy with no origin is dev and ci only); a closing node ({@link Kind#STOPPING}); another deploy holding the lock
      * ({@link Kind#CONFLICT}); then the copy, in which anything but a regular file or a directory is {@link Kind#BAD_REQUEST}; then
      * the checks, the build and the swap. Blocking: on a virtual thread.
      *
      * @return the package deployed and the flows added, swapped and removed
-     * @throws DeployRefusedException as {@link #deploy(String, String, Actor)}
+     * @throws DeployRefusedException as {@link #deploy(String, String, String, Actor)}
      * @throws IOException {@code folder} cannot be read or the data directory written: the caller's or the node's failure
      */
     public DeployResult deploy(String name, Path folder) throws DeployRefusedException, IOException {
@@ -924,6 +1016,7 @@ public final class Deployments {
             return installed(copy, () -> install(name, Optional.empty(), copy, hex(Package.content(copy)), null, null, null, false));
         } finally {
             deploying.unlock();
+            writeListing();   // a package from git it replaced is no longer this node's to list
         }
     }
 
@@ -991,6 +1084,7 @@ public final class Deployments {
             }
         } finally {
             deploying.unlock();
+            writeListing();
         }
     }
 
@@ -1080,7 +1174,7 @@ public final class Deployments {
      * listing stays as it was; a dependency is read only from a directory the node has with the content its lock pins. Blocking: on
      * a virtual thread.
      *
-     * <p>It reports what the load, the check and the build refuse. It does not reach what only {@link #deploy(String, String, Actor)}
+     * <p>It reports what the load, the check and the build refuse. It does not reach what only {@link #deploy(String, String, String, Actor)}
      * and its install check: the package name's pattern, the fetch and the write of the commit with
      * their limits, the dependencies a deploy would fetch, the consumer of each flow (its component may still refuse it), the start
      * of each flow and the write of its record. An empty list is no promise that a deploy succeeds.
@@ -1202,6 +1296,7 @@ public final class Deployments {
         } finally {
             deploying.unlock();
         }
+        writeListing();
     }
 
     /**
@@ -1266,6 +1361,7 @@ public final class Deployments {
                 settleDrains(read.result().marked());
             } finally {
                 deploying.unlock();
+                writeListing();
             }
         } finally {
             ticking = null;
@@ -1410,6 +1506,82 @@ public final class Deployments {
     }
 
     /**
+     * What the pool runs and what each node of it runs ({@link DeploymentStore#listings}), read within the stop deadline. Blocking:
+     * on a virtual thread.
+     *
+     * @throws DeployRefusedException {@link Kind#FAILED} when the store fails, the pool holding more than
+     *                                {@link DeploymentStore#LISTINGS_MAX} rows and records together among the reasons, or does not
+     *                                answer within the stop deadline
+     */
+    public Listings listings() throws DeployRefusedException {
+        Future<Listings> read = bounded(records.listings(), "the read of what each node runs");
+        read.otherwiseEmpty().await();
+        if (read.failed()) throw refused(Kind.FAILED, "what each node runs could not be read: " + reason(read.cause()));
+        return read.result();
+    }
+
+    /**
+     * Writes the rows of what this node runs ({@link #rows}) as the node's epoch ({@link DeploymentStore#writeListing}), unless they
+     * are the rows the last write wrote; nothing once {@link #close} began. One write at a time: each takes the listing once it
+     * holds {@link #listing}, so a later write carries a later listing. A write that did not answer within the stop deadline may
+     * still run in the store: no other starts until it ended, so it never lands after a later one. A write that fails, is refused
+     * (the node's lease ended or a newer incarnation of it joined), does not answer within the stop deadline or waits for one that
+     * did not is a WARNING once per reason, and the next one writes again. Called once the node's lock and the pool's are free:
+     * after a restore, a deploy, an undeploy and a tick. Never throws.
+     */
+    private void writeListing() {
+        if (closing) return;
+        listing.lock();
+        try {
+            List<NodePackage> rows = rows();
+            if (rows.equals(listed)) return;
+            listed = null;
+            Throwable cause = null;
+            String why;
+            if (!writing.isComplete()) {
+                why = "the write before it, which did not answer within the stop deadline, has not ended";
+            } else {
+                writing = records.writeListing(config.nodeId(), epoch, rows);
+                Future<Boolean> written = bounded(writing, "the write of what this node runs");
+                written.otherwiseEmpty().await();
+                cause = written.cause();
+                why = written.failed() ? reason(cause)
+                        : written.result() ? null : "the pool's membership holds no lease of this node at epoch " + epoch;
+            }
+            if (why == null) {
+                listed = rows;
+                unlisted = null;
+                return;
+            }
+            if (!why.equals(unlisted)) {
+                LOG.log(System.Logger.Level.WARNING, "what this node runs could not be written; its next deploy, undeploy or tick writes again: " + why, cause);
+            }
+            unlisted = why;
+        } finally {
+            listing.unlock();
+        }
+    }
+
+    /**
+     * The rows of what this node runs: each package it lists with a repository and a commit, by name, with its state and why the
+     * last install of its record here was refused ({@link #behind}), at most {@link DeploymentStore#BEHIND_LINES} lines of at
+     * most {@link DeploymentStore#BEHIND_LINE_MAX} code points each. A package deployed with no origin is not among them.
+     */
+    private List<NodePackage> rows() {
+        List<NodePackage> rows = new ArrayList<>();
+        for (Deployed d : deployed.values()) {
+            DeployedPackage p = d.pkg();
+            if (p.repository().isEmpty() || p.commit().isEmpty()) continue;
+            List<String> why = behind.getOrDefault(p.name(), List.of()).stream().limit(DeploymentStore.BEHIND_LINES)
+                    .map(line -> line.codePointCount(0, line.length()) <= DeploymentStore.BEHIND_LINE_MAX ? line
+                            : line.substring(0, line.offsetByCodePoints(0, DeploymentStore.BEHIND_LINE_MAX)))
+                    .toList();
+            rows.add(new NodePackage(p.name(), p.version(), p.repository().get(), p.commit().get(), p.deployedAt(), p.state(), why));
+        }
+        return rows;
+    }
+
+    /**
      * {@code repos}, kept as {@link #tickFetch} while a tick runs so that {@link #close} can abort its fetch; aborted at once when a
      * close began before it was kept.
      */
@@ -1443,14 +1615,14 @@ public final class Deployments {
                     throw refused(Kind.FAILED, row.repository() + " at " + row.commit() + " holds the content " + content + ", its record " + row.content()
                             + ": the node reads another RAIL8_GIT_BASE or RAIL8_GIT_PATH than the deploy did");
                 }
-                install(row.name(), Optional.of(new Origin(row.repository(), row.commit(), null, null)), folder, hex(content), commits, repos, row, false);
+                install(row.name(), Optional.of(new Origin(row.repository(), row.commit(), null, null, null, null)), folder, hex(content), commits, repos, row, false);
                 behind.remove(row.name());
                 return true;
             }
         } catch (DeployRefusedException refused) {
             List<String> problems = Stream.concat(Stream.of(refused.error()), refused.problems().stream()).toList();
             boolean runs = runs(row.name());
-            if (!problems.toString().equals(behind.put(row.name(), problems.toString()))) {
+            if (!problems.equals(behind.put(row.name(), problems))) {
                 LOG.log(System.Logger.Level.ERROR, "package '" + row.name() + "' (" + row.repository() + " at " + row.commit() + ") could not be installed; "
                         + (runs ? "version " + deployed.get(row.name()).pkg().version() + " runs on" : "it is listed FAILED") + ", and every tick tries it again: "
                         + problems);
@@ -1579,7 +1751,7 @@ public final class Deployments {
                 built.clear();
                 for (Path p : written) quietly("package '" + name + "': the directory " + p.getFileName() + " its check wrote could not be deleted", () -> deleteWritten(p));
                 quietly("package '" + name + "': its directory could not be deleted after its check", () -> deleteIfEmpty(packageDir));
-                return new DeployResult(deployedPackage, added, swapped, List.copyOf(gone.keySet()));
+                return new DeployResult(deployedPackage, added, swapped, List.copyOf(gone.keySet()), origin.map(Origin::replaces));
             }
             for (Flow f : now) {   // its own worker takes the items of a flow it runs at-least-once again
                 Flow drain = AT_LEAST_ONCE.equals(f.flow().delivery()) ? draining.remove(f.id()) : null;
@@ -1607,7 +1779,8 @@ public final class Deployments {
                 PoolLock pool = poolLock;
                 Origin from = origin.get();
                 JsonObject audited = detail(from.repository(), from.commit(), from.author(),
-                        new JsonObject().put("outcome", "deployed").put("package", name).put("version", version));
+                        new JsonObject().put("expect", from.expect()).put("outcome", "deployed").put("package", name).put("version", version)
+                                .put("replaces", from.replaces()));
                 Future<Long> saved = bounded(Future.future(done -> pool.save(saving, from.by(), audited).onComplete(done)), "the write of the deploy record");
                 saved.otherwiseEmpty().await();
                 if (saved.failed()) {
@@ -1630,7 +1803,7 @@ public final class Deployments {
             if (previous != null) kept.put(previous, running.kept().get(previous));
             now.forEach(f -> kept.computeIfAbsent(f.dir(), d -> running.kept().get(d)));   // in use: an old flow's was kept with it
             next = new Deployed(deployedPackage, List.copyOf(now), Map.copyOf(kept), previous, pins, record);
-            result = new DeployResult(deployedPackage, added, swapped, List.copyOf(gone.keySet()));
+            result = new DeployResult(deployedPackage, added, swapped, List.copyOf(gone.keySet()), origin.map(Origin::replaces));
         } catch (Throwable failure) {
             unsaved = Set.of();
             revived.forEach(f -> undrained.put(f.id(), f));   // their flows are still to drain: the next tick starts them again

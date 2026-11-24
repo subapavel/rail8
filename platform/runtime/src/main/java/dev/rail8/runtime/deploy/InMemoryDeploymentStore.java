@@ -1,14 +1,18 @@
 package dev.rail8.runtime.deploy;
 
 import dev.rail8.core.audit.Actor;
+import dev.rail8.core.node.InMemoryMembership;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -16,7 +20,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * The {@link DeploymentStore} of a node without Postgres records (dev, tests): lost with the process. The {@code Deployments} that
  * share one such store are one pool: they share its records, its marks, its generation and its lock. It sees no work rows, so
- * {@link #endMarks} ends every mark.
+ * {@link #endMarks} ends every mark. What each node runs is checked against an {@link InMemoryMembership} when the store has one,
+ * as the Postgres store checks it against {@code nodes}; without one, every write of a listing is taken, and every node that
+ * wrote one is listed with its last.
  */
 public final class InMemoryDeploymentStore implements DeploymentStore {
 
@@ -36,6 +42,23 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
     private long generation;
     private Held holder;
     private final List<Audited> audited = new CopyOnWriteArrayList<>();
+    /** What each node wrote it runs, by node id; guarded by {@code this}. */
+    private final Map<String, Listing> listings = new TreeMap<>();
+    /** The leases the listings are checked against; null: none. */
+    private final InMemoryMembership membership;
+
+    /** One node's rows: the epoch it wrote them under, and its packages. */
+    private record Listing(long epoch, List<NodePackage> packages) {}
+
+    /** A store whose listings are not checked against any membership. */
+    public InMemoryDeploymentStore() {
+        this.membership = null;
+    }
+
+    /** A store whose listings are checked against {@code membership}'s leases, as the Postgres store checks them against {@code nodes}. */
+    public InMemoryDeploymentStore(InMemoryMembership membership) {
+        this.membership = Objects.requireNonNull(membership, "membership");
+    }
 
     @Override
     public synchronized Future<Snapshot> read() {
@@ -44,6 +67,38 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
     private Snapshot snapshot() {
         return new Snapshot(generation, new ArrayList<>(rows.values()), new ArrayList<>(marked));
+    }
+
+    @Override
+    public synchronized Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
+        if (membership != null && !(membership.live(node) && membership.epoch(node) == epoch)) return Future.succeededFuture(false);
+        listings.put(node, new Listing(epoch, List.copyOf(packages)));
+        if (membership != null) listings.entrySet().removeIf(e -> !membership.live(e.getKey()) || membership.epoch(e.getKey()) != e.getValue().epoch());
+        return Future.succeededFuture(true);
+    }
+
+    @Override
+    public synchronized Future<Listings> listings() {
+        SortedMap<String, List<NodePackage>> nodes = new TreeMap<>();
+        if (membership == null) {
+            listings.forEach((node, l) -> nodes.put(node, sorted(l.packages())));
+        } else {
+            membership.leased().forEach((node, epoch) -> {
+                Listing l = listings.get(node);
+                nodes.put(node, l == null || l.epoch() != epoch ? List.of() : sorted(l.packages()));
+            });
+        }
+        long read = rows.size() + nodes.values().stream().mapToLong(p -> Math.max(1, p.size())).sum();
+        if (read > LISTINGS_MAX) {
+            return Future.failedFuture(new IllegalStateException("the pool holds more than " + LISTINGS_MAX
+                    + " records and rows of what each node runs together, the most one read takes"));
+        }
+        return Future.succeededFuture(new Listings(new ArrayList<>(rows.values()), nodes));
+    }
+
+    /** {@code packages} sorted by name as {@link String#compareTo} sorts. */
+    private static List<NodePackage> sorted(List<NodePackage> packages) {
+        return packages.stream().sorted(Comparator.comparing(NodePackage::name)).toList();
     }
 
     @Override

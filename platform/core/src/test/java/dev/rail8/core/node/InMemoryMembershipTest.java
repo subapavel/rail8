@@ -14,7 +14,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * P2-15a (D-101 (1)): the in-memory membership's rows beside {@code MembershipContract} — a renew of a node that never joined
  * renews nothing and leaves no row; a renew that is not renewed never names its own expired row among the expired peers; a
- * release takes only the peers asked for whose lease ran out, each once; a reconnect has nothing to drop and changes no row.
+ * release takes only the peers asked for whose lease ran out, each once; a reconnect has nothing to drop and changes no row. The
+ * leased nodes are those whose lease holds now, each with its current epoch.
  */
 class InMemoryMembershipTest {
 
@@ -22,6 +23,25 @@ class InMemoryMembershipTest {
 
     final FakeClock clock = FakeClock.at(Instant.parse("2026-11-05T08:00:00Z"));
     final InMemoryMembership members = new InMemoryMembership(clock);
+
+    @Test
+    void theLeasedNodesAreTheLiveOnesWithTheirCurrentEpochUpToTheLeasesEnd() {
+        members.join("b", L).await();
+        members.join("a", L).await();
+        long restarted = members.join("a", L).await();
+        members.join("c", L).await();
+        clock.advance(Duration.ofSeconds(10));
+        members.join("d", L).await();
+        clock.advance(L.minusSeconds(10));            // the end of b's, a's and c's leases: live up to and including it
+        assertEquals(java.util.Map.of("a", restarted, "b", 1L, "c", 1L, "d", 1L), members.leased());
+        assertEquals(List.of("a", "b", "c", "d"), List.copyOf(members.leased().keySet()), "sorted by id");
+
+        clock.advance(Duration.ofSeconds(1));
+        assertEquals(java.util.Map.of("d", 1L), members.leased(), "a lease that ran out holds no more, released or not");
+        members.release(List.of("b")).await();
+        members.join("c", L).await();
+        assertEquals(java.util.Map.of("c", 2L, "d", 1L), members.leased(), "a rejoin holds under its new epoch");
+    }
 
     @Test
     void aNodeThatNeverJoinedIsNotRenewedAndLeavesNoRow() {

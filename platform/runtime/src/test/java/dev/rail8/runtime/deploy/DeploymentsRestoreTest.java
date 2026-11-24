@@ -169,11 +169,11 @@ class DeploymentsRestoreTest {
         }
 
         DeployResult deploy(String repository, String commit) throws Exception {
-            return OnVirtualThread.call(() -> deployments.deploy(repository, commit, TestActors.named("test")));
+            return OnVirtualThread.call(() -> deployments.deploy(repository, commit, Deployments.ANY, TestActors.named("test")));
         }
 
         DeployRefusedException refused(String repository, String commit) throws Exception {
-            return joinRefused(OnVirtualThread.start(() -> deployments.deploy(repository, commit, TestActors.named("test"))), "the deploy of " + repository + " on " + id
+            return joinRefused(OnVirtualThread.start(() -> deployments.deploy(repository, commit, Deployments.ANY, TestActors.named("test"))), "the deploy of " + repository + " on " + id
                     + " is refused");
         }
 
@@ -223,6 +223,16 @@ class DeploymentsRestoreTest {
         @Override
         public Future<Optional<PoolLock>> lock() {
             return fail("a restore takes no lock");
+        }
+
+        @Override
+        public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
+            return Future.succeededFuture(true);
+        }
+
+        @Override
+        public Future<Listings> listings() {
+            return Future.failedFuture(new IllegalStateException(message));
         }
 
         @Override

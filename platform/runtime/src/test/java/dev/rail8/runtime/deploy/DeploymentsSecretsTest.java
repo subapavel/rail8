@@ -185,12 +185,12 @@ class DeploymentsSecretsTest {
         /** Commits {@code p} to the repository of its name and deploys that commit. */
         DeployedPackage deploy(PackageDraft p) throws Exception {
             String commit = repos.commit(p);
-            return OnVirtualThread.call(() -> deployments.deploy(name(p), commit, TestActors.named("test"))).pkg();
+            return OnVirtualThread.call(() -> deployments.deploy(name(p), commit, Deployments.ANY, TestActors.named("test"))).pkg();
         }
 
         DeployRefusedException refused(PackageDraft p) {
             String commit = repos.commit(p);
-            return assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy(name(p), commit, TestActors.named("test"))),
+            return assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy(name(p), commit, Deployments.ANY, TestActors.named("test"))),
                     "the deploy is refused");
         }
 

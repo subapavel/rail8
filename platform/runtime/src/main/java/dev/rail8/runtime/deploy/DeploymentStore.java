@@ -4,13 +4,19 @@ import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
+import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 /**
  * Where the pool's {@link DeploymentRecord}s, its generation and the audit rows of the deploys live: Postgres on a node
  * ({@link PgDeploymentStore}), memory in dev and tests ({@link InMemoryDeploymentStore}). Records are written only under the
- * pool's lock ({@link #lock}), one holder at a time across the pool, and each write raises the pool's generation by one.
+ * pool's lock ({@link #lock}), one holder at a time across the pool, and each write raises the pool's generation by one. Beside
+ * the records, each node writes what it runs itself ({@link #writeListing}), so that any node can answer for the whole pool
+ * ({@link #listings}); nothing reads those rows to decide anything.
  *
  * @since 0.1
  */
@@ -38,8 +44,73 @@ public interface DeploymentStore {
         }
     }
 
+    /**
+     * One package as the node that runs it lists it: its row of what each node runs.
+     *
+     * @param name the package's name
+     * @param version its manifest's version; a {@link DeployedPackage.State#FAILED} package's is its record's
+     * @param repository the repository it was deployed from; a FAILED package's is its record's
+     * @param commit the commit it was deployed from, 40 lower-case hex digits; a FAILED package's is its record's
+     * @param deployedAt when the deploy that the node runs wrote it, to the microsecond
+     * @param state whether the node runs it
+     * @param behind why the node's last install of the package's record was refused, one line each, at most
+     *               {@link #BEHIND_LINES} lines of at most {@link #BEHIND_LINE_MAX} characters; empty when it was not
+     */
+    record NodePackage(String name, String version, String repository, String commit, Instant deployedAt, DeployedPackage.State state,
+                       List<String> behind) {
+        public NodePackage {
+            behind = List.copyOf(behind);
+        }
+    }
+
+    /**
+     * What the pool runs, read in one read-only transaction.
+     *
+     * @param records every record of the pool, sorted by name as {@link String#compareTo} sorts
+     * @param nodes each node whose lease holds, by id, sorted as {@link String#compareTo} sorts: its rows of its current epoch,
+     *              sorted by name the same way; empty for a node that wrote none
+     */
+    record Listings(List<DeploymentRecord> records, SortedMap<String, List<NodePackage>> nodes) {
+        public Listings {
+            records = List.copyOf(records);
+            TreeMap<String, List<NodePackage>> copy = new TreeMap<>();
+            nodes.forEach((node, packages) -> copy.put(node, List.copyOf(packages)));
+            nodes = Collections.unmodifiableSortedMap(copy);
+        }
+    }
+
+    /** The most lines of why a node's package is behind ({@link NodePackage#behind}). */
+    int BEHIND_LINES = 20;
+
+    /** The most characters of one line of why a node's package is behind ({@link NodePackage#behind}). */
+    int BEHIND_LINE_MAX = 500;
+
+    /**
+     * The most rows {@link #listings} reads, records and nodes' packages together; a node that wrote none counts as one. A pool
+     * that holds more is answered with a failure that names the limit, never with a part of it.
+     */
+    int LISTINGS_MAX = 10_000;
+
     /** The pool's generation, every record and every mark, read in one snapshot. */
     Future<Snapshot> read();
+
+    /**
+     * Replaces the rows of what {@code node} runs with {@code packages}, whole, in one transaction, and only while the node's
+     * membership row carries {@code epoch} with a lease that was not released: answers false and writes nothing otherwise. The same
+     * transaction deletes the rows of every node whose epoch moved on or whose lease was released. It takes no pool lock and raises
+     * no generation.
+     *
+     * @param node the node that writes, about itself
+     * @param epoch its incarnation, as its membership joined it
+     * @param packages each package it lists from git
+     */
+    Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages);
+
+    /**
+     * Every record, and the rows of every node whose lease holds, of its current epoch, read in one read-only transaction; it fails,
+     * naming {@link #LISTINGS_MAX}, when they are more than that.
+     */
+    Future<Listings> listings();
 
     /**
      * Ends the mark of each retired flow whose work rows are gone, each in a transaction of its own and only while no write of a message for

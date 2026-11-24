@@ -160,13 +160,13 @@ class DeploymentsListenerTest {
 
     DeployResult deploy(Deployments d, PackageDraft p) throws Exception {
         String commit = repos.commit(p);
-        return OnVirtualThread.call(() -> d.deploy(p.name(), commit, TestActors.named("test")));
+        return OnVirtualThread.call(() -> d.deploy(p.name(), commit, Deployments.ANY, TestActors.named("test")));
     }
 
     /** The deploy of {@code p} on {@code d}, refused as a 422. */
     DeployRefusedException refused(Deployments d, PackageDraft p) {
         String commit = repos.commit(p);
-        DeployRefusedException r = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy(p.name(), commit, TestActors.named("test"))),
+        DeployRefusedException r = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy(p.name(), commit, Deployments.ANY, TestActors.named("test"))),
                 "the deploy of " + p.name() + " is refused");
         assertEquals(Kind.INVALID, r.kind(), "a 422: " + r.error() + " " + r.problems());
         return r;
@@ -489,7 +489,7 @@ class DeploymentsListenerTest {
         });
         String v2 = repos.commit(listening(listening(pkg("alpha"), "a1", port(8081)), "a2", port(8082)));
         DeployRefusedException rolledBack = assertThrows(DeployRefusedException.class,
-                () -> OnVirtualThread.call(() -> deployments.deploy("alpha", v2, TestActors.named("test"))), "v2, whose a1 does not start");
+                () -> OnVirtualThread.call(() -> deployments.deploy("alpha", v2, Deployments.ANY, TestActors.named("test"))), "v2, whose a1 does not start");
         assertEquals(Kind.FAILED, rolledBack.kind(), rolledBack.error() + " " + rolledBack.problems());
         assertEquals(Map.of("alpha/a1", DeployedFlow.State.FAILED, "alpha/a2", FLOW_RUNNING), flows(deployments), "fixture: a1 is FAILED: " + rolledBack.error());
 

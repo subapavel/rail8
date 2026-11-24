@@ -210,6 +210,7 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `body_refs`, `journal_segments`, `journal_keys`, `journal_nodes`, `journal_losses` | where each durable body is, the journal files, their wrapped encryption keys, and losses an operator accepted |
 | `nodes` | node membership and leases |
 | `deployments` | which commit of which repository each package runs, its content digest and the pins of its dependencies |
+| `node_packages` | what each node of the pool runs, written by that node alone as the epoch it joined with: each package's version, repository, commit, state and why it runs behind; nothing decides by it, and its loss loses no message |
 | `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
 | `users`, `role_assignments`, `sessions`, `tokens`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions and named tokens (by fingerprint), the longest a token lives, the failed logins of each name, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
@@ -437,8 +438,10 @@ root of its working tree, or whose files differ from its `HEAD`, is refused. `ra
 `rail8 test` read each dependency's files from its pinned commit in that folder of repositories, through
 the git seam the node will use, and the package itself from its working folder. A node still resolves
 a dependency by its content among the packages it holds.
-`rail8 deploy <repository> <commit|ref> [--check]` asks a node's admin API to deploy that commit of
-that repository (`POST /admin/deploy`) and prints the node's answer; `--check` deploys nothing.
+`rail8 deploy <repository> <commit|ref> --expect <commit|none|any>` asks a node's admin API to deploy
+that commit of that repository over the state `--expect` names (`POST /admin/deploy`) and prints the
+node's answer; without `--expect` a deploy is a usage error and sends nothing. `--check` deploys
+nothing, needs no `--expect`, and answers the state as `replaces`.
 `rail8 user add <name> [--role <role>]` makes a person through a node's admin API with
 `RAIL8_ADMIN_TOKEN`, the emergency key, and prints their first password; it makes the first
 administrator. `rail8 key new` prints a new emergency key and sends nothing. Both commands that call
@@ -453,8 +456,13 @@ CLI's class path only, never `RAIL8_PLUGINS`.
 ### Deployment
 
 One commit of a package's own git repository is what runs (`docs/DEPLOY-FROM-GIT.md`). A deploy
-names a repository and a commit: `POST /admin/deploy` with `{"repository", "commit"}`; in `dev` and
-`ci` the commit may also be a ref, such as `HEAD` or `main`, resolved at the fetch. A node reads the
+names a repository, a commit and the state it expects to replace: `POST /admin/deploy` with
+`{"repository", "commit", "expect"}`; in `dev` and `ci` the commit may also be a ref, such as `HEAD` or
+`main`, resolved at the fetch. `expect` is the commit of the package's record, `none` when the pool
+records no such package, or `any`, the blind overwrite, which the audit row records. Under the pool's
+lock, once the commit names the package, the node compares it with the record and refuses another
+state (412 with `replaces`, the state the pool holds), changing nothing. A check may leave `expect`
+out; its answer, as the deploy's, names `replaces`, so a client checks, then deploys expecting it. A node reads the
 repositories under one base, `RAIL8_GIT_BASE` (a `file://` base only in `dev` and `ci`), each by its
 name, with the package at `RAIL8_GIT_PATH` in it, through a JGit cache in its data directory that is
 not state: a commit the cache lacks is fetched within `RAIL8_GIT_TIMEOUT`, and with `RAIL8_GIT_REF`
@@ -490,6 +498,15 @@ what the records name before it plans. Every 5 s, on its injected timer, each no
 records: it installs a record whose content it does not run, undeploys a package from git that has
 no record, and tries again a package it could not install. A package that ran keeps its old version
 while a newer record does not install; it is listed behind, and `/health` is `DEGRADED` meanwhile.
+
+Each node writes what it runs into `node_packages`, after its restore and after each deploy, undeploy
+and tick in which that changed, once its locks are free: one transaction that holds its row of `nodes`
+and writes only while that row carries its own epoch and a lease not released, so an old incarnation
+writes nothing after a newer one joined. A write that fails or does not answer within the stop
+deadline is a WARNING, never the deploy's answer, and the next one writes again; no other starts while
+one runs. `GET /admin/pool/packages`, on any node, answers the pool's records and the rows of each node
+whose lease holds, of its current epoch, in one read: a follower that runs an older commit until its
+next tick, and why a node runs behind. Nothing reads these rows to decide anything.
 
 A flow retires when the pool no longer runs it at-least-once: a redeploy removes it or changes its
 delivery, or its package is undeployed. The write of the record marks it in the table `retiring`,
@@ -833,7 +850,8 @@ so it cannot act after others think it dead. A node replaced by a newer start of
 - **Polling.** A polling consumer (SFTP) runs only on the node that holds the endpoint's lease in
   Valkey, so one file is read by one node.
 - **Deploys** (part 4). One deploy or undeploy at a time per pool, under a Postgres advisory lock that
-  a dead node frees with its connection. Every node follows the records every 5 s. A removed
+  a dead node frees with its connection. Every node follows the records every 5 s and writes what it
+  runs, which any node answers for the pool; a node whose lease ended drops out of that answer. A removed
   at-least-once flow stops taking messages on every node, and its items run on each node's drain of
   it. A node that dies while a flow drains leaves its items in the work queue; restarted, it builds no
   drain yet, so they wait.
@@ -1227,7 +1245,8 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `GET /admin/work/stopped` | keys of ordered flows stopped behind a failed message |
 | `GET /admin/work/held`, `POST /admin/work/{seq}/release` | held items |
 | `GET /admin/work/lost`, `POST /admin/work/{seq}/discard` | items whose body was lost |
-| `POST /admin/deploy`, `DELETE /admin/packages/{name}`; `GET /admin/packages`, `GET /admin/flows` | deploy a commit (`?check=true`: check it only), undeploy, what runs (a `RESTARTING` flow with its failures, next attempt and cause) |
+| `POST /admin/deploy`, `DELETE /admin/packages/{name}`; `GET /admin/packages`, `GET /admin/flows` | deploy a commit over the state it expects (`?check=true`: check it only), undeploy, what runs (a `RESTARTING` flow with its failures, next attempt and cause) |
+| `GET /admin/pool/packages` | the pool's records and what each node of the pool runs |
 | `GET /admin/targets`, `GET /admin/flows/{flow}/cpu` | limits per target system, CPU by step |
 | `GET /admin/components` | the components the node serves and their settings descriptions |
 | `GET /admin/steps` | the step types of the node's modules and plugins, each with its `configSchema`, sorted by type |

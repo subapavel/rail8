@@ -10,12 +10,15 @@ import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
+import dev.rail8.runtime.deploy.DeploymentStore.Listings;
+import dev.rail8.runtime.deploy.DeploymentStore.NodePackage;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.runtime.queue.PgWorkQueue;
 import dev.rail8.testkit.FakeRuntime;
 import dev.rail8.testkit.SharedPostgres;
 import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
@@ -24,6 +27,7 @@ import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.PgConnection;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
+import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -41,9 +45,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static dev.rail8.runtime.deploy.DeploymentsRedeployTest.reachedWhile;
+import static dev.rail8.runtime.deploy.DeploymentsRedeployTest.untilWhile;
 import static dev.rail8.runtime.deploy.DeploymentsUndeployTest.children;
 import static dev.rail8.runtime.deploy.DeploymentsTest.joinRefused;
 import static dev.rail8.runtime.deploy.DeploymentsTest.until;
@@ -61,8 +72,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * is refused while it runs; a node behind the pool's generation installs what the records name before it plans its own deploy; the
  * other node installs and undeploys at its next tick ({@code follow}), and a package it could not install, its repository not
  * answering, at a later tick once it does. An at-least-once flow the pool no longer runs stops taking messages on every node, and
- * the items it left run on a drain of the node that accepted them, which ends at a tick once none is left. The ticks run as the node
- * runs them, on its timer, or are called one at a time.
+ * the items it left run on a drain of the node that accepted them, which ends at a tick once none is left. Each node joins the
+ * pool's {@code nodes} as it starts and writes what it runs into {@code node_packages}, which either node answers for the whole
+ * pool. The ticks run as the node runs them, on its timer, or are called one at a time.
  */
 class DeploymentsPoolIT {
 
@@ -79,6 +91,13 @@ class DeploymentsPoolIT {
     final InMemoryMessageStore messages = new InMemoryMessageStore();
     final InMemoryDlq dlq = new InMemoryDlq();
     final List<Peer> peers = new ArrayList<>();
+    final List<LogRecord> logged = new CopyOnWriteArrayList<>();
+    final Logger rail8 = Logger.getLogger("dev.rail8");
+    final Handler capture = new Handler() {
+        @Override public void publish(LogRecord r) { logged.add(r); }
+        @Override public void flush() {}
+        @Override public void close() {}
+    };
 
     @BeforeAll
     static void start() {
@@ -99,20 +118,27 @@ class DeploymentsPoolIT {
 
     @BeforeEach
     void wire() {
-        pool.query("truncate deployments, retiring").execute().await();
+        pool.query("truncate deployments, retiring, node_packages").execute().await();
         pool.query("delete from work").execute().await();
+        pool.query("delete from nodes").execute().await();
         repos = new GitRepos(tmp.resolve("repos"));
+        rail8.addHandler(capture);
     }
 
     @AfterEach
     void closeEveryPeer() throws Exception {
+        rail8.removeHandler(capture);
         for (Peer p : peers) p.doors.releaseAll();
         for (Peer p : peers) p.close();
     }
 
-    /** One node of the pool: its data directory {@code <tmp>/<id>}, its Doors, its Deployments over the pool's Postgres. */
+    /**
+     * One node of the pool: its data directory {@code <tmp>/<id>}, its Doors, its Deployments over the pool's Postgres, joined to the
+     * pool's {@code nodes} as it is built, as a node joins before it restores: a node built again with the same id is its restart.
+     */
     final class Peer {
         final String id;
+        final long epoch;
         final Doors doors = new Doors();
         final Deployments deployments;
 
@@ -133,6 +159,7 @@ class DeploymentsPoolIT {
 
         Peer(String id, String base, DeploymentStore records) {
             this.id = id;
+            this.epoch = join(id);
             Map<String, String> e = new HashMap<>();
             e.put("RAIL8_ENV", "dev");
             e.put("RAIL8_NODE_ID", id);
@@ -143,7 +170,7 @@ class DeploymentsPoolIT {
             e.put("RAIL8_GIT_BASE", base);
             Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors));
             deployments = new Deployments(NodeConfig.from(e), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq,
-                    new PgWorkQueue(pool, id), () -> 0L, records);
+                    new PgWorkQueue(pool, id), () -> 0L, records, epoch);
             peers.add(this);
         }
 
@@ -157,7 +184,7 @@ class DeploymentsPoolIT {
         }
 
         OnVirtualThread.Call<DeployResult> deploying(String repository, String commit) {
-            return OnVirtualThread.start(() -> deployments.deploy(repository, commit, TestActors.named("test")));
+            return OnVirtualThread.start(() -> deployments.deploy(repository, commit, Deployments.ANY, TestActors.named("test")));
         }
 
         DeployResult deploy(String repository, String commit) throws Exception {
@@ -186,6 +213,21 @@ class DeploymentsPoolIT {
         /** Each package listed, {@code <name>@<version> <state>}, by name. */
         List<String> listed() {
             return deployments.packages().stream().map(p -> p.name() + "@" + p.version() + " " + p.state()).toList();
+        }
+
+        /**
+         * This node's answer of what the pool runs: {@code record <name>@<version>} per record, then per node {@code <node>} when it
+         * has no package, else {@code <node> <name>@<version> <state>} per package, with its {@code behind} lines when it has any.
+         */
+        List<String> answer() throws Exception {
+            Listings answer = OnVirtualThread.call(deployments::listings);
+            List<String> lines = new ArrayList<>();
+            answer.records().forEach(r -> lines.add("record " + r.name() + "@" + r.version()));
+            answer.nodes().forEach((node, packages) -> {
+                if (packages.isEmpty()) lines.add(node);
+                for (NodePackage p : packages) lines.add(node + " " + p.name() + "@" + p.version() + " " + p.state() + (p.behind().isEmpty() ? "" : " " + p.behind()));
+            });
+            return lines;
         }
 
         /** The doors of {@code flow} that started and were not stopped since. */
@@ -223,10 +265,18 @@ class DeploymentsPoolIT {
         return p;
     }
 
-    /** The pool's records through the Postgres store, whose reads fail while {@code failing} is set. */
+    /**
+     * The pool's records through the Postgres store, whose reads fail while {@code failing} is set. Its writes of what the node runs
+     * are counted in {@code writes}; while {@code holding} is set, each waits for it before it reaches Postgres, counted in
+     * {@code held}, and {@code ended} counts those that ended since.
+     */
     static final class Unreadable implements DeploymentStore {
         final DeploymentStore records = new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connect).map(c -> c));
         volatile boolean failing;
+        volatile Promise<Void> holding;
+        final AtomicInteger writes = new AtomicInteger();
+        final AtomicInteger held = new AtomicInteger();
+        final AtomicInteger ended = new AtomicInteger();
 
         @Override
         public Future<Snapshot> read() {
@@ -247,6 +297,50 @@ class DeploymentsPoolIT {
         public Future<Void> endMarks() {
             return records.endMarks();
         }
+
+        @Override
+        public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
+            writes.incrementAndGet();
+            Promise<Void> hold = holding;
+            if (hold == null) return records.writeListing(node, epoch, packages);
+            held.incrementAndGet();
+            return hold.future().compose(go -> records.writeListing(node, epoch, packages)).onComplete(done -> ended.incrementAndGet());
+        }
+
+        @Override
+        public Future<Listings> listings() {
+            return records.listings();
+        }
+    }
+
+    /** Joins {@code node} to the pool's {@code nodes}: epoch 1, or the next one, with a lease of 30 s by the database's clock. */
+    static long join(String node) {
+        return pool.preparedQuery("insert into nodes (node, epoch, lease_until) values ($1, 1, now() + interval '30 seconds') "
+                + "on conflict (node) do update set epoch = nodes.epoch + 1, lease_until = excluded.lease_until returning epoch")
+                .execute(Tuple.of(node)).await().iterator().next().getLong(0);
+    }
+
+    /** Ends {@code node}'s lease by the database's clock, as a node that stopped renewing it. */
+    static void expire(String node) {
+        pool.preparedQuery("update nodes set lease_until = now() - interval '1 second' where node = $1").execute(Tuple.of(node)).await();
+    }
+
+    /** Releases {@code node}'s lease, as a peer releases an ended one. */
+    static void release(String node) {
+        pool.preparedQuery("update nodes set lease_until = null where node = $1").execute(Tuple.of(node)).await();
+    }
+
+    /** Every row of {@code node_packages}, {@code <node>/<epoch>/<package>@<version>}, sorted. */
+    static List<String> nodeRows() {
+        List<String> rows = new ArrayList<>();
+        pool.query("select r from (select node || '/' || epoch || '/' || package || '@' || version as r from node_packages) t order by r collate \"C\"").execute().await()
+                .forEach(r -> rows.add(r.getString(0)));
+        return rows;
+    }
+
+    /** The messages of each WARNING logged that contains {@code text}, in order. */
+    List<String> warned(String text) {
+        return logged.stream().filter(r -> r.getLevel() == Level.WARNING && r.getMessage().contains(text)).map(LogRecord::getMessage).toList();
     }
 
     /** The pool's generation, read with plain SQL. */
@@ -567,6 +661,190 @@ class DeploymentsPoolIT {
         assertEquals(List.of(), b.packageDirs("shop"), "node b's tick ends its drain and prunes the directory");
         assertEquals(Health.up(), a.deployments.health());
         assertEquals(Health.up(), b.deployments.health());
+    }
+
+    // --- what each node runs
+
+    /**
+     * Both nodes answer the same: the pool's records and what each node runs. After a deploy on node a, node b runs the older
+     * version until its next tick; after an undeploy, it runs the package until then.
+     */
+    @Test
+    void eachNodeAnswersWhatEveryNodeRunsAFollowerBehindUntilItsTick() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        Peer b = new Peer("node-b").restored();
+        assertEquals(List.of("node-a", "node-b"), a.answer(), "both nodes joined and restored nothing");
+
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        b.follow();
+        a.deploy("shop", repos.commit(pkg("shop", "2.0.0", "a", "c")));
+        List<String> behind = List.of("record shop@2.0.0", "node-a shop@2.0.0 RUNNING", "node-b shop@1.0.0 RUNNING");
+        assertEquals(behind, a.answer(), "node b runs 1.0.0 until its next tick");
+        assertEquals(behind, b.answer(), "and says so itself");
+
+        b.follow();
+        assertEquals(List.of("record shop@2.0.0", "node-a shop@2.0.0 RUNNING", "node-b shop@2.0.0 RUNNING"), b.answer(), "node b's tick wrote 2.0.0");
+
+        a.undeploy("shop");
+        assertEquals(List.of("node-a", "node-b shop@2.0.0 RUNNING"), b.answer(), "no record, and node b runs shop until its next tick");
+        b.follow();
+        assertEquals(List.of("node-a", "node-b"), a.answer());
+        assertEquals(List.of(), warned("what this node runs could not be written"), "every write was written");
+    }
+
+    /**
+     * A tick that cannot install a newer record writes why into the row of the version the node runs on; the tick that installs the
+     * record writes the row with nothing behind it.
+     */
+    @Test
+    void aTickThatCannotInstallARecordWritesWhy() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        Peer b = new Peer("node-b").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        b.follow();
+        a.deploy("shop", repos.commit(pkg("shop", "2.0.0", "a", "c")));
+        Path aside = tmp.resolve("aside");
+        Files.move(repos.dir("shop"), aside);   // shop's repository does not answer node b's fetch of 2.0.0
+
+        b.follow();
+        String health = b.deployments.health().detail();
+        String prefix = "BEHIND: package shop runs version 1.0.0: ";
+        assertTrue(health.contains(prefix), health);
+        NodePackage row = OnVirtualThread.call(a.deployments::listings).nodes().get("node-b").getFirst();
+        assertEquals("1.0.0", row.version(), "node b runs 1.0.0 on");
+        assertFalse(row.behind().isEmpty(), "its row says why it runs behind: " + row);
+        assertTrue(health.contains(prefix + row.behind()), "the lines its health names: " + row.behind() + " in " + health);
+
+        Files.move(aside, repos.dir("shop"));
+        b.follow();
+        assertEquals(List.of("record shop@2.0.0", "node-a shop@2.0.0 RUNNING", "node-b shop@2.0.0 RUNNING"), a.answer(), "nothing behind it once installed");
+    }
+
+    /**
+     * A node whose lease ended drops out of the answer, its rows kept unread; once a peer released the lease, the next write of any
+     * node deletes them.
+     */
+    @Test
+    void aNodeWhoseLeaseEndedDropsOutOfTheAnswer() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        Peer b = new Peer("node-b").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        b.follow();
+
+        expire("node-b");
+        assertEquals(List.of("record shop@1.0.0", "node-a shop@1.0.0 RUNNING"), a.answer(), "node b's lease ended: it is not in the answer");
+        assertEquals(List.of("node-a/1/shop@1.0.0", "node-b/1/shop@1.0.0"), nodeRows(), "its rows stay");
+        release("node-b");
+        assertEquals(List.of("node-a/1/shop@1.0.0", "node-b/1/shop@1.0.0"), nodeRows(), "until the next write of any node");
+
+        a.deploy("billing", repos.commit(pkg("billing", "1.0.0", "b")));
+        assertEquals(List.of("node-a/1/billing@1.0.0", "node-a/1/shop@1.0.0"), nodeRows(), "node a's write deleted the released node's rows");
+        assertEquals(List.of("record billing@1.0.0", "record shop@1.0.0", "node-a billing@1.0.0 RUNNING", "node-a shop@1.0.0 RUNNING"), b.answer());
+    }
+
+    /** A restarted node joins as a new epoch: it is listed with no packages until its restore writes what it runs. */
+    @Test
+    void aRestartedNodeIsListedWithNoPackagesUntilItsRestoreWrites() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        a.close();
+
+        Peer restarted = new Peer("node-a");
+        assertEquals(2, restarted.epoch, "fixture: the restart joined as epoch 2");
+        assertEquals(List.of("record shop@1.0.0", "node-a"), restarted.answer(), "the previous incarnation's rows dropped out at once");
+        restarted.restored();
+        assertEquals(List.of("record shop@1.0.0", "node-a shop@1.0.0 RUNNING"), restarted.answer(), "its restore wrote what it runs");
+        assertEquals(List.of("node-a/2/shop@1.0.0"), nodeRows(), "the write replaced the rows of every epoch of the node");
+    }
+
+    /**
+     * An old incarnation of a node, still running after a newer one joined, writes nothing: its deploy answers with its record
+     * written, and its rows are refused, a WARNING once per reason.
+     */
+    @Test
+    void anOldIncarnationsWriteChangesNothing() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        assertEquals(2, join("node-a"), "fixture: a newer incarnation of node a joined, and wrote nothing yet");
+
+        DeployResult billing = a.deploy("billing", repos.commit(pkg("billing", "1.0.0", "b")));
+        assertEquals("1.0.0", billing.pkg().version(), "the deploy answers");
+        assertEquals(List.of("record billing@1.0.0", "record shop@1.0.0", "node-a"), a.answer(), "the newer incarnation is listed with nothing yet");
+        assertEquals(List.of("node-a/1/shop@1.0.0"), nodeRows(), "the old incarnation's write changed nothing");
+        a.undeploy("billing");
+        assertEquals(List.of("what this node runs could not be written; its next deploy, undeploy or tick writes again: "
+                + "the pool's membership holds no lease of this node at epoch 1"), warned("what this node runs could not be written"), "one WARNING for both refusals");
+    }
+
+    /**
+     * With {@code node_packages} gone, a deploy answers with its record written and the other node's tick installs it; the answer of
+     * what each node runs is FAILED, and each node's failed write a WARNING once. Once the table is back, the next tick of each node
+     * writes what it runs.
+     */
+    @Test
+    void theTableGoneLeavesTheTicksAndTheDeploysGoingOn() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        Peer b = new Peer("node-b").restored();
+        pool.query("alter table node_packages rename to node_packages_gone").execute().await();
+        try {
+            a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+            b.follow();
+            assertEquals(List.of("shop@1.0.0 RUNNING"), b.listed(), "node b's tick installed shop");
+            a.deploy("billing", repos.commit(pkg("billing", "1.0.0", "b")));
+            b.follow();
+            assertEquals(List.of("billing@1.0.0 RUNNING", "shop@1.0.0 RUNNING"), b.listed());
+            assertEquals(Health.up(), a.deployments.health(), "what a node runs is not its health");
+            assertEquals(Health.up(), b.deployments.health());
+            DeployRefusedException unread = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(a.deployments::listings));
+            assertEquals(Kind.FAILED, unread.kind(), unread.getMessage());
+            assertTrue(unread.error().startsWith("what each node runs could not be read: "), unread.error());
+            assertEquals(2, warned("what this node runs could not be written").size(), "one WARNING per node: " + warned("what this node runs could not be written"));
+        } finally {
+            pool.query("alter table node_packages_gone rename to node_packages").execute().await();
+        }
+        a.follow();
+        b.follow();
+        assertEquals(List.of("record billing@1.0.0", "record shop@1.0.0", "node-a billing@1.0.0 RUNNING", "node-a shop@1.0.0 RUNNING",
+                "node-b billing@1.0.0 RUNNING", "node-b shop@1.0.0 RUNNING"), a.answer(), "each node's next tick wrote what it runs");
+    }
+
+    /**
+     * A write of what the node runs that does not answer: the deploy answers within the stop deadline with its record written, and a
+     * WARNING says why. No other write starts while it runs, so it never lands after a later one: an undeploy meanwhile writes
+     * nothing, and once the held write landed the deploy's rows, the next tick writes what the node runs.
+     */
+    @Test
+    void aWriteThatHangsLeavesTheDeployAnsweringWithItsRecordWritten() throws Exception {
+        Unreadable records = new Unreadable();
+        Peer a = new Peer("node-a", records).restored();
+        assertEquals(1, records.writes.get(), "fixture: the restore wrote what the node runs, nothing");
+        Promise<Void> hold = Promise.promise();
+        records.holding = hold;
+        long before = generation();
+
+        OnVirtualThread.Call<DeployResult> deploying = a.deploying("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        untilWhile(deploying, () -> records.held.get() == 1, "the deploy writes what the node runs");
+        untilWhile(deploying, () -> rt.timer().pending() > 0 && rt.timer().nextDelay().equals(STOP_DEADLINE), "the write is bounded on the node's timer");
+        rt.clock().advance(STOP_DEADLINE);
+        assertEquals("1.0.0", OnVirtualThread.join(deploying).pkg().version(), "the deploy answers");
+        assertEquals(before + 1, generation(), "its record is written");
+        assertEquals(List.of("record shop@1.0.0", "node-a"), a.answer(), "node a's rows are those before the deploy");
+        List<String> timedOut = warned("what this node runs could not be written");
+        assertEquals(1, timedOut.size(), timedOut.toString());
+        assertTrue(timedOut.getFirst().contains("the write of what this node runs did not complete within the stop deadline"), timedOut.getFirst());
+
+        records.holding = null;
+        a.undeploy("shop");
+        assertEquals(2, records.writes.get(), "the undeploy started no write while the deploy's runs");
+        assertTrue(warned("what this node runs could not be written").getLast().endsWith("the write before it, which did not answer within the stop deadline, has not ended"),
+                warned("what this node runs could not be written").toString());
+
+        hold.complete();
+        until(() -> records.ended.get() == 1, "the deploy's write ends");
+        assertEquals(List.of("node-a/1/shop@1.0.0"), nodeRows(), "it landed the rows it carried");
+        a.follow();
+        assertEquals(List.of("node-a"), a.answer(), "the next tick wrote what the node runs: nothing");
+        assertEquals(3, records.writes.get());
     }
 
     /** The work rows of {@code flow} in the pool's work table. */
