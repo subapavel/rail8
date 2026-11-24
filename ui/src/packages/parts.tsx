@@ -121,7 +121,14 @@ export function PoolFact({ state }: { state: PackageRow }) {
       })}
       {behind.length > 0 && (
         <Typography.Text type="warning">
-          {pool.record === null ? 'Running though the pool records no deploy of it' : `Behind the pool's commit ${short(pool.record)}`}: {behind.map((n) => n.node).join(', ')}
+          {pool.record === null ? (
+            'Running though the pool records no deploy of it'
+          ) : (
+            <>
+              Behind the pool's commit <Typography.Text code>{short(pool.record)}</Typography.Text>
+            </>
+          )}
+          : {behind.map((n) => n.node).join(', ')}
         </Typography.Text>
       )}
       {behind.flatMap((n) =>

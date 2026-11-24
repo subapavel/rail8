@@ -98,7 +98,8 @@ describe('the Packages screen', () => {
     await expect.element(orders.getByText('Failed')).toBeVisible();
     await expect.element(orders).toMatchTextContent(`Deployed${second} on 1 of 3 nodes`);
     await expect.element(orders).toMatchTextContent(`Failed${second} on 1 of 3 nodes`);
-    await expect.element(orders.getByText(`Behind the pool's commit ${second}: node-b`)).toBeVisible();
+    await expect.element(orders.getByText(/^Behind the pool's commit/)).toMatchTextContent(`Behind the pool's commit ${second}: node-b`);
+    expect(orders.getByText(/^Behind the pool's commit/).element().querySelector('code')?.textContent).toBe(second);
     await expect.element(orders.getByText(`node-b: ${why}`)).toBeVisible();
     await expect.element(rowOf('billing').getByText('Not running', { exact: true })).toBeVisible();
     await expect.element(rowOf('billing')).toMatchTextContent('on 3 of 3 nodes');
@@ -116,6 +117,7 @@ describe('the Packages screen', () => {
     open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }], pool: 'fails' });
 
     await expect.element(rowOf('orders').getByText(/^What each node of the pool runs is unknown: the node at 127\.0\.0\.1:8081 answered 500/)).toBeVisible();
+    expect(page.getByText(/every node of its pool/).elements()).toHaveLength(0);
   });
 
   test('reads Ahead and Other commit, a detached HEAD and a merge left open', async () => {
