@@ -56,8 +56,9 @@ default branch, so it does not protect `release` unless that is the default bran
 exact project-level menu, because the excerpts say project protected-branch settings are moving to
 Settings, Repository, Branch rules.
 
-**A repository created later.** Covered by the group rule. Not confirmed (see above); on Free, the rule
-has to be added by hand to each new project, and the check below finds the ones that were missed.
+**A repository created later.** Not confirmed. The excerpts say only that the rule applies to "all projects in
+the group". On Free, the rule has to be added by hand to each new project, and the check finds the ones that
+were missed.
 
 **Check every repository.** Not confirmed: the endpoints. The Protected branches API page and the
 Groups API page were named in the search results but not read. The Group-level protected branches API
@@ -122,9 +123,8 @@ Pages: [Set and manage branch policies](https://learn.microsoft.com/en-us/azure/
 **Repository by repository.** Project settings, Repositories, select the repository, select the branch,
 and turn on the policy under Policies. A policy at repository level affects only that repository.
 
-**A repository created later.** Covered by the project policy, since it matches current and future
-branches by pattern (as the page states). Not confirmed: that a pattern covers a branch that does not
-yet exist; it says "current and future branches".
+**A repository created later.** Not confirmed. The excerpts say only that a policy at project level
+"affects all repositories in the project"; whether a repository created later falls under it was not stated.
 
 **Check every repository.** `az repos policy` sets policies from the command line, and a policy whose
 `repositoryId` is null with a `refName` applies to all repositories in the project. The Policy
