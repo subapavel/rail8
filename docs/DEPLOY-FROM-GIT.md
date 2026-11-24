@@ -9,7 +9,7 @@ API (`PUT /admin/packages/{name}`, `rail8 deploy`), and the node keeps each arch
 folder, under its SHA-256. All of that goes. Undeploy, the redeploy of only the flows that changed, the
 rollback of a failed start and the package checks stay.
 
-It is built in six stages; none reworks what an earlier one built ("What each stage builds", at the
+It is built in seven stages; none reworks what an earlier one built ("What each stage builds", at the
 end).
 
 ## Rules
@@ -125,26 +125,29 @@ them is refused, naming `rail8 lock`.
 
 ## A deploy
 
-`POST /admin/deploy` with the body `{"repository": "<name>", "commit": "<40 hex>"}`. In `dev` and `ci`
+`POST /admin/deploy` with the body `{"repository": "<name>", "commit": "<40 hex>"}`, and optionally
+`"expect"`, the state the deploy expects to replace ("The expected state of a deploy"). In `dev` and `ci`
 the commit may also be a ref (`HEAD`, `main`, `refs/tags/v1`), resolved in the repository at the fetch.
 With `?check=true` the node answers what the deploy would do and every problem; nothing that runs
 changes and no record is written, though the fetch fills the cache and the folders it wrote are deleted.
 The actor is the request's `X-Rail8-Actor` header, as for every audited act.
 
-`rail8 deploy <repository> <commit|ref> [--check]` sends it and prints the answer.
+`rail8 deploy <repository> <commit|ref> [--check] [--expect <commit|none>]` sends it and prints the answer.
 
 The order:
 
-1. **Refusals before any fetch.** A bad body, repository name or commit id, or a ref in a deployed
-   environment (400); a closing node (503); another deploy or undeploy running on any node of the
-   pool (409, "Several nodes" below).
+1. **Refusals before any fetch.** A bad body, repository name or commit id, a ref in a deployed
+   environment, or an `expect` with a ref (400); a closing node (503); another deploy or undeploy running
+   on any node of the pool (409, "Several nodes" below).
 2. **Fetch.** The commit is fetched within the timeout and the cache's size. When `RAIL8_GIT_REF` is
    set, the ref is fetched too, its tip resolved once, and the commit proved an ancestor of that tip
    (422 otherwise; history the cache lacks is refused as incomplete, never as unapproved).
 3. **Write.** The package's folder is written under `<dataDir>/.incoming` first. Its manifest's name
    is checked against the package-name pattern before it names a directory; then the folder moves to
    `<dataDir>/packages/<name>/<content hex>/`, unless that directory is one the node keeps and its
-   files are intact. A package of the same name recorded from another repository is refused (409).
+   files are intact. A package of the same name recorded from another repository is refused (409). Then
+   a deploy that names `expect` is compared with that package's record, and refused (412) when the
+   pool holds another state ("The expected state of a deploy").
 4. **Dependencies.** Every pin of the closure is resolved, fetched and written as "Dependencies" says.
 5. **Check.** The package is checked whole with today's checks: schemas, components, endpoints,
    dependencies, listeners and calls between flows. Every problem is one line of one answer (422), and nothing has stopped. A check ends here.
@@ -156,7 +159,8 @@ The order:
    rolls back as after any other failed save. A refused deploy writes its row after the refusal.
 
 The answer is today's deploy answer, with the repository and the commit in place of the revision and
-the archive.
+the archive, and `replaces`: the commit of the record the deploy replaced, or `none`. The check's answer
+names `replaces` too.
 
 A listener or a node-local address that moves from one package to another takes two deploys: first
 the one that removes it, then the one that adds it.
@@ -207,7 +211,8 @@ At its start, before its admin port opens, a node installs each record:
   then plans.
 - **Following.** Every node reads the generation on its injected timer and, when it moved, reconciles
   what it runs to the records: it installs a record whose content differs from what it runs, as a
-  restore does, and undeploys a package that has no record. It writes no record. At every tick it
+  restore does, and undeploys a package that has no record. It writes no record, only its own rows of
+  what it runs ("What each node runs"). At every tick it
   tries again a package it lists `FAILED` because its commit could not be fetched. A node that cannot
   reconcile is `DEGRADED`, naming the packages, and tries again at the next tick.
 - **Retiring.** A removed flow retires only when no node holds its work. A flow the pool no longer runs
@@ -223,6 +228,111 @@ At its start, before its admin port opens, a node installs each record:
   flow, and the package's directory goes then. A drain takes as long as its items do. A node that dies
   while a flow drains leaves its items in the work queue; a restarted node builds no drain yet, so they
   wait for one.
+
+## What each node runs
+
+The records say what the pool runs. Each node also writes, in Postgres, what it runs itself, so that any node answers for the
+whole pool, a follower that still runs an older commit included.
+
+- **The rows.** `node_packages` holds one row per package a node lists. A row names the node, the epoch of the incarnation
+  that wrote it, the package's name, version, repository and commit, `deployed_at`, and the state, `RUNNING` or `FAILED`. Its
+  `behind` holds the lines of the node's last refused install of the package's record, and is empty when there is none. A
+  `FAILED` package's row names its record's commit, as `GET /admin/packages` does.
+- **When a node writes them.** After its restore, and after every deploy, undeploy and tick, whenever what it lists differs
+  from the rows it last wrote, or that write failed. So it writes when it installs a package, when it undeploys one, and when
+  a tick fails to install one. A node writes only its own rows.
+- **How.** The write runs once the node's deploy lock and the pool's lock are both free. It holds a lock of its own, which
+  only these writes take, and takes the node's listing at the moment it holds it, so a later write always carries a later
+  listing. It is one transaction:
+  1. The node's row in `nodes` is locked `FOR KEY SHARE`. It must still carry the node's own epoch, with a lease that was not
+     released; otherwise nothing is written. That lock waits for a join, so an old incarnation never writes after a newer
+     one joined. It never holds back a renew or a release.
+  2. The node's rows, of every epoch, are replaced whole.
+  3. The rows of every node whose epoch moved on or whose lease was released are deleted.
+
+  The write takes no pool lock and raises no generation.
+- **A write that fails.** A deploy waits for its own write, within the stop deadline, before it answers; nothing else waits
+  for one. A write that fails, or does not answer in time, is a WARNING once per reason, and the next tick writes again. It
+  never changes the answer of a deploy: the record is the commit point, and it is written by then.
+- **A restart, and a lease that ended.** A restart joins as a new epoch before it restores, so the rows of its previous
+  incarnation drop out of the answer at once. Until its restore writes, the node is listed with no packages: it has not
+  started. A node whose lease ended drops out of the answer. Its rows stay, unread, until it joins again, or until a peer
+  releases its lease and the next write of any node deletes them.
+- **Beside the records.** A record is what the pool runs: one per package, written by a deploy or an undeploy under the
+  pool's lock, the commit point. A row is what one node runs, written by that node alone. A row differs from its record
+  while its node has not followed yet, at most one tick, and while the node is behind; `behind` then says why.
+- **Not state.** Nothing reads the rows to decide anything:
+  - a restore and a tick read the records;
+  - the work queue admits by the records, the marks and the node's own memory;
+  - a drain ends by the marks and the work rows;
+  - the expected state of a deploy is compared with the records.
+
+  A lost row, or a lost table, loses no message. The answer is only blind until each node writes again.
+
+`GET /admin/pool/packages` answers the pool's records and what each node runs:
+
+```json
+{"records": [{"name": "orders", "version": "1.4.0", "repository": "orders", "commit": "<40 hex>"}],
+ "nodes": [{"node": "node-a", "packages": [{"name": "orders", "version": "1.4.0", "repository": "orders",
+   "commit": "<40 hex>", "deployedAt": "…", "state": "RUNNING", "behind": []}]}]}
+```
+
+- `nodes` lists every node whose lease holds, by the database clock that measures leases, each with the rows of its current
+  epoch. A node that joined but has not written yet has no packages.
+- The records and the rows are read in one read-only transaction.
+- Records and packages are sorted by name, and nodes by id, as `String.compareTo` sorts.
+- The answer is not paged. It holds at most 10 000 rows and records together; a pool that holds more is answered 500, naming
+  the limit, never a cut answer.
+- Every node gives the same answer.
+
+A node's row whose commit differs from its package's record, a row with no record, and a record a node has no row for each
+show a node that has not followed yet, or one that is behind. Once a tick failed, `behind` says why. Why a node cannot follow
+at all, its records unreadable for one, is a fact about the node, and its `/health` says it.
+
+## The expected state of a deploy
+
+A deploy may name the state it expects to replace, so that one author's deploy never replaces another's, or CI's, unseen.
+
+- **The body.** `POST /admin/deploy` takes an optional third key, `expect`:
+  - the commit the pool's record of the package names, as 40 lower-case hex digits;
+  - or `none`, when the pool records no such package.
+
+  A deploy without `expect` behaves as before. A deploy with `expect` must name its commit as 40 hex digits: a ref could move
+  between the check and the deploy. Any other value of `expect`, `null` included, any other key, and an `expect` with a ref
+  are 400, before anything is fetched.
+- **What names it.** The commit of the package's record, not the pool's generation:
+  - The generation moves with every deploy and undeploy of any package. An unrelated deploy between an author's check and
+    their confirmation would refuse it, and the refusal could not say what changed.
+  - The commit is what the author saw, and a refusal names the commit the pool holds now.
+  - A pool that went from a commit to another and back holds what the author confirmed a change against, and the deploy goes
+    ahead.
+  - Whatever else the check found, from listeners to calls between flows, the deploy checks again under the pool's lock.
+- **`none`, not `null`.** A missing key keeps meaning "as before". A client that drops nulls, or confuses a null with a
+  missing key, cannot turn "expects no record" into "expects nothing".
+- **Where it is compared.** In step 3 of the order: once the commit's `package.yaml` has named the package, and after the
+  refusal of a package recorded from another repository. It is compared with that package's record, as the pool's lock read
+  it. Only a holder of the lock writes records, so that is still the pool's record at the commit point. The package is the
+  one the commit's manifest names: a commit that renames a package from `a` to `b` replaces nothing of `a`, and expects
+  `none` for `b`.
+- **The refusal.** A different commit, a record where `none` was expected, or none where a commit was, is 412
+  `{"error": "…", "replaces": "<40 hex>" | "none"}`:
+  - `replaces` is what the pool holds now;
+  - the error names that commit, and says so when it is the commit the deploy names, as after a retry of a deploy whose
+    answer was lost;
+  - nothing has stopped, no record is written, the generation does not move, and the folder written is deleted;
+  - the refusal is audited, as every refusal under the pool's lock is.
+- **What tells the client.** The answers of the check and of the deploy name `replaces`: the commit of the record the deploy
+  replaces, or `none`. It is the pool's record, never the listing of the node that answers. On a node that has not followed
+  yet, `GET /admin/packages` can name another commit until its next tick. The check reads it from the records once the
+  package is named, without the pool's lock.
+  - A client sends the check's `replaces` back unchanged as `expect`.
+  - A check that names `expect` compares it with that read, and answers the same 412. Only the deploy's comparison is the
+    guarantee.
+- **The command line.** `rail8 deploy <repository> <commit> --expect <commit|none>` sends it. `--check` prints
+  `replaces`, so an author at a terminal gets the same guarantee in the same two steps. CI sends none and keeps working. A
+  412 exits 1, as any answer that is not 2xx.
+- **Undeploy** takes no expected state yet. Nothing undeploys for an author: the command line has no undeploy, and the UI
+  leaves it out. The expected state comes with the first client that does.
 
 ## Environments
 
@@ -314,6 +424,8 @@ public interface Commit {
 | One deploy | the package and at most 100 packages in its dependency closure |
 | A repository's name | one segment of at most 100 letters, digits, `.`, `_` and `-`, not `.` or `..` |
 | A deploy's body | 4 KiB |
+| Why a node's package is behind (`behind`) | 20 lines of at most 500 characters each |
+| The answer of `GET /admin/pool/packages` | 10 000 rows and records together |
 
 ## Tests
 
@@ -341,6 +453,24 @@ public interface Commit {
   behind the generation reconciling before it plans; the other node installing and undeploying at its
   next tick; a `FAILED` package restored at a later tick once its repository answers; a removed flow
   that takes no new message on any node and drains before it stops.
+- What each node runs, on two nodes and a fake clock. The tests run on an in-memory membership whose leases end on the fake
+  clock, and on Postgres with a lease ended by setting `lease_until` in the past:
+  - a follower behind after a deploy, then caught up at its tick;
+  - a tick that cannot install a record writing why;
+  - a node whose lease ended dropping out of the answer;
+  - a restarted node listed with no packages until its restore writes;
+  - an old incarnation's write changing nothing;
+  - the table deleted during a run, and the ticks and the deploys going on;
+  - a write of the rows that hangs, and the deploy answering 200 with its record written.
+- The expected state:
+  - two deploys that expect the same commit: the first applied, the second 412, with nothing changed;
+  - `none` applied on a first deploy, then 412;
+  - an undeploy between a check and its deploy, then 412;
+  - a deploy with no `expect` as before;
+  - `null`, upper case, another key, and an `expect` with a ref, each 400 before any fetch;
+  - the check answering `replaces`, and 412 with a stale `expect`;
+  - a retried deploy whose first try landed, 412 saying so;
+  - `rail8 deploy --expect`.
 
 ## The owner's choices
 
@@ -354,6 +484,8 @@ The owner chose:
 - A command that names the commit; a node that follows its ref by itself may come later as a timer
   calling the same deploy.
 - The token in the node's environment now; the secret store planned for step 2 takes it later.
+- A deploy that can name the state it expects, refused when the pool holds another: on a shared server one author's deploy
+  must never replace another's, or CI's, unseen.
 
 These were decided on the owner's behalf, and stand until the owner says otherwise:
 
@@ -365,6 +497,9 @@ These were decided on the owner's behalf, and stand until the owner says otherwi
 - `RAIL8_GIT_REF` names the same branch in every repository of the pool.
 - Until sign-in comes, whoever holds the admin token may deploy any package of the base; who may change
   a package and its release branch is the git host's to decide.
+- The expected state of a deploy is the commit of the package's record, not the pool's generation, and `none` names no
+  record.
+- `rail8 deploy` takes `--expect`; an undeploy takes no expected state until a client undeploys for an author.
 
 ## What each stage builds
 
@@ -392,3 +527,6 @@ These were decided on the owner's behalf, and stand until the owner says otherwi
 6. **Several nodes.** Designed in full first, then built: the pool's lock, the catching up before a
    plan, the generation, following and retiring; a deployed environment then takes deploys of commits
    reachable from its ref, and undeploys. ARCHITECTURE parts 4 and 6 describe it.
+7. **What each node runs, and the expected state.** `node_packages` and its write, `GET /admin/pool/packages`, `expect`
+   and `replaces` on the deploy and its check, and `rail8 deploy --expect`. ARCHITECTURE parts 3 and 10 describe them, and
+   the UI's Deploy in `docs/PACKAGES-AND-GIT.md` sends the check's `replaces` as `expect`.
