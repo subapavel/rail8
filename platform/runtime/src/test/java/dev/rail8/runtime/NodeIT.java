@@ -760,7 +760,8 @@ class NodeIT {
             assertEquals(200, put.statusCode(), put.body());
             assertEquals(new JsonObject().put("package", "demo").put("version", "0.1.0").put("repository", "demo").put("commit", commit)
                     .put("flows", new io.vertx.core.json.JsonArray().add("demo/invoice-sync")).put("added", new io.vertx.core.json.JsonArray().add("demo/invoice-sync"))
-                    .put("swapped", new io.vertx.core.json.JsonArray()).put("removed", new io.vertx.core.json.JsonArray()), new JsonObject(put.body()), "the deploy's answer");
+                    .put("swapped", new io.vertx.core.json.JsonArray()).put("removed", new io.vertx.core.json.JsonArray()).put("replaces", "none"),
+                    new JsonObject(put.body()), "the deploy's answer: it replaced no record");
 
             HttpResponse<String> invoice = send(client, "POST", node.httpPort(), "/http/in", Files.readAllBytes(DEMO.resolve("fixtures/sample-invoice.xml")), "application/xml");
             assertEquals(200, invoice.statusCode(), invoice.body());
