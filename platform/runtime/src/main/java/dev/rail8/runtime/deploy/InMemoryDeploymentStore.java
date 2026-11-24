@@ -21,13 +21,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class InMemoryDeploymentStore implements DeploymentStore {
 
     /**
-     * One audit row of a deploy, as {@link DeploymentStore#audit} was given it.
+     * One audit row of a deploy or an undeploy, as the store was given it.
      *
-     * @param actor who deployed, by name
-     * @param subject {@code repository/<repository>}
-     * @param detail the commit and the outcome
+     * @param actor who acted, by name
+     * @param action {@code deploy} or {@code undeploy}
+     * @param subject {@code repository/<repository>} for a deploy, {@code package/<name>} for an undeploy
+     * @param detail the commit, its author and the outcome of a deploy; the version, the repository and the commit of an undeploy
      */
-    public record Audited(String actor, String subject, JsonObject detail) {}
+    public record Audited(String actor, String action, String subject, JsonObject detail) {}
 
     /** By name: sorted as {@link String#compareTo} sorts. Guarded by {@code this}, with the generation and the lock's holder. */
     private final Map<String, DeploymentRecord> rows = new TreeMap<>();
@@ -60,7 +61,7 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
     @Override
     public Future<Void> audit(Actor by, String repository, JsonObject detail) {
-        audited.add(new Audited(by.name(), "repository/" + repository, detail.copy()));
+        audited.add(new Audited(by.name(), "deploy", "repository/" + repository, detail.copy()));
         return Future.succeededFuture();
     }
 
@@ -85,16 +86,17 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
         }
 
         @Override
-        public Future<Long> save(DeploymentRecord record) {
-            return write(record.name(), record);
+        public Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail) {
+            return write(record.name(), record, new Audited(by.name(), "deploy", "repository/" + record.repository(), detail.copy()));
         }
 
         @Override
-        public Future<Long> delete(String name) {
-            return write(name, null);
+        public Future<Long> delete(String name, Actor by, JsonObject detail) {
+            return write(name, null, new Audited(by.name(), "undeploy", "package/" + name, detail.copy()));
         }
 
-        private Future<Long> write(String name, DeploymentRecord record) {
+        /** Writes {@code record} as {@code name}'s row, or deletes the row when it is null, with its audit row {@code row}. */
+        private Future<Long> write(String name, DeploymentRecord record, Audited row) {
             synchronized (InMemoryDeploymentStore.this) {
                 if (holder != this) return Future.failedFuture(new IllegalStateException("the pool's lock is no longer held"));
                 if (generation != read) return Future.failedFuture(new IllegalStateException("the pool's generation moved from " + read + " to " + generation));
@@ -102,6 +104,7 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
                 List<String> runs = record == null ? List.of() : record.atLeastOnce();
                 if (replaced != null) replaced.atLeastOnce().stream().filter(flow -> !runs.contains(flow)).forEach(marked::add);
                 runs.forEach(marked::remove);
+                audited.add(row);
                 read = ++generation;
                 return Future.succeededFuture(generation);
             }

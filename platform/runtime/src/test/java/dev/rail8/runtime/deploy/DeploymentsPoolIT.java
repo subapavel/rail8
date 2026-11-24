@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -164,7 +165,7 @@ class DeploymentsPoolIT {
         }
 
         UndeployResult undeploy(String name) throws Exception {
-            return OnVirtualThread.call(() -> deployments.undeploy(name));
+            return OnVirtualThread.call(() -> deployments.undeploy(name, TestActors.named("test")));
         }
 
         /** One tick, as the node's timer runs it. */
@@ -253,6 +254,49 @@ class DeploymentsPoolIT {
         return pool.query("select generation from deploy_pool").execute().await().iterator().next().getLong(0);
     }
 
+    /** Each deploy and undeploy row of the audit, oldest first: {@code <actor> <action> <subject> <author>}. */
+    static List<String> audited() {
+        List<String> rows = new ArrayList<>();
+        pool.query("select actor, action, subject, detail->>'author' from audit where action in ('deploy', 'undeploy') order by id").execute().await()
+                .forEach(r -> rows.add(r.getString(0) + " " + r.getString(1) + " " + r.getString(2) + " " + r.getString(3)));
+        return rows;
+    }
+
+    /**
+     * A redeploy whose audit row Postgres refuses is not recorded: it rolls back, and the node runs what ran before; an undeploy
+     * whose row is refused deletes nothing, and the package runs on. Once the row can be written, both go through, each row in
+     * the transaction of its record, naming who acted and the commit's author.
+     */
+    @Test
+    void aDeployOrAnUndeployWhoseAuditRowIsRefusedChangesNothing() throws Exception {
+        pool.query("delete from audit where action in ('deploy', 'undeploy')").execute().await();
+        Peer a = new Peer("node-a").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        long before = generation();
+        String v2 = repos.commit(pkg("shop", "2.0.0", "a", "c"));
+        pool.query("alter table audit add constraint no_deploy_rows check (action not in ('deploy', 'undeploy')) not valid").execute().await();
+        try {
+            DeployRefusedException refused = joinRefused(a.deploying("shop", v2), "the redeploy whose row is refused");
+            assertEquals(Kind.FAILED, refused.kind(), refused.getMessage());
+            assertTrue(refused.error().contains("was not recorded"), refused.error());
+            assertEquals(List.of("shop@1.0.0 RUNNING"), a.listed(), "the node runs what ran before");
+            assertEquals(List.of(), a.live("shop/c"), "nothing of the redeploy runs");
+            assertInstanceOf(Ack.Reply.class, a.send("shop/a"), "shop 1.0.0 serves");
+            IOException undeleted = assertThrows(IOException.class, () -> a.undeploy("shop"), "the undeploy whose row is refused");
+            assertTrue(undeleted.getMessage().contains("was not deleted"), undeleted.getMessage());
+            assertEquals(List.of("shop@1.0.0 RUNNING"), a.listed(), "the package runs on");
+        } finally {
+            pool.query("alter table audit drop constraint no_deploy_rows").execute().await();
+        }
+        assertEquals(before, generation(), "neither wrote the pool");
+        assertEquals(List.of("test deploy repository/shop Rail8 test <test@rail8.invalid>"), audited(), "only the first deploy's row");
+
+        a.deploy("shop", v2);
+        a.undeploy("shop");
+        assertEquals(List.of("test deploy repository/shop Rail8 test <test@rail8.invalid>", "test deploy repository/shop Rail8 test <test@rail8.invalid>",
+                "test undeploy package/shop null"), audited(), "the redeploy's and the undeploy's rows, once they can be written");
+    }
+
     @Test
     void aSecondDeployIsRefusedOnAnyNodeWhileOneRuns() throws Exception {
         Peer a = new Peer("node-a").restored();
@@ -266,7 +310,7 @@ class DeploymentsPoolIT {
         DeployRefusedException second = joinRefused(b.deploying("billing", billing), "a deploy on node b while node a's runs");
         assertEquals(Kind.CONFLICT, second.kind(), second.getMessage());
         assertTrue(second.error().contains("another deploy or undeploy of the pool"), second.error());
-        DeployRefusedException undeploy = joinRefused(OnVirtualThread.start(() -> b.deployments.undeploy("shop")), "an undeploy on node b meanwhile");
+        DeployRefusedException undeploy = joinRefused(OnVirtualThread.start(() -> b.deployments.undeploy("shop", TestActors.named("test"))), "an undeploy on node b meanwhile");
         assertEquals(Kind.CONFLICT, undeploy.kind(), "an undeploy waits for no deploy either: " + undeploy.getMessage());
 
         held.release();

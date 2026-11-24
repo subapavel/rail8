@@ -10,6 +10,7 @@ import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.ProgressMonitor;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.RefUpdate;
@@ -247,7 +248,7 @@ public final class GitCache {
                         if (tip == null || !walk.isMergedInto(commit, tip)) throw new GitFailure(Reason.NOT_REACHABLE, repository, target);
                     }
                     update(cached, KEPT + commit.name(), commit);
-                    return new CachedCommit(repository, commit.name());
+                    return new CachedCommit(repository, commit.name(), author(commit));
                 } catch (MissingObjectException e) {
                     throw new GitFailure(Reason.HISTORY_INCOMPLETE, repository, target);
                 } catch (IOException e) {
@@ -273,7 +274,7 @@ public final class GitCache {
                     RevCommit found = walk.parseCommit(ObjectId.fromString(id));
                     complete(cached, found, repository, id);
                     update(cached, KEPT + id, found);
-                    return new CachedCommit(repository, id);
+                    return new CachedCommit(repository, id, author(found));
                 } catch (MissingObjectException e) {
                     throw new GitFailure(Reason.HISTORY_INCOMPLETE, repository, id);
                 } catch (IOException e) {
@@ -292,6 +293,12 @@ public final class GitCache {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
+        }
+
+        /** The author of {@code commit}, {@code Name <email>}. */
+        private static String author(RevCommit commit) {
+            PersonIdent who = commit.getAuthorIdent();
+            return who.getName() + " <" + who.getEmailAddress() + ">";
         }
 
         /** The commit {@code id} names, peeling a tag; {@code null} when the cache lacks it or it names no commit. */
@@ -561,10 +568,12 @@ public final class GitCache {
 
         private final String repository;
         private final String id;
+        private final String author;
 
-        CachedCommit(String repository, String id) {
+        CachedCommit(String repository, String id, String author) {
             this.repository = repository;
             this.id = id;
+            this.author = author;
         }
 
         @Override
@@ -575,6 +584,11 @@ public final class GitCache {
         @Override
         public String id() {
             return id;
+        }
+
+        @Override
+        public String author() {
+            return author;
         }
 
         @Override

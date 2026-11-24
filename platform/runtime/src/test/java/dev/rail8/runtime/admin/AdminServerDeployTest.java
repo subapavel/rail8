@@ -959,6 +959,18 @@ class AdminServerDeployTest {
         assertEquals("no flow shop/orders deployed on this node", unknown.json().getString("error"), "it answers as an unknown flow");
     }
 
+    /** A deploy and an undeploy through the admin API are audited as their caller, as the door's check knows it. */
+    @Test
+    void aDeployAndAnUndeployAreAuditedAsTheirCaller() throws Exception {
+        InMemoryDeploymentStore rows = new InMemoryDeploymentStore();
+        int at = serve(Optional.of(deployments(tmp.resolve("node-audit"), rows, true)));
+        assertJson(200, deploy(at, shop()), "fixture: shop deploys");
+        assertJson(200, delete(at, "/admin/packages/shop", AUTH), "shop undeploys");
+        assertEquals(List.of("unknown deploy repository/shop", "unknown undeploy package/shop"),
+                rows.audited().stream().map(r -> r.actor() + " " + r.action() + " " + r.subject()).toList(),
+                "the shared token without a declared name acts as unknown");
+    }
+
     /** DELETE of a package the node does not have — never deployed, or undeployed already — is 404 {error}. */
     @Test
     void deleteOfAPackageNotDeployedIs404() throws Exception {
@@ -1062,8 +1074,10 @@ class AdminServerDeployTest {
             @Override public Future<Optional<PoolLock>> lock() {
                 return rows.lock().map(held -> held.map(lock -> new PoolLock() {
                     @Override public Snapshot snapshot() { return lock.snapshot(); }
-                    @Override public Future<Long> save(DeploymentRecord record) { return lock.save(record); }
-                    @Override public Future<Long> delete(String name) { return Future.failedFuture(new IllegalStateException("connection reset by peer")); }
+                    @Override public Future<Long> save(DeploymentRecord record, dev.rail8.core.audit.Actor by, JsonObject detail) { return lock.save(record, by, detail); }
+                    @Override public Future<Long> delete(String name, dev.rail8.core.audit.Actor by, JsonObject detail) {
+                        return Future.failedFuture(new IllegalStateException("connection reset by peer"));
+                    }
                     @Override public Future<Void> close() { return lock.close(); }
                 }));
             }
@@ -1161,7 +1175,7 @@ class AdminServerDeployTest {
                 .file("urn-a/in.xml", "<in/>");
         String commit = repos.commit(legacy);
         DeploymentStore.PoolLock seeding = rows.lock().await(10, TimeUnit.SECONDS).orElseThrow();
-        seeding.save(new DeploymentRecord("legacy", "1.0.0", "legacy", commit, legacy.content(), rt.clock().instant(), List.of(), List.of())).await(10, TimeUnit.SECONDS);
+        seeding.save(new DeploymentRecord("legacy", "1.0.0", "legacy", commit, legacy.content(), rt.clock().instant(), List.of(), List.of()), TestActors.named("test"), new JsonObject()).await(10, TimeUnit.SECONDS);
         seeding.close().await(10, TimeUnit.SECONDS);
         Deployments restoring = deployments(tmp.resolve("node-2"), rows, true);
         OnVirtualThread.call(() -> { restoring.restore(); return null; });

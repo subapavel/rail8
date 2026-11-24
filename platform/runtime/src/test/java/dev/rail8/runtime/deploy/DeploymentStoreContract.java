@@ -3,12 +3,15 @@ package dev.rail8.runtime.deploy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.runtime.deploy.DeploymentStore.PoolLock;
 import io.vertx.core.Future;
+import io.vertx.core.json.JsonObject;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -32,11 +35,17 @@ public abstract class DeploymentStoreContract {
     static final String C_3 = "0123456789abcdef0123456789abcdef01234567";
     static final Instant AT = Instant.parse("2026-10-27T09:30:00.123456Z");
 
+    /** Who every write of the contract names in its audit row. */
+    static final Actor BY = TestActors.named("test");
+
     /** The case's store: empty. */
     protected DeploymentStore store;
 
     /** A fresh, empty store for one case. */
     protected abstract DeploymentStore emptyStore();
+
+    /** The audit rows of deploys and undeploys the case's store wrote, oldest first. */
+    protected abstract List<InMemoryDeploymentStore.Audited> audited();
 
     @BeforeEach
     void openTheStore() {
@@ -68,7 +77,7 @@ public abstract class DeploymentStoreContract {
     void save(DeploymentRecord r) {
         PoolLock lock = lock();
         try {
-            lock.save(r).await();
+            lock.save(r, BY, new JsonObject()).await();
         } finally {
             lock.close().await();
         }
@@ -77,7 +86,7 @@ public abstract class DeploymentStoreContract {
     void delete(String name) {
         PoolLock lock = lock();
         try {
-            lock.delete(name).await();
+            lock.delete(name, BY, new JsonObject()).await();
         } finally {
             lock.close().await();
         }
@@ -200,8 +209,8 @@ public abstract class DeploymentStoreContract {
         PoolLock lock = lock();
         try {
             assertEquals(new DeploymentStore.Snapshot(start, List.of()), lock.snapshot(), "the pool as the lock read it");
-            assertEquals(start + 1, lock.save(shop).await(), "a save raises the generation");
-            assertEquals(start + 2, lock.delete("billing").await(), "a delete raises it, a row there or not");
+            assertEquals(start + 1, lock.save(shop, BY, new JsonObject()).await(), "a save raises the generation");
+            assertEquals(start + 2, lock.delete("billing", BY, new JsonObject()).await(), "a delete raises it, a row there or not");
         } finally {
             lock.close().await();
         }
@@ -214,6 +223,28 @@ public abstract class DeploymentStoreContract {
         }
     }
 
+    /**
+     * A save appends the deploy's audit row, the subject the record's repository; a delete appends the undeploy's, the subject the
+     * package; each with who acted and the detail as given. A write that fails appends none.
+     */
+    @Test
+    void eachWriteAppendsItsAuditRow() {
+        Actor alice = new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7");
+        DeploymentRecord shop = new DeploymentRecord("shop", "1.0.0", "shop-repo", C_1, SHA_1, AT, List.of(), List.of());
+        JsonObject deployed = new JsonObject().put("commit", C_1).put("author", "A <a@example.com>").put("outcome", "deployed");
+        JsonObject undeployed = new JsonObject().put("version", "1.0.0").put("commit", C_1);
+        PoolLock lock = lock();
+        try {
+            lock.save(shop, alice, deployed).await();
+            lock.delete("shop", alice, undeployed).await();
+        } finally {
+            lock.close().await();
+        }
+        assertTrue(failsLater(lock.save(shop, alice, deployed)), "fixture: a save through a freed lock fails");
+        assertEquals(List.of(new InMemoryDeploymentStore.Audited("alice", "deploy", "repository/shop-repo", deployed),
+                new InMemoryDeploymentStore.Audited("alice", "undeploy", "package/shop", undeployed)), audited(), "one row per write, none for the failed one");
+    }
+
     /** A lock that was freed writes nothing: its save and its delete fail, and the pool stays as it was. */
     @Test
     void aFreedLockWritesNothing() {
@@ -223,8 +254,8 @@ public abstract class DeploymentStoreContract {
         PoolLock lock = lock();
         lock.close().await();
 
-        assertTrue(failsLater(lock.save(record("billing", "1.0.0", C_2, SHA_2, AT))), "a save through a freed lock fails");
-        assertTrue(failsLater(lock.delete("shop")), "a delete through a freed lock fails");
+        assertTrue(failsLater(lock.save(record("billing", "1.0.0", C_2, SHA_2, AT), BY, new JsonObject())), "a save through a freed lock fails");
+        assertTrue(failsLater(lock.delete("shop", BY, new JsonObject())), "a delete through a freed lock fails");
         assertEquals(before, store.read().await(), "nothing written");
     }
 

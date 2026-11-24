@@ -160,7 +160,7 @@ class DeploymentsUndeployTest {
         }
 
         UndeployResult undeploy(String name) throws Exception {
-            return OnVirtualThread.call(() -> deployments.undeploy(name));
+            return OnVirtualThread.call(() -> deployments.undeploy(name, TestActors.named("test")));
         }
 
         /** The undeploy of {@code name}, refused as {@code kind}; its problems are none. */
@@ -501,7 +501,7 @@ class DeploymentsUndeployTest {
         node.deploy(invoice("1.0.0", common));
         Doors.Door door = node.doors.door(FLOW);
         Ledger.Hold hold = records.holdNextDelete();
-        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> node.deployments.undeploy("invoice"));
+        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> node.deployments.undeploy("invoice", TestActors.named("test")));
         if (!hold.reached().await(20, TimeUnit.SECONDS)) fail("fixture: the undeploy did not reach its record delete: " + undeploying.outcome());
 
         assertFalse(door.stopped(), "while the record delete waits, invoice's consumer is not stopped: " + door.history());
@@ -529,7 +529,7 @@ class DeploymentsUndeployTest {
         node.deploy(common);
         node.deploy(invoice("1.0.0", common));
         Doors.Gate stop = node.doors.holdStopOf(FLOW);
-        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> node.deployments.undeploy("invoice"));
+        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> node.deployments.undeploy("invoice", TestActors.named("test")));
         try {
             if (!stop.reached().await(20, TimeUnit.SECONDS)) fail("fixture: the undeploy did not reach invoice's consumer stop: " + undeploying.outcome());
 

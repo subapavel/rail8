@@ -15,6 +15,9 @@ public interface Commit {
     /** The commit's 40-hex id. */
     String id();
 
+    /** The commit's author as git holds it: {@code Name <email>}. */
+    String author();
+
     /**
      * Writes the package folder's files, as committed, into an empty directory: the bytes git stores, with no line ending or filter
      * changed. The whole tree is checked before anything is written; a refusal is an {@link IllegalArgumentException}: a commit with

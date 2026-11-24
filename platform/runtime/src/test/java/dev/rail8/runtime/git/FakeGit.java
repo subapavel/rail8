@@ -49,6 +49,8 @@ final class FakeGit implements PackageRepositoriesContract.Source {
     }
 
     private static final URI BASE = URI.create("file:///fake/");
+    /** The author of every commit, as {@link GitSource} commits them. */
+    private static final String AUTHOR = "Rail8 test <test@rail8.invalid>";
 
     private final Map<String, Repository> source = new HashMap<>();
     private final Map<String, Map<String, FakeCommit>> cache = new LinkedHashMap<>();
@@ -263,6 +265,11 @@ final class FakeGit implements PackageRepositoriesContract.Source {
             @Override
             public String id() {
                 return id;
+            }
+
+            @Override
+            public String author() {
+                return AUTHOR;
             }
 
             @Override

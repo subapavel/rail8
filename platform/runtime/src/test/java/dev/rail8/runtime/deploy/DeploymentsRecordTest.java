@@ -127,10 +127,13 @@ class DeploymentsRecordTest {
         return joinRefused(deploying(p), "the deploy of shop " + p.version() + " is refused");
     }
 
-    /** The audit rows written, each as {@code <actor> <subject> <detail>}. */
+    /** The audit rows written, each as {@code <actor> <action> <subject> <detail>}. */
     List<String> audited() {
-        return records.audited().stream().map(a -> a.actor() + " " + a.subject() + " " + a.detail().encode()).toList();
+        return records.audited().stream().map(a -> a.actor() + " " + a.action() + " " + a.subject() + " " + a.detail().encode()).toList();
     }
+
+    /** The author of every commit {@link GitRepos} makes, as the audit row names it. */
+    static final String AUTHOR = "Rail8 test <test@rail8.invalid>";
 
     Path shopDir() {
         return data.resolve("packages").resolve("shop");
@@ -180,24 +183,45 @@ class DeploymentsRecordTest {
     void everyDeployWritesOneAuditRowWithItsOutcome() throws Exception {
         PackageDraft v1 = shop("1.0.0", "v1");
         deploy(v1);
-        assertEquals(List.of("ops repository/shop {\"repository\":\"shop\",\"commit\":\"" + v1.commit()
-                + "\",\"outcome\":\"deployed\",\"package\":\"shop\",\"version\":\"1.0.0\"}"), audited(), "the actor, the repository, the commit, the outcome");
+        assertEquals(List.of("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\",\"author\":\"" + AUTHOR
+                + "\",\"outcome\":\"deployed\",\"package\":\"shop\",\"version\":\"1.0.0\"}"), audited(),
+                "the actor, the repository, the commit, its author as the commit holds it, the outcome");
 
         PackageDraft broken = shop("2.0.0", "v2");
         broken.endpointDoc("b-in").getJsonObject("config").put("refuse", "port taken");   // b's consumer cannot be built: a build problem
         DeployRefusedException invalid = refused(broken);
         assertEquals(Kind.INVALID, invalid.kind(), invalid.getMessage());
         assertEquals(List.of("shop 1.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "a refused deploy writes no row");
-        assertEquals("ops repository/shop {\"repository\":\"shop\",\"commit\":\"" + broken.commit() + "\",\"outcome\":\"refused\",\"error\":\""
-                + invalid.error() + "\"}", audited().get(1), "a refused deploy is audited with its error");
+        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + broken.commit() + "\",\"author\":\"" + AUTHOR
+                + "\",\"outcome\":\"refused\",\"error\":\"" + invalid.error() + "\"}", audited().get(1), "a refused deploy is audited with its error");
 
         String next = repos.commit(shop("3.0.0", "v3"));
         assertEquals("3.0.0", OnVirtualThread.call(() -> deployments.check("shop", next)).pkg().version(), "fixture: the check passes");
         assertEquals(List.of("shop 1.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "a check writes no record");
         assertEquals(2, audited().size(), "a check writes no audit row");
         assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy("shop", "no-such-branch", TestActors.named("ops"))));
-        assertEquals("ops repository/shop {\"repository\":\"shop\",\"commit\":\"no-such-branch\",\"outcome\":\"refused\",\"error\":\""
-                + "shop at no-such-branch: not found\"}", audited().get(2), "a ref that was never read is audited as asked");
+        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"no-such-branch\",\"outcome\":\"refused\",\"error\":\""
+                + "shop at no-such-branch: not found\"}", audited().get(2), "a ref that was never read is audited as asked, with no author");
+    }
+
+    /**
+     * A deploy's row is written with its record, by the save: a save that fails writes neither, and the refusal's row follows. An
+     * undeploy's row is written with the delete of the record, naming who undeployed and what the package ran.
+     */
+    @Test
+    void theRowsOfADeployAndAnUndeployAreWrittenWithTheirRecord() throws Exception {
+        PackageDraft v1 = shop("1.0.0", "v1");
+        records.failNextSave("connection reset by peer");
+        DeployRefusedException unsaved = refused(v1);
+        assertEquals(List.of("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\",\"author\":\"" + AUTHOR
+                + "\",\"outcome\":\"refused\",\"error\":\"" + unsaved.error() + "\"}"), audited(), "a failed save writes no deployed row, the refusal its own");
+
+        deploy(v1);
+        assertEquals("ops deploy repository/shop", audited().get(1).substring(0, "ops deploy repository/shop".length()), "fixture: the deploy's row");
+        OnVirtualThread.call(() -> deployments.undeploy("shop", TestActors.named("dev")));
+        assertEquals("dev undeploy package/shop {\"version\":\"1.0.0\",\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\"}", audited().get(2),
+                "who undeployed, the version, the repository and the commit the package ran");
+        assertEquals(3, audited().size(), "one row each");
     }
 
     // --- the record is the commit point
@@ -309,7 +333,7 @@ class DeploymentsRecordTest {
         Doors.Door a = doors.door("shop/a");
         Ledger.Hold held = records.holdNextDelete();
         int pending = rt.timer().pending();
-        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> deployments.undeploy("shop"));
+        OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> deployments.undeploy("shop", TestActors.named("test")));
         reachedWhile(undeploying, held.reached(), "the undeploy calls the delete of shop's record");
         // the delete is called a moment before its bound is on the node's timer: advanced earlier, the bound would never fall due
         untilWhile(undeploying, () -> rt.timer().pending() > pending, "the delete is bounded on the node's timer");
