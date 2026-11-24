@@ -3,7 +3,10 @@ import { Alert, Badge, Empty, Flex, Tooltip, Typography } from 'antd';
 import type { Consumer, PinRelation, UsedBy } from './api';
 import { Age, short } from './parts';
 
-/** How a pin relates to a commit, as a status with its word and what it means on hover: the status vocabulary. `same` names that commit. */
+/**
+ * How a pin relates to a commit, as a status dot with its word and a hint for hover. `same` is the word when the pin is
+ * that commit, and `base` names that commit in the hint, such as `HEAD`.
+ */
 function relationStatus(found: PinRelation, same: string, base: string): { status: 'success' | 'warning' | 'processing' | 'default'; text: string; hint: string } {
   const commits = found.commits === 1 ? '1 commit' : `${found.commits} commits`;
   if (found.relation === 'same') return { status: 'success', text: same, hint: `The pin is ${base}.` };
