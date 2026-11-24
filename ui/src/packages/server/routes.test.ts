@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,8 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { workingFolderWrites, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import { FakeTimer } from './fakeTimer.ts';
 import { gitPackages, type GitPackagesOptions } from './routes.ts';
-import type { Runner } from './runner.ts';
+import { runner, type Runner } from './runner.ts';
+import { realTimer } from './timer.ts';
 
 const ORIGIN = 'http://localhost:5173';
 const idle: Runner = { run: () => Promise.reject(new Error('no git in this test')), undoable: () => Promise.reject(new Error('no git in this test')), close: async () => {} };
@@ -95,5 +97,43 @@ describe('the routes of the git half', () => {
     const call = await serve({ ready: Promise.resolve('git is too old') });
     expect(await call('/git/packages')).toEqual({ status: 503, body: { error: 'git is too old' } });
     expect(await call('/git/nothing')).toEqual({ status: 503, body: { error: 'git is too old' } });
+  });
+
+  test('answer a deploy the node made as made, with package null and why, when the package cannot be read after it', async () => {
+    temp = await realpath(await mkdtemp(join(tmpdir(), 'rail8-routes-')));
+    const home = join(temp, 'home');
+    const clone = join(temp, 'work', 'orders');
+    await mkdir(home);
+    await mkdir(clone, { recursive: true });
+    const env = { PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1' };
+    const run = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Seed Author', '-c', 'user.email=seed@example.com', ...args], { cwd: clone, env }).toString('utf8').trim();
+    run('init', '-q', '-b', 'main');
+    await writeFile(join(clone, 'package.yaml'), 'name: orders\nversion: 1.0.0\n');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'first');
+    const commit = run('rev-parse', 'HEAD');
+    // git that serves until the node has deployed, and refuses every call after it
+    const real = runner({ env, timer: realTimer });
+    let deployed = false;
+    const git: Runner = { run: (call) => (deployed ? Promise.reject(new Error('git stopped')) : real.run(call)), undoable: (work, undo) => real.undoable(work, undo), close: () => real.close() };
+    const node = (async () => {
+      deployed = true;
+      return new Response(JSON.stringify({ package: 'orders', version: '1.0.0', repository: 'orders', commit, flows: [], added: [], swapped: [], removed: [], replaces: 'none' }));
+    }) as typeof fetch;
+    const call = await serve({ workspace: join(temp, 'work'), git, fetch: node });
+
+    try {
+      expect(await call('/git/packages/orders/deploy', 'POST', JSON.stringify({ commit, check: false, expect: 'none' }))).toEqual({
+        status: 200,
+        body: {
+          deploy: { package: 'orders', version: '1.0.0', repository: 'orders', commit, flows: [], added: [], swapped: [], removed: [] },
+          replaces: 'none',
+          package: null,
+          problem: "the package's state could not be read after the deploy: git stopped",
+        },
+      });
+    } finally {
+      await real.close();
+    }
   });
 });

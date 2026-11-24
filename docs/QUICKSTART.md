@@ -76,6 +76,11 @@ Every deploy names the state it replaces: `none` for a package the node does not
 When the node runs another commit, the deploy is refused (`412`) and nothing changes; the answer's `replaces` names the
 commit the node runs, and `bin/rail8 deploy demo HEAD --check` answers it too.
 
+The UI does the same from **Packages**: open `demo`, choose Commit…, write the message and choose **Commit and deploy**.
+Deploy… deploys the last commit, and **Deploy this commit…** in the History tab deploys an earlier one, which goes back
+to it. The dialog checks the commit on the node first and shows the flows it adds, swaps and removes, or every problem;
+Deploy then deploys it over the commit the check found. Uncommitted changes are never deployed.
+
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
 To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow from

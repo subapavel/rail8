@@ -1,11 +1,12 @@
 import { defineConfig } from '@playwright/test';
-import { stackWorkspace } from './e2e/stack-workspace';
+import { deployPort, deployWorkspace, stackWorkspace } from './e2e/stack-workspace';
 import { uiPort } from './server/uiPort';
 
 // The @stack scenarios: the UI's development server, whose /api requests it answers itself over a working folder and the
 // real node. The node is the quickstart's, started by `docker compose up` from the repository root, with its admin API
 // on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and the token exported in RAIL8_ADMIN_TOKEN. The working folder is a
-// temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares.
+// temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares. The deploy scenario has a development server
+// of its own, on the next port, over the quickstart's working folder ~/rail8-workspace, the one the node deploys from.
 const port = uiPort(process.env.RAIL8_UI_PORT);
 
 export default defineConfig({
@@ -17,10 +18,18 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${port}`,
   },
-  webServer: {
-    command: `rm -rf ${stackWorkspace} && cp -r ../mapping/corpus ${stackWorkspace} && node e2e/stack-setup.mjs ${stackWorkspace} && exec npm run dev`,
-    url: `http://localhost:${port}/`,
-    env: { RAIL8_WORKSPACE: stackWorkspace },
-    reuseExistingServer: false,
-  },
+  webServer: [
+    {
+      command: `rm -rf ${stackWorkspace} && cp -r ../mapping/corpus ${stackWorkspace} && node e2e/stack-setup.mjs ${stackWorkspace} && exec npm run dev`,
+      url: `http://localhost:${port}/`,
+      env: { RAIL8_WORKSPACE: stackWorkspace },
+      reuseExistingServer: false,
+    },
+    {
+      command: `mkdir -p ${deployWorkspace} && exec npm run dev`,
+      url: `http://localhost:${deployPort}/`,
+      env: { RAIL8_WORKSPACE: deployWorkspace, RAIL8_UI_PORT: String(deployPort) },
+      reuseExistingServer: false,
+    },
+  ],
 });

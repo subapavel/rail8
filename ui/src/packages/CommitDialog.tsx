@@ -3,7 +3,7 @@ import { Alert, App, Button, Flex, Form, Input, Tag, Typography } from 'antd';
 import { useId, useState } from 'react';
 import { MountedModal } from '../MountedModal';
 import { useWorkingFiles, type WorkingFile } from '../workingFiles';
-import { PackagesError, type Change, type CommitAnswer, type PackagesApi, type PackageState } from './api';
+import { PackagesError, type Change, type Commit, type CommitAnswer, type PackagesApi, type PackageState } from './api';
 import { short } from './parts';
 
 export interface CommitDialogProps {
@@ -14,6 +14,8 @@ export interface CommitDialogProps {
   /** Given the package's state after a commit, or null when the tab should read it again. */
   onState: (state: PackageState | null) => void;
   onClose: () => void;
+  /** Opens the deploy dialog of a commit the dialog made, on Commit and deploy. */
+  onDeploy: (commit: Pick<Commit, 'id' | 'subject'>) => void;
 }
 
 const STATUS: Record<Change['status'], { label: string; color: string }> = {
@@ -44,7 +46,7 @@ function changedBeside(before: PackageState, after: PackageState | null, sent: r
   );
 }
 
-type Shown = { kind: 'choosing' } | { kind: 'refused'; error: string; output?: string } | { kind: 'committed'; answer: CommitAnswer; head: string | null };
+type Shown = { kind: 'choosing' } | { kind: 'refused'; error: string; output?: string } | { kind: 'committed'; answer: CommitAnswer; head: string | null; deploy: boolean };
 
 /**
  * The commit dialog of a package: the identity git commits as, a required message, and every change of the package,
@@ -54,16 +56,18 @@ type Shown = { kind: 'choosing' } | { kind: 'refused'; error: string; output?: s
  * unticked, and a note says so. A refusal says why, with what git and the hooks said, and the tab reads the package
  * again. A ticked renamed file goes with the path it was renamed from. After a commit, the open tabs without unsaved
  * changes of the paths a hook staged, rewrote or changed on disk, chosen or not, read them again; a plain commit closes
- * the dialog, and one a hook or a terminal changed stays open to say how, with what git and the hooks said.
+ * the dialog, and one a hook or a terminal changed stays open to say how, with what git and the hooks said. Commit and
+ * deploy commits the same way, then goes on to the deploy dialog of the new commit: at once after a plain commit, else
+ * from Deploy this commit… once the dialog has said how the commit was changed.
  */
-export function CommitDialog({ api, repository, state, onState, onClose }: CommitDialogProps) {
+export function CommitDialog({ api, repository, state, onState, onClose, onDeploy }: CommitDialogProps) {
   const working = useWorkingFiles();
   // the dialog is modal: the open tabs' files as they were when it opened, and as Commit found a ticked path since
   const [open, setOpen] = useState(() => working.files());
   const [dirtied, setDirtied] = useState<string[]>([]);
   const [choices, setChoices] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [message, setMessage] = useState('');
-  const [committing, setCommitting] = useState(false);
+  const [committing, setCommitting] = useState<'commit' | 'deploy' | null>(null);
   const [shown, setShown] = useState<Shown>({ kind: 'choosing' });
   const { notification } = App.useApp();
   const messageId = useId();
@@ -72,7 +76,7 @@ export function CommitDialog({ api, repository, state, onState, onClose }: Commi
   const chosen = state.changes.filter(ticked);
   const identity = state.identity;
 
-  const commit = async () => {
+  const commit = async (deploy: boolean) => {
     if (state.branch === null) return;
     // a hidden tab can get unsaved changes of its own while the dialog is open, as a mapping refreshed on opening does
     const now = working.files();
@@ -89,7 +93,7 @@ export function CommitDialog({ api, repository, state, onState, onClose }: Commi
       { path: change.path, tag: change.tag },
       ...(change.renamedFrom === undefined || chosen.some((c) => c.path === change.renamedFrom) ? [] : [{ path: change.renamedFrom, tag: null }]),
     ]);
-    setCommitting(true);
+    setCommitting(deploy ? 'deploy' : 'commit');
     try {
       const answer = await api.commit(repository, { message, branch: state.branch, head, paths });
       onState(answer.package);
@@ -100,21 +104,45 @@ export function CommitDialog({ api, repository, state, onState, onClose }: Commi
       if (plain) {
         notification.success({ key: `commit:${repository}`, title: `Committed ${short(made.id)} ${made.subject}`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss commit notification' } });
         onClose();
+        if (deploy) onDeploy(made);
       } else {
-        setShown({ kind: 'committed', answer, head });
+        setShown({ kind: 'committed', answer, head, deploy });
       }
     } catch (error) {
       onState(null);
       if (error instanceof PackagesError) setShown({ kind: 'refused', error: error.message, ...(error.output === undefined ? {} : { output: error.output }) });
       else setShown({ kind: 'refused', error: error instanceof Error ? error.message : String(error) });
     } finally {
-      setCommitting(false);
+      setCommitting(null);
     }
   };
 
   if (shown.kind === 'committed') {
+    const made = shown.answer.commit;
+    const footer =
+      shown.deploy && made !== null
+        ? [
+            <Button key="close" onClick={onClose}>
+              Close
+            </Button>,
+            <Button
+              key="deploy"
+              type="primary"
+              onClick={() => {
+                onClose();
+                onDeploy(made);
+              }}
+            >
+              Deploy this commit…
+            </Button>,
+          ]
+        : [
+            <Button key="close" type="primary" onClick={onClose}>
+              Close
+            </Button>,
+          ];
     return (
-      <MountedModal title="Committed" onCancel={onClose} footer={<Button type="primary" onClick={onClose}>Close</Button>} width={720}>
+      <MountedModal title="Committed" onCancel={onClose} footer={footer} width={720}>
         <Committed answer={shown.answer} head={shown.head} />
       </MountedModal>
     );
@@ -123,13 +151,16 @@ export function CommitDialog({ api, repository, state, onState, onClose }: Commi
   return (
     <MountedModal
       title={`Commit to ${state.branch ?? 'a branch'}`}
-      onCancel={committing ? undefined : onClose}
+      onCancel={committing !== null ? undefined : onClose}
       width={880}
       footer={[
-        <Button key="cancel" disabled={committing} onClick={onClose}>
+        <Button key="cancel" disabled={committing !== null} onClick={onClose}>
           Cancel
         </Button>,
-        <Button key="commit" type="primary" loading={committing} disabled={message.trim() === '' || chosen.length === 0} onClick={() => void commit()}>
+        <Button key="deploy" loading={committing === 'deploy'} disabled={committing === 'commit' || message.trim() === '' || chosen.length === 0} onClick={() => void commit(true)}>
+          Commit and deploy
+        </Button>,
+        <Button key="commit" type="primary" loading={committing === 'commit'} disabled={committing === 'deploy' || message.trim() === '' || chosen.length === 0} onClick={() => void commit(false)}>
           Commit
         </Button>,
       ]}

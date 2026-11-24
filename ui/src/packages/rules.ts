@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, CommitBody, Kind, PackageRow } from './api';
+import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Kind, PackageRow } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -107,6 +107,37 @@ export function commitBodyOf(repository: string, body: unknown): CommitBody | { 
   }
   if (chosen.length === 0) return { status: 422, error: 'nothing to commit: no path is chosen' };
   return { message, branch, head, paths: chosen };
+}
+
+/** A deploy and its check wait this long for the node's answer: the wait of `rail8 deploy`. */
+export const DEPLOY_MS = 5 * 60_000;
+
+/**
+ * `body` as a deploy or its check takes it, or its refusal (400): the commit is 40 hex digits; a deploy names the state
+ * it expects, a commit of 40 hex digits or `none`, and never `any`, the blind overwrite; a check names none.
+ */
+export function deployBodyOf(body: unknown): DeployBody | { status: 400; error: string } {
+  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+  const { commit, check, expect } = body;
+  if (typeof commit !== 'string' || !isCommitId(commit)) return { status: 400, error: 'commit is no commit of 40 hex digits' };
+  if (typeof check !== 'boolean') return { status: 400, error: 'check is neither true nor false' };
+  if (check) return expect === undefined ? { commit, check } : { status: 400, error: 'a check names no expect' };
+  if (typeof expect !== 'string' || (expect !== 'none' && !isCommitId(expect))) {
+    return { status: 400, error: 'a deploy names the state it expects to replace, as its check answered it: a commit of 40 hex digits, or none' };
+  }
+  return { commit, check, expect };
+}
+
+/** The longest actor a header names, as the node takes it. */
+export const MAX_ACTOR = 128;
+
+/**
+ * Who a deploy names as its actor: git's identity in the clone as `Name <email>`, or `ui` when it gives none; each
+ * character outside printable ASCII as `?`, since a header carries none, and cut to {@link MAX_ACTOR} characters.
+ */
+export function actorOf(identity: { name: string; email: string } | null): string {
+  const said = identity === null ? 'ui' : `${identity.name} <${identity.email}>`;
+  return Array.from(said, (c) => (c >= ' ' && c <= '~' ? c : '?')).slice(0, MAX_ACTOR).join('');
 }
 
 /**

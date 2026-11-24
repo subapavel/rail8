@@ -91,6 +91,8 @@ jobs:
       - name: Start the node and wait for /health
         run: |
           set -euo pipefail
+          # the working folder the node deploys from, made by the runner's user before Docker makes it root's
+          mkdir -p ~/rail8-workspace
           docker compose up -d --build
           start=$(date +%s)
           until curl -sf localhost:8081/health > /dev/null; do
