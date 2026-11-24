@@ -1,4 +1,4 @@
-import { ReloadOutlined } from '@ant-design/icons';
+import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -6,6 +6,7 @@ import { GitCredentialsAlert } from '../GitCredentialsAlert';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
+import { GetPackageDialog } from './GetPackageDialog';
 import { BranchFact, CommitFact, DeployedFact, UpstreamFact } from './parts';
 import { MAX_PACKAGES } from './rules';
 
@@ -20,8 +21,8 @@ export interface PackageListProps {
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; list: Listed; at: Date };
 
 /**
- * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh in the
- * card's corner. Each row holds the repository, which opens the package's tab, the package's name and version, the
+ * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh and Get
+ * a package… in the card's corner; Get a package… is off on a server that takes no writes. Each row holds the repository, which opens the package's tab, the package's name and version, the
  * branch, the last commit, ahead and behind the upstream as of the last fetch, the changed files, and what the node it
  * names runs of it. Above it, a warning while the node finds its git credentials refused. The folders that are no package are
  * listed in a card below, each with the reason. Without a working folder it says how to set one; a refusal, such as git
@@ -31,6 +32,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
+  const [getting, setGetting] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -91,7 +93,12 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           options={false}
           pagination={false}
           headerTitle={<h2>Packages of the working folder</h2>}
-          toolBarRender={() => [refreshButton]}
+          toolBarRender={() => [
+            refreshButton,
+            <Button key="get" type="primary" icon={<CloudDownloadOutlined aria-hidden />} disabled={!list.writable} onClick={() => setGetting(true)}>
+              Get a package…
+            </Button>,
+          ]}
           locale={{
             emptyText: (
               <Empty
@@ -164,6 +171,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
       }
     >
       {body}
+      {getting && <GetPackageDialog api={api} onCloned={refresh} onPackage={(repository) => onOpen(repository, true)} onClose={() => setGetting(false)} />}
     </Page>
   );
 }

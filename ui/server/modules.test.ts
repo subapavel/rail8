@@ -140,6 +140,18 @@ describe('the development server of vite.config.ts', () => {
       req.end();
     });
 
+  test("closes the halves on its close, and stops on SIGTERM through that close", async () => {
+    const closed = vi.fn();
+    const before = process.listeners('SIGTERM').length;
+    vite = await createServer({ configFile: false, logLevel: 'silent', server: { ws: false, watch: null }, plugins: [{ name: 'half', closeBundle: closed }] });
+    // vite answers SIGTERM by closing the server, then exits: its listener is there while the server runs
+    expect(process.listeners('SIGTERM').length).toBe(before + 1);
+    await vite.close();
+    vite = undefined;
+    expect(closed).toHaveBeenCalled();
+    expect(process.listeners('SIGTERM').length).toBe(before);
+  });
+
   test('answers every route of the shell and of the modules', async () => {
     // the node answers with the path it was asked, a module's service in JSON
     upstream = createHttpServer((req, res) => {

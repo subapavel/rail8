@@ -1,5 +1,5 @@
 import type { PackagesApi } from '../api';
-import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeNodeRefusal, type FakeSent, type FakeState } from '../fake';
+import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeNodeRefusal, type FakeSent, type FakeSource, type FakeState } from '../fake';
 import { GIT_MISSING, gitTooOld, inPackage } from '../rules';
 
 /**
@@ -34,6 +34,38 @@ export interface Seed {
   foreignPage?: boolean;
   /** null: git gives no author identity, so a commit is refused. By default {@link AUTHOR}. */
   identity?: null;
+  /** Repositories on a git host, which Get a package can clone. */
+  sources?: SourceSeed[];
+  /**
+   * The author's own setup that the git half's git reads: lines added to their global git config, where `{port}`
+   * stands for the port of the world's git host, and variables of the development server's environment. The real git
+   * half only.
+   */
+  author?: { config?: string; env?: Record<string, string> };
+}
+
+/**
+ * A repository on the world's git host, at `path`, such as `acme/orders.git`: its commits on its default branch
+ * `branch` (main by default), as {@link CloneSeed}'s are made, named `<repository>/<label>` by the world's `id`. None:
+ * an empty repository. With `noHead`, its remote HEAD names a branch it lacks.
+ */
+export interface SourceSeed {
+  path: string;
+  manifest?: string | null;
+  files?: Record<string, string>;
+  /** Paths of `files` that are executable. */
+  executable?: string[];
+  commits?: string[];
+  branch?: string;
+  noHead?: true;
+  /** It asks for credentials, which the git half's git has none of (401); or the connection is cut halfway through the pack. */
+  fails?: 'credentials' | 'broken';
+  /** Over the clone's size limit on disk: more than 20 000 files. */
+  large?: true;
+  /** A file, or an empty folder, of the repository's name appears in the working folder while git clones it. */
+  appears?: 'file' | 'folder';
+  /** Its answer waits for the world's `release`. */
+  held?: true;
 }
 
 /** The author identity git gives by default. */
@@ -127,6 +159,26 @@ export interface World {
   link?(folder: string, path: string, target: string): Promise<void>;
   /** Closes the git half's runner, as the development server does when it ends, once its next `git <command>` ends. The real git half only. */
   closesAfter?(command: string): void;
+  /** Closes the git half's runner, as the development server does when it ends, once `git <command>` has started. The real git half only. */
+  closesWhile?(command: string): void;
+  /** Closes the git half's runner now. The real git half only. */
+  closeGit?(): Promise<void>;
+  /** Runs `before` and `after` around the work of the next write that takes the working folder's lock. The real git half only. */
+  atNextLock?(at: { before?: () => Promise<void>; after?: () => Promise<void> }): void;
+  /** The working folder's real path. The real git half only. */
+  workingFolder?: string;
+  /** How many requests the world's git host was sent. The real git half only. */
+  hostRequests?(): number;
+  /** A POST of `body` as JSON to `route` of the git half, as it is answered on the wire. The real git half only. */
+  wire?(route: string, body: unknown): Promise<{ status: number; body: unknown }>;
+  /** The https address of the source at `path` on the world's git host. */
+  address(path: string): string;
+  /** Resolves once a clone waits for a `held` source. */
+  waiting(): Promise<void>;
+  /** Lets the `held` sources answer. */
+  release(): void;
+  /** The hidden folders a clone is made in, left in the working folder. */
+  leftovers(): Promise<string[]>;
   close(): Promise<void>;
 }
 
@@ -144,7 +196,7 @@ export const manifestFor = (clone: CloneSeed) => (clone.manifest === undefined ?
 export const isId = (commit: string) => /^[0-9a-f]{40}$/.test(commit);
 
 /** The fake world's state for `seed`, with the id of each labelled commit. */
-export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, string> } {
+export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, string>; held: { release: () => void; waiting: () => Promise<void> } } {
   const ids = new Map<string, string>();
   let count = 0;
   // the time of the nth commit, a minute apart, as git writes it in `zone`
@@ -268,6 +320,43 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
             deployedAt: DEPLOYED_AT,
           })),
         };
+  let release = () => {};
+  const held = new Promise<void>((done) => (release = done));
+  const waiters: (() => void)[] = [];
+  let waited = false;
+  const sources = (seed.sources ?? []).map((source): FakeSource => {
+    const repository = source.path.slice(source.path.lastIndexOf('/') + 1).replace(/\.git$/, '');
+    const manifest = source.manifest === undefined ? `name: ${repository}\nversion: 1.0.0\n` : source.manifest;
+    const commits: FakeCommit[] = [];
+    let files: Record<string, string> = { ...(manifest === null ? {} : { 'package.yaml': manifest }), ...source.files };
+    for (const label of source.commits ?? ['first']) {
+      files = { ...files, [`${label}.txt`]: `${label}\n` };
+      count++;
+      const parent = commits.at(-1);
+      const made = { id: count.toString(16).padStart(40, '0'), parents: parent === undefined ? [] : [parent.id], subject: label, author: 'Seed Author', at: at(count), files };
+      commits.push(made);
+      ids.set(`${repository}/${label}`, made.id);
+    }
+    return {
+      address: `https://git.example.com/${source.path}`,
+      commits,
+      branch: source.branch ?? 'main',
+      head: commits.at(-1)?.id ?? null,
+      ...(source.noHead ? { noHead: true as const } : {}),
+      ...(source.fails === undefined ? {} : { fails: source.fails }),
+      ...(source.large ? { large: true as const } : {}),
+      ...(source.appears === undefined ? {} : { appears: true as const }),
+      ...(source.held
+        ? {
+            held,
+            waits: () => {
+              waited = true;
+              for (const done of waiters.splice(0)) done();
+            },
+          }
+        : {}),
+    };
+  });
   const state: FakeState = {
     workspace: seed.workspace !== false,
     writable: !seed.readOnly,
@@ -277,13 +366,14 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     node,
     sent: [],
     folders,
+    sources,
   };
-  return { state, ids };
+  return { state, ids, held: { release, waiting: () => (waited ? Promise.resolve() : new Promise<void>((done) => waiters.push(done))) } };
 }
 
 /** The fake world: the fake git half over the state of `seed`, whose saves share the fake working folder's lock with it. */
 export const fakeWorld: Build = async (seed) => {
-  const { state, ids } = fakeStateOf(seed);
+  const { state, ids, held: sources } = fakeStateOf(seed);
   const all = fakeLock();
   const holding: (() => void)[] = [];
   const lock: FakeLock = (work) =>
@@ -315,6 +405,10 @@ export const fakeWorld: Build = async (seed) => {
       const commit = ids.get(`${folder}/${label}`)!;
       state.node.running = [...state.node.running.filter((r) => r.repository !== folder), { repository: folder, commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT }];
     },
+    address: (path) => `https://git.example.com/${path}`,
+    waiting: sources.waiting,
+    release: sources.release,
+    leftovers: async () => [],
     close: async () => {},
   };
 };

@@ -25,6 +25,7 @@ const exists = (path: string) => lstat(path).then(() => true, (error: unknown) =
  * Whether the folder `name` directly in the real working folder `root` is a package, and why not when it is no
  * package. A package's name is a repository name, its `.git` is a folder, `git rev-parse --show-toplevel` answers the
  * folder itself, and it holds `package.yaml` at its root. A symbolic link is no package: a package is a folder itself.
+ * Only a `package.yaml` that is not there makes it no package; any other failure to look at it rejects.
  */
 export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'name' | 'isSymbolicLink'>): Promise<{ clone: string } | { reason: string }> {
   if (!isRepositoryName(entry.name)) return { reason: REASONS.name };
@@ -35,7 +36,7 @@ export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'n
   if (!dotGit.isDirectory()) return { reason: REASONS.worktree };
   const top = (await read(git, folder, ['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, '');
   if ((await realpath(top).catch(() => top)) !== folder) return { reason: REASONS.nested };
-  const manifest = await lstat(join(folder, 'package.yaml')).catch(() => null);
+  const manifest = await lstat(join(folder, 'package.yaml')).catch((error: unknown) => (missing(error) ? null : Promise.reject(error)));
   if (manifest === null || !manifest.isFile()) return { reason: REASONS.noManifest };
   return { clone: folder };
 }

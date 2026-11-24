@@ -3,6 +3,7 @@ import {
   type Artifact,
   type Busy,
   type Change,
+  type CloneAnswer,
   type Commit,
   type CommitAnswer,
   type DeployAnswer,
@@ -16,6 +17,8 @@ import {
 import {
   actorOf,
   artifactsOf,
+  CLONE_REFUSALS,
+  cloneSourceOf,
   commitBodyOf,
   deployBodyOf,
   indexFrom,
@@ -129,6 +132,28 @@ export interface FakeState {
   /** Every deploy and check the node was sent, in order: whether it was the check, its body and its actor. */
   sent: FakeSent[];
   folders: FakeFolder[];
+  /** The repositories Get a package can clone. */
+  sources?: FakeSource[];
+}
+
+/**
+ * A repository on a git host that Get a package can clone, by its address as the rule answers it (a trailing `/`
+ * aside): its commits, its default branch and the commit it names (null: an empty repository, or with `noHead` a
+ * remote HEAD that names no branch it has). It fails for want of credentials, or halfway (`broken`); it is over the size
+ * limit (`large`); a folder of its name appears in the working folder while git runs (`appears`); or its answer waits
+ * for `held` (`waits` resolves once a clone waits for it).
+ */
+export interface FakeSource {
+  address: string;
+  commits: FakeCommit[];
+  branch: string;
+  head: string | null;
+  noHead?: true;
+  fails?: 'credentials' | 'broken';
+  large?: true;
+  appears?: true;
+  held?: Promise<void>;
+  waits?: () => void;
 }
 
 /** A refusal the fake node gives: its status, its error and its problems. */
@@ -381,9 +406,57 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     };
   };
 
+  let cloning = false;
+
   return {
     async get(repository) {
       return stateOf(packageOf(repository));
+    },
+    async clone(address): Promise<CloneAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, CLONE_REFUSALS.readOnly);
+      if (cloning) throw refused(409, CLONE_REFUSALS.another);
+      cloning = true;
+      try {
+        const asked = cloneSourceOf(JSON.parse(JSON.stringify({ address })).address as unknown);
+        if ('error' in asked) throw refused(asked.status, asked.error);
+        if (!state.workspace) throw refused(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+        const { repository } = asked;
+        if (state.folders.some((f) => f.name === repository)) throw refused(409, CLONE_REFUSALS.exists);
+        const source = state.sources?.find((s) => s.address === asked.address.replace(/\/$/, ''));
+        if (source?.held !== undefined) {
+          source.waits?.();
+          await source.held;
+        }
+        const failed = (said: string) => new PackagesError(422, CLONE_REFUSALS.gitFailed, undefined, said);
+        if (source === undefined) throw failed('remote: Repository not found.\nfatal: repository not found');
+        if (source.fails === 'credentials') throw failed('fatal: could not read Username: terminal prompts disabled');
+        if (source.fails === 'broken') throw failed('error: RPC failed; curl 18 transfer closed with outstanding read data remaining\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output');
+        if (source.large) throw refused(422, CLONE_REFUSALS.tooLarge);
+        if (source.appears) {
+          state.folders.push({ name: repository, git: 'none', commits: [], head: { branch: null, commit: null }, upstream: null, index: {}, disk: {}, operation: null, conflicts: [] });
+          throw refused(409, CLONE_REFUSALS.exists);
+        }
+        const head = source.noHead ? null : source.head;
+        const files = filesOf({ commits: source.commits } as FakeFolder, head);
+        const folder: FakeFolder = {
+          name: repository,
+          git: 'clone',
+          commits: source.commits.map((c) => ({ ...c, parents: [...c.parents], files: { ...c.files } })),
+          head: { branch: source.noHead ? 'main' : source.branch, commit: head },
+          upstream: head === null ? null : { name: `origin/${source.branch}`, commit: head, fetchedAt: null },
+          index: { ...files },
+          disk: { ...files },
+          operation: null,
+          conflicts: [],
+        };
+        state.folders.push(folder);
+        const reason = whyNot(folder);
+        return reason === null ? { repository, package: await stateOf(folder) } : { repository, package: null, reason };
+      } finally {
+        cloning = false;
+      }
     },
     async file(repository, rev, path): Promise<FileVersion> {
       const folder = packageOf(repository);

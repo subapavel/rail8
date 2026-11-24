@@ -81,6 +81,13 @@ Deploy… deploys the last commit, and **Deploy this commit…** in the History 
 to it. The dialog checks the commit on the node first and shows the flows it adds, swaps and removes, or every problem;
 Deploy then deploys it over the commit the check found. Uncommitted changes are never deployed.
 
+To work on a package that is already on a git host, get it from the UI: in **Packages** choose **Get a package…**, paste
+the repository's https or ssh address, as its Clone button gives it, and choose **Get**. The dialog shows the folder it
+goes into, named as the repository, and the package opens in its tab once git has cloned it. git signs in with your own
+credential helper, ssh agent and keys; when it cannot, the dialog shows what git said, and `git ls-remote <address>` in a
+terminal, where git can ask, sets it up. The local node reads the working folder, so the package deploys at once; a node
+elsewhere deploys it only from a repository of the same name on its own git host.
+
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
 To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow from

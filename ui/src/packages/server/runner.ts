@@ -3,8 +3,11 @@ import type { Readable, Writable } from 'node:stream';
 import { Refusal } from '../../../server/workingFolder.ts';
 import type { Timer } from './timer.ts';
 
-/** A read changes nothing; a write may change the clone, and runs with the author's locale for their hooks. */
-export type Mode = 'read' | 'write';
+/**
+ * A read changes nothing; a write may change the clone, and runs with the author's locale for their hooks; a clone
+ * makes a new clone, as a write runs, with only the https and ssh transports allowed.
+ */
+export type Mode = 'read' | 'write' | 'clone';
 
 /** How long one call may run, and how many bytes it may write on each of its two output streams. */
 export interface Limits {
@@ -27,9 +30,9 @@ export const KILL_AFTER_MS = 2_000;
 /** How long a call waits, after its process exited, for a descendant to release its output streams. */
 export const DRAIN_MS = 100;
 
-/** At most this many processes run at once, and at most this many reads and writes wait. */
+/** At most this many processes run at once, and at most this many reads, writes and clones wait. */
 export const MAX_RUNNING = 4;
-export const MAX_WAITING: Readonly<Record<Mode, number>> = { read: 32, write: 8 };
+export const MAX_WAITING: Readonly<Record<Mode, number>> = { read: 32, write: 8, clone: 1 };
 
 /** One git call. */
 export interface Call {
@@ -42,6 +45,8 @@ export interface Call {
   stdin?: string;
   /** {@link READ_LIMITS} by default. */
   limits?: Limits;
+  /** Its abort stops the call as its deadline does, and the call rejects with the signal's reason. */
+  signal?: AbortSignal;
 }
 
 /** How a call's process ended: its exit code (null when a signal ended it) and what it wrote, each stream at most its limit. */
@@ -118,7 +123,7 @@ const ENDING: readonly NodeJS.Signals[] = ['SIGINT', 'SIGHUP'];
 /**
  * The environment of a call: `env` without any `GIT_*` or `RAIL8_*` variable, with no terminal prompt from git, the Git
  * Credential Manager or ssh, and for a read the C locale and no optional locks, so that it never blocks the author's
- * own git.
+ * own git. A clone may reach a repository through https and ssh only, whatever the author's config allows.
  */
 export function environmentOf(env: Readonly<Record<string, string | undefined>>, mode: Mode): Record<string, string> {
   const kept: Record<string, string> = {};
@@ -133,6 +138,7 @@ export function environmentOf(env: Readonly<Record<string, string | undefined>>,
     kept.LC_ALL = 'C';
     kept.GIT_OPTIONAL_LOCKS = '0';
   }
+  if (mode === 'clone') kept.GIT_ALLOW_PROTOCOL = 'https:ssh';
   return kept;
 }
 
@@ -150,19 +156,23 @@ const mib = (bytes: number) => `${bytes / (1024 * 1024)} MiB`;
 /** What a call is while its process runs: whether it is an undo's, how to stop it, and when it has exited. */
 interface Live {
   undo: boolean;
-  stop(why: Refusal): void;
+  stop(why: unknown): void;
   exited: Promise<void>;
 }
 
 /**
  * A runner over `options.spawn` (Node's own by default). Each process is git with `--no-pager`, started without a
  * shell, in a session and process group of its own with no terminal, so that a prompt in a terminal fails at once.
- * At its deadline, or when one of its output streams passes its limit while it is read, its process group gets TERM,
- * and KILL 2 s later. A call ends when its process has exited and both streams have ended, or {@link DRAIN_MS} after
- * the exit, never past its deadline, when a descendant still holds one of them; such a descendant is not killed.
+ * At its deadline, at the abort of its signal, or when one of its output streams passes its limit while it is read, its
+ * process group gets TERM, and KILL 2 s later. A call ends when its process has exited and both streams have ended, or
+ * {@link DRAIN_MS} after the exit, never past its deadline, when a descendant still holds one of them; such a
+ * descendant is not killed. A stopped clone's group gets its KILL even when git has exited first, and the clone ends
+ * only once it was sent, so that no process of the group writes into the clone's folder after it ended; on Windows
+ * only git itself is signalled, as for every call.
  *
- * At most {@link MAX_RUNNING} processes run at once, and one write at a time; reads run beside it. A call that cannot
- * start waits in order, at most {@link MAX_WAITING} of its mode.
+ * At most {@link MAX_RUNNING} processes run at once, one write at a time and one clone at a time; reads run beside
+ * them, and a write and a clone beside each other. A call that cannot start waits in order, at most
+ * {@link MAX_WAITING} of its mode.
  *
  * While a process runs, or an undoable is under way, SIGINT and SIGHUP of `options.signals` (the development server's
  * process by default) first close the runner as {@link Runner.close} does, and end the server with the same signal
@@ -180,6 +190,7 @@ export function runner(options: RunnerOptions): Runner {
   const waiting: { call: Call; undo: boolean; resolve: (ran: Ran) => void; reject: (error: unknown) => void }[] = [];
   let running = 0;
   let writing = false;
+  let cloning = false;
   let closing: Promise<void> | null = null;
 
   const ending = new Map<NodeJS.Signals, () => void>();
@@ -229,10 +240,13 @@ export function runner(options: RunnerOptions): Runner {
 
       const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
       const sizes = { stdout: 0, stderr: 0 };
-      let failure: Refusal | undefined;
+      let failure: unknown;
       let exited = false;
       let settled = false;
       let cancelKill: (() => void) | undefined;
+      // a stopped clone ends only once its group was sent KILL
+      let killSent: Promise<void> = Promise.resolve();
+      const groupKilled = call.mode === 'clone' && process.platform !== 'win32';
       let endDrain: (() => void) | undefined;
       let markExited: () => void = () => {};
       const entry: Live = {
@@ -243,9 +257,18 @@ export function runner(options: RunnerOptions): Runner {
           if (child.pid === undefined) return;
           const pid = child.pid;
           kill(pid, 'SIGTERM');
-          cancelKill = timer.after(KILL_AFTER_MS, () => {
-            if (!exited) kill(pid, 'SIGKILL');
-          });
+          if (groupKilled) {
+            killSent = new Promise<void>((sent) => {
+              timer.after(KILL_AFTER_MS, () => {
+                kill(pid, 'SIGKILL');
+                sent();
+              });
+            });
+          } else {
+            cancelKill = timer.after(KILL_AFTER_MS, () => {
+              if (!exited) kill(pid, 'SIGKILL');
+            });
+          }
         },
         exited: new Promise<void>((done) => {
           markExited = done;
@@ -258,12 +281,15 @@ export function runner(options: RunnerOptions): Runner {
         if (exited) endDrain?.();
         else entry.stop(new Refusal(504, `git took longer than ${limits.ms / 1000} s and was stopped`));
       });
+      const aborted = () => entry.stop(call.signal!.reason);
+      call.signal?.addEventListener('abort', aborted);
 
-      const finish = (error: Refusal | undefined, code: number | null) => {
+      const finish = (error: unknown, code: number | null) => {
         if (settled) return;
         settled = true;
         cancelDeadline();
         cancelKill?.();
+        call.signal?.removeEventListener('abort', aborted);
         child.stdout?.destroy();
         child.stderr?.destroy();
         live.delete(entry);
@@ -315,20 +341,26 @@ export function runner(options: RunnerOptions): Runner {
             done();
           });
         });
-        void drained.then(() => finish(failure, code));
+        // a clone stopped after this exit sends its KILL all the same, and ends after it
+        void drained.then(async () => {
+          await killSent;
+          finish(failure, code);
+        });
       });
     });
 
-  const canStart = (mode: Mode) => running < MAX_RUNNING && (mode === 'read' || !writing);
+  const canStart = (mode: Mode) => running < MAX_RUNNING && (mode === 'read' || (mode === 'write' ? !writing : !cloning));
 
   const launch = (call: Call, undo: boolean, resolve: (ran: Ran) => void, reject: (error: unknown) => void) => {
     running++;
     if (call.mode === 'write') writing = true;
+    if (call.mode === 'clone') cloning = true;
     start(call, undo)
       .then(resolve, reject)
       .finally(() => {
         running--;
         if (call.mode === 'write') writing = false;
+        if (call.mode === 'clone') cloning = false;
         for (let i = 0; i < waiting.length; ) {
           const next = waiting[i]!;
           if (canStart(next.call.mode)) {
@@ -341,11 +373,27 @@ export function runner(options: RunnerOptions): Runner {
 
   const submit = (call: Call, undo: boolean): Promise<Ran> => {
     if (closing !== null && !undo) return Promise.reject(new Refusal(503, 'the development server is closing'));
+    if (call.signal?.aborted) return Promise.reject(call.signal.reason);
     return new Promise<Ran>((resolve, reject) => {
       if (canStart(call.mode)) launch(call, undo, resolve, reject);
       else if (!undo && waiting.filter((w) => w.call.mode === call.mode).length >= MAX_WAITING[call.mode]) {
         reject(new Refusal(503, `too many git ${call.mode}s are waiting: try again`));
-      } else waiting.push({ call, undo, resolve, reject });
+      } else {
+        const waits = { call, undo, resolve, reject };
+        waiting.push(waits);
+        // an abort while it waits takes it out of the queue
+        call.signal?.addEventListener(
+          'abort',
+          () => {
+            const at = waiting.indexOf(waits);
+            if (at >= 0) {
+              waiting.splice(at, 1);
+              reject(call.signal!.reason);
+            }
+          },
+          { once: true },
+        );
+      }
     });
   };
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { link, lstat, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
@@ -209,6 +209,48 @@ async function linkNew(file: string, content: string | Uint8Array): Promise<bool
     );
   } finally {
     await rm(temporary, { force: true });
+  }
+}
+
+/** The error codes of a rename that found an entry at its target. */
+const TAKEN = new Set(['ENOTEMPTY', 'EEXIST', 'ENOTDIR']);
+
+/**
+ * Puts the folder `from` in place as the new folder `to`, beside it in the working folder, by one rename, never writing
+ * into, replacing or removing an entry that is at `to`; false, with nothing moved, when there is one. The caller holds
+ * the working folder's lock. An exclusive `mkdir` claims the name first; just before the rename, the claim must still
+ * be the same folder (its `dev` and `ino`); the rename replaces only that empty claim. When the rename fails, the claim
+ * is removed while it is still that folder, and only while it is empty. On Windows, where a rename never replaces a
+ * folder, it renames without the claim. A failure of its own file operations rejects as it is.
+ */
+export async function moveIntoPlace(from: string, to: string): Promise<boolean> {
+  const taken = (error: unknown) => TAKEN.has((error as NodeJS.ErrnoException).code ?? '');
+  if (process.platform === 'win32') {
+    return rename(from, to).then(
+      () => true,
+      (error: unknown) => (taken(error) ? false : Promise.reject(error)),
+    );
+  }
+  try {
+    await mkdir(to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+  const claim = await lstat(to);
+  const isClaim = async () => {
+    const now = await lstat(to).catch(() => null);
+    return now !== null && now.isDirectory() && now.dev === claim.dev && now.ino === claim.ino;
+  };
+  try {
+    if (!(await isClaim())) return false;
+    await rename(from, to);
+    return true;
+  } catch (error) {
+    // rmdir removes the claim only while it is empty
+    if (await isClaim()) await rmdir(to).catch(() => undefined);
+    if (taken(error)) return false;
+    throw error;
   }
 }
 

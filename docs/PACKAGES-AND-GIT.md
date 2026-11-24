@@ -52,7 +52,7 @@ shows:
 - the deployed state on that node: Deployed, Deployed with changes since, Behind *n*, Ahead *n*, Other commit, Failed,
   or Not running on *node*.
 
-**New package** sits above the table.
+**New package** and **Get a package…** sit above the table.
 
 Some folders are not packages:
 
@@ -152,7 +152,9 @@ Every git process, and `rail8 lock`, is started through one runner:
   descendant is an agent the author's tools start on purpose, such as gpg-agent or a credential cache, and it is not
   killed.
 - **Nothing outlives the server.** When the development server closes or restarts, the half kills every process it
-  started, the same way. A commit it stops this way still takes the paths it added out of the index again: that undo
+  started, the same way. A clone of Get a package that has not started is refused, and one whose git runs is stopped
+  the same way, after which its hidden folder is removed; one whose git had ended goes on into place, and the close
+  waits for it ("Get a package"). A commit it stops this way still takes the paths it added out of the index again: that undo
   makes at most six git calls of 10 s and 1 MiB each, is not stopped, and the close waits for it. While a commit is
   under way, SIGINT and SIGHUP are caught, and the server ends with the signal only after the commit or its undo. The
   first signal during an undo prints one line saying it is undoing, and for at most how long; a further signal is
@@ -174,6 +176,8 @@ The git half runs only these commands:
   - `diff --name-status --no-ext-diff --no-textconv`.
 - **Writes:**
   - `init` (a new package);
+  - `clone`, of an https or ssh address the rule takes, into a hidden folder of the working folder, without hooks,
+    submodules or LFS content (Get a package);
   - `add`, of the untracked files a commit takes;
   - `rm --cached`, only of the paths that `add` added, that `HEAD` lacks and whose index entry is still the blob the
     request checked, when the commit fails or the server closes during it. It leaves the file on disk, and git
@@ -216,7 +220,7 @@ The editors' saves and the git writes share one lock of the working folder.
   a restart get the same lock. `replaceFile`, `writeNew` and `createFile` take the lock as an argument.
 - **Who takes it.** Every save of the flow screen, the endpoint form and the mapping studio, and every git write that
   reads or writes the files of a clone: commit, pull, lock and new package. Fetch and push touch no file and do not
-  take it.
+  take it. A clone of Get a package holds one admission for its whole run, and the lock only for the move into place.
 - **The save's recheck.** Under the lock, each save compares its `If-Match` with the bytes on disk once more, just
   before its rename. The mapping save compares the bytes it read for its check. Each save also resolves its path
   again. A file that is gone, or a path that now leads to another file, has changed: 412, and 409 `mapping-changed` in
@@ -254,6 +258,7 @@ success with `package: null` and the reason.
 | `GET /git/packages/{repository}/artifacts?rev=` | `{artifacts: Artifact[], truncated}`: the package's artifacts at a revision |
 | `GET /git/packages/{repository}/log?before=&limit=` | `{items: Commit[], next}`: the first-parent history of `HEAD`, or of `before`, 50 to a page by default and at most 100 |
 | `POST /git/packages` `{repository, name}` | 201 `PackageState`: a new package ("New package") |
+| `POST /git/clone` `{address}` | 201 `{repository, package}`, with `reason` or `problem` when `package` is null ("Get a package") |
 | `POST /git/packages/{repository}/commit` `{message, branch, head, paths}` | `{commit, output, package}` ("Commit") |
 | `POST /git/packages/{repository}/deploy` `{commit, check, expect}` | `{deploy, replaces, package}` ("Deploy") |
 | `POST /git/packages/{repository}/lock` `{manifestTag, lockTag, dependencies}` | `{pins, package}` ("Dependencies") |
@@ -621,6 +626,109 @@ folder is not touched. Afterwards the package reads "Behind *n*", which is what 
 
 Undeploy stays with the command line.
 
+## Get a package
+
+**Get a package…** on the Packages screen clones one repository, from an https or ssh address the author pastes, into
+a new folder of the working folder named as the repository. As the author types, the dialog shows the folder, or why
+the address is refused. A clone that is a package opens in its tab; one that is no package stays in place, listed
+below the packages, and the dialog says why. There is no field for the folder or the branch: a node fetches
+`RAIL8_GIT_BASE` + the folder's name, and the clone checks out the repository's default branch.
+
+The new folder deploys only from a pool whose `RAIL8_GIT_BASE` holds a repository of that name with these commits: a
+fork named `orders` is another repository.
+
+**The address rule.** One rule, `cloneSourceOf` of `ui/src/packages/rules.ts`, is shared by the dialog, the route and
+the fake. The first check that fails is the answer, each with a line of its own that says what to do, and no line
+repeats the address or any part of it:
+
+1. White space at both ends is trimmed, and a leading `git clone` is dropped. Any other white space is refused.
+2. 1 to 1000 characters, each printable ASCII.
+3. A leading `-` is refused, and so is `::` anywhere, the form that runs `git-remote-<transport>`.
+4. Only lowercase `https://` and `ssh://` are taken, and the scp-like ssh form `[user@]host:path`. `http`, `git`,
+   `file`, any other scheme, an uppercase one, and a local path are refused.
+5. An https address holds no user information: the credential helper chooses the account. An ssh user is letters,
+   digits, `.`, `_` and `-`, and holds no password.
+6. A host is labels of letters, digits, `-` and `_`, not starting with `-`, or a dotted IPv4 address; no IPv6 literal.
+   In the scp form a host of one letter is a drive letter, refused. A port is 1 to 65535.
+7. A path is segments of `[A-Za-z0-9._~+-]`, with `%XX` in the URL forms. Once decoded, each byte is 0x20 to 0x7E and
+   neither `/` nor `\`, so a control character and any byte of 0x80 or above are refused. No segment is `.` or `..`
+   or starts with `-`.
+8. The folder is the last segment, less one trailing `.git`. It must be a repository name, must not end in `.`, and
+   must not be a Windows device name such as `con` or `lpt1`, on every platform.
+
+git is given the address as it stands after step 1, so `origin` is what a terminal would store.
+
+**The statuses,** in the order they are checked, after the session gate and the foreign-page refusal:
+
+| Status | When |
+| --- | --- |
+| 503 | git is missing or older than 2.30 |
+| 405 | any method but POST |
+| 403 | `RAIL8_READ_ONLY=true` |
+| 503 | nine writes of the working folder are under way |
+| 409 | another clone is under way |
+| 413 | a body over 1 MiB |
+| 400 | a body that is no `{address}` of text, or the rule's line |
+| 404 | no working folder |
+| 409 | anything at the folder's name, before git runs and again at the move |
+| 503 | the server is closing |
+| 422 | git ended with an error, with git's words as `output` and a line on signing in; or the clone is over the size limit |
+| 500 | git wrote more than 1 MiB on a stream, or a file operation of the server's own failed |
+| 504 | git ran past 300 s |
+| 201 | the folder is in place |
+
+**The steps.**
+
+1. The checks above only read. `lstat` of `<working folder>/<repository>` must find nothing, else 409.
+2. The clone runs as one undoable of the runner: a server close refuses it before it starts, with nothing made.
+3. It makes a hidden folder `.rail8-clone-*` of the working folder, mode 0700, which the list and the editors' walks
+   skip. A failure, a timeout or a server close while git runs removes it whole, and nothing else.
+4. git clones into it, in the runner's `clone` mode: one clone at a time, beside the one write, with the environment
+   of a write plus `GIT_ALLOW_PROTOCOL=https:ssh`, which wins over every config level and also refuses an `insteadOf`
+   that rewrites the address to `file://`. It runs as
+
+   ```
+   git -c core.hooksPath=/dev/null -c core.askPass= -c transfer.bundleURI=false -c filter.lfs.process=
+       -c filter.lfs.smudge= -c filter.lfs.required=false -c core.protectHFS=true -c core.protectNTFS=true
+       clone --quiet --no-recurse-submodules -- <address> <repository>
+   ```
+
+   Every `-c` comes before `clone`, so none is written into the new clone's config, and the address comes after `--`.
+   A submodule stays an empty folder, and a node refuses such a package at its deploy check. LFS files keep their
+   pointer bytes, which are what git stores and what a node deploys.
+5. Every second, on the injected timer, the size of the hidden folder is looked at, by `lstat` only, hidden entries
+   counted. Past 1 GiB of files or 20 000 entries git is stopped: 422. Once git has ended, it is looked at once more.
+6. Under the working folder's lock, `moveIntoPlace` of `ui/server/workingFolder.ts` puts the clone in place: an
+   exclusive `mkdir` claims the name and keeps its `dev` and `ino`, `lstat` must still give them just before the
+   rename, and the rename replaces only that empty claim. An entry that appeared meanwhile is 409, and is never
+   written into, replaced or removed. On Windows, where a rename never replaces a folder, it renames without the claim.
+7. The emptied hidden folder is removed, and the new folder is read as the list reads it. The rename is the commit
+   point: a failure after it is still a 201, with `problem`.
+
+Getting a package runs no hook and no git-lfs. A filter the author's own config defines runs, as in a terminal.
+
+**The close.** A server close refuses a clone that has not started, and stops git's process group: TERM, and KILL 2 s
+later, even after git's leader has exited. The hidden folder is then removed. A clone whose git had ended goes on into
+place, and the close waits for it. So the close is bounded by the KILL's 2 s and the removal of at most the size limit
+plus one second's growth, or by the move, which waits for the write that holds the lock. During a clone, SIGINT and
+SIGHUP are caught as during a commit's undo, and Vite's own SIGTERM closes the server, which closes the git half.
+
+**Credentials** come as for every git call ("Remote"). When git cannot sign in, or does not know the host's key, the
+answer says to run `git ls-remote` with the address in a terminal, where it can ask, and then try again.
+
+**As in a terminal:**
+
+- The address names where the author's git connects. The author's `insteadOf`, git's redirect rule, packfile URIs,
+  proxies, and hosts on localhost or a private network behave as in a terminal. The address shown is no security
+  boundary.
+- The clone runs the author's git on the repository the address names, as `git clone` in their terminal does.
+  Protection against flaws in git's own parsers is the author's patched git.
+- Filters the author's config defines, other than LFS, run on checkout.
+- The state read after the clone runs `git status` under the author's config, and may run a clean filter.
+- After the clone, every git command in it follows the author's config, a relative `core.hooksPath` included.
+- A hard crash can leave a hidden `.rail8-clone-*` folder, and, in the instant between the claim and the rename, an
+  empty folder of the repository's name, which the list shows as "no clone of its own". The author deletes them.
+
 ## Dependencies
 
 The Dependencies tab reads `package.yaml` and `package.lock` on disk. For each dependency it shows:
@@ -685,8 +793,11 @@ it.
   - Without an upstream, it is refused, naming `git push -u` for a terminal.
   - When the remote rejects it (a protected branch, a push that is not a fast-forward), the answer is a 409 with git's
     lines.
-- **Credentials** are the author's credential helper or ssh agent. No terminal prompt can open, so a helper that must
-  ask in a terminal fails and says so.
+- **Credentials** come from what the author's git and ssh give without a terminal: credential helpers, `.netrc`,
+  `http.extraHeader`, the ssh agent and keys, and `ssh_config`. No terminal prompt opens. A helper's own window (a
+  keychain, a browser) may open, and the git call waits for it up to its deadline. An unknown ssh host key fails ("Host
+  key verification failed"). BatchMode, a host-key policy and agent forwarding stay the author's `ssh_config` and
+  `core.sshCommand`, as for every other git call.
 
 The UI leaves these to the git host:
 
@@ -699,7 +810,7 @@ The UI leaves these to the git host:
 
 It leaves these to a terminal:
 
-- clones, branches, merges other than a fast-forward, rebases and conflicts;
+- branches, merges other than a fast-forward, rebases and conflicts;
 - stash, reset, discard and amend;
 - remotes and submodules.
 
@@ -715,8 +826,11 @@ It leaves these to a terminal:
    - `.gitattributes`, holding `* -text`.
 3. **The repository.** In that folder it runs `git init -b main`, `git add -A` and a first commit, "Create package
    *name*". The commit is refused, like any other commit, without a git identity.
-4. **Into place.** The folder is renamed to the repository's name. The rename is refused (409) when that name exists.
-   A failure at any point deletes the temporary folder, which is the server's own, and nothing else.
+4. **Into place.** The folder is renamed to the repository's name, with the helper Get a package uses,
+   `moveIntoPlace` of `ui/server/workingFolder.ts`: an exclusive `mkdir` claims the name and keeps its `dev` and `ino`,
+   `lstat` must still give them just before the rename, and the rename replaces only that empty claim. It is refused
+   (409) when that name exists. A failure at any point deletes the temporary folder, which is the server's own, and
+   nothing else.
 
 It adds no remote. In the local run, the node reads the working folder as its base, so the new package can be
 deployed at once. A deployed environment needs the repository on the git host first.
@@ -781,6 +895,10 @@ Modules still import no other module. The shell gains two contracts, as files di
 | A commit, with its hooks | 60 s, 1 MiB on each stream |
 | Taking a stopped commit's added paths out of the index | at most six git calls, each 10 s and 1 MiB on each stream |
 | Fetch, pull, push | 120 s each, 1 MiB on each stream |
+| A clone of Get a package | 300 s, 1 MiB on each stream |
+| A clone on disk, sampled each second and once more after git | 1 GiB of files, 20 000 entries |
+| Clones at once | 1, and 1 waiting |
+| The address of Get a package | 1000 characters |
 | `rail8 lock` | 120 s, 1 MiB on each stream |
 | From TERM to KILL | 2 s |
 | After git exits, for the end of its output while a process it started holds the pipes open | 100 ms, within the deadline |
@@ -795,7 +913,7 @@ Modules still import no other module. The shell gains two contracts, as files di
   answers the reads and refuses every write, as `RAIL8_READ_ONLY=true` does.
 - Branches, merges other than a fast-forward, rebases, conflicts, stash, reset, discard, amend, and anything that
   rewrites history.
-- Cloning, remotes, submodules and worktrees.
+- Remotes, submodules and worktrees.
 - A package at a folder other than its clone's root.
 - Choosing hunks, and the index as such. The author chooses whole files.
 - Undeploy, which stays with the command line.
@@ -921,10 +1039,12 @@ Modules still import no other module. The shell gains two contracts, as files di
    - the `@stack` scenario.
 
    The common case then works end to end: edit, commit, deploy.
-8. **Dependencies and Lock.** The Dependencies tab, `…/lock` through `RAIL8_CLI`, and the write of `package.lock`
+8. **Get a package.** `POST /git/clone`, the runner's `clone` mode, `moveIntoPlace`, and the dialog on the Packages
+   screen. The owner pastes the address of an existing package and gets its tab.
+9. **Dependencies and Lock.** The Dependencies tab, `…/lock` through `RAIL8_CLI`, and the write of `package.lock`
    through a temporary file and a rename in `rail8 lock`.
-9. **Remote.** Fetch, the fast-forward pull with the clean tabs reloaded, push, and the two-window test.
-10. **New package.** `POST /git/packages` and its dialog.
-11. **What each node runs, on the node.** The rows of what each node runs and `GET /admin/pool/packages`. It is designed
+10. **Remote.** Fetch, the fast-forward pull with the clean tabs reloaded, push, and the two-window test.
+11. **New package.** `POST /git/packages` and its dialog.
+12. **What each node runs, on the node.** The rows of what each node runs and `GET /admin/pool/packages`. It is designed
     first and depends on nothing in the UI, so its design may start at any time.
-12. **Every node in the UI.** One entry per node in the deployed state.
+13. **Every node in the UI.** One entry per node in the deployed state.

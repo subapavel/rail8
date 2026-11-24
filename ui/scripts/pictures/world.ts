@@ -76,6 +76,10 @@ const SEED: Seed = {
     { folder: 'customers', commits: ['Start the customers package'], commitFiles: { 'Start the customers package': { 'Start the customers package.txt': null, 'flows/customers.yaml': flow('customers', 'crm-in', '  - type: to\n    name: erp\n    endpoint: erp-out\n') } } },
   ],
   plain: ['notes'],
+  sources: [
+    { path: 'acme/invoices.git', commits: ['Start the invoices package', 'Send each invoice to the ledger'] },
+    { path: 'acme/payroll.git', fails: 'credentials' },
+  ],
   node: [
     { repository: 'orders', commit: 'Test the happy path of an order' },
     { repository: 'customers', commit: 'Start the customers package' },
@@ -97,7 +101,17 @@ function idFor(text: string): string {
 export function pictureWorld(): PackagesApi {
   const { state } = fakeStateOf(SEED);
   const ids = new Map(state.folders.flatMap((f) => f.commits.map((c) => [c.id, idFor(`${f.name}/${c.subject}`)] as const)));
+  for (const source of state.sources ?? []) for (const c of source.commits) ids.set(c.id, idFor(`${source.address}/${c.subject}`));
   const idOf = (id: string) => ids.get(id) ?? id;
+  for (const source of state.sources ?? []) {
+    for (const commit of source.commits) {
+      commit.id = idOf(commit.id);
+      commit.parents = commit.parents.map(idOf);
+      commit.author = 'Petr Svoboda';
+      commit.at = '2026-11-20T15:40:00+01:00';
+    }
+    if (source.head !== null) source.head = idOf(source.head);
+  }
   for (const folder of state.folders) {
     for (const commit of folder.commits) {
       commit.id = idOf(commit.id);
