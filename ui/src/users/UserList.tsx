@@ -112,8 +112,9 @@ export function UserList({ api }: { api: UsersApi }) {
           Roles…
         </Button>
       </Tooltip>
+      {/* each its own key, so the popover of one is never reused by the other */}
       {user.blockedAt === null ? (
-        <Allowed action="user.block">
+        <Allowed key="block" action="user.block">
           <ConfirmButton
             label="Block"
             title={`Block ${user.name}?`}
@@ -122,7 +123,7 @@ export function UserList({ api }: { api: UsersApi }) {
           />
         </Allowed>
       ) : (
-        <Allowed action="user.block">
+        <Allowed key="unblock" action="user.block">
           <ConfirmButton
             label="Unblock"
             title={`Unblock ${user.name}?`}
