@@ -8,6 +8,7 @@ import { cloneSourceOf, CLONE_REFUSALS, LOCK_REFUSALS, REMOTE_REFUSALS } from '.
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
+import { discardBodyOf, discardPaths, DiscardRefused } from './discard.ts';
 import { lockBodyOf, lockPackage, LockRefused } from './lock.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
@@ -55,6 +56,10 @@ const PREFIX = '/git';
  *   chosen paths (see {@link commitPaths}), with the package's state after it, or `package: null` and `problem` when
  *   that cannot be read. Refused with 403 under RAIL8_READ_ONLY=true, with 503 before its body is read while 9 writes of the
  *   working folder are under way, and with 413 for a body over 1 MiB; a refusal of git or a hook carries its `output`.
+ * - `POST …/{repository}/discard` `{head, paths}`: 200 `{discarded, left, package}`, the chosen paths put back as in the
+ *   last commit (see {@link discardPaths}), with the package's state after it, or `package: null` and `problem` when
+ *   that cannot be read. Refused, as a commit is, with 403, 503 and 413 before its body is read; a refusal of git
+ *   carries its `output`.
  * - `POST …/{repository}/deploy` `{commit, check, expect}`: 200 `{deploy, replaces, package}`, the node's answer to the
  *   deploy of the commit, or to its check (see {@link deployCommit}), with the package's state after it, or
  *   `package: null` and `problem` when that cannot be read. A deploy, never its check, is refused with 403 under
@@ -133,6 +138,15 @@ export function gitPackages(options: GitPackagesOptions) {
         const unread = `the package's state could not be read after the commit: ${error instanceof Error ? error.message : String(error)}`;
         return { ...done, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
       }
+    });
+  };
+
+  const discard = (req: IncomingMessage, repository: string) => {
+    if (!options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was discarded');
+    return admitted(options.writes, async (lock) => {
+      const body = discardBodyOf(repository, await jsonBody(req));
+      const clone = await cloneIn(repository);
+      return withState(req, clone, repository, 'the discard', await discardPaths(options.git, lock, clone, repository, body));
     });
   };
 
@@ -257,7 +271,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
-    const writes = ['commit', 'deploy', 'lock', 'fetch', 'pull', 'push'];
+    const writes = ['commit', 'discard', 'deploy', 'lock', 'fetch', 'pull', 'push'];
     const method = under?.[2] !== undefined && writes.includes(under[2]) ? 'POST' : 'GET';
     if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
     if (under === null) return { value: await list(req) };
@@ -269,6 +283,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     if (under[2] === 'fetch' || under[2] === 'pull' || under[2] === 'push') return { value: await remote(req, repository, under[2]) };
     if (under[2] === 'lock') return { value: await lock(req, repository) };
+    if (under[2] === 'discard') return { value: await discard(req, repository) };
     if (method === 'POST') return { value: await (under[2] === 'commit' ? commit(req, repository) : deploy(req, repository)) };
     return one(req, repository, under[2], url.searchParams);
   };
@@ -290,7 +305,7 @@ export function gitPackages(options: GitPackagesOptions) {
       (error: unknown) => {
         if (res.headersSent) sendFailure(res, error);
         else if (isSessionRefused(error)) refusedSession(res, error);
-        else if (error instanceof CommitRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { error: error.message, output: error.output });
+        else if (error instanceof CommitRefused || error instanceof DiscardRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { error: error.message, output: error.output });
         else if (error instanceof LockRefused)
           send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }), ...(error.output === undefined ? {} : { output: error.output }) });
         else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });

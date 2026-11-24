@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { ADDRESS_REFUSALS, cloneSourceOf, MAX_ADDRESS } from './rules';
+import type { Change } from './api';
+import { ADDRESS_REFUSALS, chosenPaths, cloneSourceOf, discardBodyOf, MAX_ADDRESS, MAX_CHOSEN } from './rules';
 
 describe('the address rule of Get a package', () => {
   test.each([
@@ -138,5 +139,59 @@ describe('the address rule of Get a package', () => {
 
   test('no refusal repeats the address or any part of it', () => {
     for (const error of Object.values(ADDRESS_REFUSALS)) expect(error).not.toMatch(/acme|github|secret|orders/);
+  });
+});
+
+describe('the body of a discard', () => {
+  const head = 'a'.repeat(40);
+  const one = { path: 'orders/a.txt', tag: 't1', index: 'clean' };
+
+  test('a well-formed body is taken as it stands, a null head and a null tag or index too', () => {
+    const body = { head, paths: [one, { path: 'orders/b/c.txt', tag: null, index: 'staged' }, { path: 'orders/d.txt', tag: 't2', index: null }] };
+    expect(discardBodyOf('orders', body)).toEqual(body);
+    expect(discardBodyOf('orders', { head: null, paths: [one] })).toEqual({ head: null, paths: [one] });
+  });
+
+  test.each([
+    ['no object', ['x'], 400, 'the request is no JSON object'],
+    ['a short head', { head: 'abc', paths: [one] }, 400, 'head is neither null nor a commit of 40 hex digits'],
+    ['no list', { head, paths: one }, 400, 'paths is no list'],
+    ['too many paths', { head, paths: Array.from({ length: MAX_CHOSEN + 1 }, (_, i) => ({ path: `orders/${i}`, tag: null, index: null })) }, 400, `a discard takes at most ${MAX_CHOSEN} paths`],
+    ['an index of another value', { head, paths: [{ ...one, index: 'differs' }] }, 400, 'each path is {path, tag, index}, its tag a text or null, its index clean, staged or null'],
+    ['a tag of a number', { head, paths: [{ ...one, tag: 7 }] }, 400, 'each path is {path, tag, index}, its tag a text or null, its index clean, staged or null'],
+    ['a path twice', { head, paths: [one, { ...one, tag: null }] }, 400, 'orders/a.txt is chosen twice'],
+    ['a .git segment', { head, paths: [{ ...one, path: 'orders/.git/config' }] }, 400, 'a path with a .git segment names git’s own files, never a file of the package'],
+    ['a path of another package', { head, paths: [{ ...one, path: 'billing/a.txt' }] }, 404, 'billing/a.txt lies outside the package orders'],
+    ['no path', { head, paths: [] }, 422, 'nothing to discard: no path is chosen'],
+  ])('%s is refused', (_, body, status, error) => {
+    expect(discardBodyOf('orders', body)).toEqual({ status, error });
+  });
+});
+
+describe('the paths a discard of chosen changes names', () => {
+  const change = (path: string, more: Partial<Change> = {}): Change => ({ path, kind: 'file', status: 'modified', index: 'clean', tag: `tag of ${path}`, ...more });
+
+  test('each picked change, in the order picked, with its tag and index; a row whose index differs is named clean', () => {
+    const a = change('orders/a.txt');
+    const b = change('orders/b.txt', { index: 'staged' });
+    const c = change('orders/c.txt', { index: 'differs' });
+    expect(chosenPaths([c, a, b], [a, b, c])).toEqual([
+      { path: 'orders/c.txt', tag: 'tag of orders/c.txt', index: 'clean' },
+      { path: 'orders/a.txt', tag: 'tag of orders/a.txt', index: 'clean' },
+      { path: 'orders/b.txt', tag: 'tag of orders/b.txt', index: 'staged' },
+    ]);
+  });
+
+  test('a rename brings the path it was renamed from right after it: with that path’s own row, else as not on disk', () => {
+    const renamed = change('orders/new.txt', { status: 'renamed', renamedFrom: 'orders/old.txt', index: 'staged' });
+    expect(chosenPaths([renamed], [renamed])).toEqual([
+      { path: 'orders/new.txt', tag: 'tag of orders/new.txt', index: 'staged' },
+      { path: 'orders/old.txt', tag: null, index: null },
+    ]);
+    const old = change('orders/old.txt', { status: 'added' });
+    expect(chosenPaths([renamed, old], [renamed, old])).toEqual([
+      { path: 'orders/new.txt', tag: 'tag of orders/new.txt', index: 'staged' },
+      { path: 'orders/old.txt', tag: 'tag of orders/old.txt', index: 'clean' },
+    ]);
   });
 });

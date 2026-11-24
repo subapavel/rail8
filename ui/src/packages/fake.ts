@@ -7,6 +7,7 @@ import {
   type Commit,
   type CommitAnswer,
   type DeployAnswer,
+  type DiscardAnswer,
   type Deployed,
   type Dependency,
   type LockAnswer,
@@ -35,6 +36,7 @@ import {
   cloneSourceOf,
   commitBodyOf,
   deployBodyOf,
+  discardBodyOf,
   indexFrom,
   inPackage,
   isCommitId,
@@ -53,6 +55,7 @@ import {
   REASONS,
   REMOTE_REFUSALS,
   remoteBodyOf,
+  staleChoice,
   statusCompared,
   unstageCommand,
   statusOf,
@@ -671,6 +674,78 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         return { pins, package: await stateOf(folder) };
       });
     },
+    async discard(repository, body): Promise<DiscardAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was discarded');
+      const asked = discardBodyOf(repository, JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      const folder = packageOf(repository);
+      const nothing = 'nothing was discarded';
+      return lock(async () => {
+        const entries = statusEntries(folder);
+        const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
+        if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal, then discard`);
+        if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
+        if (folder.head.commit !== asked.head) throw refused(412, `HEAD is now ${folder.head.commit ?? '(no commit yet)'}, not the HEAD you saw; ${nothing}`);
+        const insides = asked.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
+        const compared = statusCompared(entries);
+        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), compared, nothing);
+        if (stale !== null) throw refused(412, stale);
+        const rows = new Set(compared.map((c) => c.inside));
+        const fromChosen = new Set(compared.filter((c) => c.renamedFrom !== undefined && insides.includes(c.inside)).map((c) => c.renamedFrom!));
+        const index = indexFrom(entries);
+        const now = insides.map((inside) => (rows.has(inside) ? index(inside, inside in folder.disk) : null));
+        asked.paths.forEach((p, n) => {
+          const at = now[n]!;
+          const moved = at === null ? p.index !== null || !fromChosen.has(insides[n]!) : p.index === null || (at !== 'differs' && at !== p.index);
+          if (moved) throw refused(412, `${p.path} was staged or unstaged since you saw it; ${nothing}`);
+        });
+        asked.paths.forEach((p, n) => {
+          if (folder.escapes?.some((e) => insides[n] === e || insides[n]!.startsWith(`${e}/`))) throw refused(403, `${p.path} leads out of the package's folder, or into its .git folder; ${nothing}`);
+        });
+        const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
+        asked.paths.forEach((p, n) => {
+          if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you saw it; ${nothing}`);
+        });
+        asked.paths.forEach((p, n) => {
+          if (now[n] === 'differs') throw refused(409, `${p.path} is staged in a terminal with other content: discard or unstage it there; ${nothing}`);
+        });
+        // a file and a folder of the same name meet where one path is a folder of the other
+        const head = filesOf(folder, folder.head.commit);
+        const leading = (inside: string) => inside.split('/').slice(0, -1).map((_, n, segments) => segments.slice(0, n + 1).join('/'));
+        const below = (files: Record<string, string>, inside: string) => Object.keys(files).find((k) => k.startsWith(`${inside}/`));
+        asked.paths.forEach((p, n) => {
+          const inside = insides[n]!;
+          const meet = (other: string) => refused(409, `${p.path} and ${folder.name}/${other} are a file and a folder of the same name: discard them one at a time, or in a terminal; ${nothing}`);
+          const file = leading(inside).find((f) => f in folder.disk);
+          if (file !== undefined) throw meet(file);
+          const held = below(folder.disk, inside);
+          if (held !== undefined) throw meet(held);
+          if (!(inside in head)) return;
+          const staged = below(folder.index, inside) ?? leading(inside).find((f) => f in folder.index);
+          if (staged !== undefined) throw meet(staged);
+        });
+        for (const inside of insides) {
+          const committed = head[inside];
+          if (committed === undefined) {
+            delete folder.index[inside];
+            delete folder.disk[inside];
+          } else {
+            folder.index[inside] = committed;
+            folder.disk[inside] = committed;
+          }
+        }
+        const after = statusEntries(folder);
+        const isLeft = (inside: string) => after.some((e) => e.path === inside || e.from === inside || (e.kind === 'untracked' && e.path.startsWith(`${inside}/`)));
+        const pathOf = (inside: string) => `${folder.name}/${inside}`;
+        return {
+          discarded: sorted(insides.filter((inside) => !isLeft(inside)).map(pathOf)),
+          left: sorted(insides.filter(isLeft).map(pathOf)),
+          package: await stateOf(folder),
+        };
+      });
+    },
     async commit(repository, body): Promise<CommitAnswer> {
       if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
       if (state.git !== null) throw refused(503, state.git);
@@ -686,22 +761,10 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         if (folder.head.branch === null) throw refused(409, 'HEAD is detached: commit on a branch, which a terminal can switch to');
         if (state.identity === null) throw refused(422, 'git gives no author identity in this clone: set it in a terminal with git config user.name and git config user.email');
         if (folder.head.branch !== asked.branch || folder.head.commit !== asked.head) throw refused(412, 'the clone is not at the branch and HEAD you reviewed; nothing was committed');
-        const changed = new Set(statusCompared(entries).flatMap((c) => [c.inside, ...(c.renamedFrom === undefined ? [] : [c.renamedFrom])]));
         const index = indexFrom(entries);
         const insides = asked.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
-        asked.paths.forEach((p, n) => {
-          const inside = insides[n]!;
-          if (!changed.has(inside)) throw refused(412, `${p.path} is no longer among the package's changes; nothing was committed`);
-        });
-        // a renamed change is chosen with the path it was renamed from: not on disk, unless named with a tag of its own
-        const renamedFrom = new Map(statusCompared(entries).flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
-        asked.paths.forEach((p, n) => {
-          const from = renamedFrom.get(insides[n]!);
-          if (from === undefined) return;
-          const source = insides.indexOf(from);
-          if (source < 0) throw refused(412, `${p.path} is renamed from ${folder.name}/${from}, which is not among the paths chosen with it; nothing was committed`);
-          if (asked.paths[source]!.tag === null && from in folder.disk) throw refused(412, `${folder.name}/${from}, which ${p.path} was renamed from, is on disk: choose it too; nothing was committed`);
-        });
+        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), statusCompared(entries), 'nothing was committed');
+        if (stale !== null) throw refused(412, stale);
         const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
         asked.paths.forEach((p, n) => {
           if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you reviewed it; nothing was committed`);

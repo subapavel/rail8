@@ -72,7 +72,7 @@ async function streamedTagOf(file: string): Promise<string> {
 }
 
 /** Whether the real path `real` lies in the clone at `clone` outside its `.git` folder, in any letter case. */
-const inClone = (clone: string, real: string) => real.startsWith(clone + sep) && !real.slice(clone.length + 1).split(sep).some((s) => s.toLowerCase() === '.git');
+export const inClone = (clone: string, real: string) => real.startsWith(clone + sep) && !real.slice(clone.length + 1).split(sep).some((s) => s.toLowerCase() === '.git');
 
 /**
  * What lies on disk at `inside` of the clone at `clone`: null when nothing does; else its size, the tag of its bytes,

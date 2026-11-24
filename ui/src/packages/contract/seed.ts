@@ -126,6 +126,8 @@ export interface CloneSeed {
   staged?: Record<string, string | null>;
   /** Files written on disk last, by path; null deletes one. */
   edits?: Record<string, string | null>;
+  /** Paths that are symbolic links to a file outside the package, made on disk last and never committed. */
+  linkedOut?: string[];
   /** Paths of the first commit that are symbolic links to a file outside the package. */
   outside?: string[];
   /** Symbolic links of the first commit into the clone's own `.git` folder: from the link's path to the path within `.git` it names. */
@@ -153,6 +155,8 @@ export interface World {
    * 200 when it wrote, or 412 when they differ.
    */
   save(path: string, text: string, tag: string): Promise<200 | 412>;
+  /** Stages the file at `path`, relative to the working folder, as `git add` does in a terminal: its bytes on disk, or its removal when it is not on disk. */
+  stage(path: string): Promise<void>;
   /** Resolves once the next write holds the working folder's lock. */
   held(): Promise<void>;
   /** Every deploy and check the node was sent, in order. */
@@ -292,6 +296,10 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
       if (text === null) delete folder.disk[path];
       else folder.disk[path] = text;
     }
+    for (const path of clone.linkedOut ?? []) {
+      folder.disk[path] = 'not of the package\n';
+      folder.escapes = [...(folder.escapes ?? []), path];
+    }
     if (clone.switchedTo !== undefined) {
       folder.head.branch = clone.switchedTo;
       folder.upstream = null;
@@ -417,6 +425,13 @@ export const fakeWorld: Build = async (seed) => {
         folder.disk[inside] = text;
         return 200;
       }),
+    async stage(path) {
+      const [repository] = path.split('/');
+      const folder = state.folders.find((f) => f.name === repository)!;
+      const { inside } = inPackage(repository!, path) as { inside: string };
+      if (inside in folder.disk) folder.index[inside] = folder.disk[inside]!;
+      else delete folder.index[inside];
+    },
     held: () => new Promise<void>((done) => holding.push(done)),
     sent: () => state.sent,
     // the fake node answers at once: a silent one with the git half's 504
