@@ -172,8 +172,7 @@ export function gitPackages(options: GitPackagesOptions) {
     return admitted(options.writes, async (held) => {
       const body = lockBodyOf(await jsonBody(req));
       const clone = await cloneIn(repository);
-      const node = nodeState(req);
-      const pins = await lockPackage(options.git, held, options.cli, clone, repository, body, node);
+      const pins = await lockPackage(options.git, held, options.cli, clone, repository, body);
       return withState(req, clone, repository, 'the lock', { pins });
     });
   };

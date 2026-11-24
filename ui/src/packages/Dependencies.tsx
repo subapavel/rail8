@@ -13,11 +13,13 @@ const STATE: Record<Dependency['state'], { status: 'success' | 'warning' | 'erro
   missing: { status: 'error', text: 'Missing', hint: 'No folder of the working folder holds this name and version, or several do.' },
 };
 
-/** Why Lock is disabled for the package `state` on a server that takes writes when `writable`; null when it is not. */
-function lockRefused(writable: boolean, state: PackageState): string | null {
+/**
+ * Why Lock is disabled on a server that takes writes when `writable`; null when it is not. A lock with every dependency
+ * pinned, or none declared, still writes package.lock anew, which drops the pins of dependencies package.yaml no longer
+ * declares.
+ */
+function lockRefused(writable: boolean): string | null {
   if (!writable) return 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).';
-  if (state.dependencies.length === 0) return 'Nothing to lock: package.yaml declares no dependency.';
-  if (state.dependencies.every((d) => d.state === 'pinned')) return 'Nothing to lock: every dependency is pinned at its candidate’s HEAD.';
   return null;
 }
 
@@ -41,7 +43,7 @@ function At({ name, commit, content }: { name: string; commit: string | null; co
  * The dependencies of the package `repository` in a titled card: each one's name and version from `package.yaml`, its
  * pin from `package.lock`, its candidate, the folder of the working folder that Lock would pin, at its `HEAD`, its
  * state, and the commit the node resolved for it when it runs the package. Lock, the card's action, is disabled with
- * the reason as its title when there is nothing to lock or the server takes no writes. Its pins are a notification and
+ * the reason as its title when the server takes no writes. Its pins are a notification and
  * its answer's state goes to `onState`; a refusal stays above the table, with the problems `rail8 lock` named, until it
  * is dismissed or Lock runs again. A refusal because the package or a candidate changed reads the package again.
  */
@@ -55,7 +57,7 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
   const { notification } = App.useApp();
   const [locking, setLocking] = useState(false);
   const [refusal, setRefusal] = useState<PackagesError | null>(null);
-  const refused = lockRefused(writable, state);
+  const refused = lockRefused(writable);
 
   const lock = async () => {
     setRefusal(null);
