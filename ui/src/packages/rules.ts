@@ -318,3 +318,165 @@ export function indexFrom(entries: readonly StatusEntry[]): (inside: string, onD
     return entry === undefined ? 'clean' : indexOf(entry.kind, entry.xy, onDisk);
   };
 }
+
+/** An address of a repository is at most this many characters. */
+export const MAX_ADDRESS = 1000;
+
+/** Why an address is not taken, one line each, saying what to do. None repeats the address or any part of it. */
+export const ADDRESS_REFUSALS = {
+  notText: 'the request is no {address} of text',
+  empty: "paste the address of a repository, as its git host's Clone button gives it",
+  space: 'paste only the address: it holds white space',
+  long: `the address is over ${MAX_ADDRESS} characters: paste only the address`,
+  character: "the address holds a character outside printable ASCII: paste it as its git host's Clone button gives it",
+  option: "an address never starts with '-': paste the address of the repository",
+  transport: "an address with '::' names a transport of its own, which is not taken: use the repository's https or ssh address",
+  scheme: "only https:// and ssh:// addresses are taken: use the repository's https or ssh address",
+  local: "a repository on this machine is not taken: clone it in a terminal, or use its git host's address",
+  httpsUser: "remove the part before '@': your credential helper chooses the account",
+  password: "the address holds a password: remove it; your credential helper or your ssh key signs in",
+  user: "the user name before '@' is malformed: letters, digits, '.', '_' and '-', starting with a letter, a digit or '_'",
+  host: "the host is malformed: labels of letters, digits, '-' and '_' joined by '.'; an IPv6 address is not taken, use the host's name",
+  driveLetter: "a host of one letter is a drive letter to git on Windows: use the host's full name, or an ssh:// address",
+  port: 'the port is no number from 1 to 65535',
+  path: "the path of the address is malformed: segments of letters, digits, '.', '_', '~', '+' and '-' joined by '/', none of them '.' or '..' or starting with '-'",
+  noRepository: 'the address names no repository: paste the address its git host gives',
+  folderCharacter: "the repository's name holds a character a package's folder cannot have, such as a space: a package's folder takes letters, digits, '.', '_' and '-'",
+  name: `the repository's name is no name of a package's folder: ${REASONS.name.slice('its name is no repository name: '.length)}`,
+  trailingDot: "the repository's name ends with '.', which a folder on Windows cannot keep",
+  device: "the repository's name is a device name on Windows, such as con or nul, which no folder can have",
+} as const;
+
+/** A label of a host: letters, digits, `-` and `_`, not starting with `-`, 1 to 63 characters. */
+const HOST_LABEL = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$/;
+/** A user of an ssh address. */
+const SSH_USER = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/;
+/** A segment of a path as it is written: in the URL forms `%XX` too. */
+const LITERAL_SEGMENT = /^[A-Za-z0-9._~+-]+$/;
+const ENCODED_SEGMENT = /^(?:[A-Za-z0-9._~+-]|%[0-9A-Fa-f]{2})+$/;
+/** The names Windows keeps for its devices, with or without an extension. */
+const DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+type Refused = { status: 400; error: string };
+const refused = (error: string): Refused => ({ status: 400, error });
+
+/** Whether `host` is a host name or a dotted IPv4 address: labels joined by `.`, at most 253 characters in all. */
+function isHost(host: string): boolean {
+  return host.length >= 1 && host.length <= 253 && host.split('.').every((label) => HOST_LABEL.test(label));
+}
+
+/**
+ * The decoded segments of `path` (a URL form's when `encoded`, else the scp form's literal path), with one trailing `/`
+ * allowed; null when it is malformed. Each decoded byte is 0x20 to 0x7E and neither `/` nor `\`; no segment is `.` or
+ * `..`, or starts with `-`.
+ */
+function segmentsOf(path: string, encoded: boolean): string[] | null {
+  const parts = (path.endsWith('/') ? path.slice(0, -1) : path).split('/');
+  const decoded: string[] = [];
+  for (const part of parts) {
+    if (!(encoded ? ENCODED_SEGMENT : LITERAL_SEGMENT).test(part)) return null;
+    const bytes = part.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (Array.from(bytes).some((c) => c < ' ' || c > '~' || c === '/' || c === '\\')) return null;
+    if (bytes === '.' || bytes === '..' || bytes.startsWith('-')) return null;
+    decoded.push(bytes);
+  }
+  return decoded;
+}
+
+/**
+ * The address a person pasted to get a package, as the clone takes it, and the folder it clones into; or the refusal
+ * (400) of the first rule it fails, in this order:
+ *
+ * 1. White space at both ends is trimmed, and a leading `git clone` with the white space after it dropped; any other
+ *    white space is refused.
+ * 2. 1 to 1000 characters, each printable ASCII.
+ * 3. No leading `-`, so git never reads it as an option.
+ * 4. No `::`, the form that names a transport of its own.
+ * 5. With a scheme, only lowercase `https://` and `ssh://`.
+ * 6. Without one, the scp-like ssh form `[user@]host:path` when a `:` comes before any `/`; anything else is a local
+ *    path, refused.
+ * 7. No user information in an https address; in an ssh one an optional user, never a password. A host of labels or a
+ *    dotted IPv4 address, never an IPv6 literal, of at least 2 characters in the scp form. A port of 1 to 65535, in the
+ *    URL forms only. A path of segments, decoded once in the URL forms and literal in the scp form.
+ * 8. The folder: the last segment less one trailing `.git`, a repository name that does not end in `.` and is no
+ *    Windows device name.
+ *
+ * The address answered is the text as it stands after step 1, so that `origin` is what a terminal would store.
+ */
+export function cloneSourceOf(text: unknown): { address: string; repository: string } | Refused {
+  if (typeof text !== 'string') return refused(ADDRESS_REFUSALS.notText);
+  const address = text.trim().replace(/^git\s+clone\s+/, '');
+  if (/\s/.test(address)) return refused(ADDRESS_REFUSALS.space);
+  if (address === '') return refused(ADDRESS_REFUSALS.empty);
+  if (address.length > MAX_ADDRESS) return refused(ADDRESS_REFUSALS.long);
+  if (!/^[\x21-\x7e]+$/.test(address)) return refused(ADDRESS_REFUSALS.character);
+  if (address.startsWith('-')) return refused(ADDRESS_REFUSALS.option);
+  if (address.includes('::')) return refused(ADDRESS_REFUSALS.transport);
+
+  let segments: string[] | null;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(address);
+  if (scheme !== null) {
+    if (scheme[1] !== 'https' && scheme[1] !== 'ssh') return refused(ADDRESS_REFUSALS.scheme);
+    const rest = address.slice(scheme[0].length);
+    const slash = rest.indexOf('/');
+    const authority = slash < 0 ? rest : rest.slice(0, slash);
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) {
+      if (scheme[1] === 'https') return refused(ADDRESS_REFUSALS.httpsUser);
+      const user = authority.slice(0, at);
+      if (user.includes(':')) return refused(ADDRESS_REFUSALS.password);
+      if (!SSH_USER.test(user)) return refused(ADDRESS_REFUSALS.user);
+    }
+    const hostPort = authority.slice(at + 1);
+    const colon = hostPort.indexOf(':');
+    const host = colon < 0 ? hostPort : hostPort.slice(0, colon);
+    if (!isHost(host)) return refused(ADDRESS_REFUSALS.host);
+    if (colon >= 0) {
+      const port = hostPort.slice(colon + 1);
+      if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) return refused(ADDRESS_REFUSALS.port);
+    }
+    if (slash < 0 || rest.slice(slash) === '/') return refused(ADDRESS_REFUSALS.noRepository);
+    segments = segmentsOf(rest.slice(slash + 1), true);
+  } else {
+    const colon = address.indexOf(':');
+    const slash = address.indexOf('/');
+    if (colon < 0 || (slash >= 0 && slash < colon)) return refused(ADDRESS_REFUSALS.local);
+    const authority = address.slice(0, colon);
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) {
+      const user = authority.slice(0, at);
+      if (!SSH_USER.test(user)) return refused(ADDRESS_REFUSALS.user);
+    }
+    const host = authority.slice(at + 1);
+    if (!isHost(host)) return refused(ADDRESS_REFUSALS.host);
+    if (host.length < 2) return refused(ADDRESS_REFUSALS.driveLetter);
+    const path = address.slice(colon + 1);
+    const relative = path.startsWith('/') ? path.slice(1) : path;
+    if (relative === '' || relative === '/') return refused(ADDRESS_REFUSALS.noRepository);
+    segments = segmentsOf(relative, false);
+  }
+  if (segments === null) return refused(ADDRESS_REFUSALS.path);
+
+  const last = segments.at(-1)!;
+  const repository = last.endsWith('.git') ? last.slice(0, -'.git'.length) : last;
+  if (repository === '') return refused(ADDRESS_REFUSALS.noRepository);
+  if (!/^[A-Za-z0-9._-]+$/.test(repository)) return refused(ADDRESS_REFUSALS.folderCharacter);
+  if (!isRepositoryName(repository)) return refused(ADDRESS_REFUSALS.name);
+  if (repository.endsWith('.')) return refused(ADDRESS_REFUSALS.trailingDot);
+  if (DEVICE.test(repository)) return refused(ADDRESS_REFUSALS.device);
+  return { address, repository };
+}
+
+/** A clone of Get a package may grow to this many bytes and this many files and folders on disk. */
+export const CLONE_MAX_BYTES = 1024 * 1024 * 1024;
+export const CLONE_MAX_ENTRIES = 20_000;
+
+/** What Get a package answers, besides the address rule's own lines. */
+export const CLONE_REFUSALS = {
+  another: 'another package is being got: wait for it to end',
+  exists: "the working folder holds an entry of the repository's name already: nothing was written; rename or remove it, or get the package in another working folder",
+  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was got',
+  gitFailed:
+    'git could not clone the repository, and nothing was written: if git could not sign in or does not know the host’s key, run git ls-remote with this address in a terminal, where it can ask, then try again',
+  tooLarge: `the repository is over ${CLONE_MAX_BYTES / (1024 * 1024 * 1024)} GiB or ${CLONE_MAX_ENTRIES.toLocaleString('en-US')} files and folders on disk, so nothing was written: clone it in a terminal`,
+} as const;

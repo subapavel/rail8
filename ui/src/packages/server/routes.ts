@@ -3,11 +3,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
 import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
-import type { PackageList } from '../api.ts';
+import type { CloneAnswer, PackageList } from '../api.ts';
+import { cloneSourceOf, CLONE_REFUSALS } from '../rules.ts';
+import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
-import { listPackages, type NodeState } from './packages.ts';
+import { folderOf, listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
 import type { Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
@@ -53,6 +55,14 @@ const PREFIX = '/git';
  *   deploy of the commit, or to its check (see {@link deployCommit}), with the package's state after it, or
  *   `package: null` and `problem` when that cannot be read. A deploy, never its check, is refused with 403 under
  *   RAIL8_READ_ONLY=true; a refusal of the node carries its `problems`.
+ * - `POST /git/clone` `{address}`: 201 {@link CloneAnswer}, Get a package (see {@link cloneInto}): the address cloned
+ *   into a new folder of the working folder named as the repository. Refused, in this order: 403 under
+ *   RAIL8_READ_ONLY=true; 503 before its body is read while 9 writes of the working folder are under way; 409 while
+ *   another clone is under way; 413 for a body over 1 MiB; 400 for a body that is no `{address}` of text, or an address
+ *   the rule refuses (see {@link cloneSourceOf}); 404 without a working folder; 409 when anything of that name is in the
+ *   working folder; 503 when the server is closing; 422 with git's `output` when git fails, and over the size limit;
+ *   504 past 300 s. It holds one admission of the working folder's writes for its whole run, and the lock only for
+ *   the move into place.
  *
  * A revision is `work` or a commit of 40 hex digits, never a name such as `HEAD`. Under a package, 400 refuses a
  * malformed repository name, revision or path, or a path with a `.git` segment; 404 a folder that is no package, a
@@ -106,6 +116,38 @@ export function gitPackages(options: GitPackagesOptions) {
     });
   };
 
+  let cloning = false;
+  const clone = (req: IncomingMessage): Promise<CloneAnswer> => {
+    if (!options.writable) throw new Refusal(403, CLONE_REFUSALS.readOnly);
+    return admitted(options.writes, async (lock) => {
+      if (cloning) throw new Refusal(409, CLONE_REFUSALS.another);
+      cloning = true;
+      try {
+        const body = await jsonBody(req);
+        const source = cloneSourceOf(typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as { address?: unknown }).address : undefined);
+        if ('error' in source) throw new Refusal(source.status, source.error);
+        if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+        const root = await rootOf(options.workspace);
+        const { repository } = source;
+        const done = await cloneInto(options.git, options.timer, lock, root, source.address, repository);
+        const problem = (error: unknown) => {
+          const unread = `the package's state could not be read after the clone: ${error instanceof Error ? error.message : String(error)}`;
+          return { repository, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
+        };
+        try {
+          const found = await folderOf(options.git, root, { name: repository, isSymbolicLink: () => false });
+          if ('reason' in found) return done.problem === undefined ? { repository, package: null, reason: found.reason } : problem(new Error(found.reason));
+          const state = await stateOf(options.git, found.clone, repository, nodeState(req));
+          return done.problem === undefined ? { repository, package: state } : { repository, package: null, problem: done.problem };
+        } catch (error) {
+          return problem(error);
+        }
+      } finally {
+        cloning = false;
+      }
+    });
+  };
+
   const deploy = async (req: IncomingMessage, repository: string) => {
     const body = deployBodyFrom(await jsonBody(req));
     if (!body.check && !options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
@@ -144,10 +186,14 @@ export function gitPackages(options: GitPackagesOptions) {
     }
   };
 
-  const answer = async (req: IncomingMessage, url: URL): Promise<{ value: unknown; etag?: string }> => {
+  const answer = async (req: IncomingMessage, url: URL): Promise<{ value: unknown; etag?: string; status?: number }> => {
     const unfit = await options.ready;
     if (unfit !== null) throw new Refusal(503, unfit);
     const path = url.pathname;
+    if (path === '/git/clone') {
+      if (req.method !== 'POST') throw new Refusal(405, `POST is the only way to call ${path}`);
+      return { value: await clone(req), status: 201 };
+    }
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
     const method = under?.[2] === 'commit' || under?.[2] === 'deploy' ? 'POST' : 'GET';
@@ -176,11 +222,11 @@ export function gitPackages(options: GitPackagesOptions) {
       return;
     }
     answer(req, url).then(
-      ({ value, etag }) => send(res, 200, value, etag),
+      ({ value, etag, status }) => send(res, status ?? 200, value, etag),
       (error: unknown) => {
         if (res.headersSent) sendFailure(res, error);
         else if (isSessionRefused(error)) refusedSession(res, error);
-        else if (error instanceof CommitRefused) send(res, error.status, { error: error.message, output: error.output });
+        else if (error instanceof CommitRefused || error instanceof CloneRefused) send(res, error.status, { error: error.message, output: error.output });
         else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });
         else sendFailure(res, error);
       },

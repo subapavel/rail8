@@ -1,7 +1,8 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer, type Server, type ServerResponse } from 'node:http';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -16,13 +17,14 @@ import { uiSession } from '../../../server/session.ts';
 import { gitPackages } from '../server/routes.ts';
 import { runner, type Spawn } from '../server/runner.ts';
 import { realTimer } from '../server/timer.ts';
-import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed, type Zone } from './seed';
+import { HIDDEN_PREFIX } from '../server/clone.ts';
+import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed, type SourceSeed, type Zone } from './seed';
 
 const ORIGIN = 'http://localhost:5173';
 const TOKEN = 'the-admin-token';
 
-const listen = (server: Server) => new Promise<number>((done) => server.listen(0, '127.0.0.1', () => done((server.address() as AddressInfo).port)));
-const shut = (server: Server) => new Promise<void>((done) => server.close(() => done()));
+const listen = (server: Pick<Server, 'listen' | 'address'>) => new Promise<number>((done) => server.listen(0, '127.0.0.1', () => done((server.address() as AddressInfo).port)));
+const shut = (server: Pick<Server, 'close'>) => new Promise<void>((done) => server.close(() => done()));
 const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
 /**
@@ -31,6 +33,9 @@ const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
  * whose `.git` is no repository is taken by git for one of its folders. Every git the world itself runs to build the
  * seed gets a home of its own, so the machine's git config never reaches it. Its saves share the working folder's
  * writes with the git half, as the editors' saves do.
+ *
+ * Its git host serves the seed's sources as bare repositories at `https://localhost:<port>/<path>` through Node's https
+ * server and `git http-backend`, with a certificate made for the run that only the author's own git config trusts.
  */
 export const httpWorld: Build = async (seed) => {
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'rail8-packages-')));
@@ -165,6 +170,129 @@ export const httpWorld: Build = async (seed) => {
   }
   for (const { folder, to } of seed.links ?? []) await symlink(join(work, to), join(work, folder));
 
+  // the git host: each source a bare repository, its remote HEAD set to its default branch
+  const served = join(temp, 'served');
+  const repositoryOf = (source: SourceSeed) => source.path.slice(source.path.lastIndexOf('/') + 1).replace(/\.git$/, '');
+  const buildSource = async (source: SourceSeed) => {
+    const repository = repositoryOf(source);
+    const bare = join(served, ...source.path.split('/'));
+    const branch = source.branch ?? 'main';
+    const pushed = source.noHead ? (branch === 'main' ? 'develop' : branch) : branch;
+    await mkdir(bare, { recursive: true });
+    git(bare, 'init', '-q', '--bare', '-b', 'main');
+    if (source.large) {
+      // over 20 000 files, all of one blob, made at once
+      const manifest = `name: ${repository}\nversion: 1.0.0\n`;
+      const lines = ['blob', 'mark :1', 'data 2', 'x', `commit refs/heads/${pushed}`, 'committer Seed Author <seed@example.com> 1700000000 +0000', 'data 5', 'large'];
+      lines.push(`M 100644 inline package.yaml`, `data ${manifest.length}`, manifest.slice(0, -1));
+      for (let n = 0; n <= 20_000; n++) lines.push(`M 100644 :1 files/${String(n).padStart(5, '0')}.txt`);
+      execFileSync('git', ['fast-import', '--quiet'], { cwd: bare, env: setup, input: `${lines.join('\n')}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+    } else if ((source.commits ?? ['first']).length > 0) {
+      const side = join(temp, 'authors', ...source.path.split('/'));
+      await mkdir(side, { recursive: true });
+      git(side, 'init', '-q', '-b', branch);
+      const manifest = source.manifest === undefined ? `name: ${repository}\nversion: 1.0.0\n` : source.manifest;
+      if (manifest !== null) await write(join(side, 'package.yaml'), manifest);
+      for (const [path, text] of Object.entries(source.files ?? {})) await write(join(side, path), text);
+      for (const path of source.executable ?? []) await chmod(join(side, path), 0o755);
+      for (const label of source.commits ?? ['first']) {
+        await write(join(side, `${label}.txt`), `${label}\n`);
+        commit(side, repository, label);
+      }
+      git(side, 'push', '-q', bare, `HEAD:refs/heads/${pushed}`);
+    }
+    git(bare, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`);
+  };
+  for (const source of seed.sources ?? []) await buildSource(source);
+
+  // the host's certificate, for localhost only, made for this run
+  const tls = join(temp, 'tls');
+  await mkdir(tls);
+  execFileSync(
+    'openssl',
+    ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', join(tls, 'host.key'), '-out', join(tls, 'host.crt'), '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-days', '1'],
+    { stdio: 'ignore' },
+  );
+  let releaseHeld = () => {};
+  const heldUntil = new Promise<void>((done) => (releaseHeld = done));
+  let waited = false;
+  const waiters: (() => void)[] = [];
+  const appeared = new Set<string>();
+  const hostHome = join(temp, 'host-home');
+  await mkdir(hostHome);
+  /** One request to `git http-backend`, as CGI: its status, its headers and its body, read whole. */
+  const backend = (req: IncomingMessage, url: URL) =>
+    new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((done, fail) => {
+      const cgi = spawn('git', ['http-backend'], {
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: hostHome,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_PROJECT_ROOT: served,
+          GIT_HTTP_EXPORT_ALL: '1',
+          PATH_INFO: decodeURIComponent(url.pathname),
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: req.method ?? 'GET',
+          CONTENT_TYPE: req.headers['content-type'] ?? '',
+          HTTP_CONTENT_ENCODING: String(req.headers['content-encoding'] ?? ''),
+          GIT_PROTOCOL: String(req.headers['git-protocol'] ?? ''),
+          REMOTE_ADDR: '127.0.0.1',
+        },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      const out: Buffer[] = [];
+      cgi.stdout.on('data', (chunk: Buffer) => out.push(chunk));
+      cgi.on('error', fail);
+      cgi.on('close', () => {
+        const all = Buffer.concat(out);
+        const end = all.indexOf('\r\n\r\n');
+        const headers: Record<string, string> = {};
+        let status = 200;
+        for (const line of all.subarray(0, end).toString('latin1').split('\r\n')) {
+          const colon = line.indexOf(':');
+          const [name, value] = [line.slice(0, colon).trim(), line.slice(colon + 1).trim()];
+          if (name.toLowerCase() === 'status') status = Number(value.split(' ')[0]);
+          else headers[name] = value;
+        }
+        done({ status, headers, body: all.subarray(end + 4) });
+      });
+      req.pipe(cgi.stdin);
+    });
+  let hostRequests = 0;
+  const host = createHttpsServer({ cert: readFileSync(join(tls, 'host.crt')), key: readFileSync(join(tls, 'host.key')) }, (req, res) => {
+    hostRequests += 1;
+    const url = new URL(req.url ?? '', 'https://localhost');
+    const source = (seed.sources ?? []).find((s) => decodeURIComponent(url.pathname).startsWith(`/${s.path}/`));
+    void (async () => {
+      if (source?.held) {
+        waited = true;
+        for (const done of waiters.splice(0)) done();
+        await heldUntil;
+      }
+      if (source?.fails === 'credentials') {
+        res.writeHead(401, { 'www-authenticate': 'Basic realm="rail8"' }).end();
+        return;
+      }
+      if (source?.appears !== undefined && !appeared.has(source.path)) {
+        appeared.add(source.path);
+        if (source.appears === 'file') await writeFile(join(work, repositoryOf(source)), 'not the clone\n');
+        else await mkdir(join(work, repositoryOf(source)));
+      }
+      const answer = await backend(req, url);
+      res.writeHead(answer.status, answer.headers);
+      if (source?.fails === 'broken' && answer.body.includes('packfile')) {
+        // the connection is cut halfway through the pack
+        res.write(answer.body.subarray(0, Math.floor(answer.body.length / 2)), () => res.socket?.destroy());
+        return;
+      }
+      res.end(answer.body);
+    })().catch(() => res.socket?.destroy());
+  });
+  const hostPort = await listen(host);
+  // the author's git trusts the host's certificate through their own config, as for a host of their company
+  await appendFile(join(home, '.gitconfig'), `[http "https://localhost:${hostPort}"]\n\tsslCAInfo = ${join(tls, 'host.crt')}\n`);
+  if (seed.author?.config !== undefined) await appendFile(join(home, '.gitconfig'), `${seed.author.config.replaceAll('{port}', String(hostPort))}\n`);
+
   // the node: what it runs, by repository, as a deploy changes it
   const running = new Map(
     (seed.node === 'silent' ? [] : (seed.node ?? [])).map((r) => [
@@ -270,6 +398,8 @@ export const httpWorld: Build = async (seed) => {
   const afterwards = new Map((seed.clones ?? []).flatMap((c) => (c.afterwards === undefined ? [] : [[join(work, c.folder), c] as const])));
   // the command after whose end the runner closes, as the development server does when it ends
   let closing: string | undefined;
+  // the command while which the runner closes
+  let closingWhile: string | undefined;
   const spawned: Spawn = (command, args, options) => {
     const seeded = args[1] === '-C' && (args[3] === 'add' || args[3] === 'commit') ? meanwhile.get(args[2]!) : undefined;
     if (seeded !== undefined) {
@@ -308,19 +438,29 @@ export const httpWorld: Build = async (seed) => {
       closing = undefined;
       child.once('exit', () => void runs.close());
     }
+    if (closingWhile !== undefined && args.includes(closingWhile)) {
+      closingWhile = undefined;
+      setImmediate(() => void runs.close());
+    }
     return child;
   };
-  const runs = runner({ env: { PATH: path, HOME: home }, timer: realTimer, spawn: spawned });
+  const runs = runner({ env: { PATH: path, HOME: home, ...seed.author?.env }, timer: realTimer, spawn: spawned });
 
   // the working folder's writes, which tell `held` when a write takes the lock
   const all = workingFolderWrites();
   const holding: (() => void)[] = [];
+  let lockGate: { before?: () => Promise<void>; after?: () => Promise<void> } | undefined;
   const writes: WorkingFolderWrites = (write) =>
     all((lock) =>
       write((work) =>
-        lock(() => {
+        lock(async () => {
           for (const done of holding.splice(0)) done();
-          return work();
+          const at = lockGate;
+          lockGate = undefined;
+          await at?.before?.();
+          const done = await work();
+          await at?.after?.();
+          return done;
         }),
       ),
     );
@@ -373,8 +513,28 @@ export const httpWorld: Build = async (seed) => {
     closesAfter(command) {
       closing = command;
     },
+    closesWhile(command) {
+      closingWhile = command;
+    },
+    closeGit: () => runs.close(),
+    atNextLock(at) {
+      lockGate = at;
+    },
+    workingFolder: work,
+    hostRequests: () => hostRequests,
+    wire: async (route, body) => {
+      const res = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { ...page, 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }, body: JSON.stringify(body) });
+      return { status: res.status, body: (await res.json()) as unknown };
+    },
+    address: (path) => `https://localhost:${hostPort}/${path}`,
+    waiting: () => (waited ? Promise.resolve() : new Promise<void>((done) => waiters.push(done))),
+    release: () => releaseHeld(),
+    leftovers: async () => (await readdir(work)).filter((name) => name.startsWith(HIDDEN_PREFIX)),
     async close() {
+      releaseHeld();
       await shut(front);
+      host.closeAllConnections();
+      await shut(host);
       for (const res of held) res.destroy();
       if (seed.node !== 'silent') await shut(node);
       await runs.close();

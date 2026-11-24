@@ -1,6 +1,6 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { Shell } from '../Shell';
 import { fakeStateOf, type Seed } from './contract/seed';
 import { fakePackagesApi, type FakeState } from './fake';
@@ -155,5 +155,63 @@ describe('the Packages screen', () => {
 
     await expect.element(page.getByText('Read-only', { exact: true })).toBeVisible();
     await expect.element(page.getByRole('alert').filter({ hasText: 'Not every folder of the working folder is listed' })).toBeVisible();
+  });
+});
+
+describe('Get a package', () => {
+  const address = 'https://git.example.com/acme/orders.git';
+  const dialog = () => page.getByRole('dialog', { name: 'Get a package' });
+  const field = () => dialog().getByLabelText('Address', { exact: true });
+
+  test('clones the address into the folder of its name, lists it, and opens its tab', async () => {
+    open({ clones: [{ folder: 'billing' }], sources: [{ path: 'acme/orders.git', commits: ['first', 'second'] }] });
+
+    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await expect.element(dialog().getByRole('button', { name: 'Get', exact: true })).toBeDisabled();
+    await field().fill('https://git.example.com/acme/my orders.git');
+    await expect.element(dialog().getByText('paste only the address', { exact: false })).toBeVisible();
+    await field().fill(`git clone ${address}`);
+    await expect.element(dialog().getByText('Goes into the folder orders')).toBeVisible();
+    await dialog().getByRole('button', { name: 'Get', exact: true }).click();
+
+    await expect.element(page.getByRole('tab', { name: /orders$/, selected: true })).toBeVisible();
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await page.getByRole('tab', { name: /Packages$/ }).click();
+    await expect.element(rowOf('orders')).toMatchTextContent('orders 1.0.0');
+    await expect.element(rowOf('orders')).toMatchTextContent('second');
+  });
+
+  test('says why git could not clone, with what git said, and keeps the address to try again', async () => {
+    open({ sources: [{ path: 'acme/orders.git', fails: 'credentials' }] });
+
+    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await field().fill(address);
+    await userEvent.type(field(), '{Enter}');
+
+    const refused = dialog().getByRole('alert').filter({ hasText: 'The package was not got' });
+    await expect.element(refused).toMatchTextContent('git could not clone the repository');
+    await expect.element(dialog().getByLabelText('What git said')).toMatchTextContent('could not read Username');
+    await expect.element(field()).toHaveValue(address);
+    expect(packages().getByRole('row').filter({ hasText: 'orders' }).elements()).toEqual([]);
+  });
+
+  test('says when the clone is no package, and lists it among the folders that are no package', async () => {
+    open({ clones: [{ folder: 'billing' }], sources: [{ path: 'acme/orders.git', manifest: null, files: { 'README.md': 'orders\n' } }] });
+
+    await page.getByRole('button', { name: 'Get a package…' }).click();
+    await field().fill(address);
+    await dialog().getByRole('button', { name: 'Get', exact: true }).click();
+
+    const got = page.getByRole('dialog', { name: 'Got orders' });
+    await expect.element(got.getByText('The folder orders holds the clone, but it is no package')).toBeVisible();
+    await expect.element(got).toMatchTextContent(REASONS.noManifest);
+    await got.getByRole('button', { name: 'Close' }).last().click();
+    await expect.element(page.getByRole('table', { name: 'Folders that are no package' }).getByText('orders')).toBeVisible();
+  });
+
+  test('is off on a server that takes no writes', async () => {
+    open({ readOnly: true, clones: [{ folder: 'billing' }] });
+
+    await expect.element(page.getByRole('button', { name: 'Get a package…' })).toBeDisabled();
   });
 });

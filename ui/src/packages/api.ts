@@ -191,6 +191,17 @@ export interface DeployAnswer {
   problem?: string;
 }
 
+/**
+ * What Get a package answers: the new folder, named as its repository, and exactly one of its state as a package (a
+ * malformed `package.yaml` stays its own `problem`, as the list shows it), why it is no package (the reason the list's
+ * `others` gives, such as no `package.yaml` at its root), or why its state could not be read though the clone is in
+ * place.
+ */
+export type CloneAnswer =
+  | { repository: string; package: PackageState }
+  | { repository: string; package: null; reason: string }
+  | { repository: string; package: null; problem: string };
+
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
 export interface PackagesApi {
   list(): Promise<PackageList>;
@@ -217,6 +228,12 @@ export interface PackagesApi {
    * is refused, changing nothing, when the node's state of the package is no longer its `expect`.
    */
   deploy(repository: string, body: DeployBody): Promise<DeployAnswer>;
+  /**
+   * Gets a package: clones the repository at `address`, an https or ssh address the rule `cloneSourceOf` takes, into a
+   * new folder of the working folder named as the repository, with the author's own credentials and without hooks,
+   * submodules or LFS content. An entry of that name is never written into.
+   */
+  clone(address: string): Promise<CloneAnswer>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
@@ -286,5 +303,6 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     log: (repository, page = {}) => json<LogPage>(of(repository, '/log', { before: page.before, limit: page.limit?.toString() })),
     commit: (repository, body) => post<CommitAnswer>(of(repository, '/commit'), body),
     deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
+    clone: (address) => post<CloneAnswer>('/git/clone', { address }),
   };
 }

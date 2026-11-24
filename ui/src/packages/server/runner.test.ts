@@ -256,6 +256,116 @@ describe('the runner on a fake process', () => {
     expect(processes.children).toHaveLength(2 + MAX_WAITING.write);
   });
 
+  test('runs one clone at a time beside a write and reads, within the 4 processes, lets one clone wait and refuses one more with 503', async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const clone = (n: number) => git.run({ args: [`clone-${n}`], mode: 'clone' });
+
+    const first = clone(0);
+    const writing = git.run({ args: ['write'], clone: '/work/orders', mode: 'write' });
+    const second = clone(1);
+    const refused = await refusalOf(clone(2));
+
+    expect(refused.status).toBe(503);
+    expect(processes.children.map((c) => c.args.at(-1))).toEqual(['clone-0', 'write']);
+    processes.children[0]!.exit(0);
+    await first;
+    await settle();
+    expect(processes.children.map((c) => c.args.at(-1))).toEqual(['clone-0', 'write', 'clone-1']);
+    processes.children[1]!.exit(0);
+    processes.children[2]!.exit(0);
+    await Promise.all([writing, second]);
+  });
+
+  test('gives a clone the environment of a write, with https and ssh as the only transports git may use', async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: { PATH: '/usr/bin', LANG: 'cs_CZ.UTF-8', GIT_ALLOW_PROTOCOL: 'file', SSH_ASKPASS: '/usr/bin/ask' }, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+
+    const cloning = git.run({ args: ['clone'], mode: 'clone' });
+    const writing = git.run({ args: ['write'], clone: '/work/orders', mode: 'write' });
+    processes.children.forEach((c) => c.exit(0));
+    await Promise.all([cloning, writing]);
+
+    expect(processes.children[0]!.options.env).toEqual({ ...processes.children[1]!.options.env, GIT_ALLOW_PROTOCOL: 'https:ssh' });
+    expect(processes.children[1]!.options.env).not.toHaveProperty('GIT_ALLOW_PROTOCOL');
+    expect(processes.children[0]!.options.env).toMatchObject({ LANG: 'cs_CZ.UTF-8', SSH_ASKPASS: '/usr/bin/ask', GIT_TERMINAL_PROMPT: '0' });
+  });
+
+  test('stops a call at the abort of its signal as at its deadline, and rejects with the signal’s reason', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const stop = new AbortController();
+    const why = new Refusal(422, 'over the limit');
+
+    const ran = git.run({ args: ['status'], clone: '/work/orders', mode: 'read', signal: stop.signal });
+    stop.abort(why);
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM']);
+    timer.advance(KILL_AFTER_MS);
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    processes.children[0]!.exit(null);
+
+    expect(await refusalOf(ran)).toBe(why);
+  });
+
+  test('a signal aborted before the call starts, or while it waits, starts no process', async () => {
+    const processes = fakeProcesses();
+    const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const why = new Refusal(422, 'stopped');
+
+    expect(await refusalOf(git.run({ args: ['clone'], mode: 'clone', signal: AbortSignal.abort(why) }))).toBe(why);
+    const first = git.run({ args: ['clone-0'], mode: 'clone' });
+    const stop = new AbortController();
+    const waits = git.run({ args: ['clone-1'], mode: 'clone', signal: stop.signal });
+    stop.abort(why);
+    expect(await refusalOf(waits)).toBe(why);
+    processes.children[0]!.exit(0);
+    await first;
+    await settle();
+
+    expect(processes.children.map((c) => c.args.at(-1))).toEqual(['clone-0']);
+  });
+
+  test('a stopped clone’s group gets KILL 2 s after TERM even when git exited first, and the call ends only then', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const stop = new AbortController();
+    let ended = false;
+
+    const ran = git.run({ args: ['clone'], mode: 'clone', signal: stop.signal });
+    void ran.catch(() => (ended = true));
+    stop.abort(new Refusal(422, 'over the limit'));
+    processes.children[0]!.exit(null);
+    await settle();
+    await settle();
+    expect(ended).toBe(false);
+    timer.advance(KILL_AFTER_MS);
+    await settle();
+
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(ended).toBe(true);
+    expect((await refusalOf(ran)).status).toBe(422);
+  });
+
+  test('a clone the close stops gets its KILL after git exited, and the close resolves only then', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    let closed = false;
+
+    const ran = git.run({ args: ['clone'], mode: 'clone' });
+    const closing = git.close().then(() => (closed = true));
+    processes.children[0]!.exit(null);
+    await settle();
+    expect(closed).toBe(false);
+    timer.advance(KILL_AFTER_MS);
+    await closing;
+
+    expect(processes.children[0]!.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect((await refusalOf(ran)).status).toBe(503);
+  });
+
   test('stops every process when it closes, refuses waiting and new calls, and resolves once each has exited', async () => {
     const processes = fakeProcesses();
     const timer = new FakeTimer();
