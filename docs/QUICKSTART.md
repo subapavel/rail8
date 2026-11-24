@@ -31,7 +31,7 @@ cp -r mapping/corpus ~/rail8-workspace/mapping-corpus                     # once
 export RAIL8_ADMIN_TOKEN=rail8-local               # the admin API's bearer token; any string will do, keep it for later shells
 docker compose up -d --build                       # the node, its Postgres and the partner echo
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
-bin/rail8 deploy demo HEAD                         # the demo's last commit, deployed to the node
+bin/rail8 deploy demo HEAD --expect none          # the demo's last commit, deployed to a node that runs no demo yet
 ```
 
 The working folder `~/rail8-workspace` holds the packages as git repositories, each named as its folder: the demo is the
@@ -67,9 +67,14 @@ the lines of the settings you changed. Commit the change and deploy it, from the
 where `RAIL8_ADMIN_TOKEN` is exported:
 
 ```sh
+deployed=$(git -C ~/rail8-workspace/demo rev-parse HEAD)   # the commit deployed before the edit
 git -C ~/rail8-workspace/demo add -A && git -C ~/rail8-workspace/demo commit -qm 'An edit'
-bin/rail8 deploy demo HEAD
+bin/rail8 deploy demo HEAD --expect "$deployed"            # replaces that commit, and only that one
 ```
+
+Every deploy names the state it replaces: `none` for a package the node does not run yet, else the commit the node runs.
+When the node runs another commit, the deploy is refused (`412`) and nothing changes; the answer's `replaces` names the
+commit the node runs, and `bin/rail8 deploy demo HEAD --check` answers it too.
 
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
@@ -130,7 +135,7 @@ stays empty. Check the packages with `curl -H "Authorization: Bearer $RAIL8_ADMI
 which lists none. Deploy the demo again:
 
 ```sh
-bin/rail8 deploy demo HEAD
+bin/rail8 deploy demo HEAD --expect none
 ```
 
 A working copy of the mapping corpus made by an older checkout, `~/rail8-mapping-workspace`, is moved into the working
@@ -232,10 +237,11 @@ Ctrl+C stops the UI.
 
 ## Notes
 
-`bin/rail8 deploy <repository> <commit|ref>` asks the node to deploy that commit of the repository of that name in the
-working folder, which the node reads as `file:///workspace/`; it sends the token and prints the node's answer, or exits
-non-zero on a refusal. `--check` checks the commit and deploys nothing; `RAIL8_ADMIN` (default `http://localhost:8081`)
-points it at another node. A repository in the working folder is a full clone with its own `.git` folder: the node
+`bin/rail8 deploy <repository> <commit|ref> --expect <commit|none|any>` asks the node to deploy that commit of the
+repository of that name in the working folder, which the node reads as `file:///workspace/`, over the state `--expect`
+names: the commit the node runs, `none` when it runs no such package, or `any` to replace whatever it runs. It sends the
+token and prints the node's answer, or exits non-zero on a refusal. `--check` checks the commit, answers the state as
+`replaces`, and deploys nothing; `RAIL8_ADMIN` (default `http://localhost:8081`) points it at another node. A repository in the working folder is a full clone with its own `.git` folder: the node
 cannot read a git worktree, or a copy whose `.git` points outside the folder. The `.gitattributes` holding `* -text`
 keeps git from changing line endings, so the node deploys the bytes you saved.
 

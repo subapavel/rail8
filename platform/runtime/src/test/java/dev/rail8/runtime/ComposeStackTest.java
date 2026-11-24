@@ -225,6 +225,8 @@ class ComposeStackTest {
         JsonNode deploy = service("deploy");
         String command = joined(deploy.path("command")) + " " + joined(deploy.path("entrypoint"));
         assertTrue(command.contains(" deploy rail8 HEAD "), "deploy runs 'rail8 deploy rail8 HEAD': " + command);
+        assertTrue(command.contains(" deploy rail8 HEAD --check ") && command.contains(" deploy rail8 HEAD --expect \"$$replaces\" "),
+                "the stack keeps its database between starts: the one-shot reads the state the pool records, then deploys expecting it: " + command);
         assertEquals(List.of("/cli"), mounts(deploy).stream().map(Mount::target).toList(), "the one-shot mounts the CLI only: the node reads the commit");
         assertTrue(command.contains("http://rail8:8081"), "deploy targets the node's admin port: " + command);
         assertEquals("service_healthy", deploy.path("depends_on").path("rail8").path("condition").asText());

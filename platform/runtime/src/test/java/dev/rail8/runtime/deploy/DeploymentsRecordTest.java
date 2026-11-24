@@ -116,7 +116,7 @@ class DeploymentsRecordTest {
     /** The deploy of {@code p}, committed to the repository {@code shop}, by the actor {@code ops}; started, not awaited. */
     OnVirtualThread.Call<DeployResult> deploying(PackageDraft p) {
         String commit = repos.commit(p);
-        return OnVirtualThread.start(() -> deployments.deploy("shop", commit, TestActors.named("ops")));
+        return OnVirtualThread.start(() -> deployments.deploy("shop", commit, Deployments.ANY, TestActors.named("ops")));
     }
 
     DeployResult deploy(PackageDraft p) throws Exception {
@@ -125,6 +125,16 @@ class DeploymentsRecordTest {
 
     DeployRefusedException refused(PackageDraft p) throws Exception {
         return joinRefused(deploying(p), "the deploy of shop " + p.version() + " is refused");
+    }
+
+    /** The deploy of {@code commit} of the repository {@code shop} expecting {@code expect}, by the actor {@code ops}. */
+    DeployResult deploy(String commit, String expect) throws Exception {
+        return OnVirtualThread.call(() -> deployments.deploy("shop", commit, expect, TestActors.named("ops")));
+    }
+
+    /** The refusal of the deploy of {@code commit} of the repository {@code shop} expecting {@code expect}. */
+    DeployRefusedException refused(String commit, String expect) {
+        return assertThrows(DeployRefusedException.class, () -> deploy(commit, expect), "the deploy of shop at " + commit + " is refused");
     }
 
     /** The audit rows written, each as {@code <actor> <action> <subject> <detail>}. */
@@ -184,8 +194,8 @@ class DeploymentsRecordTest {
         PackageDraft v1 = shop("1.0.0", "v1");
         deploy(v1);
         assertEquals(List.of("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\",\"author\":\"" + AUTHOR
-                + "\",\"outcome\":\"deployed\",\"package\":\"shop\",\"version\":\"1.0.0\"}"), audited(),
-                "the actor, the repository, the commit, its author as the commit holds it, the outcome");
+                + "\",\"expect\":\"any\",\"outcome\":\"deployed\",\"package\":\"shop\",\"version\":\"1.0.0\",\"replaces\":\"none\"}"), audited(),
+                "the actor, the repository, the commit, its author as the commit holds it, the state expected, the outcome, what it replaced");
 
         PackageDraft broken = shop("2.0.0", "v2");
         broken.endpointDoc("b-in").getJsonObject("config").put("refuse", "port taken");   // b's consumer cannot be built: a build problem
@@ -193,14 +203,15 @@ class DeploymentsRecordTest {
         assertEquals(Kind.INVALID, invalid.kind(), invalid.getMessage());
         assertEquals(List.of("shop 1.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "a refused deploy writes no row");
         assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + broken.commit() + "\",\"author\":\"" + AUTHOR
-                + "\",\"outcome\":\"refused\",\"error\":\"" + invalid.error() + "\"}", audited().get(1), "a refused deploy is audited with its error");
+                + "\",\"expect\":\"any\",\"outcome\":\"refused\",\"error\":\"" + invalid.error() + "\"}", audited().get(1),
+                "a refused deploy is audited with the state it expected and its error");
 
         String next = repos.commit(shop("3.0.0", "v3"));
-        assertEquals("3.0.0", OnVirtualThread.call(() -> deployments.check("shop", next)).pkg().version(), "fixture: the check passes");
+        assertEquals("3.0.0", OnVirtualThread.call(() -> deployments.check("shop", next, Deployments.ANY)).pkg().version(), "fixture: the check passes");
         assertEquals(List.of("shop 1.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "a check writes no record");
         assertEquals(2, audited().size(), "a check writes no audit row");
-        assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy("shop", "no-such-branch", TestActors.named("ops"))));
-        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"no-such-branch\",\"outcome\":\"refused\",\"error\":\""
+        assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy("shop", "no-such-branch", Deployments.ANY, TestActors.named("ops"))));
+        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"no-such-branch\",\"expect\":\"any\",\"outcome\":\"refused\",\"error\":\""
                 + "shop at no-such-branch: not found\"}", audited().get(2), "a ref that was never read is audited as asked, with no author");
     }
 
@@ -214,7 +225,8 @@ class DeploymentsRecordTest {
         records.failNextSave("connection reset by peer");
         DeployRefusedException unsaved = refused(v1);
         assertEquals(List.of("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\",\"author\":\"" + AUTHOR
-                + "\",\"outcome\":\"refused\",\"error\":\"" + unsaved.error() + "\"}"), audited(), "a failed save writes no deployed row, the refusal its own");
+                + "\",\"expect\":\"any\",\"outcome\":\"refused\",\"error\":\"" + unsaved.error() + "\"}"), audited(),
+                "a failed save writes no deployed row, the refusal its own");
 
         deploy(v1);
         assertEquals("ops deploy repository/shop", audited().get(1).substring(0, "ops deploy repository/shop".length()), "fixture: the deploy's row");
@@ -222,6 +234,97 @@ class DeploymentsRecordTest {
         assertEquals("dev undeploy package/shop {\"version\":\"1.0.0\",\"repository\":\"shop\",\"commit\":\"" + v1.commit() + "\"}", audited().get(2),
                 "who undeployed, the version, the repository and the commit the package ran");
         assertEquals(3, audited().size(), "one row each");
+    }
+
+    // --- the expected state
+
+    /**
+     * A deploy names the state it expects to replace. {@code none} on a first deploy is applied; the same deploy again is
+     * {@link Kind#STALE}, naming the commit the pool records and that it is the deploy's own. Of two deploys that expect the same
+     * commit the first is applied and the second refused, naming the first's commit. {@code any} replaces whatever the pool records,
+     * and its audit row records {@code any}. A refusal changes nothing: no record, the listing as it was, no flow stopped; its
+     * audit row names the state it expected.
+     */
+    @Test
+    void aDeployIsAppliedOnlyOverTheStateItExpects() throws Exception {
+        String c1 = repos.commit(shop("1.0.0", "v1"));
+        assertEquals(Optional.of("none"), deploy(c1, "none").replaces(), "a first deploy expecting none replaces no record");
+
+        DeployRefusedException again = refused(c1, "none");
+
+        assertEquals(Kind.STALE, again.kind(), again.getMessage());
+        assertEquals(Optional.of(c1), again.replaces(), "the refusal names what the pool records");
+        assertEquals("the pool records package 'shop' at " + c1 + ", but this deploy expects none; that is the commit this deploy names: an earlier"
+                + " try of it may have landed; check again, and deploy expecting what the pool records", again.error());
+        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + c1 + "\",\"author\":\"" + AUTHOR
+                + "\",\"expect\":\"none\",\"outcome\":\"refused\",\"error\":\"" + again.error() + "\"}", audited().getLast(), "the refusal is audited");
+
+        String c2 = repos.commit(shop("2.0.0", "v2"));
+        assertEquals(Optional.of(c1), deploy(c2, c1).replaces(), "the first of two deploys expecting v1 is applied");
+        List<String> events = List.copyOf(log);
+        String c3 = repos.commit(shop("3.0.0", "v3"));
+
+        DeployRefusedException second = refused(c3, c1);
+
+        assertEquals(Kind.STALE, second.kind(), second.getMessage());
+        assertEquals(Optional.of(c2), second.replaces());
+        assertEquals("the pool records package 'shop' at " + c2 + ", but this deploy expects " + c1 + "; check again, and deploy expecting what the pool"
+                + " records", second.error());
+        assertEquals(List.of("shop 1.0.0", "shop 2.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "no record written");
+        assertEquals("2.0.0", deployments.packages().getFirst().version(), "v2 runs on");
+        assertEquals(events, log, "no flow was built, stopped or started, and no record written");
+
+        DeployResult blind = deploy(c3, "any");
+
+        assertEquals(Optional.of(c2), blind.replaces(), "any replaced v2");
+        assertEquals("3.0.0", deployments.packages().getFirst().version());
+        assertEquals("ops deploy repository/shop {\"repository\":\"shop\",\"commit\":\"" + c3 + "\",\"author\":\"" + AUTHOR
+                + "\",\"expect\":\"any\",\"outcome\":\"deployed\",\"package\":\"shop\",\"version\":\"3.0.0\",\"replaces\":\"" + c2 + "\"}",
+                audited().getLast(), "the blind overwrite is audited as any, with what it replaced");
+    }
+
+    /**
+     * The check answers what the deploy would replace, read from the records, and compares nothing with {@code any}; a stale
+     * expected state is the deploy's {@link Kind#STALE}. An undeploy between a check and its deploy refuses the deploy: the pool
+     * records no package any more. Checks write no audit row.
+     */
+    @Test
+    void theCheckAnswersWhatTheDeployWouldReplaceAndAnUndeployBetweenRefusesTheDeploy() throws Exception {
+        String c1 = repos.commit(shop("1.0.0", "v1"));
+        assertEquals(Optional.of("none"), OnVirtualThread.call(() -> deployments.check("shop", c1, Deployments.ANY)).replaces(), "nothing recorded yet");
+        DeployRefusedException early = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.check("shop", c1, c1)));
+        assertEquals(Kind.STALE, early.kind(), early.getMessage());
+        assertEquals("the pool records no package 'shop', but this deploy expects " + c1 + "; check again, and deploy expecting what the pool records",
+                early.error());
+        deploy(c1, "none");
+        String c2 = repos.commit(shop("2.0.0", "v2"));
+        DeployResult checked = OnVirtualThread.call(() -> deployments.check("shop", c2, Deployments.ANY));
+        assertEquals(Optional.of(c1), checked.replaces(), "the check answers the commit the pool records");
+        assertEquals(1, audited().size(), "checks write no audit row");
+
+        OnVirtualThread.call(() -> deployments.undeploy("shop", TestActors.named("dev")));
+        DeployRefusedException refused = refused(c2, checked.replaces().orElseThrow());
+
+        assertEquals(Kind.STALE, refused.kind(), refused.getMessage());
+        assertEquals(Optional.of("none"), refused.replaces(), "the pool records no package shop");
+        assertEquals(List.of(), deployments.packages(), "nothing was deployed");
+    }
+
+    /**
+     * An expected state other than 40 lower-case hex digits, {@code none} and {@code any} is {@link Kind#BAD_REQUEST} before
+     * anything is fetched or written, and writes no audit row.
+     */
+    @Test
+    void anExpectedStateOfAnotherShapeIsABadRequest() throws Exception {
+        String commit = repos.commit(shop("1.0.0", "v1"));
+        for (String expect : List.of("ANY", "None", commit.toUpperCase(java.util.Locale.ROOT), commit.substring(1), "", "null")) {
+            DeployRefusedException refused = assertThrows(DeployRefusedException.class,
+                    () -> OnVirtualThread.call(() -> deployments.deploy("shop", commit, expect, TestActors.named("ops"))), "expect '" + expect + "'");
+            assertEquals(Kind.BAD_REQUEST, refused.kind(), refused.getMessage());
+            assertEquals("expect is the commit of the package's record as 40 lower-case hex digits, none or any, was '" + expect + "'", refused.error());
+        }
+        assertEquals(List.of(), audited(), "no audit row");
+        assertEquals(List.of(), log, "nothing was fetched, written or started");
     }
 
     // --- the record is the commit point

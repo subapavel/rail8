@@ -65,7 +65,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * The local quickstart as its user runs it, against a node in this JVM on a Postgres of its own (as {@link NodeIT}). The
  * working folder holds the demo as the git repository {@code demo}, with a {@code .gitattributes} of {@code * -text}, and
  * commits it; the node reads the working folder as its {@code file://} package repositories, as the quickstart's compose file
- * mounts it; a deploy is the request {@code rail8 deploy demo HEAD} sends, {@code POST /admin/deploy}. The partner the demo
+ * mounts it; a deploy is the request {@code rail8 deploy demo HEAD --expect <state>} sends, {@code POST /admin/deploy}. The partner the demo
  * sends to is the quickstart's JDK echo, {@code java deploy/quickstart/PartnerEcho.java <port>}, a process of its own that
  * answers every path ({@code /echo} and {@code /echo-foreign}).
  *
@@ -164,7 +164,7 @@ class QuickstartIT {
         Path demo = demoCopy(echoPort);
         String commit = commit(demo);
 
-        HttpResponse<String> deployed = deploy("demo", "HEAD");
+        HttpResponse<String> deployed = deploy("demo", "HEAD", "none");
 
         assertEquals(200, deployed.statusCode(), deployed.body());
         assertTrue(deployed.body().contains("\"package\":\"demo\"") && deployed.body().contains("\"demo/invoice-sync\""),
@@ -201,7 +201,7 @@ class QuickstartIT {
     void aForeignInvoiceGetsTheEchosAnswerFromEchoForeign() throws Exception {
         int echoPort = startTheEcho();
         commit(demoCopy(echoPort));
-        HttpResponse<String> deployed = deploy("demo", "HEAD");
+        HttpResponse<String> deployed = deploy("demo", "HEAD", "none");
         assertEquals(200, deployed.statusCode(), "fixture: the demo deploys: " + deployed.body());
         String invoice = new String(replaced(Files.readAllBytes(DEMO.resolve("fixtures/sample-invoice.xml")),
                 Map.of("<Id>4711</Id>", "<Id>4712</Id>", "<Currency>CZK</Currency>", "<Currency>EUR</Currency>")), StandardCharsets.UTF_8);
@@ -216,23 +216,24 @@ class QuickstartIT {
 
     /**
      * The quickstart's steps commit before every deploy: an edit of the working folder that is not committed is not deployed —
-     * a deploy of {@code HEAD} deploys the commit before it again — and once committed, a deploy of {@code HEAD} deploys it.
+     * a deploy of {@code HEAD} deploys the commit before it again — and once committed, a deploy of {@code HEAD} deploys it. The
+     * first deploy expects none; each later one expects the commit deployed, read before the edit is committed.
      */
     @Test
     void anEditIsDeployedOnceItIsCommitted() throws Exception {
         Path demo = demoCopy(freePort());
         String first = commit(demo);
-        assertEquals(200, deploy("demo", "HEAD").statusCode(), "fixture: the demo deploys");
+        assertEquals(200, deploy("demo", "HEAD", "none").statusCode(), "fixture: the demo deploys");
         rewrite(demo.resolve("package.yaml"), Map.of("version: 0.1.0", "version: 0.2.0"));
 
-        HttpResponse<String> uncommitted = deploy("demo", "HEAD");
+        HttpResponse<String> uncommitted = deploy("demo", "HEAD", first);
 
         assertEquals(200, uncommitted.statusCode(), uncommitted.body());
         assertEquals(first, onlyPackage().getString("commit"), "the edit is not committed: HEAD is still the first commit");
         assertEquals("0.1.0", onlyPackage().getString("version"));
 
         String second = commit(demo);
-        HttpResponse<String> committed = deploy("demo", "HEAD");
+        HttpResponse<String> committed = deploy("demo", "HEAD", first);
 
         assertEquals(200, committed.statusCode(), committed.body());
         assertNotEquals(first, second, "fixture: the edit is a commit of its own");
@@ -258,9 +259,9 @@ class QuickstartIT {
         }
     }
 
-    /** The deploy {@code rail8 deploy <repository> <commit>} sends: {@code POST /admin/deploy} with the node's token. */
-    HttpResponse<String> deploy(String repository, String commit) throws IOException, InterruptedException {
-        byte[] body = new JsonObject().put("repository", repository).put("commit", commit).encode().getBytes(StandardCharsets.UTF_8);
+    /** The deploy {@code rail8 deploy <repository> <commit> --expect <expect>} sends: {@code POST /admin/deploy} with the node's token. */
+    HttpResponse<String> deploy(String repository, String commit, String expect) throws IOException, InterruptedException {
+        byte[] body = new JsonObject().put("repository", repository).put("commit", commit).put("expect", expect).encode().getBytes(StandardCharsets.UTF_8);
         try (HttpClient client = http()) {
             return client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + node.adminPort() + "/admin/deploy")).timeout(Duration.ofSeconds(60))
                     .header("authorization", "Bearer " + TOKEN).header("content-type", "application/json")

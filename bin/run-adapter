@@ -128,7 +128,8 @@ echo "run-adapter: deploying $dir/package as committed at HEAD ($(git -C "$dir" 
 if [ -n "$(git -C "$dir" status --porcelain -- package)" ]; then
   echo "run-adapter: $dir/package has changes not committed: they are not deployed; commit them and run again to deploy them"
 fi
-(unset RAIL8_ADMIN_TOKEN; "$root/bin/rail8" deploy "$repository" HEAD --admin "http://127.0.0.1:$admin_port") \
+# the Postgres of this run is new: the pool records no package, so the deploy expects none
+(unset RAIL8_ADMIN_TOKEN; "$root/bin/rail8" deploy "$repository" HEAD --expect none --admin "http://127.0.0.1:$admin_port") \
   || fail "the node refused the package; its log: $run/node.log"
 
 "$java" "$root/deploy/quickstart/PartnerEcho.java" $partner_port > "$run/partner.log" 2>&1 &

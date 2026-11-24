@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.function.Supplier;
 
 /**
@@ -39,6 +41,13 @@ import java.util.function.Supplier;
  * <p>The pool's lock is the session advisory lock {@code (294, 0)} ({@code 0x0126}), taken with {@code pg_try_advisory_lock} on
  * a connection of its own, opened for the one holder and never pooled: its writes run on that connection, and closing it frees
  * the lock, so a node that vanishes frees it once the server sees the connection gone. Reads run on {@code pool}.
+ *
+ * <p>What each node runs are rows of {@code node_packages}, written on {@code pool}. A node's write is one transaction: its row of
+ * {@code nodes} locked {@code for key share} — a join of the node, which locks that row {@code for update}, waits for the write,
+ * while a renew or a release does not — and read to carry the epoch written with and a lease that was not released; then the node's
+ * rows of every epoch deleted with those of every node whose epoch moved on or whose lease was released, and its new rows inserted.
+ * {@link #listings} reads the records and the rows of the nodes whose lease holds by the database clock, of their current epoch, in
+ * one read-only transaction at repeatable read: both reads see one snapshot.
  *
  * @since 0.1
  */
@@ -67,6 +76,20 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String AUDIT = "insert into audit (at, actor, action, subject, detail, user_id, via, credential)"
             + " values (now(), $1, $2, $3, $4, $5, $6, $7)";
 
+    /** Whether the writing node's row carries the epoch $2 with a lease not released; locked so that a join of the node waits. */
+    private static final String OWN = "select epoch = $2 and lease_until is not null from nodes where node = $1 for key share";
+    /** The rows of node $1, of every epoch, and those of every node whose epoch moved on or whose lease was released. */
+    private static final String SWEEP = "delete from node_packages p where p.node = $1 or not exists "
+            + "(select 1 from nodes n where n.node = p.node and n.epoch = p.epoch and n.lease_until is not null)";
+    private static final String LIST = "insert into node_packages (node, epoch, package, version, repository, commit, deployed_at, state, behind) "
+            + "values ($1, $2, $3, $4, $5, $6, $7, $8, $9)";
+    private static final String SNAPSHOT = "set transaction isolation level repeatable read, read only";
+    /** The records, as {@link #READ} reads them, one more than a read of the listings takes: so a pool that holds more shows. */
+    private static final String RECORDS = READ + " limit " + (LISTINGS_MAX + 1);
+    /** Each node whose lease holds by the database clock, with each of its rows of its current epoch; one row with no package for a node that wrote none. */
+    private static final String LISTED = "select n.node, p.package, p.version, p.repository, p.commit, p.deployed_at, p.state, p.behind "
+            + "from nodes n left join node_packages p on p.node = n.node and p.epoch = n.epoch where n.lease_until >= now() limit " + (LISTINGS_MAX + 1);
+
     private final Pool pool;
     private final Supplier<Future<SqlConnection>> connect;
 
@@ -82,6 +105,38 @@ public final class PgDeploymentStore implements DeploymentStore {
     @Override
     public Future<Snapshot> read() {
         return pool.query(READ).execute().map(PgDeploymentStore::snapshot);
+    }
+
+    @Override
+    public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
+        List<Tuple> rows = packages.stream().map(p -> Tuple.of(node, epoch, p.name(), p.version(), p.repository(), p.commit(),
+                p.deployedAt().atOffset(ZoneOffset.UTC), p.state().name(), p.behind().toArray(String[]::new))).toList();
+        return pool.withTransaction(tx -> tx.preparedQuery(OWN).execute(Tuple.of(node, epoch)).compose(own -> {
+            if (!own.iterator().hasNext() || !own.iterator().next().getBoolean(0)) return Future.succeededFuture(false);
+            Future<?> swept = tx.preparedQuery(SWEEP).execute(Tuple.of(node));
+            return swept.compose(deleted -> rows.isEmpty() ? Future.succeededFuture() : tx.preparedQuery(LIST).executeBatch(rows)).map(true);
+        }));
+    }
+
+    @Override
+    public Future<Listings> listings() {
+        return pool.withTransaction(tx -> tx.query(SNAPSHOT).execute().compose(set -> tx.query(RECORDS).execute())
+                .compose(records -> tx.query(LISTED).execute().compose(rows -> listings(snapshot(records).records(), rows))));
+    }
+
+    /** The listings of {@code records} and the rows {@link #LISTED} read; failed, naming the limit, when they are more than it. */
+    private static Future<Listings> listings(List<DeploymentRecord> records, RowSet<Row> rows) {
+        if ((long) records.size() + rows.size() > LISTINGS_MAX) return Future.failedFuture(new IllegalStateException("the pool holds more than " + LISTINGS_MAX
+                + " records and rows of what each node runs together, the most one read takes"));
+        SortedMap<String, List<NodePackage>> nodes = new TreeMap<>();
+        for (Row r : rows) {
+            List<NodePackage> packages = nodes.computeIfAbsent(r.getString("node"), node -> new ArrayList<>());
+            if (r.getString("package") == null) continue;   // a node that wrote none
+            packages.add(new NodePackage(r.getString("package"), r.getString("version"), r.getString("repository"), r.getString("commit"),
+                    r.getOffsetDateTime("deployed_at").toInstant(), DeployedPackage.State.valueOf(r.getString("state")), List.of(r.getArrayOfStrings("behind"))));
+        }
+        nodes.values().forEach(packages -> packages.sort(Comparator.comparing(NodePackage::name)));
+        return Future.succeededFuture(new Listings(records, nodes));
     }
 
     @Override

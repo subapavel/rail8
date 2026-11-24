@@ -133,6 +133,16 @@ final class Ledger implements DeploymentStore {
     }
 
     @Override
+    public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
+        return rows.writeListing(node, epoch, packages);
+    }
+
+    @Override
+    public Future<Listings> listings() {
+        return rows.listings();
+    }
+
+    @Override
     public Future<Snapshot> read() {
         return rows.read();
     }

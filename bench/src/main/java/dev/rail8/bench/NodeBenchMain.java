@@ -1110,9 +1110,12 @@ public final class NodeBenchMain {
             return new JsonObject(exchange(HttpMethod.GET, admin, "/health", "text/plain", Buffer.buffer()).body()).getLong("snapshotWriteFailures");
         }
 
-        /** Deploys {@code commit} of the bench's repository {@value #REPOSITORY}; a refusal fails the run with the node's answer. */
+        /**
+         * Deploys {@code commit} of the bench's repository {@value #REPOSITORY}, expecting {@code none}: the run truncated every
+         * table, so the pool records no package. A refusal fails the run with the node's answer.
+         */
         void deploy(int admin, String commit) {
-            Buffer request = Buffer.buffer(new JsonObject().put("repository", REPOSITORY).put("commit", commit).encode());
+            Buffer request = Buffer.buffer(new JsonObject().put("repository", REPOSITORY).put("commit", commit).put("expect", "none").encode());
             Answer a = exchange(HttpMethod.POST, admin, "/admin/deploy", "application/json", request);
             if (a.status() != 200) throw new IllegalStateException("the node refused the bench package: " + a.status() + " " + a.body());
         }

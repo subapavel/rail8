@@ -2,12 +2,13 @@ package dev.rail8.runtime.deploy;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Why {@link Deployments#deploy} refused a package, or {@link Deployments#undeploy} an undeploy: its {@link Kind} — the admin API
  * answers each with its own status — the error line, and for {@link Kind#INVALID} every problem found, one line each, none with
  * an absolute path; for a redeploy that did not start and rolled back ({@link Kind#FAILED} or {@link Kind#BUSY}) every flow that
- * did not start, build or start again.
+ * did not start, build or start again; for {@link Kind#STALE} the state the pool records.
  *
  * @since 0.1
  */
@@ -43,19 +44,31 @@ public final class DeployRefusedException extends Exception {
         /** A deploy with no origin in a deployed environment, or a deploy on a node without {@code RAIL8_GIT_BASE} (403). */
         FORBIDDEN,
         /** The package to undeploy is not deployed on this node (404). */
-        NOT_FOUND
+        NOT_FOUND,
+        /**
+         * The deploy expects another state than the pool records of its package: the commit of the package's record, or
+         * {@link Deployments#NONE}, is {@link #replaces()} (412). Nothing changed.
+         */
+        STALE
     }
 
     private final Kind kind;
     private final String error;
     private final List<String> problems;
+    private final Optional<String> replaces;
 
     /** No stack trace is kept; suppression is on: a cleanup that fails after the refusal is added to it, never in its place. */
     public DeployRefusedException(Kind kind, String error, List<String> problems) {
+        this(kind, error, problems, Optional.empty());
+    }
+
+    /** As the constructor above, with the state the pool records of the package ({@link #replaces()}). */
+    public DeployRefusedException(Kind kind, String error, List<String> problems, Optional<String> replaces) {
         super(kind + ": " + error + (problems.isEmpty() ? "" : " " + problems), null, true, false);
         this.kind = Objects.requireNonNull(kind, "kind");
         this.error = Objects.requireNonNull(error, "error");
         this.problems = List.copyOf(problems);
+        this.replaces = Objects.requireNonNull(replaces, "replaces");
     }
 
     public Kind kind() { return kind; }
@@ -65,4 +78,7 @@ public final class DeployRefusedException extends Exception {
 
     /** Every problem of an {@link Kind#INVALID} package, or of a {@link Kind#FAILED} or {@link Kind#BUSY} redeploy, one line each; otherwise empty. */
     public List<String> problems() { return problems; }
+
+    /** For {@link Kind#STALE}, the commit of the pool's record of the package, or {@link Deployments#NONE}; otherwise empty. */
+    public Optional<String> replaces() { return replaces; }
 }

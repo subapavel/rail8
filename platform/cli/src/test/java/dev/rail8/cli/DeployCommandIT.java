@@ -54,7 +54,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * token, its HTTP port on port 0 too, its {@code RAIL8_GIT_BASE} a folder of git repositories this test commits to. The demo's
  * commit deploys (200, exit 0) and the node lists its repository, commit and exactly its files at their package-relative paths;
  * {@code --check} of {@code HEAD} answers what the deploy would do and deploys nothing (exit 0); a package whose stylesheet does
- * not compile is refused (422, exit 1) and nothing is deployed; without the token the node refuses (401, exit 1).
+ * not compile is refused (422, exit 1) and nothing is deployed; without the token the node refuses (401, exit 1). A pipeline
+ * reads the state with {@code --check} and sends it with {@code --expect}; a deploy that expects another state is refused (412,
+ * exit 1) and changes nothing.
  */
 class DeployCommandIT {
 
@@ -179,7 +181,7 @@ class DeployCommandIT {
     void theDemosCommitDeploysWith200AndExits0() throws Exception {
         String commit = committed(DEMO, "demo");
 
-        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "demo", commit, "--admin", adminUrl());
+        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "demo", commit, "--expect", "none", "--admin", adminUrl());
 
         assertEquals(0, ran.exit(), ran.toString());
         assertTrue(ran.out().contains("\"package\":\"demo\"") && ran.out().contains("\"demo/invoice-sync\"")
@@ -209,7 +211,7 @@ class DeployCommandIT {
     void aBrokenPackageIs422AndExits1() throws Exception {
         String commit = committed(FIXTURES.resolve("broken-xslt"), "broken");
 
-        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "broken", commit, "--admin", adminUrl());
+        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "broken", commit, "--expect", "none", "--admin", adminUrl());
 
         assertEquals(1, ran.exit(), ran.toString());
         assertTrue(ran.out().contains("\"problems\"") && ran.out().contains("flows/invoice-to-partner.xsl"),
@@ -221,9 +223,37 @@ class DeployCommandIT {
     void withoutTheTokenTheNodeRefusesAndTheDeployExits1() throws Exception {
         String commit = committed(DEMO, "demo");
 
-        Ran ran = run(Map.of(), "deploy", "demo", commit, "--admin", adminUrl());
+        Ran ran = run(Map.of(), "deploy", "demo", commit, "--expect", "none", "--admin", adminUrl());
 
         assertEquals(1, ran.exit(), ran.toString());
         assertEquals(0, packages().size(), "nothing deployed");
+    }
+
+    /**
+     * A pipeline's two steps: the check answers {@code replaces}, and the deploy sends it as {@code --expect}. A second deploy that
+     * still expects {@code none} is 412, exit 1, naming what the pool records, and changes nothing; the next check answers that
+     * commit, and a deploy expecting it goes through.
+     */
+    @Test
+    void aPipelineReadsTheStateAndSendsItWithTheDeploy() throws Exception {
+        String first = committed(DEMO, "demo");
+        Map<String, String> env = Map.of("RAIL8_ADMIN_TOKEN", TOKEN);
+
+        Ran empty = run(env, "deploy", "demo", first, "--check", "--admin", adminUrl());
+        assertEquals("none", new JsonObject(empty.out().trim()).getString("replaces"), empty.toString());
+        Ran deployed = run(env, "deploy", "demo", first, "--expect", "none", "--admin", adminUrl());
+        assertEquals(0, deployed.exit(), deployed.toString());
+
+        Ran stale = run(env, "deploy", "demo", first, "--expect", "none", "--admin", adminUrl());
+        assertEquals(1, stale.exit(), stale.toString());
+        assertEquals(first, new JsonObject(stale.out().trim()).getString("replaces"), "the 412 names what the pool records: " + stale);
+        assertEquals(first, packages().getJsonObject(0).getString("commit"), "nothing changed");
+
+        Ran check = run(env, "deploy", "demo", "HEAD", "--check", "--admin", adminUrl());
+        String replaces = new JsonObject(check.out().trim()).getString("replaces");
+        assertEquals(first, replaces, check.toString());
+        Ran again = run(env, "deploy", "demo", "HEAD", "--expect", replaces, "--admin", adminUrl());
+        assertEquals(0, again.exit(), again.toString());
+        assertEquals(first, new JsonObject(again.out().trim()).getString("replaces"), again.toString());
     }
 }

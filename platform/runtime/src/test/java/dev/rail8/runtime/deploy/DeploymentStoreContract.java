@@ -10,10 +10,13 @@ import io.vertx.core.json.JsonObject;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -23,7 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * kept to the microsecond, the pins and the at-least-once flows of each row as saved, and {@code delete} removing one row; the
  * pool's lock held by one holder at a time, every write through it raising the generation by one, and a lock that was freed
  * writing nothing; the marks of the flows a write retires, revived by a save that runs them again and ended by {@code endMarks}
- * once no work row of them is left. Run by {@code InMemoryDeploymentStoreTest} and {@code PgDeploymentStoreIT}.
+ * once no work row of them is left. What each node runs: a node's write replaces its rows whole, only while its membership row
+ * carries the epoch it writes with and a lease nobody released; the listings answer every record and the rows of each node whose
+ * lease holds, of its current epoch, sorted by node and by name, and fail, naming the limit, past {@link DeploymentStore#LISTINGS_MAX}.
+ * Run by {@code InMemoryDeploymentStoreTest} and {@code PgDeploymentStoreIT}.
  */
 public abstract class DeploymentStoreContract {
 
@@ -47,6 +53,15 @@ public abstract class DeploymentStoreContract {
     /** The audit rows of deploys and undeploys the case's store wrote, oldest first. */
     protected abstract List<InMemoryDeploymentStore.Audited> audited();
 
+    /** Joins {@code node} to the membership the case's store checks listings against, as a new incarnation; answers its epoch. */
+    protected abstract long join(String node);
+
+    /** Ends {@code node}'s lease, released by nobody; the other nodes' leases hold on. */
+    protected abstract void expire(String node);
+
+    /** Releases {@code node}'s ended lease, as a peer does. */
+    protected abstract void release(String node);
+
     @BeforeEach
     void openTheStore() {
         store = emptyStore();
@@ -67,6 +82,18 @@ public abstract class DeploymentStoreContract {
 
     List<DeploymentRecord> list() {
         return store.read().await().records();
+    }
+
+    static DeploymentStore.NodePackage running(String name, String commit) {
+        return new DeploymentStore.NodePackage(name, "1.0.0", name + "-repo", commit, AT, DeployedPackage.State.RUNNING, List.of());
+    }
+
+    boolean write(String node, long epoch, DeploymentStore.NodePackage... packages) {
+        return store.writeListing(node, epoch, List.of(packages)).await();
+    }
+
+    Map<String, List<DeploymentStore.NodePackage>> nodes() {
+        return store.listings().await().nodes();
     }
 
     /** The pool's lock, taken: a case that finds it held fails. */
@@ -90,6 +117,86 @@ public abstract class DeploymentStoreContract {
         } finally {
             lock.close().await();
         }
+    }
+
+    @Test
+    void aNodesListingIsItsLastWriteWhole() {
+        long a = join("node-a");
+        assertEquals(Map.of("node-a", List.of()), nodes(), "a node that wrote nothing is listed with no packages");
+        assertTrue(write("node-a", a, running("shop", C_1), running("orders", C_2)));
+        assertTrue(write("node-a", a, running("shop", C_3)));
+        assertEquals(Map.of("node-a", List.of(running("shop", C_3))), nodes(), "orders went with the write that left it out");
+        assertTrue(write("node-a", a));
+        assertEquals(Map.of("node-a", List.of()), nodes(), "a write of none empties the listing");
+    }
+
+    @Test
+    void aListingKeepsEveryFieldAndIsSortedByNodeThenByName() {
+        long b = join("node-b");
+        long a = join("node-a");
+        // the instant past the microsecond: kept to it; '-' sorts before 'a' as a Java string, not under en_US collation
+        DeploymentStore.NodePackage failed = new DeploymentStore.NodePackage("shopa", "2.0.0", "shops", C_2, Instant.parse("2026-10-27T09:30:59.999999Z"),
+                DeployedPackage.State.FAILED, List.of("INVALID: the package of shops at " + C_2 + " cannot be read", "a second line"));
+        assertTrue(write("node-b", b, failed, running("shop-eu", C_1)));
+        assertTrue(write("node-a", a, running("zeta", C_3)));
+        assertEquals(List.of("node-a", "node-b"), List.copyOf(nodes().keySet()), "sorted by node");
+        assertEquals(List.of(running("shop-eu", C_1), failed), nodes().get("node-b"), "every field as written, sorted by name in String order");
+    }
+
+    @Test
+    void anOldIncarnationWritesNothingAndARestartHidesItsRows() {
+        long first = join("node-a");
+        assertTrue(write("node-a", first, running("shop", C_1)));
+        long second = join("node-a");
+        assertEquals(Map.of("node-a", List.of()), nodes(), "restarted: listed with no packages until it writes");
+        assertFalse(write("node-a", first, running("shop", C_2)), "the old incarnation is refused");
+        assertEquals(Map.of("node-a", List.of()), nodes(), "and wrote nothing");
+        assertTrue(write("node-a", second, running("shop", C_3)));
+        assertEquals(Map.of("node-a", List.of(running("shop", C_3))), nodes());
+        assertFalse(write("ghost", 1, running("shop", C_1)), "a node that never joined writes nothing");
+        assertEquals(Map.of("node-a", List.of(running("shop", C_3))), nodes());
+    }
+
+    @Test
+    void aLeaseThatEndedDropsOutAndAReleasedOneWritesNothing() {
+        long a = join("node-a");
+        long b = join("node-b");
+        assertTrue(write("node-a", a, running("shop", C_1)));
+        assertTrue(write("node-b", b, running("shop", C_2)));
+        expire("node-a");
+        assertEquals(Map.of("node-b", List.of(running("shop", C_2))), nodes(), "a lease that ended drops out of the answer");
+        assertTrue(write("node-a", a, running("shop", C_3)), "a lease nobody released is still its node's: it writes");
+        release("node-a");
+        assertFalse(write("node-a", a, running("shop", C_1)), "a released lease writes nothing");
+        assertTrue(write("node-b", b, running("shop", C_2)));
+        long again = join("node-a");
+        assertEquals(Map.of("node-a", List.of(), "node-b", List.of(running("shop", C_2))), nodes(), "joined again: none until it writes");
+        assertTrue(write("node-a", again, running("shop", C_1)));
+        assertEquals(List.of(running("shop", C_1)), nodes().get("node-a"));
+    }
+
+    @Test
+    void theListingsAnswerEveryRecordBesideTheNodes() {
+        DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
+        DeploymentRecord billing = record("billing", "3.1.0", C_3, SHA_3, AT);
+        save(shop);
+        save(billing);
+        assertEquals(List.of(billing, shop), store.listings().await().records(), "every record, sorted by name");
+        assertEquals(Map.of(), nodes(), "no node holds a lease");
+    }
+
+    @Test
+    void moreThanTheLimitReadsNothingAndNamesIt() {
+        long a = join("node-a");
+        DeploymentStore.NodePackage[] many = IntStream.range(0, DeploymentStore.LISTINGS_MAX - 1)
+                .mapToObj(i -> running("p" + i, C_1)).toArray(DeploymentStore.NodePackage[]::new);
+        assertTrue(write("node-a", a, many));
+        save(record("shop", "1.0.0", C_1, SHA_1, AT));
+        assertEquals(DeploymentStore.LISTINGS_MAX - 1, nodes().get("node-a").size(), "the limit itself is read whole");
+        save(record("billing", "1.0.0", C_1, SHA_1, AT));
+        Future<DeploymentStore.Listings> over = store.listings();
+        Throwable failed = over.transform(done -> Future.succeededFuture(done.cause())).await();
+        assertTrue(failed != null && failed.getMessage().contains(Integer.toString(DeploymentStore.LISTINGS_MAX)), "a failure that names the limit: " + failed);
     }
 
     @Test

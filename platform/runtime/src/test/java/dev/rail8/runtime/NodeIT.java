@@ -690,9 +690,9 @@ class NodeIT {
         return text.getBytes(StandardCharsets.UTF_8);
     }
 
-    /** The body of {@code POST /admin/deploy}: {@code commit} of {@code repository}. */
+    /** The body of {@code POST /admin/deploy}: {@code commit} of {@code repository}, replacing whatever the pool records. */
     static byte[] deployBody(String repository, String commit) {
-        return new JsonObject().put("repository", repository).put("commit", commit).encode().getBytes(StandardCharsets.UTF_8);
+        return new JsonObject().put("repository", repository).put("commit", commit).put("expect", "any").encode().getBytes(StandardCharsets.UTF_8);
     }
 
     /**

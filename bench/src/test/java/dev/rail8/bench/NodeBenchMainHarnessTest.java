@@ -157,8 +157,8 @@ class NodeBenchMainHarnessTest {
         String commit = "0123456789abcdef0123456789abcdef01234567";
         IllegalStateException refused = assertThrows(IllegalStateException.class, () -> harness.deploy(server.actualPort(), commit));
         assertTrue(refused.getMessage().contains("422") && refused.getMessage().contains("flow 'bench' is invalid"), refused.getMessage());
-        assertEquals("POST application/json " + new JsonObject().put("repository", "bench").put("commit", commit).encode(), deployed.get(),
-                "the commit of the bench's repository, as JSON");
+        assertEquals("POST application/json " + new JsonObject().put("repository", "bench").put("commit", commit).put("expect", "none").encode(), deployed.get(),
+                "the commit of the bench's repository over an empty installation, as JSON");
     }
 
     @Test

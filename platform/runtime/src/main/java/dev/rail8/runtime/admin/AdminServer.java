@@ -36,6 +36,7 @@ import dev.rail8.runtime.deploy.DeployRefusedException;
 import dev.rail8.runtime.deploy.DeployResult;
 import dev.rail8.runtime.deploy.DeployedFlow;
 import dev.rail8.runtime.deploy.DeployedPackage;
+import dev.rail8.runtime.deploy.DeploymentStore;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.UndeployResult;
 import dev.rail8.runtime.pg.PgTx;
@@ -124,12 +125,16 @@ import java.util.stream.Collectors;
  * response is reset).
  *
  * <p>With a {@link Deployments} it also deploys from git: {@code POST /admin/deploy} with the body
- * {@code {"repository": "<name>", "commit": "<40 hex, or a ref in dev and ci>"}} and nothing else (else 400; above
- * {@link #DEPLOY_BODY_MAX} bytes 413), the actor the authenticated caller (the shared token and the open loopback API name it
- * by their {@code X-Rail8-Actor} header, 400 above {@link #ACTOR_MAX} characters). The
- * deploy runs on the route's virtual thread: 200 {@code {package, version, repository, commit, flows, added, swapped, removed}}
- * (the last three sorted qualified flow ids: a redeploy swaps only the flows that changed), or a refusal by its kind — 400, 403,
- * 409 (another deploy runs on the node, or the package is deployed from another repository), 422 {@code {error, problems}}, 500
+ * {@code {"repository": "<name>", "commit": "<40 hex, or a ref in dev and ci>", "expect": "<40 hex>" | "none" | "any"}} and
+ * nothing else (else 400; above {@link #DEPLOY_BODY_MAX} bytes 413): {@code expect} is the state the deploy expects to replace,
+ * the commit of the package's record, {@code none} for no record or {@code any} for whatever the pool records; a check may
+ * leave it out and then compares nothing. The actor is the authenticated caller (the shared token and the open loopback API name
+ * it by their {@code X-Rail8-Actor} header, 400 above {@link #ACTOR_MAX} characters). The
+ * deploy runs on the route's virtual thread: 200 {@code {package, version, repository, commit, flows, added, swapped, removed,
+ * replaces}} (the flows sorted qualified flow ids: a redeploy swaps only the flows that changed; {@code replaces} the commit of the
+ * record the deploy replaced, or {@code none}), or a refusal by its kind — 400, 403, 409 (another deploy runs on the node, or the
+ * package is deployed from another repository), 412 {@code {error, replaces}} (the pool records another state than
+ * {@code expect}: {@code replaces} is the one it records), 422 {@code {error, problems}}, 500
  * ({@code {error}}; a redeploy whose start failed and rolled back: {@code {error, problems}}), 503 (the node stops; or the node's
  * Postgres pool refused the deploy record's write: the same body as the 500 of a record not written, or its work-queue question:
  * {@code {error}} naming the flow and the pool's refusal; only when every failed question was the pool's — a real failure of
@@ -148,7 +153,12 @@ import java.util.stream.Collectors;
  * the node, or the work queue holds items of a flow of it), 503 (the node stops; or the
  * node's Postgres pool refused the work queue's question or the record delete: nothing changed, retryable; a refused
  * question only when no other question failed otherwise and no flow holds items — those are 500 and 409) — and 404 for a package the node does not list; a record
- * delete or a queue question that fails otherwise is 500. {@code GET /admin/targets} lists the node's limits per target system, sorted by target: 200
+ * delete or a queue question that fails otherwise is 500. {@code GET /admin/pool/packages} answers what the pool runs and what each
+ * node of it runs, read in one transaction: 200 {@code {records:[{name, version, repository, commit}], nodes:[{node,
+ * packages:[{name, version, repository, commit, deployedAt, state, behind}]}]}}, the records and each node's packages sorted by
+ * name, the nodes whose lease holds sorted by id, {@code behind} the lines of why the node's last install of the package's record
+ * was refused; 500 when the store fails, or holds more rows and records together than one read takes.
+ * {@code GET /admin/targets} lists the node's limits per target system, sorted by target: 200
  * {@code {items:[{target, maxCalls, maxWaitMs, inFlight, waiting, refused}]}}, every target a built flow named so far; a limit of a
  * component that names no target is not listed. {@code GET /admin/components} lists every component the node serves, sorted by
  * scheme: 200 {@code {environment, httpOrigin, items:[{scheme, httpPrefix, settings}]}}, {@code environment} the node's
@@ -680,6 +690,7 @@ public final class AdminServer {
                 admin.delete("/admin/packages/:name", Action.PACKAGE_UNDEPLOY, (c, who) -> undeployed(c, who, d));
                 admin.get("/admin/flows", Action.DEPLOYMENT_READ, (c, who) -> flows(d));
                 admin.get("/admin/packages", Action.DEPLOYMENT_READ, (c, who) -> packages(d));
+                admin.get("/admin/pool/packages", Action.DEPLOYMENT_READ, (c, who) -> poolPackages(d));
                 admin.get("/admin/targets", Action.DEPLOYMENT_READ, (c, who) -> targets(d));
                 admin.get("/admin/components", Action.DEPLOYMENT_READ, (c, who) -> components(d));
                 admin.get("/admin/steps", Action.DEPLOYMENT_READ, (c, who) -> steps(d));
@@ -1657,14 +1668,15 @@ public final class AdminServer {
     }
 
     /**
-     * {@code POST /admin/deploy}: the deploy of the body's commit of the body's repository, or with {@code ?check=true} its check;
-     * the body and the {@code check} parameter are refused (400) before the deploy is asked.
+     * {@code POST /admin/deploy}: the deploy of the body's commit of the body's repository expecting the body's {@code expect}, or
+     * with {@code ?check=true} its check, which compares nothing without one; the body and the {@code check} parameter are refused
+     * (400) before the deploy is asked.
      */
     private static Reply deploy(RoutingContext ctx, Caller who, Deployments deployments) throws IOException {
         Actor by = who.acting(Action.PACKAGE_DEPLOY, PackageRef.ANY, remote(ctx));
         String check = Objects.requireNonNullElse(ctx.request().getParam("check"), "false");
         if (!check.equals("true") && !check.equals("false")) throw new Refused("check is true or false, was '" + check + "'");
-        String shape = "the body is {\"repository\": \"<name>\", \"commit\": \"<commit or ref>\"}";
+        String shape = "the body is {\"repository\": \"<name>\", \"commit\": \"<commit or ref>\", \"expect\": \"<commit>\" | \"none\" | \"any\"}";
         String type = ctx.request().getHeader(HttpHeaders.CONTENT_TYPE);
         if (type != null && type.toLowerCase(java.util.Locale.ROOT).startsWith("multipart/form-data")) throw new Refused(shape + ": it is a form");
         if (ctx.body().isEmpty()) throw new Refused(shape + ": there is none");
@@ -1674,19 +1686,49 @@ public final class AdminServer {
         } catch (DecodeException notJson) {
             throw new Refused(shape + ": it is not JSON");
         }
-        if (!(json instanceof JsonObject o) || o.size() != 2 || !(o.getValue("repository") instanceof String repository)
+        boolean dry = check.equals("true");
+        if (!(json instanceof JsonObject o) || !(o.getValue("repository") instanceof String repository)
                 || !(o.getValue("commit") instanceof String commit)) {
             throw new Refused(shape);
         }
+        boolean named = o.containsKey("expect");   // a null is no state: 400, as any value other than a string
+        if (o.size() != (named ? 3 : 2) || named && !(o.getValue("expect") instanceof String)) throw new Refused(shape);
+        if (!named && !dry) throw new Refused(shape + ": a deploy names the state it expects, and this one has no expect");
+        String expect = named ? o.getString("expect") : Deployments.ANY;   // a check without one compares nothing
         try {
-            DeployResult r = check.equals("true") ? deployments.check(repository, commit) : deployments.deploy(repository, commit, by);
+            DeployResult r = dry ? deployments.check(repository, commit, expect) : deployments.deploy(repository, commit, expect, by);
             DeployedPackage p = r.pkg();
             return Json.of(200, new JsonObject().put("package", p.name()).put("version", p.version()).put("repository", p.repository().orElse(null))
                     .put("commit", p.commit().orElse(null)).put("flows", new JsonArray(p.flows()))
-                    .put("added", new JsonArray(r.added())).put("swapped", new JsonArray(r.swapped())).put("removed", new JsonArray(r.removed())));
+                    .put("added", new JsonArray(r.added())).put("swapped", new JsonArray(r.swapped())).put("removed", new JsonArray(r.removed()))
+                    .put("replaces", r.replaces().orElse(null)));
         } catch (DeployRefusedException refused) {
             return refusal(refused);
         }
+    }
+
+    /**
+     * {@code GET /admin/pool/packages}: the pool's records and what each node whose lease holds runs; a read that fails, or a pool
+     * holding more than one read takes, is the deploy's {@code FAILED}, 500 {@code {error}}.
+     */
+    private static Reply poolPackages(Deployments deployments) {
+        DeploymentStore.Listings listings;
+        try {
+            listings = deployments.listings();
+        } catch (DeployRefusedException refused) {
+            return refusal(refused);
+        }
+        JsonArray records = new JsonArray();
+        listings.records().forEach(r -> records.add(new JsonObject().put("name", r.name()).put("version", r.version()).put("repository", r.repository())
+                .put("commit", r.commit())));
+        JsonArray nodes = new JsonArray();
+        listings.nodes().forEach((node, runs) -> {
+            JsonArray packages = new JsonArray();
+            runs.forEach(p -> packages.add(new JsonObject().put("name", p.name()).put("version", p.version()).put("repository", p.repository())
+                    .put("commit", p.commit()).put("deployedAt", p.deployedAt().toString()).put("state", p.state().name()).put("behind", new JsonArray(p.behind()))));
+            nodes.add(new JsonObject().put("node", node).put("packages", packages));
+        });
+        return Json.of(200, new JsonObject().put("records", records).put("nodes", nodes));
     }
 
     private static Reply packages(Deployments deployments) {
@@ -1725,9 +1767,9 @@ public final class AdminServer {
     }
 
     /**
-     * A refusal by its kind: 400, 403, 404, 409, 422 (with every problem), 500 (with every problem of a redeploy rolled back), 503
-     * (the node stops; the pool refused the record's write, with every problem of a redeploy rolled back, a deploy's or an
-     * undeploy's queue question, or an undeploy's record delete).
+     * A refusal by its kind: 400, 403, 404, 409, 412 (with the state the pool records), 422 (with every problem), 500 (with every
+     * problem of a redeploy rolled back), 503 (the node stops; the pool refused the record's write, with every problem of a
+     * redeploy rolled back, a deploy's or an undeploy's queue question, or an undeploy's record delete).
      */
     private static Reply refusal(DeployRefusedException refused) {
         int status = switch (refused.kind()) {
@@ -1738,9 +1780,11 @@ public final class AdminServer {
             case FAILED -> 500;
             case STOPPING, BUSY -> 503;
             case NOT_FOUND -> 404;
+            case STALE -> 412;
         };
         JsonObject body = error(refused.error());
         if (!refused.problems().isEmpty()) body.put("problems", new JsonArray(refused.problems()));
+        refused.replaces().ifPresent(replaces -> body.put("replaces", replaces));
         return Json.of(status, body);
     }
 

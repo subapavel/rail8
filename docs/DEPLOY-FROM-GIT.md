@@ -255,7 +255,8 @@ whole pool, a follower that still runs an older commit included.
   The write takes no pool lock and raises no generation.
 - **A write that fails.** A deploy waits for its own write, within the stop deadline, before it answers; nothing else waits
   for one. A write that fails, or does not answer in time, is a WARNING once per reason, and the next tick writes again. It
-  never changes the answer of a deploy: the record is the commit point, and it is written by then.
+  never changes the answer of a deploy: the record is the commit point, and it is written by then. A write that did not
+  answer in time may still run in Postgres; the node starts no other until it ended, so it never lands after a later one.
 - **A restart, and a lease that ended.** A restart joins as a new epoch before it restores, so the rows of its previous
   incarnation drop out of the answer at once. Until its restore writes, the node is listed with no packages: it has not
   started. A node whose lease ended drops out of the answer. Its rows stay, unread, until it joins again, or until a peer
@@ -480,7 +481,8 @@ public interface Commit {
   - a restarted node listed with no packages until its restore writes;
   - an old incarnation's write changing nothing;
   - the table deleted during a run, and the ticks and the deploys going on;
-  - a write of the rows that hangs, and the deploy answering 200 with its record written.
+  - a write of the rows that hangs, and the deploy answering 200 with its record written; an undeploy meanwhile writing
+    nothing, and the next tick, once the hung write ended, writing what the node runs.
 - The expected state:
   - two deploys that expect the same commit: the first applied, the second 412, with nothing changed;
   - `none` applied on a first deploy, then 412;

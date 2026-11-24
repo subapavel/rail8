@@ -146,7 +146,7 @@ class DeploymentsUndeployTest {
         }
 
         DeployResult deploy(Committed p) throws Exception {
-            return OnVirtualThread.call(() -> deployments.deploy(p.name(), p.commit(), TestActors.named("test")));
+            return OnVirtualThread.call(() -> deployments.deploy(p.name(), p.commit(), Deployments.ANY, TestActors.named("test")));
         }
 
         /** Commits {@code p} to the repository of its name and deploys that commit. */
@@ -156,7 +156,7 @@ class DeploymentsUndeployTest {
 
         OnVirtualThread.Call<DeployResult> deploying(PackageDraft p) {
             Committed c = committed(p);
-            return OnVirtualThread.start(() -> deployments.deploy(c.name(), c.commit(), TestActors.named("test")));
+            return OnVirtualThread.start(() -> deployments.deploy(c.name(), c.commit(), Deployments.ANY, TestActors.named("test")));
         }
 
         UndeployResult undeploy(String name) throws Exception {

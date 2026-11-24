@@ -128,7 +128,7 @@ class DeploymentsDependenciesTest {
         }
 
         DeployResult deploy(Committed p) throws Exception {
-            return OnVirtualThread.call(() -> deployments.deploy(p.name(), p.commit(), TestActors.named("test")));
+            return OnVirtualThread.call(() -> deployments.deploy(p.name(), p.commit(), Deployments.ANY, TestActors.named("test")));
         }
 
         /** Commits {@code p} to the repository of its name and deploys that commit. */
@@ -139,7 +139,7 @@ class DeploymentsDependenciesTest {
         DeployRefusedException refused(PackageDraft p) throws IOException {
             Committed c = committed(p);
             DeployRefusedException refused = assertThrows(DeployRefusedException.class,
-                    () -> OnVirtualThread.call(() -> deployments.deploy(c.name(), c.commit(), TestActors.named("test"))), "the deploy of " + p.name() + " is refused");
+                    () -> OnVirtualThread.call(() -> deployments.deploy(c.name(), c.commit(), Deployments.ANY, TestActors.named("test"))), "the deploy of " + p.name() + " is refused");
             assertEquals(Kind.INVALID, refused.kind(), refused.getMessage() + " " + refused.problems());
             assertNoAbsolutePath(refused.problems());
             assertFalse(refused.error().contains(tmp.toString()), "no absolute path in the error: " + refused.error());

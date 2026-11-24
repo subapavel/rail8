@@ -76,7 +76,8 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
     @Override
     protected DeploymentStore emptyStore() {
-        pool.query("truncate deployments, retiring").execute().await();
+        pool.query("truncate deployments, retiring, node_packages").execute().await();
+        pool.query("delete from nodes").execute().await();
         pool.query("delete from work").execute().await();
         pool.query("delete from audit where action in ('deploy', 'undeploy')").execute().await();
         return store(pool, connect);
@@ -113,6 +114,95 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         } finally {
             lock.close().await();
         }
+    }
+
+    @Override
+    protected long join(String node) {
+        return pool.preparedQuery("insert into nodes (node, epoch, lease_until) values ($1, 1, now() + interval '30 seconds') "
+                + "on conflict (node) do update set epoch = nodes.epoch + 1, lease_until = excluded.lease_until returning epoch")
+                .execute(io.vertx.sqlclient.Tuple.of(node)).await().iterator().next().getLong(0);
+    }
+
+    @Override
+    protected void expire(String node) {
+        pool.preparedQuery("update nodes set lease_until = now() - interval '1 second' where node = $1").execute(io.vertx.sqlclient.Tuple.of(node)).await();
+    }
+
+    @Override
+    protected void release(String node) {
+        pool.preparedQuery("update nodes set lease_until = null where node = $1").execute(io.vertx.sqlclient.Tuple.of(node)).await();
+    }
+
+    /** The rows of {@code node_packages} themselves, {@code <node>/<epoch>/<package>}, sorted. */
+    static List<String> nodeRows() {
+        List<String> rows = new java.util.ArrayList<>();
+        pool.query("select r from (select node || '/' || epoch || '/' || package as r from node_packages) t order by r collate \"C\"").execute().await()
+                .forEach(r -> rows.add(r.getString(0)));
+        return rows;
+    }
+
+    /** A node's write deletes the rows of every node whose epoch moved on or whose lease was released, and nobody else's. */
+    @Test
+    void aWriteSweepsTheRowsOfReleasedNodesAndOfOldEpochs() {
+        long a = join("node-a");
+        long b = join("node-b");
+        long c = join("node-c");
+        assertTrue(write("node-a", a, running("shop", C_1)));
+        assertTrue(write("node-b", b, running("shop", C_1)));
+        assertTrue(write("node-c", c, running("shop", C_1)));
+        expire("node-a");
+        release("node-a");
+        join("node-b");   // restarted, not written yet
+        expire("node-c");   // ended, released by nobody: still its node's
+        assertEquals(List.of("node-a/1/shop", "node-b/1/shop", "node-c/1/shop"), nodeRows(), "fixture: rows stay until a write");
+
+        long d = join("node-d");
+        assertTrue(write("node-d", d, running("orders", C_2)));
+        assertEquals(List.of("node-c/1/shop", "node-d/1/orders"), nodeRows(), "the released node's rows and the old epoch's went; the ended lease's stayed");
+    }
+
+    /**
+     * A write holds its node's row of {@code nodes} so that a join of the node waits for it, and never so that the node's renew or a
+     * peer's release of its lease waits: held back mid-write by a lock on {@code node_packages}, the renew, the lease's end and its
+     * release each answer at once, and the join is held until the write ends.
+     */
+    @Test
+    void aWriteHoldsBackAJoinOfItsNodeButNeverARenewOrARelease() {
+        long a = join("node-a");
+        SqlConnection holder = PgConnection.connect(vertx, connect).await();
+        SqlConnection other = PgConnection.connect(vertx, connect).await();
+        try {
+            Transaction locked = holder.begin().await();
+            holder.query("lock table node_packages in exclusive mode").execute().await();
+            io.vertx.core.Future<Boolean> writing = store.writeListing("node-a", a, List.of(running("shop", C_1)));
+            for (int i = 0; i < 10_000 && waiting() == 0; i++) {
+                assertTrue(!writing.isComplete(), "fixture: the write waits for the table lock: " + writing.cause());
+            }
+            assertEquals(1, waiting(), "fixture: the write waits for the table lock, its node's row held");
+
+            other.query("set statement_timeout = '5s'").execute().await();
+            dev.rail8.runtime.node.PgMembership members = new dev.rail8.runtime.node.PgMembership(other);
+            assertTrue(members.renew("node-a", a, java.time.Duration.ofSeconds(30)).await().renewed(), "the renew answers while the write holds the row");
+            other.query("update nodes set lease_until = now() - interval '1 second' where node = 'node-a'").execute().await();
+            assertEquals(List.of("node-a"), members.release(List.of("node-a")).await(), "and so does a peer's release of the ended lease");
+
+            other.query("set statement_timeout = '1s'").execute().await();
+            Throwable join = members.join("node-a", java.time.Duration.ofSeconds(30)).transform(done -> io.vertx.core.Future.succeededFuture(done.cause())).await();
+            assertTrue(join != null && join.getMessage().contains("statement timeout"), "the join waits for the write: " + join);
+
+            locked.commit().await();
+            assertTrue(writing.await(), "the write ends once the table is free: it read the row before the release");
+            assertEquals(List.of("node-a/" + a + "/shop"), nodeRows());
+        } finally {
+            other.close().await();
+            holder.close().await();
+        }
+    }
+
+    /** How many locks of {@code node_packages} are waited for. */
+    static int waiting() {
+        return pool.query("select count(*)::int from pg_locks where relation = 'node_packages'::regclass and not granted").execute().await()
+                .iterator().next().getInteger(0);
     }
 
     /** A store over {@code on}, its lock on a connection of its own opened with {@code options}, kept in {@link #opened}. */
