@@ -96,7 +96,7 @@ abstract class AccessContract {
 
     /** {@code name} logged in on {@code node} with {@code password}: the session's credential. */
     static String login(Access node, String name, String password) {
-        return node.login(name, password, REMOTE).session();
+        return node.login(name, password, Optional.empty(), REMOTE).session();
     }
 
     /** {@code name}'s first password changed to {@link #NEW_PASSWORD} in a session on {@code node}: the session's caller now. */
@@ -163,7 +163,60 @@ abstract class AccessContract {
 
     /** The failures the login limit counts for {@code name}, or empty when it has no row. */
     Optional<Integer> failures(String name) {
-        return ((Accounts) a).query(tx -> tx.limit(name, NAME_ROW, false)).map(Tx.Limit::failures);
+        return failures(name, NAME_ROW);
+    }
+
+    /** The failures the login limit counts on the row {@code (name, device)}, or empty when it has no row. */
+    Optional<Integer> failures(String name, String device) {
+        return ((Accounts) a).query(tx -> tx.limit(name, device, false)).map(Tx.Limit::failures);
+    }
+
+    /** {@code name} logged in on {@code node}, asking for a device and presenting {@code device}: the device it was issued. */
+    static String device(Access node, String name, String password, String device) {
+        return node.login(name, password, Optional.of(device), REMOTE).device().orElseThrow();
+    }
+
+    /** The id of a device credential. */
+    static String idOf(String device) {
+        return Credentials.deviceId(device).orElseThrow();
+    }
+
+    /** Every device row of {@code user}, dead ones included. */
+    List<Tx.DeviceRow> devices(String user) {
+        Accounts accounts = (Accounts) a;
+        long id = accounts.query(tx -> tx.user(user, Tx.Lock.NONE)).orElseThrow().id();
+        return accounts.query(tx -> tx.devices(id));
+    }
+
+    /**
+     * {@code during}, while a login of an unknown name holds {@code node}'s shared place on a latch in its hash; the login
+     * ends after it.
+     */
+    void holdingTheSharedPlace(Access node, Runnable during) throws InterruptedException {
+        CountDownLatch hashing = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        hash.duringNextMatch(() -> {
+            hashing.countDown();
+            try {
+                assertTrue(done.await(20, TimeUnit.SECONDS));
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        Thread holder = Thread.ofVirtual().start(() -> {
+            try {
+                node.login("holder", "a password", Optional.empty(), REMOTE);
+            } catch (AccessRefused refused) {
+                // the unknown name is refused once its hash ends
+            }
+        });
+        assertTrue(hashing.await(20, TimeUnit.SECONDS));
+        try {
+            during.run();
+        } finally {
+            done.countDown();
+            holder.join();
+        }
     }
 
     // --- the bridge and the emergency key
@@ -268,7 +321,7 @@ abstract class AccessContract {
         assertEquals(List.of("anna", "session", session.substring(7, 23)), List.of(row.getString("actor"), row.getString("via"),
                 row.getString("credential")), "the audit names the session's user, its via and its id");
         assertEquals(1, row.getJsonObject("detail").getInteger("sessions"), "the other session ended");
-        refused(401, "login-refused", () -> a.login("anna", first, REMOTE));
+        refused(401, "login-refused", () -> a.login("anna", first, Optional.empty(), REMOTE));
         assertFalse(login(b, "anna", NEW_PASSWORD).isEmpty());
     }
 
@@ -276,7 +329,7 @@ abstract class AccessContract {
     void aFirstPasswordExpiresAfterSevenDays() {
         String first = person("anna");
         clockA.advance(Duration.ofDays(7));
-        refused(401, "login-refused", () -> a.login("anna", first, REMOTE));
+        refused(401, "login-refused", () -> a.login("anna", first, Optional.empty(), REMOTE));
         assertEquals("first-password-expired", audit("login.refused").getLast().getJsonObject("detail").getString("reason"));
     }
 
@@ -294,7 +347,7 @@ abstract class AccessContract {
         for (String[] attempt : new String[][] {{"nobody", "a password"}, {"anna", "a wrong password"}, {"ci-deploy", "a password"},
                 {"bob", "whatever"}}) {
             int before = hash.matches.get();
-            texts.add(refused(401, "login-refused", () -> a.login(attempt[0], attempt[1], REMOTE)).getMessage());
+            texts.add(refused(401, "login-refused", () -> a.login(attempt[0], attempt[1], Optional.empty(), REMOTE)).getMessage());
             assertEquals(before + 1, hash.matches.get(), attempt[0] + ": one hash, whatever the reason");
         }
         assertEquals(1, Set.copyOf(texts).size(), "one text for every reason: " + texts);
@@ -315,23 +368,23 @@ abstract class AccessContract {
     @Test
     void theFirstFiveFailuresAreFreeThenEachWaits() {
         person("anna");
-        for (int i = 1; i <= 5; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
+        for (int i = 1; i <= 5; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
         int before = hash.matches.get();
-        AccessRefused wait = refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", REMOTE));
+        AccessRefused wait = refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
         assertEquals(1, wait.retryAfter().getAsLong());
-        refused(429, "too-many-attempts", () -> b.login("anna", "wrong password", REMOTE));
+        refused(429, "too-many-attempts", () -> b.login("anna", "wrong password", Optional.empty(), REMOTE));
         assertEquals(before, hash.matches.get(), "a refused attempt hashes nothing");
 
         clockA.advance(Duration.ofSeconds(1));
-        refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));   // the sixth failure: the next waits 2 s
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));   // the sixth failure: the next waits 2 s
         clockA.advance(Duration.ofMillis(1500));
-        assertEquals(1, refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", REMOTE)).retryAfter().getAsLong(),
+        assertEquals(1, refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE)).retryAfter().getAsLong(),
                 "half a second left: one second, rounded up");
 
         assertEquals(List.of(1), audit("login.refused").stream().map(r -> r.getJsonObject("detail").getInteger("failures")).toList(),
                 "the first failure of a run is written, then at most one an hour");
         clockA.advance(Duration.ofHours(1));
-        refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
         assertEquals(List.of(1, 7), audit("login.refused").stream().map(r -> r.getJsonObject("detail").getInteger("failures")).toList(),
                 "an hour later, one more, with the failures since");
     }
@@ -339,29 +392,29 @@ abstract class AccessContract {
     @Test
     void aNodeWhoseClockIsBehindDoesNotShortenAWait() {
         person("anna");
-        for (int i = 1; i <= 4; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
-        refused(401, "login-refused", () -> b.login("anna", "wrong password", REMOTE));   // the fifth, on B, 20 s behind
+        for (int i = 1; i <= 4; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
+        refused(401, "login-refused", () -> b.login("anna", "wrong password", Optional.empty(), REMOTE));   // the fifth, on B, 20 s behind
         clockA.advance(Duration.ofMillis(500));
-        refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", REMOTE));
+        refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
     }
 
     @Test
     void aSuccessForgivesOnlyTheFailuresUpToItsOwnClaim() {
         String first = person("anna");
-        for (int i = 1; i <= 3; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
+        for (int i = 1; i <= 3; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
         // while the success hashes, B counts a fifth failure after its claim, the fourth
-        hash.duringNextMatch(() -> refused(401, "login-refused", () -> b.login("anna", "wrong password", REMOTE)));
+        hash.duringNextMatch(() -> refused(401, "login-refused", () -> b.login("anna", "wrong password", Optional.empty(), REMOTE)));
         login(a, "anna", first);
 
-        for (int i = 1; i <= 4; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
-        refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", REMOTE));   // B's failure stood: 1 + 4
+        for (int i = 1; i <= 4; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
+        refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));   // B's failure stood: 1 + 4
     }
 
     @Test
     void aLoginWhoseUserChangedWhileItHashedIsRefused() {
         String first = person("anna");
         hash.duringNextMatch(() -> a.endSessions(key(a).acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna"));
-        refused(401, "login-refused", () -> a.login("anna", first, REMOTE));
+        refused(401, "login-refused", () -> a.login("anna", first, Optional.empty(), REMOTE));
         assertEquals("account-changed", audit("login.refused").getLast().getJsonObject("detail").getString("reason"));
         assertEquals(List.of(), a.user("anna").orElseThrow().sessions(), "no session was made");
         assertFalse(login(a, "anna", first).isEmpty(), "the next login holds");
@@ -369,11 +422,14 @@ abstract class AccessContract {
 
     @Test
     void aLoginHeldWhileTheOtherNodeResetsThePasswordMakesNoSession() {
-        String first = person("anna");
+        changed(a, "anna", person("anna"));
+        String wrong = refused(401, "login-refused", () -> a.login("anna", "a wrong password", Optional.empty(), REMOTE)).getMessage();
         hash.duringNextMatch(() -> b.resetPassword(key(b).acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna"));
-        refused(401, "login-refused", () -> a.login("anna", first, REMOTE));
+        AccessRefused held = refused(401, "login-refused", () -> a.login("anna", NEW_PASSWORD, Optional.of(""), REMOTE));
+        assertEquals(wrong, held.getMessage(), "the one text of a refused login");
         assertEquals("account-changed", audit("login.refused").getLast().getJsonObject("detail").getString("reason"));
         assertEquals(List.of(), a.user("anna").orElseThrow().sessions(), "no session was made");
+        assertEquals(List.of(), devices("anna"), "and no device");
     }
 
     /**
@@ -388,13 +444,13 @@ abstract class AccessContract {
         hash.duringNextMatch(() -> {
             assertEquals(Accounts.NAMES_MAX, limited(), "the login in flight claimed the last name");
             int hashed = hash.matches.get();
-            refused(401, "login-refused", () -> b.login("ghost", "a password", REMOTE));
+            refused(401, "login-refused", () -> b.login("ghost", "a password", Optional.empty(), REMOTE));
             assertEquals(hashed + 1, hash.matches.get(), "the unknown name is hashed as any other");
             assertEquals(Optional.empty(), failures("ghost"), "and refused without a row");
-            refused(401, "login-refused", () -> b.login("anna", "wrong password", REMOTE));
-            refused(401, "login-refused", () -> b.login("limited-1", "a password", REMOTE));
+            refused(401, "login-refused", () -> b.login("anna", "wrong password", Optional.empty(), REMOTE));
+            refused(401, "login-refused", () -> b.login("limited-1", "a password", Optional.empty(), REMOTE));
         });
-        refused(401, "login-refused", () -> a.login("in-flight", "a password", REMOTE));
+        refused(401, "login-refused", () -> a.login("in-flight", "a password", Optional.empty(), REMOTE));
         assertEquals(List.of(Optional.of(1), Optional.of(1), Optional.of(2)), List.of(failures("in-flight"), failures("anna"), failures("limited-1")));
         assertEquals(Accounts.NAMES_MAX + 1, limited(), "the cap passed by the known name alone");
     }
@@ -404,11 +460,11 @@ abstract class AccessContract {
     void atMostAThousandRefusedLoginsAreWrittenAnHour() {
         for (int i = 0; i <= 1000; i++) {
             String name = "guess-" + i;
-            refused(401, "login-refused", () -> a.login(name, "a password", REMOTE));
+            refused(401, "login-refused", () -> a.login(name, "a password", Optional.empty(), REMOTE));
         }
         assertEquals(1000, audit("login.refused").size(), "the thousand and first is not written");
         clockA.advance(Duration.ofHours(1));
-        refused(401, "login-refused", () -> a.login("guess-of-the-next-hour", "a password", REMOTE));
+        refused(401, "login-refused", () -> a.login("guess-of-the-next-hour", "a password", Optional.empty(), REMOTE));
         assertEquals("user/guess-of-the-next-hour", audit("login.refused").getLast().getString("subject"), "the next hour writes again");
     }
 
@@ -442,20 +498,308 @@ abstract class AccessContract {
         AtomicReference<Throwable> held = new AtomicReference<>();
         Thread login = Thread.ofVirtual().start(() -> {
             try {
-                node.login("anna", NEW_PASSWORD, REMOTE);
+                node.login("anna", NEW_PASSWORD, Optional.empty(), REMOTE);
             } catch (Throwable t) {
                 held.set(t);
             }
         });
         assertTrue(hashing.await(20, TimeUnit.SECONDS));
         int before = hash.matches.get();
-        refused(503, "busy", () -> node.login("bob", "a password", REMOTE));
+        refused(503, "busy", () -> node.login("bob", "a password", Optional.empty(), REMOTE));
         assertEquals(before, hash.matches.get(), "nothing hashed");
         assertFalse(node.resetPassword(anna.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "bob").isEmpty(),
                 "a reset takes the second place");
         done.countDown();
         login.join();
         assertEquals(null, held.get(), "the login that held the shared place went through");
+    }
+
+    // --- devices
+
+    /**
+     * Someone keeps failing anna's name into its wait and holds the node's shared place with a login on the latch: a login
+     * without a valid device is 503 with nothing counted or hashed, while anna's browser hashes on the second place, gets in
+     * and is issued a new device. The name's row still waits.
+     */
+    @Test
+    void aFloodDoesNotKeepOutAKnownBrowser() throws Exception {
+        HashPlaces places = new HashPlaces();
+        Access node = node(clockA, hash, places, Optional.of(KEY));
+        changed(a, "anna", person("anna"));
+        String known = device(a, "anna", NEW_PASSWORD, "");
+        for (int i = 1; i <= 5; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
+        refused(429, "too-many-attempts", () -> a.login("anna", NEW_PASSWORD, Optional.of(""), REMOTE));
+        holdingTheSharedPlace(node, () -> {
+            int before = hash.matches.get();
+            refused(503, "busy", () -> node.login("anna", NEW_PASSWORD, Optional.of(""), REMOTE));
+            assertEquals(before, hash.matches.get(), "nothing hashed");
+            assertEquals(Optional.of(5), failures("anna"), "nothing counted");
+            Access.Login in = node.login("anna", NEW_PASSWORD, Optional.of(known), REMOTE);
+            assertEquals("anna", in.caller().name());
+            assertTrue(in.device().filter(d -> !d.equals(known)).isPresent(), "a new device");
+        });
+        refused(429, "too-many-attempts", () -> a.login("anna", NEW_PASSWORD, Optional.empty(), REMOTE));
+    }
+
+    /**
+     * A stolen device buys only its own row's 5 free failures and waits, the same on both nodes, and leaves the name's row alone;
+     * it dies at the user's next login from that browser.
+     */
+    @Test
+    void aStolenDeviceBuysOnlyItsOwnRowsGuesses() {
+        changed(a, "anna", person("anna"));
+        String stolen = device(a, "anna", NEW_PASSWORD, "");
+        Optional<Integer> name = failures("anna");
+        String text = refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE)).getMessage();
+        for (int i = 1; i <= 5; i++) {
+            assertEquals(text, refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(stolen), REMOTE)).getMessage());
+        }
+        assertEquals(1, refused(429, "too-many-attempts", () -> a.login("anna", "wrong password", Optional.of(stolen), REMOTE)).retryAfter()
+                .getAsLong());
+        refused(429, "too-many-attempts", () -> b.login("anna", "wrong password", Optional.of(stolen), REMOTE));
+        assertEquals(Optional.of(5), failures("anna", idOf(stolen)));
+        assertEquals(name.map(n -> n + 1), failures("anna"), "the name's row counted only the one failure without the device");
+        assertEquals(idOf(stolen), audit("login.refused").getLast().getJsonObject("detail").getString("device"), "the refusal names the device");
+
+        clockA.advance(Duration.ofSeconds(1));
+        String next = device(a, "anna", NEW_PASSWORD, stolen);
+        assertEquals(name.map(n -> n + 1), failures("anna"), "a device's success leaves the name's row alone");
+        assertEquals(Optional.empty(), failures("anna", idOf(stolen)), "the replaced device's row is gone");
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(stolen), REMOTE));
+        assertEquals(name.map(n -> n + 2), failures("anna"), "the stolen copy now counts as none");
+        assertEquals(Optional.empty(), failures("anna", idOf(stolen)));
+        assertEquals(List.of(idOf(next)), devices("anna").stream().map(Tx.DeviceRow::id).toList());
+    }
+
+    /**
+     * A reset ends every device of the user, on either node: each one then counts on the name's row and is 503 while the shared
+     * place is held; the first password's login gets no device, the next full login a new one. A block, the user's own password
+     * change and an end of sessions end them too.
+     */
+    @Test
+    void aResetEndsEveryDevice() throws Exception {
+        HashPlaces places = new HashPlaces();
+        Access node = node(clockA, hash, places, Optional.of(KEY));
+        Caller root = a.authenticate(bearer(session("root", Role.ADMINISTRATOR)), Optional.empty());
+        changed(a, "anna", person("anna"));
+        String one = device(a, "anna", NEW_PASSWORD, "");
+        String two = device(b, "anna", NEW_PASSWORD, "");
+        String first = b.resetPassword(key(b).acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna");
+        holdingTheSharedPlace(node, () -> {
+            refused(503, "busy", () -> node.login("anna", first, Optional.of(one), REMOTE));
+            refused(503, "busy", () -> node.login("anna", first, Optional.of(two), REMOTE));
+        });
+        for (String ended : List.of(one, two)) {
+            Optional<Integer> before = failures("anna");
+            refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(ended), REMOTE));
+            assertEquals(Optional.of(before.orElse(0) + 1), failures("anna"), "counted on the name's row");
+        }
+        String session = a.login("anna", first, Optional.of(one), REMOTE).session();
+        assertEquals(Optional.empty(), a.login("anna", first, Optional.of(""), REMOTE).device(), "a first password gets no device");
+        Caller anna = a.authenticate(bearer(session), Optional.empty());
+        a.changePassword(anna.acting(Action.SELF_PASSWORD, PackageRef.ANY, REMOTE), first, NEW_PASSWORD);
+        String three = device(a, "anna", NEW_PASSWORD, one);
+
+        String held = three;
+        String password = NEW_PASSWORD;
+        for (String ender : List.of("a block", "a password change", "an end of sessions")) {
+            switch (ender) {
+                case "a block" -> {
+                    a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
+                    a.unblock(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
+                }
+                case "a password change" -> {
+                    Caller self = a.authenticate(bearer(login(a, "anna", password)), Optional.empty());
+                    a.changePassword(self.acting(Action.SELF_PASSWORD, PackageRef.ANY, REMOTE), password, "another password of mine");
+                    password = "another password of mine";
+                }
+                default -> a.endSessions(root.acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna");
+            }
+            String gone = held;
+            Optional<Integer> before = failures("anna");
+            refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(gone), REMOTE));
+            assertEquals(Optional.of(before.orElse(0) + 1), failures("anna"), ender + " ended the device: it counts on the name's row");
+            held = device(a, "anna", password, gone);
+            assertTrue(devices("anna").stream().noneMatch(d -> d.id().equals(idOf(gone))), "the ended device's row went at the next issue");
+        }
+    }
+
+    /** A device is issued only to a full login that asks; it is kept as its fingerprint, and the audit names it by its id. */
+    @Test
+    void aDeviceIsIssuedOnlyToAFullLoginThatAsks() {
+        String first = person("anna");
+        assertEquals(Optional.empty(), a.login("anna", first, Optional.of(""), REMOTE).device(), "a first password gets none");
+        changed(a, "anna", first);
+        assertEquals(Optional.empty(), a.login("anna", NEW_PASSWORD, Optional.empty(), REMOTE).device(), "a login that does not ask gets none");
+        assertEquals(List.of(), devices("anna"));
+        String issued = device(a, "anna", NEW_PASSWORD, "");
+        assertTrue(issued.matches("rail8d_[0-9a-f]{16}_[A-Za-z0-9_-]{43}"), issued);
+        Tx.DeviceRow row = devices("anna").getFirst();
+        assertEquals(List.of(idOf(issued), Credentials.fingerprint(issued), T0, T0.plus(Duration.ofDays(90))),
+                List.of(row.id(), row.fingerprint(), row.createdAt(), row.expiresAt()), "only its fingerprint, for 90 days");
+        JsonObject login = audit("login").getLast().getJsonObject("detail");
+        assertEquals(idOf(issued), login.getString("issued"));
+        assertFalse(login.containsKey("device"), "it presented none");
+        String next = device(a, "anna", NEW_PASSWORD, issued);
+        JsonObject replaced = audit("login").getLast().getJsonObject("detail");
+        assertEquals(List.of(idOf(issued), idOf(next)), List.of(replaced.getString("device"), replaced.getString("issued")));
+        assertFalse(audit().toString().contains(issued.substring(24)) || audit().toString().contains(next.substring(24)), "never a secret");
+    }
+
+    /**
+     * A malformed value, a real id with a wrong secret, another user's valid device and a session credential each behave as no
+     * device: the name's row, the shared place only, and a new device on success. The other user's device stays valid.
+     */
+    @Test
+    void aDeviceThatIsNotTheUsersValidOneCountsAsNone() throws Exception {
+        HashPlaces places = new HashPlaces();
+        Access node = node(clockA, hash, places, Optional.of(KEY));
+        changed(a, "anna", person("anna"));
+        changed(a, "bob", person("bob"));
+        String annas = device(a, "anna", NEW_PASSWORD, "");
+        String bobs = device(a, "bob", NEW_PASSWORD, "");
+        String session = login(a, "anna", NEW_PASSWORD);
+        List<String> others = List.of("rail8d_not-a-device", annas.substring(0, 24) + "w".repeat(43), bobs, session);
+        holdingTheSharedPlace(node, () -> {
+            for (String other : others) refused(503, "busy", () -> node.login("anna", NEW_PASSWORD, Optional.of(other), REMOTE));
+        });
+        for (String other : others) {
+            Optional<Integer> before = failures("anna");
+            refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(other), REMOTE));
+            assertEquals(Optional.of(before.orElse(0) + 1), failures("anna"), other + " counts on the name's row");
+            assertFalse(audit("login.refused").getLast().getJsonObject("detail").containsKey("device"));
+            Access.Login in = a.login("anna", NEW_PASSWORD, Optional.of(other), REMOTE);
+            assertTrue(in.device().isPresent(), "a new device on success");
+            assertFalse(audit("login").getLast().getJsonObject("detail").containsKey("device"), "it presented none that counts");
+        }
+        assertTrue(devices("anna").stream().anyMatch(d -> d.id().equals(idOf(annas))), "anna's device, presented with a wrong secret, stays");
+        refused(401, "login-refused", () -> a.login("bob", "wrong password", Optional.of(bobs), REMOTE));
+        assertEquals(Optional.of(1), failures("bob", idOf(bobs)), "bob's device stays valid");
+    }
+
+    /** A device is valid until 90 days after its issue, by the clock of the node that judges it. */
+    @Test
+    void aDeviceLivesNinetyDays() {
+        changed(a, "anna", person("anna"));
+        String issued = device(a, "anna", NEW_PASSWORD, "");
+        clockA.set(T0.plus(Duration.ofDays(90)).minusMillis(1));
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(issued), REMOTE));
+        assertEquals(Optional.of(1), failures("anna", idOf(issued)), "valid at 90 days less a millisecond");
+        clockA.set(T0.plus(Duration.ofDays(90)));
+        Optional<Integer> before = failures("anna");
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(issued), REMOTE));
+        assertEquals(Optional.of(before.orElse(0) + 1), failures("anna"), "dead at exactly 90 days");
+        device(a, "anna", NEW_PASSWORD, issued);
+        assertTrue(devices("anna").stream().noneMatch(d -> d.id().equals(idOf(issued))), "the dead device went at the next issue");
+    }
+
+    /** The eleventh device ends the oldest, dead devices go at an issue, and a user never holds more than 10 rows. */
+    @Test
+    void theEleventhDeviceEndsTheOldest() {
+        changed(a, "anna", person("anna"));
+        List<String> held = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            clockA.advance(Duration.ofSeconds(1));
+            held.add(device(a, "anna", NEW_PASSWORD, ""));
+        }
+        assertEquals(10, devices("anna").size());
+        clockA.advance(Duration.ofSeconds(1));
+        String eleventh = device(a, "anna", NEW_PASSWORD, "");
+        List<String> ids = devices("anna").stream().map(Tx.DeviceRow::id).sorted().toList();
+        List<String> expected = new ArrayList<>(held.subList(1, 10).stream().map(AccessContract::idOf).toList());
+        expected.add(idOf(eleventh));
+        assertEquals(expected.stream().sorted().toList(), ids, "the oldest ended");
+
+        a.endSessions(key(a).acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna");
+        assertEquals(10, devices("anna").size(), "dead rows stay until the next issue");
+        String after = device(a, "anna", NEW_PASSWORD, "");
+        assertEquals(List.of(idOf(after)), devices("anna").stream().map(Tx.DeviceRow::id).toList(), "every dead one went");
+    }
+
+    /** Two nodes issuing a user's tenth device at once leave ten. */
+    @Test
+    void twoNodesIssuingTheTenthDeviceAtOnceLeaveTen() throws Exception {
+        changed(a, "anna", person("anna"));
+        for (int i = 0; i < 9; i++) device(a, "anna", NEW_PASSWORD, "");
+        CountDownLatch start = new CountDownLatch(1);
+        List<Thread> logins = new ArrayList<>();
+        AtomicReference<Throwable> failed = new AtomicReference<>();
+        for (Access node : List.of(a, b)) {
+            logins.add(Thread.ofVirtual().start(() -> {
+                try {
+                    assertTrue(start.await(20, TimeUnit.SECONDS));
+                    device(node, "anna", NEW_PASSWORD, "");
+                } catch (Throwable t) {
+                    failed.set(t);
+                }
+            }));
+        }
+        start.countDown();
+        for (Thread t : logins) t.join();
+        assertEquals(null, failed.get());
+        assertEquals(10, devices("anna").size());
+    }
+
+    /**
+     * Two logins presenting one device at once: the first replacement wins. The other login gets its session and no device, and
+     * ends no other device.
+     */
+    @Test
+    void theFirstOfTwoLoginsPresentingOneDeviceReplacesIt() {
+        changed(a, "anna", person("anna"));
+        String other = device(a, "anna", NEW_PASSWORD, "");
+        String shared = device(a, "anna", NEW_PASSWORD, "");
+        AtomicReference<Access.Login> second = new AtomicReference<>();
+        hash.duringNextMatch(() -> second.set(b.login("anna", NEW_PASSWORD, Optional.of(shared), REMOTE)));
+        Access.Login first = a.login("anna", NEW_PASSWORD, Optional.of(shared), REMOTE);
+        String successor = second.get().device().orElseThrow();
+        assertEquals(Optional.empty(), first.device(), "the later one gets no device");
+        a.authenticate(bearer(first.session()), Optional.empty());
+        assertEquals(List.of(idOf(other), idOf(successor)).stream().sorted().toList(),
+                devices("anna").stream().map(Tx.DeviceRow::id).sorted().toList(), "no other device ended");
+        JsonObject loser = audit("login").getLast().getJsonObject("detail");
+        assertEquals(idOf(shared), loser.getString("device"));
+        assertFalse(loser.containsKey("issued"));
+    }
+
+    /**
+     * A refusal on a device's row is written once an hour, naming the device. One whose row a reset deleted during the hash is
+     * written as a first failure, and inserts no row.
+     */
+    @Test
+    void aRefusalOnADevicesRowIsWrittenOnceAnHourAndInsertsNoRow() {
+        changed(a, "anna", person("anna"));
+        String issued = device(a, "anna", NEW_PASSWORD, "");
+        int before = audit("login.refused").size();
+        for (int i = 0; i < 3; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(issued), REMOTE));
+        assertEquals(before + 1, audit("login.refused").size(), "the first failure of the run");
+        clockA.advance(Duration.ofHours(1));
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(issued), REMOTE));
+        assertEquals(List.of(4, idOf(issued)), List.of(audit("login.refused").getLast().getJsonObject("detail").getInteger("failures"),
+                audit("login.refused").getLast().getJsonObject("detail").getString("device")), "an hour later, one more");
+
+        int written = audit("login.refused").size();
+        hash.duringNextMatch(() -> b.resetPassword(key(b).acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna"));
+        refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(issued), REMOTE));
+        assertEquals(written + 1, audit("login.refused").size(), "the row the reset deleted writes as a first failure");
+        assertEquals(Optional.empty(), failures("anna", idOf(issued)), "and no row is inserted");
+    }
+
+    /** After many replacing logins, the name has no row of the login limit for a device it no longer holds. */
+    @Test
+    void aReplacedDevicesRowOfTheLimitGoes() {
+        changed(a, "anna", person("anna"));
+        String held = device(a, "anna", NEW_PASSWORD, "");
+        List<String> replaced = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            String now = held;
+            refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.of(now), REMOTE));
+            assertEquals(Optional.of(1), failures("anna", idOf(now)));
+            replaced.add(now);
+            held = device(a, "anna", NEW_PASSWORD, now);
+        }
+        for (String gone : replaced) assertEquals(Optional.empty(), failures("anna", idOf(gone)), "a replaced device's row is deleted");
+        assertEquals(1, devices("anna").size());
     }
 
     // --- sessions
@@ -509,7 +853,7 @@ abstract class AccessContract {
         a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
         refused(401, "unknown-credential", () -> a.authenticate(bearer(three), Optional.empty()));
         refused(401, "unknown-credential", () -> b.authenticate(bearer(three), Optional.empty()));
-        refused(401, "login-refused", () -> a.login("anna", NEW_PASSWORD, REMOTE));
+        refused(401, "login-refused", () -> a.login("anna", NEW_PASSWORD, Optional.empty(), REMOTE));
         assertTrue(a.user("anna").orElseThrow().blockedAt().isPresent());
         a.unblock(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
         assertFalse(login(a, "anna", NEW_PASSWORD).isEmpty());
@@ -534,7 +878,7 @@ abstract class AccessContract {
     void aResetGivesAFirstPasswordEndsEverySessionAndForgetsTheLimit() {
         Caller root = a.authenticate(bearer(session("root", Role.ADMINISTRATOR)), Optional.empty());
         String session = session("anna");
-        for (int i = 0; i < 5; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", REMOTE));
+        for (int i = 0; i < 5; i++) refused(401, "login-refused", () -> a.login("anna", "wrong password", Optional.empty(), REMOTE));
         String first = a.resetPassword(root.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna");
         refused(401, "unknown-credential", () -> a.authenticate(bearer(session), Optional.empty()));
         assertTrue(a.authenticate(bearer(login(a, "anna", first)), Optional.empty()).firstPassword(), "no wait: the limit's rows are gone");
@@ -683,7 +1027,7 @@ abstract class AccessContract {
         assertEquals("wrong-password", audit("login.refused").getFirst().getJsonObject("detail").getString("reason"));
         assertEquals("anna", a.authenticate(bearer(session), Optional.empty()).name(), "the session goes on");
         refused(429, "too-many-attempts", () -> b.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
-        refused(429, "too-many-attempts", () -> a.login("anna", NEW_PASSWORD, REMOTE));
+        refused(429, "too-many-attempts", () -> a.login("anna", NEW_PASSWORD, Optional.empty(), REMOTE));
 
         clockA.advance(Duration.ofSeconds(1));
         a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty());
@@ -983,7 +1327,9 @@ abstract class AccessContract {
         String secret = "s3cr-et_" + "x".repeat(35);
         a.keyUsed(key(a), "POST", "/admin/tokens/rail8t_0123456789abcdef_" + secret + "/revoke", REMOTE, Optional.of(Action.TOKEN_REVOKE), true);
         a.keyUsed(key(a), "GET", "/admin/rail8s_00112233445566ff_" + secret + "/rail8k_" + secret, REMOTE, Optional.empty(), false);
-        assertEquals(List.of("/admin/tokens/rail8t_0123456789abcdef_***/revoke", "/admin/rail8s_00112233445566ff_***/rail8k_***"),
+        a.keyUsed(key(a), "GET", "/admin/rail8d_00112233445566aa_" + secret, REMOTE, Optional.empty(), false);
+        assertEquals(List.of("/admin/tokens/rail8t_0123456789abcdef_***/revoke", "/admin/rail8s_00112233445566ff_***/rail8k_***",
+                        "/admin/rail8d_00112233445566aa_***"),
                 audit("emergency-key.use").stream().map(r -> r.getJsonObject("detail").getString("path")).toList());
     }
 }

@@ -2,11 +2,13 @@ import { createServer, request, type IncomingHttpHeaders, type Server } from 'no
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { gatedRequest, SESSION, SESSION_MODE, tokenMode } from './gatedRequest';
-import { credentialOf, isSessionRefused, loopbackHost, modeOf, nodeFor, SessionRefused, uiSession, type Mode } from './session';
+import { credentialOf, heldDevice, isSessionRefused, loopbackHost, modeOf, nodeFor, SessionRefused, uiSession, type Mode } from './session';
 
 const HTTP = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 const ID = '0123456789abcdef';
 const OTHER = `rail8s_fedcba9876543210_${'o'.repeat(43)}`;
+const DEVICE = `rail8d_00112233445566aa_${'d'.repeat(43)}`;
+const NEW_DEVICE = `rail8d_ffeeddccbbaa0099_${'n'.repeat(43)}`;
 
 describe('modeOf', () => {
   const lines: string[] = [];
@@ -172,13 +174,63 @@ describe('uiSession', () => {
     expect(answer.headers['set-cookie']).toEqual([`rail8-session=${SESSION}; HttpOnly; SameSite=Strict; Path=/`]);
     expect(answer.headers['cache-control']).toBe('no-store');
     expect(answer.text).not.toContain(SESSION);
-    expect(sent).toEqual([{ method: 'POST', path: '/admin/sessions', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: '{"name":"anna","password":"twelve chars!"}' }]);
+    expect(sent).toEqual([{ method: 'POST', path: '/admin/sessions', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: '{"name":"anna","password":"twelve chars!","device":""}' }]);
   });
 
   it('sets __Host-rail8-session with Secure over HTTPS', async () => {
     const { call } = await gate({ kind: 'session', cookie: '__Host-rail8-session', secure: true }, { '/admin/sessions': { status: 201, json: { session: SESSION, expiresAt: me.expiresAt, me } } });
     const answer = await call('POST', '/session', json, '{"name":"anna","password":"p"}');
     expect(answer.headers['set-cookie']).toEqual([`__Host-rail8-session=${SESSION}; HttpOnly; SameSite=Strict; Path=/; Secure`]);
+  });
+
+  it("sends the browser's one device cookie of the device's form, and '' for none, for two or for another form", async () => {
+    const created = { '/admin/sessions': { status: 201, json: { session: SESSION, expiresAt: me.expiresAt, me } } };
+    for (const [cookie, device] of [
+      [`rail8-session=old; rail8-device=${DEVICE}`, DEVICE],
+      ['rail8-session=old', ''],
+      [`rail8-device=${DEVICE}; rail8-device=${DEVICE}`, ''],
+      [`rail8-device=${SESSION}`, ''],
+      [`__Host-rail8-device=${DEVICE}`, ''],
+    ] as const) {
+      const { sent, call } = await gate(SESSION_MODE, created);
+      await call('POST', '/session', { ...json, cookie }, '{"name":"anna","password":"p"}');
+      expect(JSON.parse(sent[0]!.body)).toEqual({ name: 'anna', password: 'p', device });
+    }
+    expect(heldDevice({ kind: 'session', cookie: '__Host-rail8-session', secure: true }, { cookie: `__Host-rail8-device=${DEVICE}` })).toBe(DEVICE);
+  });
+
+  it('keeps a device the node issued for 90 days, each cookie in its own header, the session first; no page sees it', async () => {
+    const issued = { session: SESSION, expiresAt: me.expiresAt, idleSeconds: 7200, device: NEW_DEVICE, me };
+    const { call } = await gate(SESSION_MODE, { '/admin/sessions': { status: 201, json: issued } });
+    const answer = await call('POST', '/session', { ...json, cookie: `rail8-device=${DEVICE}` }, '{"name":"anna","password":"p"}');
+    expect(answer.headers['set-cookie']).toEqual([
+      `rail8-session=${SESSION}; HttpOnly; SameSite=Strict; Path=/`,
+      `rail8-device=${NEW_DEVICE}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7776000`,
+    ]);
+    expect(answer.json).toEqual({ ...me, session: ID });
+    expect(answer.text).not.toContain(NEW_DEVICE);
+    const secure = await gate({ kind: 'session', cookie: '__Host-rail8-session', secure: true }, { '/admin/sessions': { status: 201, json: issued } });
+    expect((await secure.call('POST', '/session', json, '{"name":"anna","password":"p"}')).headers['set-cookie']?.[1]).toBe(
+      `__Host-rail8-device=${NEW_DEVICE}; HttpOnly; SameSite=Strict; Path=/; Max-Age=7776000; Secure`,
+    );
+  });
+
+  it('sets only the session cookie for a 201 without a device or with one of another form', async () => {
+    for (const device of [undefined, SESSION, 'rail8d_short', 5]) {
+      const { call } = await gate(SESSION_MODE, { '/admin/sessions': { status: 201, json: { session: SESSION, expiresAt: me.expiresAt, device, me } } });
+      const answer = await call('POST', '/session', { ...json, cookie: `rail8-device=${DEVICE}` }, '{"name":"anna","password":"p"}');
+      expect(answer.headers['set-cookie']).toEqual([`rail8-session=${SESSION}; HttpOnly; SameSite=Strict; Path=/`]);
+    }
+  });
+
+  it('refuses a login that passes 1 KiB in UTF-8 only once the device is added, sending nothing', async () => {
+    const { sent, call } = await gate(SESSION_MODE);
+    const fits = `{"name":"a","password":"${'é'.repeat(480)}"}`;
+    expect(Buffer.byteLength(fits)).toBeLessThanOrEqual(1024);
+    const answer = await call('POST', '/session', { ...json, cookie: `rail8-device=${DEVICE}` }, fits);
+    expect(answer.status).toBe(413);
+    expect(answer.json).toMatchObject({ code: 'too-large' });
+    expect(sent).toHaveLength(0);
   });
 
   it('refuses a login it cannot send, sending nothing: 404 in token mode, 415, 413 over 1 KiB, 400', async () => {
@@ -196,7 +248,7 @@ describe('uiSession', () => {
   it("passes the node's 401, 429 and 503 on with Retry-After and leaves the cookie alone; anything else is 502", async () => {
     for (const [status, code] of [[401, 'login-refused'], [429, 'too-many-attempts'], [503, 'busy']] as const) {
       const { call } = await gate(SESSION_MODE, { '/admin/sessions': { status, json: { error: 'no', code }, headers: { 'retry-after': '3' } } });
-      const answer = await call('POST', '/session', { ...json, ...holding }, '{"name":"a","password":"b"}');
+      const answer = await call('POST', '/session', { ...json, cookie: `rail8-session=${SESSION}; rail8-device=${DEVICE}` }, '{"name":"a","password":"b"}');
       expect(answer.status).toBe(status);
       expect(answer.json).toMatchObject({ code });
       expect(answer.headers['retry-after']).toBe('3');

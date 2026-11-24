@@ -237,8 +237,9 @@ A slow hash is not needed: a fingerprint of 256 random bits gives nobody anythin
 **The account's generation.** Each user has a `generation`. A block, a password change, a password reset and the end of
 the user's sessions each raise it. A credential is made only while the generation is unchanged and the user is not
 blocked: a session, a personal token, a device. This is checked in the transaction that inserts the credential, under
-the user's row taken `for share`, and `for update` for a personal token, whose user may hold at most 20. A login on one
-node therefore cannot recreate access that a reset on another node has just ended.
+the user's row taken `for share`, and `for update` for a personal token, whose user may hold at most 20, and for a login
+that issues a device, whose user may hold at most 10. A login on one node therefore cannot recreate access that a reset
+on another node has just ended.
 
 ## Passwords
 
@@ -249,9 +250,10 @@ node therefore cannot recreate access that a reset on another node has just ende
   - stored as a PHC string, `$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`.
   A login whose stored parameters differ from the current ones hashes the password again, so the parameters can change
   without a migration.
-- **Cost.** A node hashes at most 2 passwords at once, with no queue. Logins use at most 2 cores and 38 MiB. One of the
-  two places takes only a login that presents a valid device credential, so a flood of logins from unknown browsers
-  cannot keep a user's known browser out. A login that finds no place it may take is 503 `busy` with `Retry-After: 1`. An unknown name, a technical account and a blocked user still
+- **Cost.** A node hashes at most 2 passwords at once, with no queue. Logins use at most 2 cores and 38 MiB. Among
+  logins, only one that presents a valid device credential takes the second place; the acts of a session or the key take
+  it too: a password change, a personal token's issue, a new person and a reset. So a flood of logins from unknown
+  browsers cannot keep a user's known browser out, nor an administrator's reset. A login that finds no place it may take is 503 `busy` with `Retry-After: 1`. An unknown name, a technical account and a blocked user still
   cost one hash of a fixed dummy, so the time does not tell them apart.
 - **Rules.** A password is 12 to 128 characters after NFC normalisation, must not contain the user's name and must differ
   from the current one. A login's body is at most 1 KiB. There are no rules of composition.
@@ -259,7 +261,8 @@ node therefore cannot recreate access that a reset on another node has just ende
 ### The limit of login attempts
 
 A login goes in this order:
-1. It reads the user, if one has the name, with its generation, and the device credential if the login presents one.
+1. It reads the user, if one has the name, with its generation, and the device credential if the login presents one,
+   in one statement.
 2. It takes a place to hash that it may take, or answers 503 `busy`, counting nothing.
 3. It picks the row of `login_limits` to count on:
    - the name's row, `(name, '')`. The name is taken as typed and lowercased, and an unknown name has a row too, so a
@@ -296,10 +299,16 @@ A login goes in this order:
 device's own row. So someone who keeps failing a known name keeps the name's row waiting, but not the user's own browser.
 - The node issues one to a full login, past the first password, that asks for it. The UI server's login asks; the
   command line's does not.
-- It is valid for 90 days from the last login that presented it.
-- A user has at most 10. The eleventh ends the oldest.
-- It holds only while the user's generation is the one it was issued at, so a block or a reset ends them all.
+- It is valid for 90 days from its issue. Every full login that asks is issued a new one, and the one it presented ends,
+  with its row of the limit. So a browser's device lives 90 days from its last login there.
+- When two logins present one device at once, the first replacement wins. The other gets its session and no device,
+  and ends no other device.
+- A user has at most 10. The eleventh ends the oldest, and an issue ends every dead one.
+- It holds only while the user's generation is the one it was issued at, so a block, a password change or reset, and
+  the end of the user's sessions end them all.
 - Its row has its own 5 free failures and the same waits, so a stolen device buys a bounded number of guesses.
+- Anything that is not a valid device of the user (malformed, unknown, a wrong secret, another user's, ended or expired)
+  counts as none, silently: the name's row and the shared place.
 - It is never a factor of the login: the password decides alone.
 
 ### The first password
@@ -323,7 +332,8 @@ of its own, so several UI servers, and their restarts, keep every user logged in
 it still refuses every browser.
 
 The device credential is a second cookie of the same kind, `__Host-rail8-device` or `rail8-device`, for 90 days. The UI
-server puts it in the login's body and sets it from the login's answer. No page ever sees it.
+server puts it in the login's body, `""` when the browser holds none, and sets it only from a login's answer that
+carries a new one. It never clears it. No page ever sees it.
 
 **Two modes.** The UI server runs in one of two modes, chosen at its start and never mixed:
 - **Token mode**, when it holds a token: `RAIL8_TOKEN`, or the shared token during the bridge. There is no login and one
@@ -722,6 +732,25 @@ These are accepted:
 - A request admitted before a revoke, a block or a role taken away runs to its end.
 - A flood of logins from browsers without a device credential keeps one place to hash busy on every node. Logins from
   new browsers are then 503 `busy` for as long as it lasts. Known browsers, sessions and tokens already held still work.
+- An act of a session or the key holds the second place for its hash: a password change, a personal token's issue, a
+  new person or a reset. A password change and a personal token's issue claim the name's row, so someone failing the
+  name holds them off with 429.
+- An answer lost after the node replaced a device leaves the browser holding the retired one. That happens when the
+  browser closes during the login, or when the UI server's 10 s pass while the node still commits. Its next login counts
+  on the name's row, as a new browser's does, and gets a new device once it succeeds.
+- A copy of a device ends only at the next full login from the browser it was taken from. A login from the command line
+  or from another browser does not end it; until then the copy keeps its own row's guesses and its 90 days.
+- Whoever holds a copy of a device and keeps failing on it holds off the real browser holding the same device, until
+  that user logs in fully another way.
+- A flood presenting a valid stolen device takes the second place for its 5 free hashes, and then for one claim per
+  attempt.
+- Each node judges a device's expiry by its own clock, as it judges a token's, so a node behind accepts a device for as
+  long as its clock lags.
+- After a first password, and after the user's own password change, the browser is protected only from its next full
+  login.
+- A browser shared by two users keeps the device of the last one who logged in fully there. The other's device row
+  stays, and they come back through their name's row.
+- Two tabs of a new browser, with no device yet, logging in at once can make two devices.
 - A node older than step 1 that is still running after the cut keeps the old shared token's powers. Its writes of a
   retry, a cancel and a discard fail, but a deploy only logs a WARNING when its audit row fails. The upgrade note says to
   stop such nodes before the cut; nothing in Postgres can stop them.
@@ -784,8 +813,8 @@ These are accepted:
   limit, the 7 days of a first password, a device's 90 days and a token's expiry are tested the same way. No test
   sleeps.
 - A fake password hash is instant and counts its calls, which proves the dummy hash for unknown names. A variant blocks
-  on a latch. With the shared place held, a login without a device credential is 503 at once with nothing counted,
-  while one with a valid device credential still hashes.
+  on a latch. With the shared place held, a login without a valid device credential is 503 at once with nothing
+  counted, while one with a valid device credential and a reset still hash.
 - `Access.fixed(caller)` authenticates every request as one caller, so the existing route tests state who calls.
 - A test walks the router: every `/admin` route is mounted with an action, and the `Action` enum matches this
   document's table. A table test calls every route as each role, through a session and through a token, as the

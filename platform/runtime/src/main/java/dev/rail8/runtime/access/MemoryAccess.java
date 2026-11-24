@@ -89,7 +89,7 @@ public final class MemoryAccess extends Accounts {
         }
     }
 
-    /** The users, sessions, tokens, login limits, bridge marker and audit of one installation, in memory. */
+    /** The users, sessions, tokens, devices, login limits, bridge marker and audit of one installation, in memory. */
     public static final class Store {
 
         private final ReentrantLock lock = new ReentrantLock();
@@ -130,6 +130,7 @@ public final class MemoryAccess extends Accounts {
         private final Map<Long, Map<Role, Access.Grant>> grants = new HashMap<>();
         private final Map<String, SessionRow> sessions = new HashMap<>();
         private final Map<String, TokenRow> tokens = new HashMap<>();
+        private final Map<String, DeviceRow> devices = new HashMap<>();
         private int ceiling = 365;
         private final Map<List<String>, Limit> limits = new HashMap<>();
         private final List<AuditRow> audit = new ArrayList<>();
@@ -142,6 +143,7 @@ public final class MemoryAccess extends Accounts {
             grants.forEach((user, held) -> c.grants.put(user, new EnumMap<>(held)));
             c.sessions.putAll(sessions);
             c.tokens.putAll(tokens);
+            c.devices.putAll(devices);
             c.ceiling = ceiling;
             c.limits.putAll(limits);
             c.audit.addAll(audit);
@@ -269,6 +271,22 @@ public final class MemoryAccess extends Accounts {
             sessions.put(id, new SessionRow(s.id(), s.user(), s.fingerprint(), false, s.createdAt(), s.lastSeenAt(), s.expiresAt()));
         }
 
+        @Override public LoginRows loginRows(String name, Optional<String> device) {
+            return new LoginRows(user(name, Lock.NONE), device.map(devices::get));
+        }
+
+        @Override public List<DeviceRow> devices(long user) {
+            return devices.values().stream().filter(d -> d.user() == user).toList();
+        }
+
+        @Override public void insertDevice(DeviceRow row) {
+            devices.put(row.id(), row);
+        }
+
+        @Override public void endDevice(String id) {
+            devices.remove(id);
+        }
+
         @Override public Optional<TokenOfUser> token(String id) {
             TokenRow t = tokens.get(id);
             if (t == null) return Optional.empty();
@@ -360,6 +378,10 @@ public final class MemoryAccess extends Accounts {
 
         @Override public void forgetLimits(String name) {
             limits.keySet().removeIf(k -> k.get(0).equals(name));
+        }
+
+        @Override public void forgetLimit(String name, String device) {
+            limits.remove(List.of(name, device));
         }
 
         @Override public void limitAudited(String name, String device, Instant at) {

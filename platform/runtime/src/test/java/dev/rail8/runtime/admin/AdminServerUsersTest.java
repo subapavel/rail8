@@ -77,6 +77,31 @@ class AdminServerUsersTest extends AdminAccessFixture {
         assertEquals(400, shape.status(), shape.body());
     }
 
+    /** {@code device}: none asks for none; {@code ""} asks and is answered a new device; a device is presented; a non-string is 400. */
+    @Test
+    void aLoginWithADeviceAsksForOneAndPresentsIt() {
+        String first = person(root(), "alice", "operator");
+        assertEquals(204, post("/admin/me/password", login("alice", first), new JsonObject().put("current", first).put("next", PASSWORD)).status());
+
+        Answer none = send(key, "POST", "/admin/sessions", Optional.empty(), new JsonObject().put("name", "alice").put("password", PASSWORD).encode());
+        assertEquals(201, none.status(), none.body());
+        assertNull(none.json().getValue("device"), "a login that does not ask gets none");
+        Answer asks = send(key, "POST", "/admin/sessions", Optional.empty(),
+                new JsonObject().put("name", "alice").put("password", PASSWORD).put("device", "").encode());
+        assertEquals(201, asks.status(), asks.body());
+        String device = asks.json().getString("device");
+        assertTrue(device.matches("rail8d_[0-9a-f]{16}_[A-Za-z0-9_-]{43}"), asks.body());
+        Answer presents = send(key, "POST", "/admin/sessions", Optional.empty(),
+                new JsonObject().put("name", "alice").put("password", PASSWORD).put("device", device).encode());
+        assertEquals(201, presents.status(), presents.body());
+        assertNotEquals(device, presents.json().getString("device"), "a new device in place of the one presented");
+        assertEquals(device.substring(7, 23), audit("login").getLast().getJsonObject("detail").getString("device"));
+
+        Answer number = send(key, "POST", "/admin/sessions", Optional.empty(),
+                new JsonObject().put("name", "alice").put("password", PASSWORD).put("device", 5).encode());
+        assertEquals(400, number.status(), number.body());
+    }
+
     @Test
     void meNamesEveryKindOfCaller() {
         String root = root();

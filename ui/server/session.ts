@@ -22,6 +22,12 @@ export type Decision =
 /** A session as the node hands it out; group 1 is its id. */
 const SESSION_FORM = /^rail8s_([0-9a-f]{16})_[A-Za-z0-9_-]{43}$/;
 
+/** A device credential as the node hands it out. */
+const DEVICE_FORM = /^rail8d_[0-9a-f]{16}_[A-Za-z0-9_-]{43}$/;
+
+/** How long the browser keeps the device's cookie: 90 days, the device's life at the node, in seconds. */
+const DEVICE_MAX_AGE = 7_776_000;
+
 /** The emergency key's form, which the UI server never sends. */
 const KEY_PREFIX = 'rail8k_';
 
@@ -156,6 +162,23 @@ interface Admitted {
   session: string | null;
   /** The `Set-Cookie` that clears the session's cookie; null in token mode. */
   clear: string | null;
+}
+
+/** The name of the device's cookie in a session mode: `__Host-rail8-device` over HTTPS, `rail8-device` otherwise. */
+const deviceCookie = (mode: Extract<Mode, { kind: 'session' }>) => (mode.secure ? '__Host-rail8-device' : 'rail8-device');
+
+/**
+ * The device credential the request's browser holds: the one cookie of the device's name in `mode` that has the device's
+ * form; `''` for none, for two, or for one of another form.
+ */
+export function heldDevice(mode: Extract<Mode, { kind: 'session' }>, headers: IncomingHttpHeaders): string {
+  const values = cookiesNamed(headers.cookie, deviceCookie(mode));
+  return values.length === 1 && DEVICE_FORM.test(values[0]!) ? values[0]! : '';
+}
+
+/** The `Set-Cookie` that keeps the device `value` in the browser for 90 days; never cleared. */
+function deviceCookieHeader(mode: Extract<Mode, { kind: 'session' }>, value: string): string {
+  return `${deviceCookie(mode)}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${DEVICE_MAX_AGE}${mode.secure ? '; Secure' : ''}`;
 }
 
 /** The `Set-Cookie` that sets the session's cookie to `value`, or clears it when `value` is empty. */
@@ -364,9 +387,12 @@ export interface UiSessionOptions {
  * {@link SESSION_CALL_MS} on `deadline`:
  *
  * - `POST /session {name, password}` logs in: 404 `token-mode` in token mode; 415, 413 over {@link LOGIN_MAX_BYTES},
- *   400 `bad-login`. It sends the node's `POST /admin/sessions` without a credential and answers 200 with what the node
- *   answers of the caller, its session's id and never its secret, setting the cookie. The node's 401, 429 and 503 pass
- *   on with `Retry-After`, the cookie left alone; anything else is 502 `node-unavailable`.
+ *   400 `bad-login`. It sends the node's `POST /admin/sessions` without a credential, with the browser's device from
+ *   {@link heldDevice} (`''` for none), and 413 when that body passes {@link LOGIN_MAX_BYTES}, sending nothing. It answers
+ *   200 with what the node answers of the caller, its session's id and never its secret, setting the session's cookie and,
+ *   when the node issued a device of the device's form, the device's cookie after it. The node's 401, 429 and 503 pass on
+ *   with `Retry-After`, the cookies left alone; anything else is 502 `node-unavailable`. No answer and no other route
+ *   touches the device's cookie, and no page sees it.
  * - `POST /session/end` logs out: 404 `token-mode` in token mode, the refusals of {@link credentialOf}, then the node's
  *   `POST /admin/me/logout`. The cookie is cleared whatever the node answers: 204 when it answered 204 or 401, else 502.
  * - `GET /session` answers the node's `GET /admin/me` with the session's id (null in token mode). A node's 401 is 401 in
@@ -409,10 +435,12 @@ export function uiSession(options: UiSessionOptions) {
     if (mode.kind === 'token') return refuse(res, 404, 'token-mode', `this UI server runs with ${mode.variable} and has no login`);
     const body = await loginOf(req);
     if ('status' in body) return refuse(res, body.status, body.code, body.error);
+    const sent = JSON.stringify({ name: body.name, password: body.password, device: heldDevice(mode, req.headers) });
+    if (Buffer.byteLength(sent, 'utf8') > LOGIN_MAX_BYTES) return refuse(res, 413, 'too-large', `a login is at most ${LOGIN_MAX_BYTES} bytes`);
     const answer = await call(res, '/admin/sessions', {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({ name: body.name, password: body.password }),
+      body: sent,
     });
     if (answer === null) return unavailable(res, 'does not answer');
     if (answer.status === 401 || answer.status === 429 || answer.status === 503) return passOn(res, answer);
@@ -422,9 +450,9 @@ export function uiSession(options: UiSessionOptions) {
     }
     const id = SESSION_FORM.exec(json.session)?.[1];
     if (id === undefined) return unavailable(res, 'answered the login with a session of another form');
-    res
-      .writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': cookieHeader(mode, json.session) })
-      .end(JSON.stringify(meOf(json.me, id)));
+    const cookies = [cookieHeader(mode, json.session)];
+    if (typeof json.device === 'string' && DEVICE_FORM.test(json.device)) cookies.push(deviceCookieHeader(mode, json.device));
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'set-cookie': cookies }).end(JSON.stringify(meOf(json.me, id)));
   };
 
   const logout = async (req: IncomingMessage, res: ServerResponse) => {

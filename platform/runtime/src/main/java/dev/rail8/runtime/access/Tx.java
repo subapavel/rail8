@@ -36,6 +36,12 @@ interface Tx {
     /** A token with its user and the user's roles, as one read finds them. */
     record TokenOfUser(TokenRow token, UserRow user, Set<Role> roles) {}
 
+    /** A device's row; {@code fingerprint} as 64 lowercase hex digits, {@code generation} the user's at its issue. */
+    record DeviceRow(String id, long user, String fingerprint, long generation, Instant createdAt, Instant expiresAt) {}
+
+    /** The user a login names and the device it presents, as one read finds them. */
+    record LoginRows(Optional<UserRow> user, Optional<DeviceRow> device) {}
+
     /** A row of the login limit. */
     record Limit(int failures, Instant lastFailureAt, Optional<Instant> auditedAt) {}
 
@@ -102,6 +108,17 @@ interface Tx {
     /** The session no longer one of a first password. */
     void passwordChanged(String id);
 
+    /** The user named {@code name} and, when given, the device {@code device}, in one statement: both from one snapshot. */
+    LoginRows loginRows(String name, Optional<String> device);
+
+    /** Every device row of {@code user}, dead ones included. */
+    List<DeviceRow> devices(long user);
+
+    void insertDevice(DeviceRow row);
+
+    /** The device deleted. */
+    void endDevice(String id);
+
     Optional<TokenOfUser> token(String id);
 
     /** The unrevoked tokens of {@code user}, expired ones included. */
@@ -148,6 +165,9 @@ interface Tx {
 
     /** Every row of {@code name} deleted. */
     void forgetLimits(String name);
+
+    /** The row {@code (name, device)} of the login limit deleted. */
+    void forgetLimit(String name, String device);
 
     void limitAudited(String name, String device, Instant at);
 

@@ -27,7 +27,7 @@ import java.util.random.RandomGenerator;
 
 /**
  * {@link Access} in Postgres: the tables {@code users}, {@code role_assignments}, {@code sessions}, {@code tokens},
- * {@code token_ceiling}, {@code login_limits} and {@code admin_bridge}, and the {@code audit}. Every request is authenticated from Postgres and nothing is cached, so a block, a
+ * {@code token_ceiling}, {@code devices}, {@code login_limits} and {@code admin_bridge}, and the {@code audit}. Every request is authenticated from Postgres and nothing is cached, so a block, a
  * logout or a role taken away holds on every node of the pool for every request admitted after it commits. The changes that
  * can lower the number of administrators take the pool's transaction advisory lock {@code (296, 0)} first.
  */
@@ -40,6 +40,8 @@ public final class PgAccess extends Accounts {
     private static final String TOKEN_COLUMNS = "t.id as t_id, t.user_id as t_user_id, t.name as t_name,"
             + " encode(t.fingerprint, 'hex') as t_fingerprint, t.created_at as t_created_at, t.created_by as t_created_by,"
             + " t.expires_at as t_expires_at, t.last_used_at as t_last_used_at, t.revoked_at as t_revoked_at";
+    private static final String DEVICE_COLUMNS = "d.id as d_id, d.user_id as d_user_id, encode(d.fingerprint, 'hex') as d_fingerprint,"
+            + " d.generation as d_generation, d.created_at as d_created_at, d.expires_at as d_expires_at";
     private static final String CLAIM = "insert into login_limits as l (name, device, failures, last_failure_at) values ($1, $2, 1, $3)"
             + " on conflict (name, device) do update"
             + " set failures = least(l.failures + 1, 1000000), last_failure_at = greatest(l.last_failure_at, $3)"
@@ -124,6 +126,11 @@ public final class PgAccess extends Accounts {
             return new TokenRow(r.getString("t_id"), r.getLong("t_user_id"), r.getString("t_name"), r.getString("t_fingerprint"),
                     instant(r, "t_created_at"), r.getString("t_created_by"), instant(r, "t_expires_at"), maybe(r, "t_last_used_at"),
                     maybe(r, "t_revoked_at"));
+        }
+
+        private static DeviceRow device(Row r) {
+            return new DeviceRow(r.getString("d_id"), r.getLong("d_user_id"), r.getString("d_fingerprint"), r.getLong("d_generation"),
+                    instant(r, "d_created_at"), instant(r, "d_expires_at"));
         }
 
         private static Set<Role> roles(Row r) {
@@ -263,6 +270,28 @@ public final class PgAccess extends Accounts {
             run("update sessions set first_password = false where id = $1", Tuple.of(id));
         }
 
+        @Override public LoginRows loginRows(String name, Optional<String> device) {
+            Row r = run("select " + USER_COLUMNS + ", " + DEVICE_COLUMNS + " from (select 1) one left join users u on u.name = $1"
+                    + " left join devices d on d.id = $2::text", Tuple.of(name, device.orElse(null))).iterator().next();
+            return new LoginRows(r.getValue("id") == null ? Optional.empty() : Optional.of(user(r)),
+                    r.getValue("d_id") == null ? Optional.empty() : Optional.of(device(r)));
+        }
+
+        @Override public List<DeviceRow> devices(long user) {
+            List<DeviceRow> out = new ArrayList<>();
+            run("select " + DEVICE_COLUMNS + " from devices d where d.user_id = $1", Tuple.of(user)).forEach(r -> out.add(device(r)));
+            return out;
+        }
+
+        @Override public void insertDevice(DeviceRow row) {
+            run("insert into devices (id, user_id, fingerprint, generation, created_at, expires_at) values ($1, $2, decode($3, 'hex'), $4, $5, $6)",
+                    Tuple.of(row.id(), row.user(), row.fingerprint(), row.generation(), at(row.createdAt()), at(row.expiresAt())));
+        }
+
+        @Override public void endDevice(String id) {
+            run("delete from devices where id = $1", Tuple.of(id));
+        }
+
         @Override public Optional<TokenOfUser> token(String id) {
             return first(run("select " + USER_COLUMNS + ", " + TOKEN_COLUMNS + ","
                     + " array(select r.role from role_assignments r where r.user_id = u.id and r.scope = 'installation') as roles"
@@ -339,6 +368,10 @@ public final class PgAccess extends Accounts {
 
         @Override public void forgetLimits(String name) {
             run("delete from login_limits where name = $1", Tuple.of(name));
+        }
+
+        @Override public void forgetLimit(String name, String device) {
+            run("delete from login_limits where name = $1 and device = $2", Tuple.of(name, device));
         }
 
         @Override public void limitAudited(String name, String device, Instant at) {

@@ -439,7 +439,7 @@ class RetentionIT {
         assertEquals(cutoff, run.cutoff(), "the injected clock minus the max age");
         assertEquals(List.of(3L, 2L, 4L, 1000L, 0L), List.of(run.messages(), run.keys(), run.bodies(), run.bodyBytes(), run.kept()),
                 "messages, keys, bodies, bodyBytes, kept");
-        assertEquals(6, run.batches(), "one batch per phase, six phases: each scans fewer rows than the batch");
+        assertEquals(7, run.batches(), "one batch per phase, seven phases: each scans fewer rows than the batch");
         Retention.Totals t = r.totals();
         assertEquals(List.of(1L, 0L, 0L, 3L, 2L, 4L, 1000L), List.of((long) t.runs(), (long) t.skipped(), (long) t.failed(), (long) t.messages(),
                 (long) t.keys(), (long) t.bodies(), (long) t.bodyBytes()),
@@ -597,8 +597,8 @@ class RetentionIT {
                 "two rows per transaction, one table per transaction, phase after phase: the batch bounds every delete");
         long unlocked = db.query("select count(*) from deleted_in where not advisory").execute().await().iterator().next().getLong(0);
         assertEquals(0L, unlocked, "every deleting transaction held the advisory lock while it deleted");
-        assertEquals(10, run.batches(), "3 batches per phase of messages and bodies: 2 rows, 2 rows, then 0 rows (fewer than the batch ends "
-                + "the phase); one empty batch for each of the audit, the sessions, the tokens and the login limit");
+        assertEquals(11, run.batches(), "3 batches per phase of messages and bodies: 2 rows, 2 rows, then 0 rows (fewer than the batch ends "
+                + "the phase); one empty batch for each of the audit, the sessions, the tokens, the devices and the login limit");
     }
 
     /**
@@ -635,8 +635,8 @@ class RetentionIT {
                 "each message's two messages rows and its key row are deleted in one transaction, never split across batches");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(4L, 2L, 0L), List.of(run.messages(), run.keys(), run.kept()), "messages, keys, kept");
-        assertEquals(7, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
-                + "one for bodies, one for each of the audit, the sessions, the tokens and the login limit");
+        assertEquals(8, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
+                + "one for bodies, one for each of the audit, the sessions, the tokens, the devices and the login limit");
     }
 
     @Test
@@ -653,8 +653,8 @@ class RetentionIT {
         assertEquals(seededWithout("messages d-1@0", "messages d-2@0"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(2L, 3L), List.of(run.messages(), run.kept()), "messages, kept");
-        assertEquals(8, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies, then one "
-                + "for each of the audit, the sessions, the tokens and the login limit");
+        assertEquals(9, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies, then one "
+                + "for each of the audit, the sessions, the tokens, the devices and the login limit");
     }
 
     /** The bodies phase passes kept rows the same way: its cursor moves past the head it keeps. */
@@ -672,8 +672,9 @@ class RetentionIT {
         assertEquals(seededWithout("body o-1/0/body", "body o-2/0/body"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(0L, 2L), List.of(run.messages(), run.bodies()), "messages, bodies");
-        assertEquals(8, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
-                + "a cursor that went back would scan more batches; then one for each of the audit, the sessions, the tokens and the login limit");
+        assertEquals(9, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
+                + "a cursor that went back would scan more batches; then one for each of the audit, the sessions, the tokens, the devices and "
+                + "the login limit");
     }
 
     /**
@@ -1169,15 +1170,15 @@ class RetentionIT {
         assertEquals(batch, held, "the batch holds exactly its " + batch + " rows: never " + batch + " per table");
     }
 
-    // --- the audit, the expired sessions and tokens, and the login limit go by age
+    // --- the audit, the expired sessions, tokens and devices, and the login limit go by age
 
     /**
-     * Audit rows older than the clock minus the audit's max age go, and sessions that expired longer ago than that, and tokens
-     * that expired or were revoked longer ago than that; a row of the login limit goes a day after its last failure. A row
-     * exactly at its cutoff stays; batches of 2 bound every delete.
+     * Audit rows older than the clock minus the audit's max age go, and sessions that expired longer ago than that, tokens that
+     * expired or were revoked longer ago than that, and devices that expired longer ago than that; a row of the login limit goes
+     * a day after its last failure. A row exactly at its cutoff stays; batches of 2 bound every delete.
      */
     @Test
-    void theAuditExpiredSessionsAndTokensAndOldLoginLimitsGoByAge() {
+    void theAuditExpiredSessionsTokensAndDevicesAndOldLoginLimitsGoByAge() {
         Duration auditAge = Duration.ofDays(30);
         Instant auditCutoff = clock.instant().minus(auditAge);
         Instant limitCutoff = clock.instant().minus(Duration.ofHours(24));
@@ -1194,6 +1195,9 @@ class RetentionIT {
         token("00000000000000c3", anna, later, Optional.of(auditCutoff.minus(MICRO)));
         token("00000000000000c4", anna, later, Optional.of(auditCutoff));
         token("00000000000000c5", anna, later, Optional.empty());
+        for (int i = 1; i <= 3; i++) device("00000000000000d" + i, anna, auditCutoff.minus(MICRO.multipliedBy(i)));
+        device("00000000000000e0", anna, auditCutoff);
+        device("00000000000000f0", anna, later);
         limit("anna", "", limitCutoff.minus(MICRO));
         limit("bob", "0123456789abcdef", limitCutoff.minus(DAY));
         limit("carol", "", limitCutoff);
@@ -1211,9 +1215,12 @@ class RetentionIT {
                 "the rows of the login limit with a failure in the last 24 hours");
         assertEquals(List.of("00000000000000c2", "00000000000000c4", "00000000000000c5"), strings("select id from tokens order by id"),
                 "the tokens that expired, or were revoked, at the audit's cutoff or later, and the live one");
-        assertEquals(List.of(3L, 3L, 2L, 2L), List.of(run.audit(), run.sessions(), run.tokens(), run.limits()), "audit, sessions, tokens, limits");
-        assertEquals(10, run.batches(), "one batch each for messages and bodies; the audit and the sessions in 2 batches (2 rows, then 1); "
-                + "the tokens and the login limit in 2 each (2 rows, then 0)");
+        assertEquals(List.of("00000000000000e0", "00000000000000f0"), strings("select id from devices order by expires_at"),
+                "the devices that expire at the audit's cutoff or later");
+        assertEquals(List.of(3L, 3L, 2L, 3L, 2L), List.of(run.audit(), run.sessions(), run.tokens(), run.devices(), run.limits()),
+                "audit, sessions, tokens, devices, limits");
+        assertEquals(12, run.batches(), "one batch each for messages and bodies; the audit, the sessions and the devices in 2 batches "
+                + "(2 rows, then 1); the tokens and the login limit in 2 each (2 rows, then 0)");
     }
 
     /** An audit row of {@code subject} at {@code at}. */
@@ -1242,6 +1249,12 @@ class RetentionIT {
                         + " values ($1, $2, $1, $3, $4, 'ops', $5, $6, $7)")
                 .execute(Tuple.of(id, user, Buffer.buffer(new byte[32]), at(expires.minus(DAY)), at(expires),
                         revoked.map(RetentionIT::at).orElse(null), revoked.map(r -> "ops").orElse(null))).await();
+    }
+
+    /** A device {@code id} of {@code user} that expires at {@code expires}, issued 90 days before. */
+    void device(String id, long user, Instant expires) {
+        db.preparedQuery("insert into devices (id, user_id, fingerprint, generation, created_at, expires_at) values ($1, $2, $3, 0, $4, $5)")
+                .execute(Tuple.of(id, user, Buffer.buffer(new byte[32]), at(expires.minus(Duration.ofDays(90))), at(expires))).await();
     }
 
     /** A row of the login limit for {@code name} on {@code device}, its last failure at {@code last}. */
