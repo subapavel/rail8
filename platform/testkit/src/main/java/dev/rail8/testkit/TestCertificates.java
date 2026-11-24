@@ -1,4 +1,4 @@
-package dev.rail8.runtime.node;
+package dev.rail8.testkit;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -13,33 +13,33 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * FIX-146: TLS material made at test time with the JDK's own {@code keytool} (no committed key, no new dependency): a CA and the
- * server certificates it signs, as PEM files a Postgres server and a client read. Keys are EC P-256, valid two days. Nothing here
+ * TLS material made at test time with the JDK's own {@code keytool} (no committed key, no new dependency): a CA and the
+ * server certificates it signs, as PEM files a server and its clients read. Keys are EC P-256, valid two days. Nothing here
  * is a secret worth keeping: each run makes fresh material under the caller's directory.
  */
-final class TestCertificates {
+public final class TestCertificates {
 
-    private static final String PASS = "fix146-store";
+    private static final String PASS = "test-store";
 
     private final Path dir;
 
     private TestCertificates(Path dir) { this.dir = dir; }
 
     /** A fresh CA under {@code dir}/{@code name}. */
-    static TestCertificates ca(Path dir, String name) throws IOException, InterruptedException {
+    public static TestCertificates ca(Path dir, String name) throws IOException, InterruptedException {
         Path home = Files.createDirectories(dir.resolve(name));
         TestCertificates ca = new TestCertificates(home);
-        keytool(home, "-genkeypair", "-alias", "ca", "-keyalg", "EC", "-groupname", "secp256r1", "-dname", "CN=Rail8 FIX-146 " + name,
+        keytool(home, "-genkeypair", "-alias", "ca", "-keyalg", "EC", "-groupname", "secp256r1", "-dname", "CN=Rail8 test " + name,
                 "-validity", "2", "-ext", "bc:c", "-storetype", "PKCS12", "-keystore", "ca.p12", "-storepass", PASS);
         keytool(home, "-exportcert", "-alias", "ca", "-rfc", "-keystore", "ca.p12", "-storepass", PASS, "-file", "ca.pem");
         return ca;
     }
 
-    /** The CA's certificate, PEM: what a client is given as {@code RAIL8_PG_SSL_ROOT_CERT}. */
-    Path certificate() { return dir.resolve("ca.pem"); }
+    /** The CA's certificate, PEM: what a client is given to trust, such as {@code RAIL8_PG_SSL_ROOT_CERT}. */
+    public Path certificate() { return dir.resolve("ca.pem"); }
 
     /** A server certificate this CA signs, its subject {@code CN=<cn>} and its subject alternative names {@code san} (keytool syntax). */
-    Server server(String name, String cn, String san) throws Exception {
+    public Server server(String name, String cn, String san) throws Exception {
         String store = name + ".p12";
         keytool(dir, "-genkeypair", "-alias", name, "-keyalg", "EC", "-groupname", "secp256r1", "-dname", "CN=" + cn, "-validity", "2",
                 "-storetype", "PKCS12", "-keystore", store, "-storepass", PASS);
@@ -58,7 +58,7 @@ final class TestCertificates {
     }
 
     /** A server's certificate and its private key, both PEM. */
-    record Server(byte[] certificate, byte[] key) { }
+    public record Server(byte[] certificate, byte[] key) { }
 
     private static void keytool(Path cwd, String... args) throws IOException, InterruptedException {
         List<String> command = new ArrayList<>();
