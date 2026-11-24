@@ -1,0 +1,2857 @@
+# jq-1.8.2 sha256 b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f
+
+case gen/builtins-math-v1/0
+def e2bd84c7d8c4
+rc 0
+stdout -0\n2.1751476130011355e+178\n"string (\\"a\\") number required"\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/1
+def c42489f7fd9a
+rc 0
+stdout 4.75\n
+stderr
+end
+
+case gen/builtins-math-v1/2
+def d10aca333fda
+rc 0
+stdout 2\n2\n-1e+300\n4\n
+stderr
+end
+
+case gen/builtins-math-v1/3
+def 1b4499e7c25f
+rc 0
+stdout -1.7976931348623157e+308\n1\n2\n
+stderr
+end
+
+case gen/builtins-math-v1/4
+def 4a8ecc778001
+rc 0
+stdout -9.510812814159006e+174\n7\n
+stderr
+end
+
+case gen/builtins-math-v1/5
+def 9a3074e2d867
+rc 0
+stdout 2\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/6
+def bff8d98bdf39
+rc 0
+stdout 2\n
+stderr
+end
+
+case gen/builtins-math-v1/7
+def 0200fd57d551
+rc 0
+stdout 1.9999999999999996\n1\n-1.9219919194060469\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/8
+def 3d21fa42b0d2
+rc 0
+stdout 10000000000\n2.318404623873926\n1.3407807929942596e+154\n1.1726039399558574\n
+stderr
+end
+
+case gen/builtins-math-v1/9
+def 7cb4b3304140
+rc 0
+stdout -0\n-0\n-6\n
+stderr
+end
+
+case gen/builtins-math-v1/10
+def f41d448bead1
+rc 0
+stdout [-0.5,1]\n[0.5,2]\n
+stderr
+end
+
+case gen/builtins-math-v1/11
+def 4287beb4a995
+rc 0
+stdout [-0.625,-5]\n[0,1.3440259359915483e+262]\n[0.5,1]\n
+stderr
+end
+
+case gen/builtins-math-v1/12
+def a23c6c7e7fec
+rc 0
+stdout "string (\\"a\\") number required"\n16348677437324062000000000000\n
+stderr
+end
+
+case gen/builtins-math-v1/13
+def 31b9559bf28f
+rc 0
+stdout null\n0.375\n1.5563973996234944e-16\n1.372213621028814e-309\n
+stderr
+end
+
+case gen/builtins-math-v1/14
+def c03c4fe3f778
+rc 0
+stdout 1e+300\n"string (\\"a\\") number required"\n"array ([1]) number required"\n"boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/15
+def 841078477be8
+rc 0
+stdout 1.7976931348623157e+308\n3.75\n5\n
+stderr
+end
+
+case gen/builtins-math-v1/16
+def 7db2fdcb9517
+rc 0
+stdout 5.95793869059611e-169\n-6.5\n-1e+300\n5.875\n
+stderr
+end
+
+case gen/builtins-math-v1/17
+def 55ece3fbbc43
+rc 0
+stdout 4.5\n-0.5\n
+stderr
+end
+
+case gen/builtins-math-v1/18
+def 96f35f6504ea
+rc 0
+stdout -1075\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/19
+def 1c27d04b15fe
+rc 0
+stdout 9999999999999998000\n"boolean (true) number required"\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/20
+def 68370780e69b
+rc 0
+stdout 6.124999999999999\n"string (\\"a\\") number required"\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/21
+def 0bd0acf510d6
+rc 0
+stdout null\n1.656916469902368e+62\n-9.704752189085787e-21\n1.765761626199355\n
+stderr
+end
+
+case gen/builtins-math-v1/22
+def 323c82f85423
+rc 0
+stdout null\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/23
+def 0271479d4883
+rc 0
+stdout 288\n-0.2265625\n-3.2383035359824635e-262\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/24
+def 25dd00f8ba74
+rc 0
+stdout 4.005510927620129e-66\n1.0000000000052721e+300\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/25
+def f8c62b67955b
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/26
+def 0fb86cbcfc72
+rc 0
+stdout [-1,8267156204]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/27
+def e1db3ceef959
+rc 0
+stdout ["subnormal",-1]\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/28
+def ed0f358f3dcb
+rc 0
+stdout [-500,6315643307]\n[1,5017945071]\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/29
+def 710fd549e7e3
+rc 0
+stdout [-1,-6746518852]\n
+stderr
+end
+
+case gen/builtins-math-v1/30
+def f8c3ec59494d
+rc 0
+stdout "nan"\n"nan"\n"nan"\n[-125,-8119931568]\n
+stderr
+end
+
+case gen/builtins-math-v1/31
+def 760578e49831
+rc 0
+stdout [78,5009022426]\n[0,-6521025163]\n
+stderr
+end
+
+case gen/builtins-math-v1/32
+def d16612fbe46e
+rc 0
+stdout [-1,-8533169560]\n
+stderr
+end
+
+case gen/builtins-math-v1/33
+def 91b3665d6439
+rc 0
+stdout [4,7330497934]\n
+stderr
+end
+
+case gen/builtins-math-v1/34
+def a5ac2a8b50b5
+rc 0
+stdout [-1,5353598413]\n[0,-4294967296]\n"boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/35
+def a3a8f9c01efc
+rc 0
+stdout [1,4294967296]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/36
+def 87c2b33d0fb8
+rc 0
+stdout [-3,5970827232]\n[5,5428745295]\n
+stderr
+end
+
+case gen/builtins-math-v1/37
+def f664f812bb2c
+rc 0
+stdout [-25,8104192584]\n[0,4294967296]\n["zero",1]\n[24,4552395290]\n
+stderr
+end
+
+case gen/builtins-math-v1/38
+def 4f984547e044
+rc 0
+stdout [2,7223245206]\n
+stderr
+end
+
+case gen/builtins-math-v1/39
+def f4a8c419db00
+rc 0
+stdout [-180,-7072206648]\n[0,-4294967296]\n[7,5609433368]\n
+stderr
+end
+
+case gen/builtins-math-v1/40
+def 7f2d152e7ecf
+rc 0
+stdout "nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/41
+def 7782e8532b12
+rc 0
+stdout [3,8403940912]\n
+stderr
+end
+
+case gen/builtins-math-v1/42
+def 386e7ccf0e31
+rc 0
+stdout "nan"\n"nan"\n[7,7194999655]\n
+stderr
+end
+
+case gen/builtins-math-v1/43
+def 10ed309ba4fa
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/44
+def f573ad8cff85
+rc 0
+stdout [-1,8195534459]\n[-1,-7025552129]\n
+stderr
+end
+
+case gen/builtins-math-v1/45
+def f258c414d6f2
+rc 0
+stdout [2,6496357595]\n[-534,-7831199901]\n[7,5271191175]\n[-1,-4476174590]\n
+stderr
+end
+
+case gen/builtins-math-v1/46
+def c33d923f4061
+rc 0
+stdout [-1,-5069812441]\n[-5,4562628900]\n"object ({\\"a\\":1}) number required"\n"string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/47
+def bf34e2625400
+rc 0
+stdout [-1,-8474952289]\n[-1,7557653802]\n[-199,-5051985374]\n
+stderr
+end
+
+case gen/builtins-math-v1/48
+def 176793c1715b
+rc 0
+stdout ["zero",-1]\n[-801,6701427068]\n
+stderr
+end
+
+case gen/builtins-math-v1/49
+def 8e07826d9c8b
+rc 0
+stdout [2,7061434350]\n
+stderr
+end
+
+case gen/builtins-math-v1/50
+def 68e1423db6af
+rc 0
+stdout ["zero",1]\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/51
+def 937fcd9731ae
+rc 0
+stdout -0\n
+stderr
+end
+
+case gen/builtins-math-v1/52
+def 8ab6a082932d
+rc 0
+stdout "boolean (true) number required"\n3.7\n
+stderr
+end
+
+case gen/builtins-math-v1/53
+def 3115fabf39a8
+rc 0
+stdout 3\n"string (\\"1\\") number required"\n-1\n"boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/54
+def 2cd28d43ea82
+rc 0
+stdout null\n2\n1\n
+stderr
+end
+
+case gen/builtins-math-v1/55
+def 2ece88d00a9c
+rc 0
+stdout 4\n-1.2286070091688373e+123\n-1\n
+stderr
+end
+
+case gen/builtins-math-v1/56
+def 33a1a1506dd8
+rc 0
+stdout -1\n4\n-1\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/57
+def c9a37938e377
+rc 0
+stdout 5\n
+stderr
+end
+
+case gen/builtins-math-v1/58
+def 0a4651a77ff0
+rc 0
+stdout -1.9999999999999998\n1.76197768549148\n
+stderr
+end
+
+case gen/builtins-math-v1/59
+def 53052909b9b6
+rc 0
+stdout null\nnull\n32\n
+stderr
+end
+
+case gen/builtins-math-v1/60
+def c5b27d015138
+rc 0
+stdout 7\n1.7976931348623157e+308\n-0\n5\n
+stderr
+end
+
+case gen/builtins-math-v1/61
+def 6c7de46e1d4f
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/62
+def d3346416327a
+rc 0
+stdout [0.875,5]\n[-0.5,-0]\n
+stderr
+end
+
+case gen/builtins-math-v1/63
+def 685c594953f9
+rc 0
+stdout 7\n9.023574977840595e+150\n"string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/64
+def 49b6b54c4b67
+rc 0
+stdout -5e-324\n0.375\n
+stderr
+end
+
+case gen/builtins-math-v1/65
+def 624ad2984b70
+rc 0
+stdout 0.625\n1.7976931348623157e+308\n15.25\n1.7976931348623157e+308\n
+stderr
+end
+
+case gen/builtins-math-v1/66
+def 792ed89592a8
+rc 0
+stdout 7.25\n
+stderr
+end
+
+case gen/builtins-math-v1/67
+def 341930b80283
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/68
+def 793781d07f28
+rc 0
+stdout 1.3002097193663133e-64\n
+stderr
+end
+
+case gen/builtins-math-v1/69
+def 7eceaa831e19
+rc 0
+stdout 0.2421875\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/70
+def 7753298e7254
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/71
+def e22603133363
+rc 0
+stdout 5e-324\n3.8749999999999996\n5e-324\n3.8749999999999996\n
+stderr
+end
+
+case gen/builtins-math-v1/72
+def 74e803ac2e6b
+rc 0
+stdout -5.875\n-3.5\n
+stderr
+end
+
+case gen/builtins-math-v1/73
+def 222aa3374db8
+rc 0
+stdout null\n
+stderr
+end
+
+case gen/builtins-math-v1/74
+def 10922bda3e26
+rc 0
+stdout 0.1171875\n3.7600581105602183e+89\n1.7976931348623157e+308\n1.7976931348623157e+308\n
+stderr
+end
+
+case gen/builtins-math-v1/75
+def d814b4951924
+rc 0
+stdout -3.419286190707478e-263\n-3.875\n
+stderr
+end
+
+case gen/builtins-math-v1/76
+def bbc59657a58b
+rc 0
+stdout [0,6746518852]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/77
+def e49a5acf2090
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/78
+def 48f85e363223
+rc 0
+stdout "nan"\n"nan"\n[-651,-5758226326]\n
+stderr
+end
+
+case gen/builtins-math-v1/79
+def a1b847a39fef
+rc 0
+stdout [0,-8292727779]\n[1,-5520782483]\n
+stderr
+end
+
+case gen/builtins-math-v1/80
+def 6e3ef62c7dc1
+rc 0
+stdout [0,5248558798]\n[0,5938113643]\n
+stderr
+end
+
+case gen/builtins-math-v1/81
+def e0351b375b15
+rc 0
+stdout "nan"\n"string (\\"a\\") number required"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/82
+def e6f12d674882
+rc 0
+stdout [16,-7671724485]\n[0,5980641673]\n"array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/83
+def b4e082fb8fb0
+rc 0
+stdout [-1,6795527740]\n[-1,-4760451784]\n[-1,6751018045]\n
+stderr
+end
+
+case gen/builtins-math-v1/84
+def 55cb64f661d3
+rc 0
+stdout ["infinite",1]\n[10,6251522708]\n
+stderr
+end
+
+case gen/builtins-math-v1/85
+def 1b566f19af98
+rc 0
+stdout [-1,-8586438901]\n
+stderr
+end
+
+case gen/builtins-math-v1/86
+def c775b87e5f59
+rc 0
+stdout "array ([1]) number required"\n"boolean (true) number required"\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/87
+def 873eb88ae019
+rc 0
+stdout [3,8398074046]\n[-2,5577486919]\n
+stderr
+end
+
+case gen/builtins-math-v1/88
+def 413f4c9e2f18
+rc 0
+stdout [0,4294967296]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/89
+def e73b32ccb1c5
+rc 0
+stdout [7,5107605667]\n["zero",1]\n[-7,6623745059]\n[-3,5569883475]\n
+stderr
+end
+
+case gen/builtins-math-v1/90
+def 01c906b993fc
+rc 0
+stdout [-1,-5429874255]\n[-1,5572473284]\n["infinite",1]\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/91
+def b2142138d481
+rc 0
+stdout [0,7223098075]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/92
+def ae01972c90e4
+rc 0
+stdout "nan"\n"nan"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/93
+def 4f4c440d66a6
+rc 0
+stdout [0,6338970235]\n[-310,7634830250]\n[-261,4488840956]\n[-1,8289981773]\n
+stderr
+end
+
+case gen/builtins-math-v1/94
+def 6f17cd474c33
+rc 0
+stdout [0,5024789620]\n"nan"\n["infinite",-1]\n[7,6885522547]\n
+stderr
+end
+
+case gen/builtins-math-v1/95
+def f6f11b5cc19b
+rc 0
+stdout "nan"\n[-1,7963411959]\n[-638,-6975092971]\n
+stderr
+end
+
+case gen/builtins-math-v1/96
+def fd9a5aeae11c
+rc 0
+stdout ["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/97
+def a93ff9ebba42
+rc 0
+stdout [-1,-6416872672]\n
+stderr
+end
+
+case gen/builtins-math-v1/98
+def 2e6af9f4afa4
+rc 0
+stdout "null (null) number required"\n[0,4294967296]\n"array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/99
+def 0c73a76eff82
+rc 0
+stdout [1,6746518852]\n[1,-6746518852]\n
+stderr
+end
+
+case gen/builtins-math-v1/100
+def ac7a954c21d6
+rc 0
+stdout [377,6299077560]\n
+stderr
+end
+
+case gen/builtins-math-v1/101
+def e4edacac44ad
+rc 0
+stdout "nan"\n[-89,4412105169]\n
+stderr
+end
+
+case gen/builtins-math-v1/102
+def eb18a3481925
+rc 0
+stdout "array ([]) number required"\n1\n-7\n
+stderr
+end
+
+case gen/builtins-math-v1/103
+def 2f740906928c
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/104
+def c6efb4ed6c95
+rc 0
+stdout "boolean (true) number required"\n"object ({\\"a\\":1}) number required"\n-1e+300\n-1.7976931348623157e+308\n
+stderr
+end
+
+case gen/builtins-math-v1/105
+def 00fc37a58a72
+rc 0
+stdout "boolean (true) number required"\n66\n
+stderr
+end
+
+case gen/builtins-math-v1/106
+def 6999a4cdeb83
+rc 0
+stdout "boolean (true) number required"\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/107
+def 225c7cdf935c
+rc 0
+stdout "boolean (true) number required"\n0\n3\n
+stderr
+end
+
+case gen/builtins-math-v1/108
+def 75ed7cc1ff18
+rc 0
+stdout "boolean (true) number required"\n-1.290298652819918e+111\n4\n
+stderr
+end
+
+case gen/builtins-math-v1/109
+def 51a14660c287
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n1.4011590573393153\n"array ([]) number required"\n-1.0842021724855044\n
+stderr
+end
+
+case gen/builtins-math-v1/110
+def f7e6ab5bcccb
+rc 0
+stdout "boolean (false) number required"\n1.7976931348623157e+308\n"array ([1]) number required"\n1.4916681462400412e-154\n
+stderr
+end
+
+case gen/builtins-math-v1/111
+def 7646c3dafc1c
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/112
+def 5e2d4ba634aa
+rc 0
+stdout "boolean (false) number required"\n[-0.671875,3]\n
+stderr
+end
+
+case gen/builtins-math-v1/113
+def 190f611cc1b3
+rc 0
+stdout "string (\\"a\\") number required"\n[-0.625,-7]\n[-0,-1.7976931348623157e+308]\n
+stderr
+end
+
+case gen/builtins-math-v1/114
+def 2fc4e0958207
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/115
+def 35c237e6b6d5
+rc 0
+stdout "string (\\"a\\") number required"\n-0\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/116
+def 789bb8c59b96
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/117
+def ac7903e7d7ec
+rc 0
+stdout "string (\\"a\\") number required"\n"boolean (false) number required"\n1.5\n"array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/118
+def c9588e0b143a
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/119
+def 1e812c8a0ecd
+rc 0
+stdout "string (\\"a\\") number required"\n-2.25\n-1.6879925702511513e-94\n-0\n
+stderr
+end
+
+case gen/builtins-math-v1/120
+def 501ac7e35971
+rc 0
+stdout "null (null) number required"\n-1\n1.5e-323\n6.3e-322\n
+stderr
+end
+
+case gen/builtins-math-v1/121
+def 6533b601e235
+rc 0
+stdout "array ([]) number required"\n"string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/122
+def 61512aa27773
+rc 0
+stdout "array ([]) number required"\n-4.124999999999999\n-0.7500000000000001\n
+stderr
+end
+
+case gen/builtins-math-v1/123
+def 70dee0abb016
+rc 0
+stdout "string (\\"a\\") number required"\n-0.5\n
+stderr
+end
+
+case gen/builtins-math-v1/124
+def 969418d0ccca
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/125
+def c61df82ce77a
+rc 0
+stdout "array ([1]) number required"\n-1.1235582092889473e+307\n
+stderr
+end
+
+case gen/builtins-math-v1/126
+def 5c93655e10df
+rc 0
+stdout "array ([]) number required"\n-1.78125\n
+stderr
+end
+
+case gen/builtins-math-v1/127
+def 2bfb9c88cc9f
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/128
+def 670ff72a58a4
+rc 0
+stdout "string (\\"1\\") number required"\n"nan"\n[0,6729351482]\n"string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/129
+def 3abdf8e4086c
+rc 0
+stdout "boolean (true) number required"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/130
+def 954477ebb74e
+rc 0
+stdout "array ([1]) number required"\n[0,7074803903]\n
+stderr
+end
+
+case gen/builtins-math-v1/131
+def f8fdaf7a0931
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/132
+def 9c6ef7abe121
+rc 0
+stdout "string (\\"a\\") number required"\n["subnormal",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/133
+def d3d7f674cc48
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/134
+def 79d97f041dde
+rc 0
+stdout "array ([1]) number required"\n[-3,-4999343094]\n[-1,-7370003876]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/135
+def 6231436c8c17
+rc 0
+stdout "string (\\"1\\") number required"\n"boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/136
+def fdaeba974842
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/137
+def 4e8f0509df70
+rc 0
+stdout "array ([1]) number required"\n[0,8589934409]\n
+stderr
+end
+
+case gen/builtins-math-v1/138
+def 9a2d67be476a
+rc 0
+stdout "array ([1]) number required"\n["zero",1]\n[1,5837465777]\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/139
+def cf4df1100495
+rc 0
+stdout "boolean (true) number required"\n"array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/140
+def c31b58b03f13
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/141
+def 02a4f210c794
+rc 0
+stdout "null (null) number required"\n[3,6003555731]\n[0,-4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/142
+def ebbf17a20d8f
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/143
+def 3f3eeeecea67
+rc 0
+stdout "boolean (true) number required"\n["zero",1]\n"nan"\n[5,5539044379]\n
+stderr
+end
+
+case gen/builtins-math-v1/144
+def 1fd473835810
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/145
+def 51e3aa8e0e83
+rc 0
+stdout "array ([]) number required"\n["infinite",-1]\n[10,-4504682496]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/146
+def a6450eee0f1a
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/147
+def 357446eebefc
+rc 0
+stdout "string (\\"a\\") number required"\n[9,6692394568]\n[-472,6890512684]\n
+stderr
+end
+
+case gen/builtins-math-v1/148
+def 878a1148b975
+rc 0
+stdout "string (\\"1\\") number required"\n[-2,4691706231]\n[1,6121642947]\n[-1,-5366416254]\n
+stderr
+end
+
+case gen/builtins-math-v1/149
+def 124b05765c63
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/150
+def 8dd5be473f66
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/151
+def bdb7deff0882
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/152
+def 137b9c48e823
+rc 0
+stdout "null (null) number required"\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/153
+def d540d775c157
+rc 0
+stdout "boolean (true) number required"\n"array ([]) number required"\n5\n
+stderr
+end
+
+case gen/builtins-math-v1/154
+def 93a076c50742
+rc 0
+stdout "array ([1]) number required"\n1.2617248778350722e-15\n1e+20\n5.25\n
+stderr
+end
+
+case gen/builtins-math-v1/155
+def 3bea94f2660b
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/156
+def f955ef99b475
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/157
+def a8fec4d43e2b
+rc 0
+stdout "boolean (false) number required"\n0\n-2\n10000000000\n
+stderr
+end
+
+case gen/builtins-math-v1/158
+def dc2e885b699a
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/159
+def 3ac62debdf71
+rc 0
+stdout "boolean (true) number required"\n-1e+300\n
+stderr
+end
+
+case gen/builtins-math-v1/160
+def 40b0245c23f1
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/161
+def 00e450b7434b
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n0.8660254037844386\n"array ([1]) number required"\n1.6583123951777\n
+stderr
+end
+
+case gen/builtins-math-v1/162
+def 88888f422d64
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/163
+def ed09d7fdac1f
+rc 0
+stdout "boolean (false) number required"\n[0.7056709568381793,-997]\n[-0.5,-2]\n
+stderr
+end
+
+case gen/builtins-math-v1/164
+def 35ca0c98e27d
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/165
+def e71a3e15df12
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/166
+def cb8a6b261b3a
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/167
+def a80dd2b05b59
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/168
+def 5c4158acf3f9
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/169
+def 5f64834a93c8
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/170
+def 0ca730d5bce0
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/171
+def 58a99d9fdbf1
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/172
+def 8051e6a5fc03
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/173
+def 9c59925cc0a8
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/174
+def 6e2a031bee7b
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/175
+def fdc364a209a6
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/176
+def ebe8d154497e
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/177
+def c783d565ae8a
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/178
+def 3d8f393f4522
+rc 0
+stdout "array ([1]) number required"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/179
+def f8ab10beae41
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n"nan"\n"nan"\n[1,5876914266]\n
+stderr
+end
+
+case gen/builtins-math-v1/180
+def 15c12a372681
+rc 0
+stdout "null (null) number required"\n"nan"\n[0,6746518852]\n
+stderr
+end
+
+case gen/builtins-math-v1/181
+def edc07c46c96a
+rc 0
+stdout "boolean (false) number required"\n[0,-4824814546]\n[1,-5561221302]\n
+stderr
+end
+
+case gen/builtins-math-v1/182
+def f5dca7c495d0
+rc 0
+stdout "string (\\"a\\") number required"\n[0,-6746518852]\n[0,-5694343506]\n
+stderr
+end
+
+case gen/builtins-math-v1/183
+def 50a6d833547e
+rc 0
+stdout "null (null) number required"\n"nan"\n"nan"\n[-927,-7911919281]\n
+stderr
+end
+
+case gen/builtins-math-v1/184
+def 8406b0a36326
+rc 0
+stdout "null (null) number required"\n"array ([1]) number required"\n[0,6817835604]\n[17,5411319705]\n
+stderr
+end
+
+case gen/builtins-math-v1/185
+def 0e025dd9092b
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n[-1,7207146920]\n"object ({\\"a\\":1}) number required"\n[-1,-8589828845]\n
+stderr
+end
+
+case gen/builtins-math-v1/186
+def 7cedeedb13fc
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/187
+def 4c60cf064653
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n[-1,7238744692]\n
+stderr
+end
+
+case gen/builtins-math-v1/188
+def 79f023016397
+rc 0
+stdout "string (\\"a\\") number required"\n[0,8444357305]\n["zero",1]\n[-2,8237749373]\n
+stderr
+end
+
+case gen/builtins-math-v1/189
+def ccd08b50bdfa
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/190
+def 57ee21b791a1
+rc 0
+stdout "null (null) number required"\n["zero",1]\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/191
+def 6bf2bb0b2742
+rc 0
+stdout "boolean (true) number required"\n"boolean (false) number required"\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/192
+def 60fa55160d42
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/193
+def 6e9935f75691
+rc 0
+stdout "boolean (true) number required"\n[-1,6965837516]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/194
+def 793298f6cb62
+rc 0
+stdout "null (null) number required"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/195
+def 6035fd659161
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/196
+def 59e2cb7be5be
+rc 0
+stdout "boolean (false) number required"\n[4,-7963788740]\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/197
+def d2b9fbe822ef
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/198
+def 6673672a78e0
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n["subnormal",1]\n["infinite",-1]\n[0,5047450693]\n
+stderr
+end
+
+case gen/builtins-math-v1/199
+def 1bc5cd0ae139
+rc 0
+stdout "string (\\"a\\") number required"\n[-2,-6112253115]\n[-1,-4796186868]\n
+stderr
+end
+
+case gen/builtins-math-v1/200
+def 7192f1ed2157
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/201
+def 4668c8fb93b1
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/202
+def c96b48bd44a9
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/203
+def d0fad2c4b1ac
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/204
+def 8a42bd5f7944
+rc 0
+stdout "boolean (false) number required"\n5.2648354586394514e+94\n1\n
+stderr
+end
+
+case gen/builtins-math-v1/205
+def 8df585dfa85d
+rc 0
+stdout 2.7\n1.875\n1e+20\n
+stderr
+end
+
+case gen/builtins-math-v1/206
+def 967d613875d8
+rc 0
+stdout 0\n0\n1e+300\n
+stderr
+end
+
+case gen/builtins-math-v1/207
+def a0b1f26a380b
+rc 0
+stdout 59\n-3\n
+stderr
+end
+
+case gen/builtins-math-v1/208
+def f4467812bbff
+rc 0
+stdout -2.4599291835548426e+294\n
+stderr
+end
+
+case gen/builtins-math-v1/209
+def b477dd8c0155
+rc 0
+stdout -1.5674121540541748e+282\n
+stderr
+end
+
+case gen/builtins-math-v1/210
+def 0814ca6507a0
+rc 0
+stdout -1e+19\n
+stderr
+end
+
+case gen/builtins-math-v1/211
+def d137c3c99863
+rc 0
+stdout -1.625\n-1.75\n
+stderr
+end
+
+case gen/builtins-math-v1/212
+def 534b35c57645
+rc 0
+stdout 32\nnull\n2.2227587494850775e-162\n
+stderr
+end
+
+case gen/builtins-math-v1/213
+def 27c111bbb2e4
+rc 0
+stdout 2\n-1.0915162973409354e+73\n"boolean (false) number required"\n-0\n
+stderr
+end
+
+case gen/builtins-math-v1/214
+def acdb0569578e
+rc 0
+stdout [-0.8357776813325047,-511]\n
+stderr
+end
+
+case gen/builtins-math-v1/215
+def 76d5e8467a46
+rc 0
+stdout [0.5,2]\n
+stderr
+end
+
+case gen/builtins-math-v1/216
+def e41321625bac
+rc 0
+stdout 5.625\n
+stderr
+end
+
+case gen/builtins-math-v1/217
+def 1b567a6b49b7
+rc 0
+stdout -5.875\n-0\n"string (\\"a\\") number required"\n3.60739284464e-313\n
+stderr
+end
+
+case gen/builtins-math-v1/218
+def 52719c7a9c16
+rc 0
+stdout 1e+300\n0\n3.625\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/219
+def 9549f7b1c1dd
+rc 0
+stdout 4.684939073959102e+306\n
+stderr
+end
+
+case gen/builtins-math-v1/220
+def b77862050f29
+rc 0
+stdout 0.25\n-7.5\n-6.25\n
+stderr
+end
+
+case gen/builtins-math-v1/221
+def cc524921b2a1
+rc 0
+stdout 9.179998429088512e-254\n-3.75\n0\n3.3861377066263535e-171\n
+stderr
+end
+
+case gen/builtins-math-v1/222
+def eb3571c18829
+rc 0
+stdout 8.110572136200917e+276\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/223
+def e705dac01bd5
+rc 0
+stdout 1.7976931348623155e+308\n"string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/224
+def c93ad7583bac
+rc 0
+stdout -2.3750000000000004\n
+stderr
+end
+
+case gen/builtins-math-v1/225
+def 0526bc22bf28
+rc 0
+stdout -5e-324\n0.5\nnull\n"boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/226
+def 0b7637ff8271
+rc 0
+stdout "array ([1]) number required"\nnull\n"object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/227
+def 15258f09ad57
+rc 0
+stdout 2.95547078761875e+66\n3\n-1.0377346815597048e-194\n
+stderr
+end
+
+case gen/builtins-math-v1/228
+def 4cec92e46ebb
+rc 0
+stdout 2.7e+19\n"string (\\"a\\") number required"\n"string (\\"a\\") number required"\n1.537446212286299e+234\n
+stderr
+end
+
+case gen/builtins-math-v1/229
+def 62bee3f6cf6c
+rc 0
+stdout "nan"\n"nan"\n"nan"\n"array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/230
+def 73208751f40f
+rc 0
+stdout [5,6273987434]\n[1,4691486819]\n"nan"\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/231
+def b43bb6544115
+rc 0
+stdout [0,6746518852]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/232
+def fd4d1cd4bdef
+rc 0
+stdout [2,8186872554]\n[4,6367020074]\n[4,6367020074]\n[0,7074803903]\n
+stderr
+end
+
+case gen/builtins-math-v1/233
+def 7797a1227f0b
+rc 0
+stdout [-2,7965405270]\n[-880,8431237917]\n[0,-6006964935]\n[0,-6742523535]\n
+stderr
+end
+
+case gen/builtins-math-v1/234
+def 239cf603ca84
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/235
+def 36b70dc66fc4
+rc 0
+stdout [204,-4530598667]\n[17,5411319705]\n
+stderr
+end
+
+case gen/builtins-math-v1/236
+def 402d794d389f
+rc 0
+stdout [-4,4861023484]\n"string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/237
+def 14ff4161e2ea
+rc 0
+stdout [1,6365545925]\n
+stderr
+end
+
+case gen/builtins-math-v1/238
+def e11632a9aab7
+rc 0
+stdout [0,4294967296]\n[-1,-8475445120]\n[-1,6735153490]\n[-1,4471059906]\n
+stderr
+end
+
+case gen/builtins-math-v1/239
+def b306c367445b
+rc 0
+stdout [1,4294967296]\n[0,8497351131]\n[-11,6886797395]\n
+stderr
+end
+
+case gen/builtins-math-v1/240
+def 4659036e5891
+rc 0
+stdout ["zero",1]\n[0,4294967296]\n["infinite",1]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/241
+def 49b812cad1b9
+rc 0
+stdout ["infinite",1]\n[-19,5339858869]\n[12,5896576174]\n
+stderr
+end
+
+case gen/builtins-math-v1/242
+def edea7989a8f4
+rc 0
+stdout [-8,5107605667]\n"array ([1]) number required"\n[2,6977194957]\n
+stderr
+end
+
+case gen/builtins-math-v1/243
+def 553e1e780413
+rc 0
+stdout [-1,5572473284]\n[-922,5858681978]\n[-96,6682641861]\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/244
+def 99edea8b4232
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/245
+def 4066a9c1ce75
+rc 0
+stdout "nan"\n"nan"\n[-2,7410773039]\n
+stderr
+end
+
+case gen/builtins-math-v1/246
+def 70add6f71b46
+rc 0
+stdout [-1,5954088944]\n[0,7018537162]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/247
+def c47faf2c6fd0
+rc 0
+stdout [1,5137462546]\n[7,-5816454915]\n
+stderr
+end
+
+case gen/builtins-math-v1/248
+def 68997f746da5
+rc 0
+stdout [-5,-8167141961]\n[-1,7810805421]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/249
+def d5ce84e8b8fe
+rc 0
+stdout [-1022,4294967296]\n["subnormal",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/250
+def 2ad5ec460801
+rc 0
+stdout [-2,6112253115]\n[1,-4308515830]\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/251
+def 282251bb27b8
+rc 0
+stdout ["subnormal",-1]\n"boolean (false) number required"\n[0,-4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/252
+def 39159591ca53
+rc 0
+stdout [-769,-8157971177]\n"string (\\"a\\") number required"\n[-1022,6174015488]\n[0,6751761730]\n
+stderr
+end
+
+case gen/builtins-math-v1/253
+def 441db4538963
+rc 0
+stdout "array ([1]) number required"\n[33,5000000000]\n[519,5569829065]\n
+stderr
+end
+
+case gen/builtins-math-v1/254
+def eedf8d484eee
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/255
+def d86deea37f12
+rc 0
+stdout "array ([]) number required"\n8\n-9.488453379241037e+301\n
+stderr
+end
+
+case gen/builtins-math-v1/256
+def bf0259e31371
+rc 0
+stdout 1.7976931348623157e+308\n6.5\n3.7\n1.7976931348623157e+308\n
+stderr
+end
+
+case gen/builtins-math-v1/257
+def 7494eed597dd
+rc 0
+stdout 4\n-1\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/258
+def ddf3c23efaff
+rc 0
+stdout 10\n-1074\n2\n
+stderr
+end
+
+case gen/builtins-math-v1/259
+def dfd030699053
+rc 0
+stdout 1\n
+stderr
+end
+
+case gen/builtins-math-v1/260
+def 1c7bb3e4cd29
+rc 0
+stdout -0\n-5\n
+stderr
+end
+
+case gen/builtins-math-v1/261
+def 4480012203ba
+rc 0
+stdout -0\n"object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/262
+def f3cf77d9f794
+rc 0
+stdout 1.0000000000000002\n1.5809287635887845\n-1.125\n
+stderr
+end
+
+case gen/builtins-math-v1/263
+def 1149826c08c7
+rc 0
+stdout null\n"array ([]) number required"\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/264
+def 16492e9f2990
+rc 0
+stdout 0\n"array ([1]) number required"\n"string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/265
+def 84a3e657ac1e
+rc 0
+stdout [0.625,2]\n[null,0]\n[0.761207354170634,-14]\n[-0.578125,3]\n
+stderr
+end
+
+case gen/builtins-math-v1/266
+def b28cfd28ef5c
+rc 0
+stdout [0.875,1]\n
+stderr
+end
+
+case gen/builtins-math-v1/267
+def 39df0cf43b3d
+rc 0
+stdout -7.75\n"object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/268
+def 41e1f70fe672
+rc 0
+stdout -1.8956418880933382e-266\n
+stderr
+end
+
+case gen/builtins-math-v1/269
+def c3520e438c27
+rc 0
+stdout null\n
+stderr
+end
+
+case gen/builtins-math-v1/270
+def afa189684296
+rc 0
+stdout 1.5\n1.5\n
+stderr
+end
+
+case gen/builtins-math-v1/271
+def 06e4edb8b290
+rc 0
+stdout -2.5\n-2.5\n-5e-324\n-5e-324\n
+stderr
+end
+
+case gen/builtins-math-v1/272
+def 3d956557f0b6
+rc 0
+stdout -1\n-1\n
+stderr
+end
+
+case gen/builtins-math-v1/273
+def 4de5d5ce0f28
+rc 0
+stdout 0\n9.001535208953172e+74\n
+stderr
+end
+
+case gen/builtins-math-v1/274
+def 372972210022
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/275
+def 03a331f2deec
+rc 0
+stdout null\n-2.5\n
+stderr
+end
+
+case gen/builtins-math-v1/276
+def c64492429bca
+rc 0
+stdout -1\n1.9369169565421407e-267\n
+stderr
+end
+
+case gen/builtins-math-v1/277
+def ae05f768f91f
+rc 0
+stdout null\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/278
+def 9e56fd09005e
+rc 0
+stdout -0.000164031982421875\n0.000133514404296875\n"string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/279
+def 2f65fb2b66e6
+rc 0
+stdout -21.75\n
+stderr
+end
+
+case gen/builtins-math-v1/280
+def 30f76eaec2c5
+rc 0
+stdout "nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/281
+def 26d816e57381
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/282
+def d3f9e715d1c2
+rc 0
+stdout [0,-6746518852]\n"boolean (true) number required"\n[0,-6746518852]\n
+stderr
+end
+
+case gen/builtins-math-v1/283
+def c98d900108c9
+rc 0
+stdout [-572,7072601635]\n[0,-7074803903]\n[9,-5800459660]\n[5,6273987434]\n
+stderr
+end
+
+case gen/builtins-math-v1/284
+def becb72e3281f
+rc 0
+stdout [-2,-7965405270]\n[-1,8442133800]\n[0,5753991994]\n
+stderr
+end
+
+case gen/builtins-math-v1/285
+def e2acd0154c68
+rc 0
+stdout "nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/286
+def cddce861b3e8
+rc 0
+stdout [-294,-6183019325]\n
+stderr
+end
+
+case gen/builtins-math-v1/287
+def f6a171dde150
+rc 0
+stdout "string (\\"a\\") number required"\n[-1,8511959355]\n
+stderr
+end
+
+case gen/builtins-math-v1/288
+def 14d0619a7761
+rc 0
+stdout [4,5432063630]\n[7,7669652298]\n[0,4843116643]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/289
+def ac3c31ac6147
+rc 0
+stdout [0,-4294967296]\n[0,4294967296]\n[-1,8144718907]\n[-1,7238744692]\n
+stderr
+end
+
+case gen/builtins-math-v1/290
+def fd2c18952480
+rc 0
+stdout "boolean (false) number required"\n[1,4294967296]\n[0,8589933874]\n
+stderr
+end
+
+case gen/builtins-math-v1/291
+def 03c9db108ed9
+rc 0
+stdout [5,5428745295]\n
+stderr
+end
+
+case gen/builtins-math-v1/292
+def 05a64b66c3dc
+rc 0
+stdout [3,5368709120]\n[0,5727430940]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/293
+def d845a69d6d7f
+rc 0
+stdout ["zero",1]\n["zero",1]\n["zero",1]\n[2,5107605667]\n
+stderr
+end
+
+case gen/builtins-math-v1/294
+def 4469072d1414
+rc 0
+stdout ["zero",-1]\n[-444,5637249759]\n[5,5572865290]\n[-1,-5009117109]\n
+stderr
+end
+
+case gen/builtins-math-v1/295
+def 1a84a91ea376
+rc 0
+stdout [8,6615423519]\n"array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/296
+def 808ce70190af
+rc 0
+stdout [-1,5909656987]\n[8,5033164800]\n[-2,7879338249]\n[-1,6186121312]\n
+stderr
+end
+
+case gen/builtins-math-v1/297
+def 20598a819e14
+rc 0
+stdout "nan"\n["subnormal",1]\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/298
+def bc8679b8027d
+rc 0
+stdout "nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/299
+def 2893ac835fd5
+rc 0
+stdout [-1,-7151004783]\n
+stderr
+end
+
+case gen/builtins-math-v1/300
+def 4e16719a2d39
+rc 0
+stdout "array ([]) number required"\n[5,-5330272613]\n
+stderr
+end
+
+case gen/builtins-math-v1/301
+def 6487e50ab97e
+rc 0
+stdout [-1,-7485681172]\n[-4,-4391740240]\n[2,5413715284]\n
+stderr
+end
+
+case gen/builtins-math-v1/302
+def fd06fa3b3bca
+rc 0
+stdout [0,-4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/303
+def 5b33dc7f7049
+rc 0
+stdout [0,6746518852]\n[0,-6746518852]\n
+stderr
+end
+
+case gen/builtins-math-v1/304
+def 7e6c238bd2f9
+rc 0
+stdout [1,6710886400]\n
+stderr
+end
+
+case gen/builtins-math-v1/305
+def 6fbe3448a55b
+rc 0
+stdout "nan"\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/306
+def 30dfed11b9c1
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/307
+def 9e9ba60051ea
+rc 0
+stdout "array ([]) number required"\n6.805660448847616e-281\n1.4673931545483044e-195\n
+stderr
+end
+
+case gen/builtins-math-v1/308
+def fe34e6d1b78c
+rc 0
+stdout "array ([1]) number required"\n1e+300\n1e+19\n
+stderr
+end
+
+case gen/builtins-math-v1/309
+def f1067972c52c
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/310
+def b6d5f4e25c79
+rc 0
+stdout "string (\\"a\\") number required"\n-0\n-2.4423333515292114e+32\n
+stderr
+end
+
+case gen/builtins-math-v1/311
+def 800c8936bdbe
+rc 0
+stdout "array ([1]) number required"\n6\n"boolean (true) number required"\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/312
+def a5c57eb429b3
+rc 0
+stdout "boolean (true) number required"\n"boolean (true) number required"\n1e+20\n-5\n
+stderr
+end
+
+case gen/builtins-math-v1/313
+def 4e015a372ab2
+rc 0
+stdout "null (null) number required"\n1.34375\n-1.2987558508649326\n
+stderr
+end
+
+case gen/builtins-math-v1/314
+def ec7a9b0acccc
+rc 0
+stdout "boolean (true) number required"\n0\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/315
+def 6e080ae82e81
+rc 0
+stdout "null (null) number required"\n1024\n2\n-2.6859552969640194e+126\n
+stderr
+end
+
+case gen/builtins-math-v1/316
+def 43d265150b74
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/317
+def b571d311e447
+rc 0
+stdout "null (null) number required"\n[-0.375,-2]\n[-0,-0]\n[0,0]\n
+stderr
+end
+
+case gen/builtins-math-v1/318
+def 6463a0c6a1c1
+rc 0
+stdout "null (null) number required"\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/319
+def 176615d99369
+rc 0
+stdout "string (\\"a\\") number required"\nnull\n-0.25\n
+stderr
+end
+
+case gen/builtins-math-v1/320
+def ba6e623c6a45
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/321
+def a47b53f1875a
+rc 0
+stdout "array ([]) number required"\n2.7\n8.039509511330176e-19\n7.25\n
+stderr
+end
+
+case gen/builtins-math-v1/322
+def f577f6c20f39
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/323
+def a64c016523d7
+rc 0
+stdout "array ([]) number required"\n-1.25\n
+stderr
+end
+
+case gen/builtins-math-v1/324
+def 22693753b9f1
+rc 0
+stdout "array ([]) number required"\n-0.0625\n0\n
+stderr
+end
+
+case gen/builtins-math-v1/325
+def 2438e6117cc9
+rc 0
+stdout "array ([]) number required"\n"string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/326
+def 447e5e59fb5d
+rc 0
+stdout "string (\\"1\\") number required"\n"string (\\"1\\") number required"\n1023.9999999999999\n5.6486073265930704e-232\n
+stderr
+end
+
+case gen/builtins-math-v1/327
+def 2e4f82f87377
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/328
+def 562c8d2623b3
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/329
+def f2374481ea56
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n"null (null) number required"\n-1.7976931348623157e+308\n"object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/330
+def 429b4c4b1530
+rc 0
+stdout "null (null) number required"\n-1e+300\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/331
+def 805d121aab84
+rc 0
+stdout "array ([1]) number required"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/332
+def d6a1c637ca37
+rc 0
+stdout "string (\\"a\\") number required"\n"nan"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/333
+def 6fee3ebedaae
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/334
+def d23570f8f27b
+rc 0
+stdout "array ([]) number required"\n[0,5954088944]\n["zero",-1]\n
+stderr
+end
+
+case gen/builtins-math-v1/335
+def 62808651fe0b
+rc 0
+stdout "string (\\"1\\") number required"\n[0,-6212418218]\n[0,6746518852]\n["zero",-1]\n
+stderr
+end
+
+case gen/builtins-math-v1/336
+def 5be8bec32fa2
+rc 0
+stdout "string (\\"1\\") number required"\n"nan"\n[-3,-4317549002]\n
+stderr
+end
+
+case gen/builtins-math-v1/337
+def 61587abeddea
+rc 0
+stdout "string (\\"1\\") number required"\n[0,4916510235]\n[-261,-6660821472]\n[-323,-4937761621]\n
+stderr
+end
+
+case gen/builtins-math-v1/338
+def d885bafdcc6d
+rc 0
+stdout "boolean (false) number required"\n[0,4294967296]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/339
+def 08fdc75c0f4c
+rc 0
+stdout "array ([]) number required"\n[3,4773276399]\n["infinite",1]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/340
+def 991b8a49ca45
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n[0,4294967296]\n[-1,8589934460]\n[-1,-7238744692]\n
+stderr
+end
+
+case gen/builtins-math-v1/341
+def 23b67d2eac37
+rc 0
+stdout "boolean (true) number required"\n[0,8589916112]\n
+stderr
+end
+
+case gen/builtins-math-v1/342
+def 095ff82dcac1
+rc 0
+stdout "boolean (true) number required"\n[-9,7930916209]\n[1,6614715315]\n
+stderr
+end
+
+case gen/builtins-math-v1/343
+def b0835424668b
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/344
+def c2597fe552b6
+rc 0
+stdout "boolean (false) number required"\n[2,6623745059]\n"null (null) number required"\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/345
+def f8b7d10de9ef
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/346
+def 3d9f41f82b51
+rc 0
+stdout "string (\\"1\\") number required"\n"nan"\n[-1,-5954088944]\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/347
+def 8b1218015a29
+rc 0
+stdout "null (null) number required"\n"nan"\n"nan"\n[8,-5161555055]\n
+stderr
+end
+
+case gen/builtins-math-v1/348
+def 516628114632
+rc 0
+stdout "string (\\"1\\") number required"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/349
+def 9fb242f11e12
+rc 0
+stdout "boolean (false) number required"\n"nan"\n[10,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/350
+def 1eb1ef10d30a
+rc 0
+stdout "string (\\"a\\") number required"\n[-1,6116916703]\n[-3,-5247963602]\n
+stderr
+end
+
+case gen/builtins-math-v1/351
+def cfab6c035310
+rc 0
+stdout "array ([]) number required"\n[-2,-6594511133]\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/352
+def 63376be4b5f0
+rc 0
+stdout "string (\\"1\\") number required"\n[0,-5142886737]\n
+stderr
+end
+
+case gen/builtins-math-v1/353
+def 5d117d530780
+rc 0
+stdout "boolean (false) number required"\n[-863,8528313730]\n[-1,-8589895760]\n[-1,-8474952289]\n
+stderr
+end
+
+case gen/builtins-math-v1/354
+def 0cd3fc823e5b
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/355
+def 2fdca5b9bea6
+rc 0
+stdout "boolean (false) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/356
+def c411f39567c2
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n["zero",1]\n"nan"\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/357
+def 4f5b068beae7
+rc 0
+stdout "array ([]) number required"\n-0\n-2.4275369441741487e+82\n
+stderr
+end
+
+case gen/builtins-math-v1/358
+def 8fa2775a8eb2
+rc 0
+stdout "string (\\"a\\") number required"\n1e+19\n
+stderr
+end
+
+case gen/builtins-math-v1/359
+def 67856376ce48
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/360
+def b75db85ac76d
+rc 0
+stdout "string (\\"a\\") number required"\n642\n"object ({\\"a\\":1}) number required"\n-784\n
+stderr
+end
+
+case gen/builtins-math-v1/361
+def d2e8265f2d09
+rc 0
+stdout "boolean (true) number required"\n-0\n2\n
+stderr
+end
+
+case gen/builtins-math-v1/362
+def b456b9abe489
+rc 0
+stdout "array ([]) number required"\n"null (null) number required"\n1e+20\n
+stderr
+end
+
+case gen/builtins-math-v1/363
+def 152f7189f9aa
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/364
+def 53047be36f85
+rc 0
+stdout "array ([]) number required"\n-1\n
+stderr
+end
+
+case gen/builtins-math-v1/365
+def e8b0a833b1bd
+rc 0
+stdout "array ([]) number required"\nnull\n"null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/366
+def 5a978bfb8ac2
+rc 0
+stdout "string (\\"a\\") number required"\n"null (null) number required"\n-3\nnull\n
+stderr
+end
+
+case gen/builtins-math-v1/367
+def 8f860bd63134
+rc 0
+stdout "array ([1]) number required"\n[-0.6557080437422637,105]\n[-0.52490234375,11]\n[0.5,1]\n
+stderr
+end
+
+case gen/builtins-math-v1/368
+def 4914f71050ae
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/369
+def 27ae9fcd476c
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/370
+def fb2e3796ebd3
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/371
+def 11aa8954f5e0
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/372
+def e5633faea5dc
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/373
+def 80f673232a50
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/374
+def ac1b0352635b
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/375
+def 2d2538c4910a
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/376
+def ef267932a345
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/377
+def 4a12ae4f0de3
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/378
+def da51ea55be04
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/379
+def 9b4c469d6a1f
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/380
+def a2de0b671f93
+rc 0
+stdout "boolean (true) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/381
+def f1b42f4f3b91
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/382
+def 564a598fdb74
+rc 0
+stdout "null (null) number required"\n"nan"\n[0,6746518157]\n
+stderr
+end
+
+case gen/builtins-math-v1/383
+def 57ec482156d9
+rc 0
+stdout "array ([1]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/384
+def 04a305231517
+rc 0
+stdout "array ([1]) number required"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/385
+def e20f374e658a
+rc 0
+stdout "string (\\"a\\") number required"\n[-1,7570941464]\n
+stderr
+end
+
+case gen/builtins-math-v1/386
+def fc0bb5a080d7
+rc 0
+stdout "array ([1]) number required"\n[-1,8091718733]\n
+stderr
+end
+
+case gen/builtins-math-v1/387
+def 0b92002101e0
+rc 0
+stdout "array ([1]) number required"\n"nan"\n"nan"\n
+stderr
+end
+
+case gen/builtins-math-v1/388
+def d83212c6b249
+rc 0
+stdout "null (null) number required"\n[11,4518177019]\n[0,-6361911864]\n[0,-5924744555]\n
+stderr
+end
+
+case gen/builtins-math-v1/389
+def a5e42e69ed26
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/390
+def 5fc400034186
+rc 0
+stdout "boolean (false) number required"\n["infinite",1]\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/391
+def 0c6584ff2f53
+rc 0
+stdout "string (\\"a\\") number required"\n[-1,6735153490]\n[0,-4294967296]\n[0,4294967296]\n
+stderr
+end
+
+case gen/builtins-math-v1/392
+def ff8e49b34ea2
+rc 0
+stdout "array ([]) number required"\n[-60,4789443505]\n[-10,6433095581]\n
+stderr
+end
+
+case gen/builtins-math-v1/393
+def b798a404de59
+rc 0
+stdout "array ([]) number required"\n[4,5391670263]\n[0,4294967296]\n[8,7669615598]\n
+stderr
+end
+
+case gen/builtins-math-v1/394
+def f2a0922e9a37
+rc 0
+stdout "array ([1]) number required"\n["infinite",1]\n"string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/395
+def b3b8582efc57
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/396
+def b593fb70e006
+rc 0
+stdout "array ([]) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/397
+def 7ece12e6371a
+rc 0
+stdout "array ([1]) number required"\n[0,7605124619]\n[1,4397386897]\n
+stderr
+end
+
+case gen/builtins-math-v1/398
+def 399c03bb8065
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n[7,6648372733]\n[-5,-7970352502]\n
+stderr
+end
+
+case gen/builtins-math-v1/399
+def 5dc00d286b51
+rc 0
+stdout "null (null) number required"\n["zero",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/400
+def 438b5b59f333
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/401
+def ccf64289d6c1
+rc 0
+stdout "null (null) number required"\n[-1,8568416691]\n[-4,6300596660]\n
+stderr
+end
+
+case gen/builtins-math-v1/402
+def 9a2c92681cc7
+rc 0
+stdout "boolean (false) number required"\n["infinite",1]\n
+stderr
+end
+
+case gen/builtins-math-v1/403
+def e050d69d39c6
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n[-2,4691706231]\n[-4,-7479017284]\n[3,7570642188]\n
+stderr
+end
+
+case gen/builtins-math-v1/404
+def 31507abb1618
+rc 0
+stdout "string (\\"1\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/405
+def a25d8c236846
+rc 0
+stdout "string (\\"a\\") number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/406
+def 2ae174f4a46e
+rc 0
+stdout "null (null) number required"\n
+stderr
+end
+
+case gen/builtins-math-v1/407
+def 256f588ac052
+rc 0
+stdout "object ({\\"a\\":1}) number required"\n
+stderr
+end

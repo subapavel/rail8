@@ -1,0 +1,2450 @@
+# Generated cases of builtins-math-v1 (#312), seeds [0, 408): oracle/src/main/java/dev/rail8/jq/oracle/gen/BuiltinsMathV1.java.
+# Written with builtins-math-v1.rec by scripts/oracle-record.sh --generate builtins-math-v1 0 408, never by hand; a seed that hits a deviation keeps its block and gains deviation and engine-* lines.
+
+case gen/builtins-math-v1/0
+arg -c
+filter -8.180280422090225E-144, 2.1751476130011355E178, "a", 0 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/1
+arg -c
+filter 4.75 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/2
+arg -c
+filter 2.7, 2.7, -1e300, 4.125 | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/3
+arg -c
+filter 0, -3.7, -5 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/4
+arg -c
+filter -9.510812814159006E174, 7.375 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/5
+arg -c
+filter 1.625, 2.5565400437985225E-48 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/6
+arg -c
+filter 1.5 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/7
+arg -c
+filter 2.225073858507201e-308, 1, -8.435428903264395E304, 0 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/8
+arg -c
+filter 100000000000000000001, 5.375, 1.7976931348623157e308, 1.375 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/9
+arg -c
+filter -7.691415804873656E-20, -0.875, -6.875 | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/10
+arg -c
+filter -1, 2 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/11
+arg -c
+filter -5.625, 1.3440259359915483E262, 1.5 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/12
+arg -c
+filter ["a", 2.225073858507201e-308], [-1.6348677437324062E28, 5] | . as [$a, $b] | try copysign($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/13
+arg -c
+filter [-nan, 4.712887289974861E32], [-3.125, -1.75], [1.5563973996234944E-16, -5], [6.568303805848335E-156, 2.225073858507201e-308] | . as [$a, $b] | try drem($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/14
+arg -c
+filter [3.7, -1e300], ["a", -1], [2.7, [1]], [0.5, false] | . as [$a, $b] | try fdim($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/15
+arg -c
+filter [-1, 1.7976931348623157e308], [2.225073858507201e-308, 3.75], [5, 2.7] | . as [$a, $b] | try fmax($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/16
+arg -c
+filter [-nan, 5.95793869059611E-169], [-6.125, -6.5], [-1e300, 3.875], [infinite, 5.875] | . as [$a, $b] | try fmin($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/17
+arg -c
+filter [4.5, -8], [-0.5, 6.75] | . as [$a, $b] | try fmod($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/18
+arg -c
+filter [-1075, 4.0191329802086434E-120], [0, 3.74429057068321E26] | . as [$a, $b] | try ldexp($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/19
+arg -c
+filter [1e19, 3.7], [0.125, true], [nan, 2.2250738585072014e-308] | . as [$a, $b] | try nextafter($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/20
+arg -c
+filter [6.125, 1], ["a", -3.7], [null, []] | . as [$a, $b] | try nexttoward($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/21
+arg -c
+filter [-nan, -2.554028747953516E238], [1.656916469902368E62, -1.3418797435642802E177], [3.875, -2.1048879997822028E-19], [1e300, 3.7] | . as [$a, $b] | try remainder($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/22
+arg -c
+filter [-1.2080039732595224E58, -1.5], [-infinite, -5.25] | . as [$a, $b] | try scalb($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/23
+arg -c
+filter [2.25, 7.5], [-7.25, -5.125], [-3.2383035359824635E-262, -4.469085576605276E-141], [-nan, -0.5] | . as [$a, $b] | try scalbln($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/24
+arg -c
+filter [7.625, -2.2148915489721423E-275, 4.005510927620129E-66], [-6.125, -8.607514706963022E287, 1e300], [nan, 2.72035141624402E9, 5e-324] | . as [$a, $b, $c] | try fma($a; $b; $c) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/25
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.6011579618369302E141 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/26
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.5, (0 * -1) | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/27
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -5e-324, 0 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/28
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4.492208453901952E-151, 5.125, null | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/29
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/30
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.936199678855336E83, -4.75, 4.189461024144832E237, -4.444706108075665E-38 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/31
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4.379235793783955E70, -3.5 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/32
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.2996308742658653E80 | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/33
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/34
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 0.625, -infinite, true | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/35
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1075, 3.0186193751473535E-256 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/36
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.75, 3.7 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/37
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -7.25, (0 * -1), -1e300, 7.25 | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/38
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.75 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/39
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.0744738774836936E-54, -1.0550271101488686E13, 5.125 | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/40
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -nan, -9.81443710395441E-262 | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/41
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4503599627370497 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/42
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -4.594474194199702E179, nan, 1.332804855093665E93 | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/43
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -3.7 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/44
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.875, 1e300 | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/45
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.5, -3.2422818426302745E-161, 5.75, -0.5 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/46
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 5.75, -6.25, {"a":1}, "a" | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/47
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -2.5, 1.375, -1.4639730643496138E-60 | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/48
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [-5e-324, 1.3913998987261422E271], [1.5, 1.2820659074145444E241] | . as [$a, $b] | try (atan2($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/49
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [-6.5, 1] | . as [$a, $b] | try (hypot($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/50
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [2.3902019287868377E-249, 7.375], [-1075, -1e300] | . as [$a, $b] | try (pow($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/51
+arg -c
+filter -5e-324 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/52
+arg -c
+filter true, 3.7 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/53
+arg -c
+filter 3.7, "1", -3.226076939636396E-238, true | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/54
+arg -c
+filter nan, 6.375, -3.5 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/55
+arg -c
+filter 3.7, -1.2286070091688373E123, -1.375 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/56
+arg -c
+filter -1, 4.125, -1.125, nan | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/57
+arg -c
+filter 5 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/58
+arg -c
+filter -1.7976931348623157e308, 1.1131224132508501E-175 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/59
+arg -c
+filter -1075, -1.875, 1024 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/60
+arg -c
+filter 7.625, 1.7976931348623157e308, -8.222100200288426E-85, 5.5 | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/61
+arg -c
+filter {"a":1} | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/62
+arg -c
+filter 5.875, -0.5 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/63
+arg -c
+filter try copysign(7, -9.023574977840595E150; 1.5047004317525632E-102, "1") catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/64
+arg -c
+filter try drem(-5e-324, 0.375; -1075) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/65
+arg -c
+filter try fdim(7.5, 1.7976931348623157e308; 6.875, -7.75) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/66
+arg -c
+filter try fmax(7.25; -1.875) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/67
+arg -c
+filter try fmin(1e19, (0 * -1); true, 2.225073858507201e-308) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/68
+arg -c
+filter try fmod(1e10; 4.661272606147546E-62) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/69
+arg -c
+filter try ldexp(3.875; -4.5, -infinite) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/70
+arg -c
+filter try nextafter(1024, -2; {"a":1}) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/71
+arg -c
+filter try nexttoward((0 * -1), 3.875; 2, 3.7) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/72
+arg -c
+filter try remainder(-5.875, -3.5; -2.199214897083497E216) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/73
+arg -c
+filter try scalb(-2.878028324044999E13; 7.375) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/74
+arg -c
+filter try scalbln(7.5, 2.4064371907585397E91; -6.25, 1024) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/75
+arg -c
+filter try fma(-5e-324; 4.125; -3.419286190707478E-263, -3.875) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/76
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -4.850071573687808E-107, -4.875 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/77
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 0 | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/78
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -3.4518951187199624E70, -6.625, -1.434834109150143E-196 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/79
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -3.375, -6.5 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/80
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.75, 5.25 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/81
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 6.375, "a", 7.75 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/82
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.6041286703508318E15, 2.7, [1] | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/83
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 5.625, 4.125, 1.0673127979139066E132 | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/84
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1e300, 8 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/85
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -2.5 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/86
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], true, 2.225073858507201e-308 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/87
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.75, -1.125 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/88
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.8738740828391524E-143, 0 | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/89
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 7.25, -infinite, -6.375, -2.625 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/90
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1, 0.5, 1024, 1e300 | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/91
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 5.375, -infinite | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/92
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -4.449540759991228E-35, -3.7, -5.375, -1e19 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/93
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 3.375, 8.521987022034867E-94, 2.820625894958235E-79, 1.625 | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/94
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.25, -5.25, (0 * -1), 5.925549558198451E61 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/95
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -nan, -1e19, -1.4238128423284954E-192 | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/96
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.5275643674730391E63 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/97
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.5 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/98
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 7.075471694293169E227, [] | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/99
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (atan2(1e10, -3.9293355052323797E-119; -infinite) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/100
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (hypot(-1.875; -4.514664270750083E113) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/101
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (pow(-6.875, 1.3180578665054716E107; -0.25) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/102
+arg -c
+filter [], 2.225073858507201e-308, -7.625 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/103
+arg -c
+filter [1] | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/104
+arg -c
+filter true, {"a":1}, -1e300, -1.7976931348623157e308 | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/105
+arg -c
+filter true, 100000000000000000001 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/106
+arg -c
+filter true, 0.125 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/107
+arg -c
+filter true, 0, 3.25 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/108
+arg -c
+filter true, -1.290298652819918E111, 3.625 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/109
+arg -c
+filter {"a":1}, 1.9009024378181314E-166, [], -1e19 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/110
+arg -c
+filter false, infinite, [1], 2.225073858507201e-308 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/111
+arg -c
+filter [] | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/112
+arg -c
+filter false, -5.375 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/113
+arg -c
+filter "a", -7.625, -1.7976931348623157e308 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/114
+arg -c
+filter [true, 3.7] | . as [$a, $b] | try copysign($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/115
+arg -c
+filter ["a", 0], [-1e300, -5e-324], [2.5, -2.5] | . as [$a, $b] | try drem($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/116
+arg -c
+filter [false, -2.1492945805918315E199] | . as [$a, $b] | try fdim($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/117
+arg -c
+filter [-3.375, "a"], [false, 1.7976931348623157e308], [-3.75, 1.5], [2.225073858507201e-308, [1]] | . as [$a, $b] | try fmax($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/118
+arg -c
+filter [true, 5.5] | . as [$a, $b] | try fmin($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/119
+arg -c
+filter [2.5, "a"], [-2.25, -2.75], [-1e300, -9.178916738960882E-94], [-0.5, 0.5] | . as [$a, $b] | try fmod($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/120
+arg -c
+filter [-7.5, null], [-1, 6.536367212058842E-12], [5.5, -1075], [5e-324, 7.5] | . as [$a, $b] | try ldexp($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/121
+arg -c
+filter [[], null], ["1", -7.75] | . as [$a, $b] | try nextafter($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/122
+arg -c
+filter [[], -2.25], [-4.125, 2.2250738585072014e-308], [-0.75, -1.024301194433423E125] | . as [$a, $b] | try nexttoward($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/123
+arg -c
+filter ["a", -1.4143123411959034E119], [-0.5, 1e19] | . as [$a, $b] | try remainder($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/124
+arg -c
+filter [{"a":1}, [1]] | . as [$a, $b] | try scalb($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/125
+arg -c
+filter [[1], -6.875], [-1.7976931348623157e308, -4.125] | . as [$a, $b] | try scalbln($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/126
+arg -c
+filter [[], 2.5, -1.093087158464916E219], [-1.625, 2.25, 1.875] | . as [$a, $b, $c] | try fma($a; $b; $c) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/127
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/128
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -3.7, 2.5, "a" | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/129
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, 1024, -1.75 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/130
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], 2.5 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/131
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/132
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 2.225073858507201e-308 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/133
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [] | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/134
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -8, 8390550.490713729, -infinite | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/135
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", true | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/136
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/137
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -3.875 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/138
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -1e300, 1, -1e19 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/139
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, [1] | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/140
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/141
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 2.5, -1075 | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/142
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/143
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, 1, -2.25, 1.858217622062467E41 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/144
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/145
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], 0, 5e-324, -3.2180434283863923E38 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/146
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/147
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 7.375, 1.3156298600420035E-142 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/148
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -2.875, 4.375, -3.7 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/149
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/150
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [[], 6] | . as [$a, $b] | try (atan2($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/151
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [false, 5.875] | . as [$a, $b] | try (hypot($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/152
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [-3.375, null], [-2.75, -infinite] | . as [$a, $b] | try (pow($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/153
+arg -c
+filter true, [], 4.375 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/154
+arg -c
+filter [1], 1.2617248778350722E-15, 100000000000000000001, -5.25 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/155
+arg -c
+filter false | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/156
+arg -c
+filter false | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/157
+arg -c
+filter false, 0.5, -1.75, 1e10 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/158
+arg -c
+filter {"a":1} | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/159
+arg -c
+filter true, -1e300 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/160
+arg -c
+filter null | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/161
+arg -c
+filter {"a":1}, 0.75, [1], 2.75 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/162
+arg -c
+filter "a" | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/163
+arg -c
+filter false, 5.268616245211424E-301, -0.125 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/164
+arg -c
+filter null | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/165
+arg -c
+filter try copysign(2.875; [], -0.375) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/166
+arg -c
+filter try drem([1], -1.256189575154769E-150; -1e19, -5) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/167
+arg -c
+filter try fdim({"a":1}; -6.5, 7.68654234878052E-148) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/168
+arg -c
+filter try fmax({"a":1}, true; 6.625) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/169
+arg -c
+filter try fmin("a"; 1e300, -3.7) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/170
+arg -c
+filter try fmod(-2.625; [], -1075) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/171
+arg -c
+filter try ldexp(-3.5; false) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/172
+arg -c
+filter try nextafter(4503599627370497; false, -1.75) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/173
+arg -c
+filter try nexttoward(-4.125, -7; false, 1e10) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/174
+arg -c
+filter try remainder(2.5, -2.6032084786393738E219; [1], -5e-324) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/175
+arg -c
+filter try scalb([1], infinite; nan, -1.25) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/176
+arg -c
+filter try scalbln(3.7; null, -2.5) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/177
+arg -c
+filter try fma(true, 2.135551121591535E92; 3.8481978222038457E-277; {"a":1}) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/178
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -3.0994460575320085E45, -1.7976931348623157e308 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/179
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, -0.25, -3.8176135657243287E-121, 7.75 | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/180
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, -4.5, 1 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/181
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, -1.375, -6.625 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/182
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", -1.7976931348623157e308, -4 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/183
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, -2.25, -2.5, -1.623738192867761E-279 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/184
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, [1], 4, 4503599627370497 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/185
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, -1075, {"a":1}, 1.7976931348623157e308 | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/186
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1} | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/187
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, 1 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/188
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", -1.5, 1.7976931348623157e308, 0.5 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/189
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/190
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, -1e19, -1e19 | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/191
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, false, -1.6879222518128926E215 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/192
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [] | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/193
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, 2.25, -1.25 | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/194
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, -6.75, -infinite | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/195
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/196
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, 1.1727763540012726E-9, -2.8046177452647157E163, -7.375 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/197
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/198
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, 5e-324, -infinite, 1 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/199
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", -6.625, 1e10 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/200
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/201
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (atan2("a", -1.7976931348623157e308; 2.5) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/202
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (hypot([], 4.5; "1") | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/203
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (pow("1", 0.5; -3.375, -2.5) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/204
+arg -c
+filter false, 5.2648354586394514E94, 5e-324 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/205
+arg -c
+filter 2.7, -1.875, 100000000000000000001 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/206
+arg -c
+filter 0.5, 0, 1e300 | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/207
+arg -c
+filter 8.190858775218652E17, 0.125 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/208
+arg -c
+filter -2.4599291835548426E294 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/209
+arg -c
+filter -1.5674121540541748E282 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/210
+arg -c
+filter -1e19 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/211
+arg -c
+filter -1.625, -1.75 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/212
+arg -c
+filter 1024, -4.087875793510101E220, 5e-324 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/213
+arg -c
+filter 2.5, -1.0915162973409354E73, false, (0 * -1) | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/214
+arg -c
+filter -1.2467029445820574E-154 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/215
+arg -c
+filter 2.5 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/216
+arg -c
+filter [-5.625, 3.875] | . as [$a, $b] | try copysign($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/217
+arg -c
+filter [-5.875, -1075], [-4.140703243518841E113, 0.75], ["a", -2.375], [4.25, 2.225073858507201e-308] | . as [$a, $b] | try drem($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/218
+arg -c
+filter [-4.25, -1e300], [1.625, 6.75], [4.125, 0.5], [1.5, 1e10] | . as [$a, $b] | try fdim($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/219
+arg -c
+filter [4.684939073959102E306, 7.5] | . as [$a, $b] | try fmax($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/220
+arg -c
+filter [0.25, 2.5], [-7.5, 5.5], [2.7, -6.25] | . as [$a, $b] | try fmin($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/221
+arg -c
+filter [6.75, 1.1842597998894426E-253], [-1e300, -6.25], [4.625, -0.125], [1.7976931348623157e308, 3.7101889349183645E-171] | . as [$a, $b] | try fmod($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/222
+arg -c
+filter [8.110572136200917E276, -1.2751347385541841E-304], [2.875, -1.3191091659137996E66] | . as [$a, $b] | try ldexp($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/223
+arg -c
+filter [1.7976931348623157e308, 1e10], [1.5, "a"] | . as [$a, $b] | try nextafter($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/224
+arg -c
+filter [-2.375, -2.5] | . as [$a, $b] | try nexttoward($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/225
+arg -c
+filter [-5e-324, -1075], [0.5, infinite], [0, nan], [false, 1e19] | . as [$a, $b] | try remainder($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/226
+arg -c
+filter [4.5, [1]], [(0 * -1), -nan], [-2.5, {"a":1}] | . as [$a, $b] | try scalb($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/227
+arg -c
+filter [7.388676969046875E65, 2.5], [3, 2.2250738585072014e-308], [-8.301877452477638E-194, -3.375] | . as [$a, $b] | try scalbln($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/228
+arg -c
+filter [2.7, 1e19, 5.25], [infinite, 3.7275337902594623E65, "a"], [-9.113642079834771E50, "a", 100000000000000000001], [-2.1252757814253553E-154, 1024, 1.537446212286299E234] | . as [$a, $b, $c] | try fma($a; $b; $c) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/229
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 7.875, -6.625, 1e10, [] | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/230
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 100000000000000000001, 4.5, -3.75, 1 | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/231
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1, 2.7 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/232
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1024, 1e10, 1e10, 2.5 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/233
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 0.5, 2.4352037231794094E-265, -5.75, -1075 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/234
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -6.625 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/235
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.9950075397742136E184, 4503599627370497 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/236
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.5, "a" | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/237
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.75 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/238
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 9.791593662208195E32, -1.75, 0.875, 0.5 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/239
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -6.625, -1.625, 2.375 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/240
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -infinite, 1.683861846726881E-214, 100000000000000000001, 2.2250738585072014e-308 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/241
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4503599627370497, -5.625, 3.75 | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/242
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -7.75, [1], 2.7 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/243
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 0.5, 3.847548125472434E-278, 1.96385193897232E-29, null | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/244
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/245
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -2, -5e-324, 2.7 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/246
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1, 4.125, -3.988772828548404E21 | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/247
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 5.25, 6.581080656570193E-53 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/248
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.401526672255777E72, 2, -infinite | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/249
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.2250738585072014e-308, 5e-324 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/250
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 6.625, -4.25, null | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/251
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -5e-324, false, -8.392680501505364E209 | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/252
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [-9.835872558892994E-183, 1.607893402941659E49], ["a", {"a":1}], [5.75, 1.7976931348623157e308], [1024, -1.25] | . as [$a, $b] | try (atan2($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/253
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [[1], 4.180191157948227E-145], [5e-324, 1e10], [-2.2256135435915104E156, 1.5] | . as [$a, $b] | try (hypot($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/254
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [-4.375, -0.5] | . as [$a, $b] | try (pow($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/255
+arg -c
+filter [], 7.5, -9.488453379241037E301 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/256
+arg -c
+filter -1.7976931348623157e308, 6.5, -3.7, -infinite | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/257
+arg -c
+filter 4.375, -5e-324, 2.2250738585072014e-308 | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/258
+arg -c
+filter 1024, -5e-324, 4.25 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/259
+arg -c
+filter 1.25 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/260
+arg -c
+filter (0 * -1), -4.625 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/261
+arg -c
+filter -0.375, {"a":1} | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/262
+arg -c
+filter 4503599627370497, 1.1552649882442643E48, -4.5 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/263
+arg -c
+filter -3.25, [], -3.1761471606548843E92 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/264
+arg -c
+filter 7.470709453448739E-73, [1], "1" | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/265
+arg -c
+filter 2.5, nan, 4.6460409800453736E-5, -4.625 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/266
+arg -c
+filter 1.875 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/267
+arg -c
+filter try copysign(7.75, {"a":1}; -1e300) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/268
+arg -c
+filter try drem(5; -4.300163232876866E-266) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/269
+arg -c
+filter try fdim(1e19; nan) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/270
+arg -c
+filter try fmax(1.5; -2.58754931252604E51, 0) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/271
+arg -c
+filter try fmin(3.154048275858062E257, 0; -2.5, -5e-324) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/272
+arg -c
+filter try fmod(-1; 1.5923002451900723E212, 1.7976931348623157e308) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/273
+arg -c
+filter try ldexp(5.0072701699684655E-234; -1.4450630045467157E307, 1024) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/274
+arg -c
+filter try nextafter(null; -1e19) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/275
+arg -c
+filter try nexttoward(-2.5; -nan, -2.5) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/276
+arg -c
+filter try remainder(-1; 100000000000000000001, 4.432208426661056E-267) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/277
+arg -c
+filter try scalb(-3; 3.7729524589701305E-262, 2.225073858507201e-308) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/278
+arg -c
+filter try scalbln(-5.375, 4.375; -15.785255857743348, "1") catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/279
+arg -c
+filter try fma(-4; 6.875; 5.75) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/280
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -5.798606508952189E222, 2.707424385156994E299 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/281
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -3 | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/282
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1, true, -1 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/283
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.0652751986553948E-172, -2.5, -1e300, 100000000000000000001 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/284
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -0.5, 1.5, 4.25 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/285
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 2.1509145114423137E73, 3.75 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/286
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -9.252648247963826E-266 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/287
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 5.0935850310266E143 | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/288
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 3.7, -6.125, -0.5, 1.3230880327905338E-267 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/289
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -4.129039431099112E14, 4503599627370497, 1.375, 1 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/290
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, -8.755887484372622E94, -3.7 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/291
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 3.7 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/292
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1, 0.125, 4.659907585348733E-179 | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/293
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -4.588403286885914E115, -1.7976931348623157e308, -1.7992685916075972E171, 2.25 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/294
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; (0 * -1), 2.889278066159991E-134, 3.75, -0.875 | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/295
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 1.7645892863369462E171, [1] | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/296
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; 4.875, 1e300, 2.875, 5.25 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/297
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1075, 2.225073858507201e-308, infinite | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/298
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -nan | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/299
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -1.37706248563216E238 | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/300
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], -4.375 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/301
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -7, 4503599627370497, 1.375 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/302
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; -2.2780028562439686E163 | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/303
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (atan2(1.7976931348623157e308, -2.823619194469755E106; 0.25) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/304
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (hypot(-5e-324; -3.125) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/305
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (pow(-0.5; nan, 0) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/306
+arg -c
+filter null | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/307
+arg -c
+filter [], 6.805660448847616E-281, -1.4673931545483044E-195 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/308
+arg -c
+filter [1], 1e300, 1e19 | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/309
+arg -c
+filter null | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/310
+arg -c
+filter "a", -0.125, -2.4423333515292114E32 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/311
+arg -c
+filter [1], 6.5, true, 4.595986655245187E-18 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/312
+arg -c
+filter true, true, 100000000000000000001, -5.125 | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/313
+arg -c
+filter null, 5.375, -9.430038624124047E280 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/314
+arg -c
+filter true, 0, -1e300 | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/315
+arg -c
+filter null, 1024, 2.7, -2.6859552969640194E126 | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/316
+arg -c
+filter null | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/317
+arg -c
+filter null, -2.375, (0 * -1), 0 | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/318
+arg -c
+filter [null, 4.625], [null, 0] | . as [$a, $b] | try copysign($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/319
+arg -c
+filter ["a", 6.25], [-infinite, 9.408733357803515E50], [100000000000000000001, -6.625] | . as [$a, $b] | try drem($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/320
+arg -c
+filter [{"a":1}, 7.125] | . as [$a, $b] | try fdim($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/321
+arg -c
+filter [-1e300, []], [-3.75, 2.7], [-1.8258467259877907E-95, 8.039509511330176E-19], [7.25, -6.875] | . as [$a, $b] | try fmax($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/322
+arg -c
+filter [5e-324, []] | . as [$a, $b] | try fmin($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/323
+arg -c
+filter [1, []], [-4.802902643275398E151, -2.375] | . as [$a, $b] | try fmod($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/324
+arg -c
+filter [[], -1.6964613016619156E-37], [-0.5, -3.625], [5e-324, -3] | . as [$a, $b] | try ldexp($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/325
+arg -c
+filter [[], 1024], [-6.5, "1"] | . as [$a, $b] | try nextafter($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/326
+arg -c
+filter ["1", -1.375], [-1.3026785416937405E-56, "1"], [1024, -0.5], [5.64860732659307E-232, 1.375] | . as [$a, $b] | try nexttoward($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/327
+arg -c
+filter [-3.0020186776988574E12, null] | . as [$a, $b] | try remainder($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/328
+arg -c
+filter [{"a":1}, -1.1319776910529247E235] | . as [$a, $b] | try scalb($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/329
+arg -c
+filter [-infinite, {"a":1}], [-3.2169402690317035E238, null], [-infinite, -1.375], [{"a":1}, -2.25] | . as [$a, $b] | try scalbln($a; $b) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/330
+arg -c
+filter [-3.125, -5.375, null], [0.5, 7.875, -1e300], [2.225073858507201e-308, nan, 2.225073858507201e-308] | . as [$a, $b, $c] | try fma($a; $b; $c) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/331
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -2.5 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/332
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 1.9967518204675443E-256, -0.375, -5e-324 | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/333
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1" | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/334
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], 1.875, (0 * -1) | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/335
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -8, 1e300, (0 * -1) | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/336
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", 2.5, -0.125 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/337
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", 1.5, -7.3319111267607645E-236, -3.0454044435700515E-292 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/338
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, -1.0393264405571048E-197, 0 | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/339
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], 2.875, -3.9356855669387366E258, -3.809714072671198E-209 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/340
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, 1.7976931348623157e308, 4, -1 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/341
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, -3.25 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/342
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; true, -5.625, 1.125 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/343
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/344
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, 2.625, null, 2.519214853839709E-53 | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/345
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/346
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -3.7, 0.5, -4 | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/347
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, -1.0022467533070129E46, -nan, 2.2250738585072014e-308 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/348
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -8 | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/349
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, -5, 1.7976931348623157e308 | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/350
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 6.941752239595855E54, 1.9339752304071664E166 | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/351
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], -0.375, 1e10 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/352
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1", -0.875 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/353
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, 3.228620864828765E-260, -6.5, -2.5 | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/354
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1.7146802852630063E-187, "1"] | . as [$a, $b] | try (atan2($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/355
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [6.875, false] | . as [$a, $b] | try (hypot($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/356
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [{"a":1}, -6.125], [-7.043089325832994E-11, 4.575122703535858E283], [-4.9939417121612585E28, 7.25], [2.2250738585072014e-308, -1e19] | . as [$a, $b] | try (pow($a; $b) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/357
+arg -c
+filter [], -6.128765259470754E-293, -2.4275369441741487E82 | try ceil catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/358
+arg -c
+filter "a", -1e19 | try fabs catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/359
+arg -c
+filter "1" | try floor catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/360
+arg -c
+filter "a", -2.6620823622283557E193, {"a":1}, 1.8076339580665073E-236 | try logb catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/361
+arg -c
+filter true, -0.5, 1.5 | try nearbyint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/362
+arg -c
+filter [], null, 100000000000000000001 | try rint catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/363
+arg -c
+filter [1] | try round catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/364
+arg -c
+filter [], -1 | try significand catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/365
+arg -c
+filter [], -5.875, null | try sqrt catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/366
+arg -c
+filter "a", null, -3.125, -nan | try trunc catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/367
+arg -c
+filter [1], -2.6598678247179476E31, -1075, 1 | try frexp catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/368
+arg -c
+filter [1] | try modf catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/369
+arg -c
+filter try copysign([1], 2.7; "1") catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/370
+arg -c
+filter try drem("a"; 6) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/371
+arg -c
+filter try fdim([]; 5.125) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/372
+arg -c
+filter try fmax(-3.25; [1]) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/373
+arg -c
+filter try fmin(-1.5022903354882833E229; "1") catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/374
+arg -c
+filter try fmod(-1.7976931348623157e308, 3.7; true) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/375
+arg -c
+filter try ldexp(infinite, -4.125; true, 1.5) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/376
+arg -c
+filter try nextafter("a", -7.5; 4503599627370497) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/377
+arg -c
+filter try nexttoward(-1075; true) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/378
+arg -c
+filter try remainder(null, -3.75; 1024) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/379
+arg -c
+filter try scalb(null, 0; 1e300, -1075) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/380
+arg -c
+filter try scalbln(true; -1e19, -0.75) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/381
+arg -c
+filter try fma(null, 3.7; 0.5; 2.7, 2) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/382
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 2.375, 1.618308780414318E-7 | try (acos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/383
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1] | try (acosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/384
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], -4.75 | try (asin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/385
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 1 | try (asinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/386
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], 1.375 | try (atan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/387
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], 1.375, -2 | try (atanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/388
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 1e10, -3.25, -2.625 | try (cbrt | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/389
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1} | try (cos | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/390
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, -1e300, 4.95843554639016E151 | try (cosh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/391
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a", 0.875, -6.875, 4503599627370497 | try (erf | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/392
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], 6.25, 2.25 | try (erfc | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/393
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [], 3, -8.719823530764993E-188, 6.125 | try (exp | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/394
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], 1.7976931348623157e308, "a" | try (exp10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/395
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "a" | try (exp2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/396
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [] | try (expm1 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/397
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; [1], 5.875, 7.75 | try (log | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/398
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, 1.3707161983206444E198, 0.875 | try (log10 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/399
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 0 | try (log1p | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/400
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1} | try (log2 | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/401
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; null, 1.5, 6.375 | try (sin | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/402
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; false, 6.515244406491584E53 | try (sinh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/403
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; {"a":1}, -2.875, -3.25, 1.5 | try (tan | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/404
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; "1" | try (tanh | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/405
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (atan2("a"; null) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/406
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (hypot(null, 0.5; 5.75) | p) catch .
+stdin null\n
+end
+
+case gen/builtins-math-v1/407
+arg -c
+filter def p: if isnan then "nan" elif isinfinite then ["infinite", copysign(1; .)] elif . == 0 then ["zero", copysign(1; .)] elif isnormal then [logb, (significand * 4294967296 | rint)] else ["subnormal", copysign(1; .)] end; try (pow(-9.875286872219719E-40; {"a":1}, []) | p) catch .
+stdin null\n
+end

@@ -37,7 +37,8 @@ from jq-ref on all 17 functions tried (F-65).
 - **Checked by bounds, not digits**: one `DEVIATIONS.md` section, "libm last digits", covers the
   36, each function's row with its measured ulp bound. A JUnit test holds each function to its bound
   against jq-ref's results on a recorded sample. `builtins-math-v1` sees a computed result only
-  through exact functions and never calls the 12 (ADR-0020's spec-4 amendment).
+  through exact functions and never calls the Bessel and gamma functions, the 10 of the last math
+  ticket; it calls `erf` and `erfc` (ADR-0020's spec-4 amendment, #389).
 - **`jn` and `yn` tick** once per 1 024 steps of any loop that grows with the order, so the
   deadline and a cancel reach them (ADR-0008, F-69). No other math builtin ticks.
 - **Facts**: every math native declares path NONE and is pure, in its own ticket (spec 3's Facts).
