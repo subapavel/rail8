@@ -5,6 +5,7 @@ import dev.rail8.api.Body;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Keys;
 import dev.rail8.core.record.Snapshot;
+import dev.rail8.runtime.access.Action;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -58,6 +59,10 @@ class AdminServerUsersTest extends AdminAccessFixture {
         assertTrue(answer.getString("session").matches(SESSION_FORM), answer.encode());
         assertEquals(rt.clock().instant().plus(Duration.ofHours(12)).toString(), answer.getString("expiresAt"));
         assertEquals(7200L, answer.getLong("idleSeconds"));
+        JsonObject refused = (JsonObject) answer.getJsonObject("me").remove("refused");
+        assertEquals(Action.values().length - 3, refused.size(), refused.encode());
+        refused.forEach(entry -> assertEquals("password-change-required", ((JsonObject) entry.getValue()).getString("code"), entry.getKey()));
+        assertEquals(new JsonObject().put("code", "password-change-required").put("needs", new JsonArray().add("operator")), refused.getJsonObject("message.read"));
         assertEquals(new JsonObject().put("name", "alice").put("kind", "person").put("roles", new JsonArray().add("operator"))
                 .put("actions", new JsonArray().add("self.read").add("self.password").add("self.logout")).put("via", "session")
                 .put("firstPassword", true).put("expiresAt", answer.getString("expiresAt")).put("emergencyKey", false), answer.getJsonObject("me"));
@@ -83,6 +88,9 @@ class AdminServerUsersTest extends AdminAccessFixture {
         assertTrue(admin.getJsonArray("actions").contains("user.create"), admin.encode());
 
         JsonObject theKey = get("/admin/me", KEY).json();
+        JsonObject refused = (JsonObject) theKey.remove("refused");
+        assertEquals(new JsonObject().put("code", "not-allowed").put("needs", new JsonArray().add("operator")), refused.getJsonObject("message.read"));
+        assertEquals(Action.values().length - 9, refused.size(), refused.encode());
         assertEquals(new JsonObject().put("name", "emergency-key").put("kind", null).put("roles", new JsonArray())
                 .put("actions", new JsonArray(List.of("user.read", "user.create", "administrators.change", "user.block", "user.password-reset",
                         "session.end", "token.read", "token.revoke", "self.read")))

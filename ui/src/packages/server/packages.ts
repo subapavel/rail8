@@ -1,6 +1,7 @@
 import type { Dirent } from 'node:fs';
 import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isSessionRefused } from '../../../server/session.ts';
 import { MAX_FILE_BYTES, Refusal } from '../../../server/workingFolder.ts';
 import type { Busy, Commit, Deployed, PackageList, PackageRow } from '../api.ts';
 import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS } from '../rules.ts';
@@ -124,7 +125,7 @@ export async function rowOf(git: Runner, clone: string, repository: string, node
  * are no package, with what git said.
  * The list ends at the {@link MAX_PACKAGES}th package, at most as many folders that are no package are listed, and
  * `truncated` says when there are more. Rejects with the
- * runner's 503 when git cannot be run for the list at all.
+ * runner's 503 when git cannot be run for the list at all, and with the session's refusal by the node.
  */
 export async function listPackages(git: Runner, root: string, node: NodeState): Promise<Pick<PackageList, 'packages' | 'others' | 'truncated'>> {
   const entries = (await readdir(root, { withFileTypes: true }))
@@ -148,7 +149,7 @@ export async function listPackages(git: Runner, root: string, node: NodeState): 
           const found = await folderOf(git, root, entry);
           return 'reason' in found ? found : { row: await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone)) };
         } catch (error) {
-          if (error instanceof Refusal && error.status === 503) throw error;
+          if ((error instanceof Refusal && error.status === 503) || isSessionRefused(error)) throw error;
           return { reason: `git could not read it: ${error instanceof Error ? error.message : String(error)}` };
         }
       }),

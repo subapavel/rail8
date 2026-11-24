@@ -4,7 +4,7 @@ import { mappingApi } from './files/mappingApi.ts';
 
 /**
  * The mapping module's half of the development server: it answers the studio's `/api` over the mapping files of the
- * working folder that RAIL8_WORKSPACE names, and asks the node at RAIL8_ADMIN_URL, with RAIL8_ADMIN_TOKEN, for the
+ * working folder that RAIL8_WORKSPACE names, and asks the node at RAIL8_ADMIN_URL, with each request's credential, for the
  * engine's work, as the `/admin` proxy does. Mappings may be saved and created unless RAIL8_READ_ONLY is `true`, and
  * every save and create takes the working folder's lock for its write. The studio's fake service may read its fixtures
  * from the mapping corpus and contract.

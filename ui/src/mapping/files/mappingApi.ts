@@ -3,6 +3,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, join } from 'node:path';
 import { foreign } from '../../../server/adminProxy.ts';
+import { isSessionRefused, nodeFor, refusedSession, type NodeCall } from '../../../server/session.ts';
 import { admitted, Refusal, replaceFile, writeNew, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import {
   baseFolder,
@@ -27,8 +28,8 @@ export interface MappingApiOptions {
   editable: boolean;
   /** The development server's own origins; a POST or PUT with any other `Origin` is refused. */
   origins: readonly string[];
-  /** The node's admin API, such as `http://127.0.0.1:8081`, and the bearer token it needs, if any. */
-  node: { target: string; token?: string };
+  /** The node's admin API, such as `http://127.0.0.1:8081`; each request reaches it with the credential the session gate gave it. */
+  node: { target: string };
   /** Makes the signal that ends one call to the node; by default after {@link CALL_SECONDS}. */
   deadline?: () => AbortSignal;
   /** The working folder's writes, which admit every save and create, and whose lock each takes for its write. */
@@ -46,6 +47,7 @@ const MAX_CALL_BYTES = 16 * 1024 * 1024;
 
 const FILES_NEEDED = mappingProblem('files-needed');
 const BUSY = 'urn:rail8:admin:problem:busy';
+const FORBIDDEN = 'urn:rail8:admin:problem:forbidden';
 const ACTIONS = new Set(['compile', 'refresh', 'test']);
 
 /** An answer of the node, or of this server: its status and its JSON, as bytes. */
@@ -142,13 +144,14 @@ function routeOf(method: string, path: string): Route {
  *   a create when the folder is shown read-only; 415 for a body that is not JSON; 413 `too-large` when the body, or it
  *   and the bundle files, are over 12 MiB, before the call that would carry them. A node that does not answer within
  *   {@link CALL_SECONDS}, is down, refuses the token, has no such route or answers what it must not is 502
- *   `node-unavailable`; its 503 `busy` is passed on as it is. A save or a create that finds too many writes of the
- *   working folder under way is 503 `busy` too. A call to the node ends when the browser's request closes.
+ *   `node-unavailable`; its 503 `busy` and its 403 `forbidden`, with the roles it needs, are passed on as they are.
+ *   The session's refusal by the node is 401, as the session gate answers it. A save or a create that finds too many
+ *   writes of the working folder under way is 503 `busy` too. A call to the node ends when the browser's request closes.
+ * - Every call to the node goes through the client of the request, as the session gate admitted it.
  *
  * Every path outside `/api` goes to `next`.
  */
 export function mappingApi(options: MappingApiOptions) {
-  const { node } = options;
   let writes: Promise<unknown> = Promise.resolve();
   const locked = <T>(write: () => Promise<T>): Promise<T> => {
     const done = writes.then(write);
@@ -158,10 +161,12 @@ export function mappingApi(options: MappingApiOptions) {
 
   const unavailable = (detail: string) => new Problem(502, mappingProblem('node-unavailable'), 'Node unavailable', detail);
 
-  /** The reply of the node to a call of `op`, a POST with `call` or a GET without; 502 unless it is one to pass on. */
-  const ask = async (op: string, call: Record<string, unknown> | undefined, signal: AbortSignal): Promise<Answer & { json: unknown }> => {
+  /**
+   * The reply of the node to a call of `op`, a POST with `call` or a GET without, through the request's client `node`;
+   * 502 unless it is one to pass on. The session's refusal rejects as it is.
+   */
+  const ask = async (node: NodeCall, op: string, call: Record<string, unknown> | undefined, signal: AbortSignal): Promise<Answer & { json: unknown }> => {
     const headers: Record<string, string> = {};
-    if (node.token) headers.authorization = `Bearer ${node.token}`;
     let body: string | undefined;
     if (call !== undefined) {
       body = JSON.stringify(call);
@@ -173,7 +178,7 @@ export function mappingApi(options: MappingApiOptions) {
     let type: string;
     let bytes: Buffer;
     try {
-      const reply = await fetch(`${node.target}/admin/modules/mapping/${op}`, {
+      const reply = await node.send(`${node.target}/admin/modules/mapping/${op}`, {
         method: call === undefined ? 'GET' : 'POST',
         headers,
         body,
@@ -183,7 +188,7 @@ export function mappingApi(options: MappingApiOptions) {
       type = (reply.headers.get('content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
       bytes = Buffer.from(await reply.arrayBuffer());
     } catch (error) {
-      if (signal.aborted) throw error;
+      if (signal.aborted || isSessionRefused(error)) throw error;
       if (deadline.aborted) throw unavailable(`the node at ${node.target} did not answer within ${CALL_SECONDS} s`);
       throw unavailable(`the node at ${node.target} does not answer (is it running?): ${String(error)}`);
     }
@@ -197,6 +202,7 @@ export function mappingApi(options: MappingApiOptions) {
     if (type === 'application/problem+json' && isRecord(json) && json.status === status && typeof json.type === 'string') {
       if (status >= 400 && status < 500 && json.type.startsWith(mappingProblem(''))) return { status, body: bytes, json };
       if (status === 503 && json.type === BUSY) return { status, body: bytes, json };
+      if (status === 403 && json.type === FORBIDDEN) return { status, body: bytes, json };
     }
     const said = isRecord(json) && typeof json.type === 'string' ? ` ${json.type}` : isRecord(json) && typeof json.error === 'string' ? `: ${json.error}` : '';
     throw unavailable(`the node at ${node.target} answered ${status}${said}, which is not an answer of its mapping module`);
@@ -207,9 +213,9 @@ export function mappingApi(options: MappingApiOptions) {
    * answers `files-needed`, `place` gives the folder they are relative to and they are sent in a second call. `place`
    * is also asked when the first answer is no refusal, so that it can refuse the request. `reads` is canonical's.
    */
-  const operate = async (op: string, request: Buffer, place: () => Promise<BundleFolder>, signal: AbortSignal, reads?: 'stored' | 'sent') => {
+  const operate = async (node: NodeCall, op: string, request: Buffer, place: () => Promise<BundleFolder>, signal: AbortSignal, reads?: 'stored' | 'sent') => {
     const call = { request: request.toString('base64'), ...(reads === undefined ? {} : { reads }) };
-    const first = await ask(op, call, signal);
+    const first = await ask(node, op, call, signal);
     const needed = isRecord(first.json) && first.json.type === FILES_NEEDED;
     if (first.status >= 400 && !needed) return first;
     const at = await place();
@@ -230,7 +236,7 @@ export function mappingApi(options: MappingApiOptions) {
       if (total > MAX_RAW_BYTES) throw tooLarge(`the request and the bundle files it reads are over 12 MiB, at ${reference}`);
       files[reference] = (await readFile(found.path)).toString('base64');
     }
-    const second = await ask(op, { ...call, files, escaping }, signal);
+    const second = await ask(node, op, { ...call, files, escaping }, signal);
     if (isRecord(second.json) && second.json.type === FILES_NEEDED) throw unavailable('the node asked twice for the files of one request');
     return second;
   };
@@ -248,7 +254,8 @@ export function mappingApi(options: MappingApiOptions) {
   };
 
   const answer = async (req: IncomingMessage, route: Route, signal: AbortSignal): Promise<Answer> => {
-    if (route.op === 'catalogue') return ask('catalogue', undefined, signal);
+    const node = nodeFor(req, options.node.target);
+    if (route.op === 'catalogue') return ask(node, 'catalogue', undefined, signal);
     const root = await rootOf();
     switch (route.op) {
       case 'list': {
@@ -258,7 +265,7 @@ export function mappingApi(options: MappingApiOptions) {
       case 'get': {
         const file = await mappingFile(root, route.id);
         const at = await bundleFolder(root, await mappingFolder(root, route.id));
-        return model(await operate('canonical', await storedBytes(file), async () => at, signal, 'stored'));
+        return model(await operate(node, 'canonical', await storedBytes(file), async () => at, signal, 'stored'));
       }
       case 'save': {
         const { id } = route;
@@ -273,11 +280,12 @@ export function mappingApi(options: MappingApiOptions) {
             let read: Buffer | undefined;
             if (ifMatch !== undefined) {
               read = await storedBytes(file);
-              const stored = await operate('canonical', read, async () => at, signal, 'stored');
-              if (stored.status === 503) return stored;
+              const stored = await operate(node, 'canonical', read, async () => at, signal, 'stored');
+              // the node's refusal of this caller is passed on as it is, before the tags are compared
+              if (stored.status === 503 || stored.status === 403) return stored;
               if (stored.status !== 200 || etagOf(stored.body) !== ifMatch) throw changed();
             }
-            const saved = await operate('canonical', sent, async () => at, signal, 'sent');
+            const saved = await operate(node, 'canonical', sent, async () => at, signal, 'sent');
             // the path must still lead to the file, and the file still hold the bytes the tag was made of: a file a pull
             // removed or changed while the node was asked is kept
             const unchanged = async () => {
@@ -297,7 +305,7 @@ export function mappingApi(options: MappingApiOptions) {
           // The id and its folder are checked before the node is asked; a body that names no id is the node's to refuse.
           const named = id === '' ? undefined : await mappingFolder(root, id);
           const folder = async () => named ?? mappingFolder(root, id);
-          const created = await operate('create', sent, async () => bundleFolder(root, await folder()), signal);
+          const created = await operate(node, 'create', sent, async () => bundleFolder(root, await folder()), signal);
           if (created.status !== 201) return created;
           const into = join(await folder(), basename(id) + SUFFIX);
           return locked(async () => {
@@ -310,11 +318,11 @@ export function mappingApi(options: MappingApiOptions) {
       case 'structure': {
         const sent = await bodyOf(req);
         const at = await bundleFolder(root, await baseFolder(root, memberOf(sent, 'base')));
-        return operate('structure', sent, async () => at, signal);
+        return operate(node, 'structure', sent, async () => at, signal);
       }
       default: {
         const at = await bundleFolder(root, await mappingFolder(root, route.id));
-        return operate(route.op, await bodyOf(req), async () => at, signal);
+        return operate(node, route.op, await bodyOf(req), async () => at, signal);
       }
     }
   };
@@ -351,6 +359,7 @@ export function mappingApi(options: MappingApiOptions) {
       (done) => reply(res, done),
       (error: unknown) => {
         if (stop.signal.aborted || res.headersSent) res.destroy();
+        else if (isSessionRefused(error)) refusedSession(res, error, true);
         else if (error instanceof Problem) reply(res, { status: error.status, body: Buffer.from(JSON.stringify(error.json())) });
         else if (error instanceof Refusal && error.status === 503) {
           // too many writes of the working folder are under way: nothing was done, and the request may be sent again

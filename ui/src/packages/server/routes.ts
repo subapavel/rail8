@@ -1,6 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
+import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
 import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import type { PackageList } from '../api.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
@@ -21,13 +22,13 @@ export interface GitPackagesOptions {
   writes: WorkingFolderWrites;
   /** The development server's own origins; a request with any other `Origin` is refused. */
   origins: readonly string[];
-  /** The node whose deployed state the rows show. */
+  /** The node whose deployed state the rows show; each request reaches it with the credential the session gate gave it. */
   node: NodeTarget;
   git: Runner;
   /** The check of git made when the development server started: null when git serves, else why it does not. */
   ready: Promise<string | null>;
   timer: Timer;
-  /** What calls the node; the runtime's `fetch` by default. */
+  /** What calls the node, under each request's credential; the runtime's `fetch` by default. */
   fetch?: typeof fetch;
 }
 
@@ -58,7 +59,10 @@ const PREFIX = '/git';
  * path outside it, no file there or a commit the clone lacks; 403 a path whose real path leaves the package's real
  * folder; 413 a file over the read limit of 1 MiB.
  *
- * Every refusal is `{error}`, `{error, output}` or `{error, problems}`. Every other path goes to `next`.
+ * Every call to the node goes through the client of the request, as the session gate admitted it. The session's refusal
+ * by the node is answered as the gate answers it (401), but after a commit, which was made: its 200 then carries
+ * `package: null` and the reason. Every other refusal is `{error}`, `{error, output}` or `{error, problems}`. Every
+ * other path goes to `next`.
  */
 export function gitPackages(options: GitPackagesOptions) {
   const host = hostOf(options.node.target);
@@ -70,15 +74,16 @@ export function gitPackages(options: GitPackagesOptions) {
       throw new Refusal(404, `the working folder ${workspace} does not exist`);
     }
   };
-  const nodeState = (): NodeState => {
+  const nodeState = (req: IncomingMessage): NodeState => {
+    const node = nodeFor(req, options.node.target, options.fetch);
     let answer: Promise<NodeRead> | undefined;
-    return { host, read: () => (answer ??= readNode(options.node, options.timer, options.fetch)) };
+    return { host, read: () => (answer ??= readNode(node, options.timer)) };
   };
 
-  const list = async (): Promise<PackageList> => {
+  const list = async (req: IncomingMessage): Promise<PackageList> => {
     const shown = { writable: options.writable, node: host };
     if (options.workspace === undefined) return { configured: false, ...shown, packages: [], others: [], truncated: false };
-    return { configured: true, ...shown, ...(await listPackages(options.git, await rootOf(options.workspace), nodeState())) };
+    return { configured: true, ...shown, ...(await listPackages(options.git, await rootOf(options.workspace), nodeState(req))) };
   };
 
   const cloneIn = async (repository: string) => {
@@ -93,7 +98,7 @@ export function gitPackages(options: GitPackagesOptions) {
       const clone = await cloneIn(repository);
       const done = await commitPaths(options.git, lock, clone, repository, body);
       try {
-        return { ...done, package: await stateOf(options.git, clone, repository, nodeState()) };
+        return { ...done, package: await stateOf(options.git, clone, repository, nodeState(req)) };
       } catch (error) {
         const unread = `the package's state could not be read after the commit: ${error instanceof Error ? error.message : String(error)}`;
         return { ...done, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
@@ -105,15 +110,15 @@ export function gitPackages(options: GitPackagesOptions) {
     const body = deployBodyFrom(await jsonBody(req));
     if (!body.check && !options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
     const clone = await cloneIn(repository);
-    const done = await deployCommit(options.git, clone, repository, body, options.node, options.timer, options.fetch);
+    const done = await deployCommit(options.git, clone, repository, body, nodeFor(req, options.node.target, options.fetch), options.timer);
     try {
-      return { ...done, package: await stateOf(options.git, clone, repository, nodeState()) };
+      return { ...done, package: await stateOf(options.git, clone, repository, nodeState(req)) };
     } catch (error) {
       return { ...done, package: null, problem: `the package's state could not be read after ${body.check ? 'the check' : 'the deploy'}: ${error instanceof Error ? error.message : String(error)}` };
     }
   };
 
-  const one = async (repository: string, route: string | undefined, query: URLSearchParams): Promise<{ value: unknown; etag?: string }> => {
+  const one = async (req: IncomingMessage, repository: string, route: string | undefined, query: URLSearchParams): Promise<{ value: unknown; etag?: string }> => {
     const clone = await cloneIn(repository);
     const param = (name: string) => query.get(name) ?? undefined;
     const required = (name: string) => {
@@ -123,7 +128,7 @@ export function gitPackages(options: GitPackagesOptions) {
     };
     switch (route) {
       case undefined:
-        return { value: await stateOf(options.git, clone, repository, nodeState()) };
+        return { value: await stateOf(options.git, clone, repository, nodeState(req)) };
       case 'file': {
         const { etag, ...value } = await fileOf(options.git, clone, repository, required('rev'), required('path'));
         return { value, etag };
@@ -133,7 +138,7 @@ export function gitPackages(options: GitPackagesOptions) {
       case 'artifacts':
         return { value: await artifactsAt(options.git, clone, repository, required('rev')) };
       case 'log':
-        return { value: await logOf(options.git, clone, repository, nodeState(), param('before'), param('limit')) };
+        return { value: await logOf(options.git, clone, repository, nodeState(req), param('before'), param('limit')) };
       default:
         throw new Refusal(404, `the git half has no route ${route} of a package`);
     }
@@ -147,7 +152,7 @@ export function gitPackages(options: GitPackagesOptions) {
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
     const method = under?.[2] === 'commit' || under?.[2] === 'deploy' ? 'POST' : 'GET';
     if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
-    if (under === null) return { value: await list() };
+    if (under === null) return { value: await list(req) };
     let repository: string;
     try {
       repository = decodeURIComponent(under[1]!);
@@ -155,7 +160,7 @@ export function gitPackages(options: GitPackagesOptions) {
       throw new Refusal(400, 'the repository name is not well encoded');
     }
     if (method === 'POST') return { value: await (under[2] === 'commit' ? commit(req, repository) : deploy(req, repository)) };
-    return one(repository, under[2], url.searchParams);
+    return one(req, repository, under[2], url.searchParams);
   };
 
   return (req: IncomingMessage, res: ServerResponse, next: () => void) => {
@@ -174,6 +179,7 @@ export function gitPackages(options: GitPackagesOptions) {
       ({ value, etag }) => send(res, 200, value, etag),
       (error: unknown) => {
         if (res.headersSent) sendFailure(res, error);
+        else if (isSessionRefused(error)) refusedSession(res, error);
         else if (error instanceof CommitRefused) send(res, error.status, { error: error.message, output: error.output });
         else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });
         else sendFailure(res, error);

@@ -2,6 +2,7 @@ import { Alert, Button, Descriptions, Empty, Flex, Tag, Typography } from 'antd'
 import { useEffect, useState } from 'react';
 import { MountedModal } from '../MountedModal';
 import { ReadSpinner } from '../ReadSpinner';
+import { Allowed } from '../SessionGate';
 import { PAYLOAD_SHOWN, type AdminApi, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
 
@@ -226,13 +227,15 @@ function StepRow({ step, attempt, onShow }: StepRowProps) {
       <td>{!timed ? '' : step.cpuNanos === null ? 'unknown' : duration(step.cpuNanos)}</td>
       <td>
         {step.body.kept ? (
-          <Button
-            type="link"
-            onClick={() => onShow(step)}
-            aria-label={`Show the payload after step ${step.step} of attempt ${attempt}`}
-          >
-            {step.body.size} B
-          </Button>
+          <Allowed action="message.body">
+            <Button
+              type="link"
+              onClick={() => onShow(step)}
+              aria-label={`Show the payload after step ${step.step} of attempt ${attempt}`}
+            >
+              {step.body.size} B
+            </Button>
+          </Allowed>
         ) : (
           `${step.body.size} B, not kept`
         )}

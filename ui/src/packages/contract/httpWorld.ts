@@ -12,6 +12,7 @@ import type { FakeSent } from '../fake';
 import { manifestOf } from '../rules';
 import { FakeTimer } from '../server/fakeTimer.ts';
 import { checkGit } from '../server/git.ts';
+import { uiSession } from '../../../server/session.ts';
 import { gitPackages } from '../server/routes.ts';
 import { runner, type Spawn } from '../server/runner.ts';
 import { realTimer } from '../server/timer.ts';
@@ -331,12 +332,14 @@ export const httpWorld: Build = async (seed) => {
     writable: !seed.readOnly,
     writes,
     origins: [ORIGIN],
-    node: { target: `http://127.0.0.1:${nodePort}`, token: TOKEN },
+    node: { target: `http://127.0.0.1:${nodePort}` },
     git: runs,
     ready: checkGit(runs),
     timer: clock,
   });
-  const front = createServer((req, res) => middleware(req, res, () => res.writeHead(418).end('next')));
+  // the session gate in token mode in front of the half, as the development server mounts it
+  const gate = uiSession({ mode: { kind: 'token', token: TOKEN, variable: 'RAIL8_ADMIN_TOKEN' }, origins: [ORIGIN], target: `http://127.0.0.1:${nodePort}` });
+  const front = createServer((req, res) => gate(req, res, () => middleware(req, res, () => res.writeHead(418).end('next'))));
   const port = await listen(front);
   const page = seed.foreignPage ? { 'sec-fetch-site': 'cross-site', origin: 'https://elsewhere.example' } : { 'sec-fetch-site': 'same-origin', origin: ORIGIN };
   const api = httpPackagesApi((input, init) => fetch(`http://127.0.0.1:${port}${String(input)}`, { ...init, headers: { ...(init?.headers as Record<string, string>), ...page } }));

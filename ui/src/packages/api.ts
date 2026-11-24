@@ -1,4 +1,5 @@
 import type { Artifact, ChangeStatus, Kind } from '../artifacts';
+import { uiFetch } from '../session';
 
 export type { Artifact, ChangeStatus, Kind };
 
@@ -250,8 +251,8 @@ async function refusal(res: Response): Promise<PackagesError> {
   return new PackagesError(res.status, text, problems, output);
 }
 
-/** The git half of the server that serves the UI, under `/git`, through `send` (the browser's `fetch` by default). */
-export function httpPackagesApi(send: typeof fetch = (input, init) => fetch(input, init)): PackagesApi {
+/** The git half of the server that serves the UI, under `/git`, through `send` (the page's `uiFetch` by default). */
+export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
   async function call(url: string, init: RequestInit = {}): Promise<Response> {
     let res: Response;
     try {

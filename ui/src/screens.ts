@@ -17,6 +17,8 @@ export interface Screen {
   group?: string;
   icon?: ReactNode;
   description?: string;
+  /** The action of the admin API the screen needs, such as `message.read`; a caller who may not do it cannot open it. */
+  action?: string;
   render: (open: (screen: Screen) => void) => ReactNode;
   unsaved?: () => UnsavedChanges | null;
 }

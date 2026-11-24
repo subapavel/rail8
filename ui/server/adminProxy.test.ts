@@ -8,18 +8,18 @@ import { join, relative } from 'node:path';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { adminProxy, CA_MAX_BYTES, forward, nodeOf, trustAdminCa } from './adminProxy';
+import { adminProxy, CA_MAX_BYTES, forward, nodeOf, PROXY_BODY_MAX_BYTES, trustAdminCa } from './adminProxy';
+import { uiSession, type Mode } from './session';
 
 const origins = ['http://localhost:5173'];
 
 describe('nodeOf', () => {
-  it('is the node at 127.0.0.1:8081 without a token when nothing is set', () => {
-    expect(nodeOf({})).toEqual({ target: 'http://127.0.0.1:8081', token: undefined });
+  it('is the node at 127.0.0.1:8081 when nothing is set', () => {
+    expect(nodeOf({})).toEqual({ target: 'http://127.0.0.1:8081' });
   });
 
-  it('follows RAIL8_ADMIN_URL and RAIL8_ADMIN_TOKEN, and takes a blank token for none', () => {
-    expect(nodeOf({ RAIL8_ADMIN_URL: 'https://node:9000', RAIL8_ADMIN_TOKEN: ' t0ken ' })).toEqual({ target: 'https://node:9000', token: 't0ken' });
-    expect(nodeOf({ RAIL8_ADMIN_TOKEN: '  ' }).token).toBeUndefined();
+  it('follows RAIL8_ADMIN_URL, and gives only the target: the credential is the session gate\'s', () => {
+    expect(nodeOf({ RAIL8_ADMIN_URL: 'https://node:9000', RAIL8_ADMIN_TOKEN: ' t0ken ' })).toEqual({ target: 'https://node:9000' });
   });
 
   it.each(['http://localhost:8081', 'http://LocalHost:8081/', 'http://127.0.0.1:8081', 'http://127.31.0.9:8081', 'http://[::1]:8081',
@@ -128,19 +128,22 @@ describe('trustAdminCa', () => {
 });
 
 describe('forward', () => {
+  const target = 'http://127.0.0.1:8081';
+  const page = { 'sec-fetch-site': 'same-origin' };
+
   it('refuses a request without Sec-Fetch-Site', () => {
-    expect(forward({}, { origins })).toHaveProperty('refused');
+    expect(forward('/admin/me', {}, { origins, target })).toHaveProperty('refused');
   });
 
   it('refuses a request another site sent', () => {
-    expect(forward({ 'sec-fetch-site': 'cross-site' }, { origins })).toHaveProperty('refused');
-    expect(forward({ 'sec-fetch-site': 'same-site' }, { origins })).toHaveProperty('refused');
-    expect(forward({ 'sec-fetch-site': 'none' }, { origins })).toHaveProperty('refused');
+    expect(forward('/admin/me', { 'sec-fetch-site': 'cross-site' }, { origins, target })).toHaveProperty('refused');
+    expect(forward('/admin/me', { 'sec-fetch-site': 'same-site' }, { origins, target })).toHaveProperty('refused');
+    expect(forward('/admin/me', { 'sec-fetch-site': 'none' }, { origins, target })).toHaveProperty('refused');
   });
 
   it('refuses an Origin outside the fixed list, even one that matches the Host header', () => {
     const rebound = { 'sec-fetch-site': 'same-origin', origin: 'http://evil.example:5173', host: 'evil.example:5173' };
-    expect(forward(rebound, { origins })).toHaveProperty('refused');
+    expect(forward('/admin/me', rebound, { origins, target })).toHaveProperty('refused');
   });
 
   it('passes only Accept and Content-Type on, never what the browser adds', () => {
@@ -152,15 +155,29 @@ describe('forward', () => {
       referer: 'http://localhost:5173/',
       cookie: 'session=1',
       authorization: 'Bearer from-the-browser',
+      'rail8-session': '0123456789abcdef',
       accept: 'application/json',
       'content-type': 'application/json',
     };
-    expect(forward(headers, { origins })).toEqual({ headers: { accept: 'application/json', 'content-type': 'application/json' } });
+    expect(forward('/admin/me?x=1', headers, { origins, target })).toEqual({
+      url: new URL('http://127.0.0.1:8081/admin/me?x=1'),
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+    });
   });
 
-  it('sets the configured token and drops the one the browser sent', () => {
-    const headers = { 'sec-fetch-site': 'same-origin', authorization: 'Bearer from-the-browser' };
-    expect(forward(headers, { origins, token: 'node-token' })).toEqual({ headers: { authorization: 'Bearer node-token' } });
+  it.each(['/admin/sessions', '/admin/sessions/x', '/admin//sessions', '/admin/%73essions', '/ADMIN/Sessions', '/admin/sessions?x=1',
+    '/admin/./sessions', '/admin/x/../sessions', '/admin/sessions/'])('refuses %s: no page script reaches the node\'s sessions', (url) => {
+    expect(forward(url, page, { origins, target })).toEqual({ refused: expect.objectContaining({ status: 403, code: 'sessions-refused' }) });
+  });
+
+  it('sends exactly the URL it checked', () => {
+    const decided = forward('/admin/x/../me', page, { origins, target });
+    expect('url' in decided && decided.url.href).toBe('http://127.0.0.1:8081/admin/me');
+    expect('url' in forward('/admin/session', page, { origins, target })).toBe(true);
+  });
+
+  it('refuses a segment that does not decode', () => {
+    expect(forward('/admin/%E0%A4%A', page, { origins, target })).toEqual({ refused: expect.objectContaining({ status: 400 }) });
   });
 });
 
@@ -189,19 +206,23 @@ describe('adminProxy', () => {
     return { url, seen };
   }
 
-  async function proxy(target: string, token?: string): Promise<string> {
-    const middleware = adminProxy({ target, origins, token });
-    return listen(createServer((req, res) => middleware(req, res, () => res.writeHead(404).end('next'))));
+  const tokenMode = (token: string): Mode => ({ kind: 'token', token, variable: 'RAIL8_ADMIN_TOKEN' });
+
+  /** The session gate in `mode`, then the proxy, as the development server mounts them. */
+  async function proxy(target: string, mode: Mode = tokenMode('node-token')): Promise<string> {
+    const gate = uiSession({ mode, origins, target });
+    const middleware = adminProxy({ target, origins });
+    return listen(createServer((req, res) => gate(req, res, () => middleware(req, res, () => res.writeHead(404).end('next')))));
   }
 
-  function send(base: string, method: string, path: string, headers: Record<string, string>) {
+  function send(base: string, method: string, path: string, headers: Record<string, string>, body?: Buffer | string) {
     return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((done, fail) => {
       const req = request(base + path, { method, headers }, (res) => {
-        let body = '';
-        res.setEncoding('utf8').on('data', (chunk: string) => (body += chunk));
-        res.on('end', () => done({ status: res.statusCode ?? 0, headers: res.headers, body }));
+        let text = '';
+        res.setEncoding('utf8').on('data', (chunk: string) => (text += chunk));
+        res.on('end', () => done({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
       });
-      req.on('error', fail).end();
+      req.on('error', fail).end(body);
     });
   }
 
@@ -209,7 +230,7 @@ describe('adminProxy', () => {
 
   it('sends an admin request on to the node with its path and query, and gives back its answer', async () => {
     const target = await node();
-    const base = await proxy(target.url, 'node-token');
+    const base = await proxy(target.url);
     const answer = await send(base, 'POST', '/admin/dlq/m-1/retry?x=1', browser);
     expect(answer.status).toBe(202);
     expect(answer.body).toBe('{"id":"m-1","attempt":2}');
@@ -276,15 +297,14 @@ describe('adminProxy', () => {
       const target = await secureNode();
       const env = { RAIL8_ADMIN_URL: `https://localhost:${target.port}`, RAIL8_ADMIN_CA: ca, RAIL8_ADMIN_TOKEN: 'node-token' };
       trustAdminCa(env);
-      const node = nodeOf(env);
-      const answer = await send(await proxy(node.target, node.token), 'GET', '/admin/me', browser);
+      const answer = await send(await proxy(nodeOf(env).target, tokenMode('node-token')), 'GET', '/admin/me', browser);
       expect(answer.status).toBe(200);
       expect(target.seen[0]?.authorization).toBe('Bearer node-token');
     });
 
     it('refuses a certificate it does not trust: 502, and the node is sent nothing', async () => {
       const target = await secureNode();
-      const answer = await send(await proxy(`https://localhost:${target.port}`, 'node-token'), 'GET', '/admin/me', browser);
+      const answer = await send(await proxy(`https://localhost:${target.port}`), 'GET', '/admin/me', browser);
       expect(answer.status).toBe(502);
       expect(target.seen).toHaveLength(0);
     });
@@ -293,7 +313,7 @@ describe('adminProxy', () => {
       const target = await secureNode();
       const env = { RAIL8_ADMIN_URL: `https://127.0.0.1:${target.port}`, RAIL8_ADMIN_CA: ca, RAIL8_ADMIN_TLS: 'off' };
       trustAdminCa(env);
-      const answer = await send(await proxy(nodeOf(env).target, 'node-token'), 'GET', '/admin/me', browser);
+      const answer = await send(await proxy(nodeOf(env).target), 'GET', '/admin/me', browser);
       expect(answer.status).toBe(502);
       expect(target.seen).toHaveLength(0);
     });
@@ -312,5 +332,76 @@ describe('adminProxy', () => {
     expect((await send(base, 'GET', '/administration', browser)).body).toBe('next');
     expect((await send(base, 'GET', '/src/main.tsx', browser)).body).toBe('next');
     expect(target.seen).toHaveLength(0);
+  });
+  it('passes a JSON body of a POST on, up to 64 KiB, and a POST without a body without a Content-Type', async () => {
+    const bodies: { type?: string; body: string }[] = [];
+    const url = await listen(
+      createServer((req, res) => {
+        let body = '';
+        req.setEncoding('utf8').on('data', (chunk: string) => (body += chunk));
+        req.on('end', () => {
+          bodies.push({ type: req.headers['content-type'], body });
+          res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+        });
+      }),
+    );
+    const base = await proxy(url);
+    const json = { ...browser, 'content-type': 'application/json' };
+    expect((await send(base, 'POST', '/admin/users', json, '{"name":"anna"}')).status).toBe(200);
+    expect((await send(base, 'POST', '/admin/dlq/m-1/retry', browser)).status).toBe(200);
+    expect((await send(base, 'POST', '/admin/users', json, Buffer.alloc(PROXY_BODY_MAX_BYTES, 0x20))).status).toBe(200);
+    expect(bodies.slice(0, 2)).toEqual([{ type: 'application/json', body: '{"name":"anna"}' }, { type: undefined, body: '' }]);
+    const tooLarge = await send(base, 'POST', '/admin/users', json, Buffer.alloc(PROXY_BODY_MAX_BYTES + 1, 0x20));
+    expect(tooLarge.status).toBe(413);
+    const text = await send(base, 'POST', '/admin/users', { ...browser, 'content-type': 'text/plain' }, 'name=anna');
+    expect(text.status).toBe(415);
+    expect(bodies).toHaveLength(3);
+  });
+
+  it('passes Retry-After and WWW-Authenticate back', async () => {
+    const url = await listen(createServer((_req, res) => res.writeHead(429, { 'retry-after': '7', 'www-authenticate': 'Bearer', 'content-type': 'application/json' }).end('{}')));
+    const answer = await send(await proxy(url), 'POST', '/admin/me/password', browser);
+    expect(answer.status).toBe(429);
+    expect(answer.headers['retry-after']).toBe('7');
+    expect(answer.headers['www-authenticate']).toBe('Bearer');
+  });
+
+  it('refuses the node\'s sessions before anything is sent', async () => {
+    const target = await node();
+    const base = await proxy(target.url);
+    for (const path of ['/admin/sessions', '/admin/%73essions', '/admin//Sessions']) expect((await send(base, 'POST', path, browser)).status).toBe(403);
+    expect(target.seen).toHaveLength(0);
+  });
+
+  describe('in session mode', () => {
+    const mode: Mode = { kind: 'session', cookie: 'rail8-session', secure: false };
+    const secret = `rail8s_0123456789abcdef_${'a'.repeat(43)}`;
+    const holding = { 'sec-fetch-site': 'same-origin', cookie: `rail8-session=${secret}` };
+
+    it('sends the cookie\'s session as the bearer, and refuses a request without one itself', async () => {
+      const target = await node();
+      const base = await proxy(target.url, mode);
+      expect((await send(base, 'GET', '/admin/messages', holding)).status).toBe(202);
+      expect(target.seen[0]?.headers?.authorization).toBe(`Bearer ${secret}`);
+      expect(target.seen[0]?.headers?.cookie).toBeUndefined();
+      const none = await send(base, 'GET', '/admin/messages', { 'sec-fetch-site': 'same-origin' });
+      expect(none.status).toBe(401);
+      expect(JSON.parse(none.body)).toMatchObject({ code: 'no-credential' });
+      expect(target.seen).toHaveLength(1);
+    });
+
+    it('clears the cookie on the node\'s 401 session-ended, and on no other 401', async () => {
+      let code = 'session-ended';
+      const url = await listen(createServer((_req, res) => res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'x', code }))));
+      const base = await proxy(url, mode);
+      const ended = await send(base, 'GET', '/admin/messages', holding);
+      expect(ended.status).toBe(401);
+      expect(JSON.parse(ended.body)).toMatchObject({ code: 'session-ended' });
+      expect(ended.headers['set-cookie']).toEqual(['rail8-session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0']);
+      code = 'no-credential';
+      const other = await send(base, 'GET', '/admin/messages', holding);
+      expect(other.status).toBe(401);
+      expect(other.headers['set-cookie']).toBeUndefined();
+    });
   });
 });
