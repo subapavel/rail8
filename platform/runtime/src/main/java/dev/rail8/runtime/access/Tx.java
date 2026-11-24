@@ -29,6 +29,13 @@ interface Tx {
     /** A session with its user and the user's roles, as one read finds them. */
     record SessionOfUser(SessionRow session, UserRow user, Set<Role> roles) {}
 
+    /** A token's row; {@code fingerprint} as 64 lowercase hex digits. */
+    record TokenRow(String id, long user, String name, String fingerprint, Instant createdAt, String createdBy, Instant expiresAt,
+                    Optional<Instant> lastUsedAt, Optional<Instant> revokedAt) {}
+
+    /** A token with its user and the user's roles, as one read finds them. */
+    record TokenOfUser(TokenRow token, UserRow user, Set<Role> roles) {}
+
     /** A row of the login limit. */
     record Limit(int failures, Instant lastFailureAt, Optional<Instant> auditedAt) {}
 
@@ -94,6 +101,36 @@ interface Tx {
 
     /** The session no longer one of a first password. */
     void passwordChanged(String id);
+
+    Optional<TokenOfUser> token(String id);
+
+    /** The unrevoked tokens of {@code user}, expired ones included. */
+    List<TokenRow> unrevokedTokens(long user);
+
+    /**
+     * The unrevoked tokens that expire after {@code now} and, when given, at {@code until} at the latest: of {@code user}, or of
+     * every user when empty; soonest expiry first.
+     */
+    List<Access.Token> liveTokens(OptionalLong user, Instant now, Optional<Instant> until);
+
+    void insertToken(TokenRow row);
+
+    /** The token revoked at {@code at} by {@code by}, unless it already was: whether it was revoked now. */
+    boolean revokeToken(String id, Instant at, String by);
+
+    /** The token's last use at {@code at}, when it has none or its last was at {@code before} at the latest. */
+    void used(String id, Instant at, Instant before);
+
+    /** The installation's ceiling of a token's life, in days, its row read with {@code lock}. */
+    int ceiling(Lock lock);
+
+    void setCeiling(int maxDays);
+
+    /**
+     * Every unrevoked token that expires after {@code now}, and later than its issue plus {@code maxDays}, made to expire then:
+     * their number.
+     */
+    int shortenTokens(int maxDays, Instant now);
 
     /**
      * One attempt claimed on the row {@code (name, device)}: its failures with this one, or empty when the row is waiting. The

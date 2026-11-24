@@ -11,7 +11,7 @@ create table tokens (
     fingerprint bytea not null check (octet_length(fingerprint) = 32),
     created_at timestamptz not null,
     created_by text not null,
-    expires_at timestamptz not null check (expires_at > created_at and expires_at <= created_at + interval '365 days'),
+    expires_at timestamptz not null check (expires_at > created_at and expires_at <= created_at + interval '8760 hours'),
     last_used_at timestamptz,
     revoked_at timestamptz,
     revoked_by text

@@ -28,6 +28,9 @@ import java.util.stream.Collectors;
  * {@link Access} over a {@link Tx}: the order of every act, its rules and its audit rows, the same for every store. A store
  * gives the statements of one transaction ({@link #transaction}) or of none ({@link #query}).
  *
+ * <p>A token lives at most the installation's ceiling, 1 to 365 days: lowering the ceiling shortens the live tokens longer than
+ * it, raising it lengthens none, so a token's {@code expires_at} is its only expiry.
+ *
  * <p>The node's {@code RAIL8_ADMIN_TOKEN} is the emergency key when it has the key's form ({@code rail8k_} and 43 base64url
  * characters), and the shared token otherwise, which works only while the bridge's marker is open.
  */
@@ -42,10 +45,16 @@ abstract class Accounts implements Access {
     static final int USERS_MAX = 10_000;
     static final int NAMES_MAX = 100_000;
     static final int REFUSED_AUDIT_PER_HOUR = 1_000;
+    static final int TOKENS_PER_USER = 20;
+    static final int TOKEN_MAX_DAYS = 365;
+    static final int TOKEN_DEFAULT_DAYS = 90;
+    static final Duration USE_EVERY = Duration.ofHours(1);
     static final String UNKNOWN_ACTOR = "unknown";
 
     private static final System.Logger LOG = System.getLogger(Accounts.class.getName());
     private static final Pattern NAME = Pattern.compile("^[a-z][a-z0-9._-]{1,63}$");
+    private static final Pattern TOKEN_NAME = Pattern.compile("^[a-z0-9][a-z0-9-]{0,63}$");
+    private static final Pattern TOKEN_ID = Pattern.compile("^[0-9a-f]{16}$");
     private static final String NAME_ROW = "";
 
     private final Clock clock;
@@ -91,6 +100,8 @@ abstract class Accounts implements Access {
             if (query(Tx::bridgeOpen)) return Caller.bridge(Via.SHARED_TOKEN, declared(declaredActor));
             throw unknownCredential();
         }
+        Optional<String> token = Credentials.tokenId(presented);
+        if (token.isPresent()) return byToken(token.get(), fingerprint);
         Optional<String> id = Credentials.sessionId(presented);
         if (id.isEmpty()) throw unknownCredential();
         Optional<Tx.SessionOfUser> found = query(tx -> tx.session(id.get()));
@@ -104,6 +115,22 @@ abstract class Accounts implements Access {
         if (!now.isBefore(session.lastSeenAt().plus(TOUCH_EVERY))) query(tx -> { tx.touch(session.id(), now); return null; });
         return new Caller(OptionalLong.of(user.id()), user.name(), user.kind(), found.get().roles(), Via.SESSION,
                 Optional.of(session.id()), session.firstPassword());
+    }
+
+    /** The caller of the token {@code id} whose credential has {@code fingerprint}. */
+    private Caller byToken(String id, String fingerprint) {
+        Optional<Tx.TokenOfUser> found = query(tx -> tx.token(id));
+        boolean same = Credentials.same(fingerprint, found.map(f -> f.token().fingerprint()).orElse(Credentials.DUMMY_FINGERPRINT));
+        if (found.isEmpty() || !same) throw unknownCredential();
+        Tx.TokenRow token = found.get().token();
+        Tx.UserRow user = found.get().user();
+        Instant now = clock.instant();
+        if (token.revokedAt().isPresent()) throw AccessRefused.unauthenticated("token-revoked", "the token was revoked");
+        if (!now.isBefore(token.expiresAt())) throw AccessRefused.unauthenticated("token-expired", "the token expired");
+        if (user.blockedAt().isPresent()) throw AccessRefused.unauthenticated("blocked", "the user is blocked");
+        Instant before = now.minus(USE_EVERY);
+        if (token.lastUsedAt().map(at -> !at.isAfter(before)).orElse(true)) query(tx -> { tx.used(id, now, before); return null; });
+        return new Caller(OptionalLong.of(user.id()), user.name(), user.kind(), found.get().roles(), Via.TOKEN, Optional.of(id), false);
     }
 
     /** The name a caller of the bridge declared, stripped; {@code unknown} when none; above {@link #ACTOR_MAX} characters a 400. */
@@ -207,8 +234,13 @@ abstract class Accounts implements Access {
 
     @Override
     public Optional<Instant> expiresAt(Caller who) {
-        if (who.via() != Via.SESSION || who.credential().isEmpty()) return Optional.empty();
-        return query(tx -> tx.session(who.credential().get())).map(s -> s.session().expiresAt());
+        if (who.credential().isEmpty()) return Optional.empty();
+        String id = who.credential().get();
+        return switch (who.via()) {
+            case SESSION -> query(tx -> tx.session(id)).map(s -> s.session().expiresAt());
+            case TOKEN -> query(tx -> tx.token(id)).map(t -> t.token().expiresAt());
+            case EMERGENCY_KEY, SHARED_TOKEN, LOCAL -> Optional.empty();
+        };
     }
 
     @Override
@@ -324,6 +356,145 @@ abstract class Accounts implements Access {
             tx.audit(row(by, now, "session.end", "user/" + name, new JsonObject().put("sessions", ended)));
             return null;
         });
+    }
+
+    @Override
+    public Issued issueOwnToken(Actor by, String password, String name, OptionalInt days) {
+        long userId = by.user().orElseThrow(() -> AccessRefused.of(400, "only a person issues their own token"));
+        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, "a personal token is issued in a session"));
+        checkToken(name, days);
+        String given = Passwords.normalize(password);
+        Tx.UserRow user = query(tx -> tx.user(userId, Tx.Lock.NONE)).orElseThrow(Accounts::sessionEnded);
+        HashPlaces.Place place = places.take(true).orElseThrow(AccessRefused::busy);
+        try (place) {
+            Instant now = clock.instant();
+            int claimed = claim(user.name(), now);
+            if (!(hash.matches(given, user.password().orElse(hash.dummy())) && user.password().isPresent())) {
+                throw refusal(user.name(), Optional.of(user), claimed, "wrong-password", by.remote(), now,
+                        AccessRefused.forbidden("wrong-password", "the password is wrong", Set.of()));
+            }
+            query(tx -> { tx.forgive(user.name(), NAME_ROW, claimed); return null; });
+            return transaction(tx -> {
+                Tx.UserRow locked = tx.user(userId, Tx.Lock.UPDATE).orElseThrow(Accounts::sessionEnded);
+                if (tx.session(session).isEmpty()) throw sessionEnded();
+                if (locked.generation() != user.generation()) {
+                    throw AccessRefused.of(409, "the account changed while the password was checked: try again");
+                }
+                return issue(tx, by, locked, name, days, now);
+            });
+        }
+    }
+
+    @Override
+    public Issued issueToken(Actor by, String user, String name, OptionalInt days) {
+        checkToken(name, days);
+        Instant now = clock.instant();
+        return transaction(tx -> {
+            Tx.UserRow account = tx.user(user, Tx.Lock.UPDATE).orElseThrow(() -> noSuchUser(user));
+            if (account.kind() != Kind.TECHNICAL) throw AccessRefused.of(409, "a person issues their own tokens");
+            if (account.blockedAt().isPresent()) throw AccessRefused.of(409, user + " is blocked");
+            return issue(tx, by, account, name, days, now);
+        });
+    }
+
+    /**
+     * A token of {@code user} issued in {@code tx}, which holds the lock of the user's row; the ceiling's row is taken after it,
+     * so an issue and a change of the ceiling follow each other.
+     */
+    private Issued issue(Tx tx, Actor by, Tx.UserRow user, String name, OptionalInt days, Instant now) {
+        int life = life(days, tx.ceiling(Tx.Lock.SHARE));
+        List<Tx.TokenRow> unrevoked = tx.unrevokedTokens(user.id());
+        Optional<Tx.TokenRow> named = unrevoked.stream().filter(t -> t.name().equals(name)).findFirst();
+        if (named.isPresent() && now.isBefore(named.get().expiresAt())) {
+            throw AccessRefused.of(409, user.name() + " holds a live token named " + name);
+        }
+        if (unrevoked.stream().filter(t -> now.isBefore(t.expiresAt())).count() >= TOKENS_PER_USER) {
+            throw AccessRefused.of(409, user.name() + " holds " + TOKENS_PER_USER + " live tokens, the most a user holds");
+        }
+        named.ifPresent(t -> tx.revokeToken(t.id(), now, by.name()));
+        String id = Credentials.newId(random);
+        String token = Credentials.TOKEN + id + "_" + Credentials.newSecret(random);
+        Instant expiresAt = now.plus(Duration.ofDays(life));
+        tx.insertToken(new Tx.TokenRow(id, user.id(), name, Credentials.fingerprint(token), now, by.name(), expiresAt, Optional.empty(),
+                Optional.empty()));
+        JsonObject detail = new JsonObject().put("token", id).put("name", name).put("expiresAt", expiresAt.toString());
+        named.ifPresent(t -> detail.put("replaced", t.id()));
+        tx.audit(row(by, now, "token.issue", "user/" + user.name(), detail));
+        return new Issued(id, name, expiresAt, token);
+    }
+
+    /** A 400 for a token's name not of the form, or for days outside 1 to the ceiling as it is now. */
+    private void checkToken(String name, OptionalInt days) {
+        if (!TOKEN_NAME.matcher(name).matches()) throw AccessRefused.of(400, "a token's name matches ^[a-z0-9][a-z0-9-]{0,63}$: " + name);
+        life(days, query(tx -> tx.ceiling(Tx.Lock.NONE)));
+    }
+
+    /** A token's life in days: {@code days}, or the default under {@code ceiling}; outside 1 to the ceiling a 400. */
+    private static int life(OptionalInt days, int ceiling) {
+        int life = days.orElse(ceiling(ceiling).defaultDays());
+        if (life < 1 || life > ceiling) {
+            throw AccessRefused.of(400, "a token lives 1 to " + ceiling + " days, the installation's ceiling, not " + life);
+        }
+        return life;
+    }
+
+    @Override
+    public Tokens tokens(Optional<String> user, Optional<Duration> expiringWithin) {
+        if (expiringWithin.filter(w -> w.isNegative() || w.isZero() || w.compareTo(Duration.ofDays(TOKEN_MAX_DAYS)) > 0).isPresent()) {
+            throw AccessRefused.of(400, "expiringWithin is above zero and at most P365D, not " + expiringWithin.get());
+        }
+        Instant now = clock.instant();
+        return query(tx -> {
+            OptionalLong owner = user.isEmpty() ? OptionalLong.empty()
+                    : OptionalLong.of(tx.user(user.get(), Tx.Lock.NONE).orElseThrow(() -> noSuchUser(user.get())).id());
+            return new Tokens(tx.liveTokens(owner, now, expiringWithin.map(now::plus)), ceiling(tx.ceiling(Tx.Lock.NONE)));
+        });
+    }
+
+    @Override
+    public void revokeOwnToken(Actor by, String id) {
+        revoke(by, id, OptionalLong.of(by.user().orElseThrow(() -> noSuchToken(id))));
+    }
+
+    @Override
+    public void revokeToken(Actor by, String id) {
+        revoke(by, id, OptionalLong.empty());
+    }
+
+    /** The token {@code id} revoked, when it is {@code owner}'s or, without one, whoever's. */
+    private void revoke(Actor by, String id, OptionalLong owner) {
+        if (!TOKEN_ID.matcher(id).matches()) throw noSuchToken(id);
+        Instant now = clock.instant();
+        transaction(tx -> {
+            Tx.TokenOfUser found = tx.token(id).filter(t -> owner.isEmpty() || owner.getAsLong() == t.user().id())
+                    .orElseThrow(() -> noSuchToken(id));
+            if (tx.revokeToken(id, now, by.name())) {
+                tx.audit(row(by, now, "token.revoke", "user/" + found.user().name(),
+                        new JsonObject().put("token", id).put("name", found.token().name())));
+            }
+            return null;
+        });
+    }
+
+    @Override
+    public Ceiling changeCeiling(Actor by, int maxDays) {
+        if (maxDays < 1 || maxDays > TOKEN_MAX_DAYS) throw AccessRefused.of(400, "the ceiling is 1 to " + TOKEN_MAX_DAYS + " days, not " + maxDays);
+        Instant now = clock.instant();
+        return transaction(tx -> {
+            int from = tx.ceiling(Tx.Lock.UPDATE);
+            if (from != maxDays) {
+                int shortened = maxDays < from ? tx.shortenTokens(maxDays, now) : 0;
+                tx.setCeiling(maxDays);
+                tx.audit(row(by, now, "token.ceiling", "token-ceiling",
+                        new JsonObject().put("from", from).put("to", maxDays).put("shortened", shortened)));
+            }
+            return ceiling(maxDays);
+        });
+    }
+
+    /** The ceiling of {@code maxDays} with its default: 90 days, or the ceiling when lower. */
+    static Ceiling ceiling(int maxDays) {
+        return new Ceiling(maxDays, Math.min(TOKEN_DEFAULT_DAYS, maxDays));
     }
 
     @Override
@@ -444,7 +615,8 @@ abstract class Accounts implements Access {
         List<LiveSession> sessions = tx.sessions(u.id()).stream().filter(s -> live(s, now))
                 .sorted(Comparator.comparing(Tx.SessionRow::createdAt))
                 .map(s -> new LiveSession(s.id(), s.createdAt(), s.lastSeenAt(), s.expiresAt())).toList();
-        return new User(u.name(), u.kind(), tx.grants(u.id()), u.blockedAt(), u.firstPassword(), u.createdAt(), u.createdBy(), sessions);
+        return new User(u.name(), u.kind(), tx.grants(u.id()), u.blockedAt(), u.firstPassword(), u.createdAt(), u.createdBy(), sessions,
+                tx.liveTokens(OptionalLong.of(u.id()), now, Optional.empty()));
     }
 
     private static Set<Role> roles(List<Grant> grants) {
@@ -483,6 +655,10 @@ abstract class Accounts implements Access {
 
     private static AccessRefused noSuchUser(String name) {
         return AccessRefused.of(404, "no user " + name);
+    }
+
+    private static AccessRefused noSuchToken(String id) {
+        return AccessRefused.of(404, "no token " + id);
     }
 
     private static AccessRefused technicalAdministrator() {

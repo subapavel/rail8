@@ -2,13 +2,15 @@ package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
- * The users of the admin API, their sessions and the acts on them. Every method blocks: call it on a virtual thread. A
+ * The users of the admin API, their sessions and tokens, and the acts on them. Every method blocks: call it on a virtual thread. A
  * refusal is an {@link AccessRefused}; every act that changes something writes its audit row in the same transaction, with
  * the {@link Actor} that {@link Caller#acting} gave the route.
  */
@@ -20,9 +22,11 @@ public interface Access {
     /**
      * The caller of one admin request, from its {@code Authorization} header, read from the store with nothing cached: a session,
      * the emergency key, or while the bridge is open the shared token and, on a node without a token, a request without a
-     * credential. {@code declaredActor} is the {@code X-Rail8-Actor} header, which only the bridge's callers are named by.
+     * credential. {@code declaredActor} is the {@code X-Rail8-Actor} header, which only the bridge's callers are named by. A
+     * token's {@code last_used_at} is written when it is empty or an hour old.
      *
-     * @throws AccessRefused 401 {@code no-credential}, {@code unknown-credential}, {@code session-ended} or {@code blocked}; 400
+     * @throws AccessRefused 401 {@code no-credential}, {@code unknown-credential}, {@code session-ended}, {@code token-revoked},
+     *                       {@code token-expired} or {@code blocked}; 400
      *                       for a caller of the bridge whose declared name is above {@link #ACTOR_MAX} characters
      */
     Caller authenticate(Optional<String> authorization, Optional<String> declaredActor);
@@ -55,10 +59,10 @@ public interface Access {
     /** {@code by}'s session ends. */
     void logout(Actor by);
 
-    /** When the session of {@code who} ends at the latest; empty for any other caller. */
+    /** When the session or the token of {@code who} ends at the latest; empty for any other caller. */
     Optional<Instant> expiresAt(Caller who);
 
-    /** Every user, by name, with their roles, block and live sessions. */
+    /** Every user, by name, with their roles, block, live sessions and live tokens. */
     List<User> users();
 
     /** The user of {@code name}. */
@@ -99,6 +103,55 @@ public interface Access {
 
     /** Every session of {@code name} ends. */
     void endSessions(Actor by, String name);
+
+    /**
+     * A token of {@code by}'s own, issued in {@code by}'s session with {@code password} asked again and counted on the name's
+     * row of the login limit. It lives {@code days}, or {@link Ceiling#defaultDays} when left out. A token of the user's that
+     * has the same name and has expired is revoked in the same transaction.
+     *
+     * @throws AccessRefused 400 for a name not of the form or days outside 1 to the ceiling, 401 {@code session-ended}, 403
+     *                       {@code wrong-password}, 409 for a live token of the name, the 20 live tokens the user holds or an
+     *                       account changed while the password was checked, 429, 503 {@code busy}
+     */
+    Issued issueOwnToken(Actor by, String password, String name, OptionalInt days);
+
+    /**
+     * A token of the technical account {@code user}, as {@link #issueOwnToken} without the password.
+     *
+     * @throws AccessRefused 400, 404 for no such user, 409 for a person, a blocked account, a live token of the name or the 20
+     *                       live tokens the account holds
+     */
+    Issued issueToken(Actor by, String user, String name, OptionalInt days);
+
+    /**
+     * The live tokens, soonest expiry first, and the ceiling: of {@code user}, or of every user when empty; with
+     * {@code expiringWithin}, only those that expire within it.
+     *
+     * @throws AccessRefused 400 for an {@code expiringWithin} not above zero or above 365 days, 404 for no such user
+     */
+    Tokens tokens(Optional<String> user, Optional<Duration> expiringWithin);
+
+    /**
+     * {@code by}'s own token {@code id} revoked; one already revoked stays as it is.
+     *
+     * @throws AccessRefused 404 for an id not of the form, unknown, or of another user's token
+     */
+    void revokeOwnToken(Actor by, String id);
+
+    /**
+     * The token {@code id} revoked, whoever holds it; one already revoked stays as it is.
+     *
+     * @throws AccessRefused 404 for an id not of the form or unknown
+     */
+    void revokeToken(Actor by, String id);
+
+    /**
+     * The installation's ceiling set to {@code maxDays}. Lowering it shortens every live token longer than it to its issue plus
+     * {@code maxDays}; raising it lengthens none.
+     *
+     * @throws AccessRefused 400 for {@code maxDays} outside 1 to 365
+     */
+    Ceiling changeCeiling(Actor by, int maxDays);
 
     /**
      * The audit row of a use of the emergency key, or of the shared token for one of the key's actions: the method, the path,
@@ -154,9 +207,10 @@ public interface Access {
      * @param createdAt when the account was made
      * @param createdBy who made it
      * @param sessions the live sessions
+     * @param tokens the live tokens, soonest expiry first
      */
     record User(String name, Kind kind, List<Grant> roles, Optional<Instant> blockedAt, boolean firstPassword, Instant createdAt,
-                String createdBy, List<LiveSession> sessions) {}
+                String createdBy, List<LiveSession> sessions, List<Token> tokens) {}
 
     /**
      * A role held.
@@ -177,4 +231,43 @@ public interface Access {
      * @param expiresAt when it ends at the latest
      */
     record LiveSession(String id, Instant createdAt, Instant lastSeenAt, Instant expiresAt) {}
+
+    /**
+     * A token just issued.
+     *
+     * @param id its id
+     * @param name its name
+     * @param expiresAt when it expires
+     * @param token the credential, shown once and never stored
+     */
+    record Issued(String id, String name, Instant expiresAt, String token) {}
+
+    /**
+     * A live token, by its id; never the secret.
+     *
+     * @param id the id
+     * @param user its user's name
+     * @param name its name
+     * @param createdAt when it was issued
+     * @param createdBy who issued it
+     * @param expiresAt when it expires, a lowered ceiling counted
+     * @param lastUsedAt its last request, within an hour; empty before the first
+     */
+    record Token(String id, String user, String name, Instant createdAt, String createdBy, Instant expiresAt, Optional<Instant> lastUsedAt) {}
+
+    /**
+     * Live tokens and the ceiling.
+     *
+     * @param tokens the tokens, soonest expiry first
+     * @param ceiling the installation's ceiling
+     */
+    record Tokens(List<Token> tokens, Ceiling ceiling) {}
+
+    /**
+     * The installation's ceiling of a token's life.
+     *
+     * @param maxDays the longest a token lives, in days
+     * @param defaultDays the life of a token issued without one: 90 days, or {@code maxDays} when lower
+     */
+    record Ceiling(int maxDays, int defaultDays) {}
 }

@@ -4,6 +4,7 @@ import io.vertx.core.json.JsonObject;
 
 import java.security.SecureRandom;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -88,7 +89,7 @@ public final class MemoryAccess extends Accounts {
         }
     }
 
-    /** The users, sessions, login limits, bridge marker and audit of one installation, in memory. */
+    /** The users, sessions, tokens, login limits, bridge marker and audit of one installation, in memory. */
     public static final class Store {
 
         private final ReentrantLock lock = new ReentrantLock();
@@ -128,6 +129,8 @@ public final class MemoryAccess extends Accounts {
         private final Map<Long, UserRow> users = new HashMap<>();
         private final Map<Long, Map<Role, Access.Grant>> grants = new HashMap<>();
         private final Map<String, SessionRow> sessions = new HashMap<>();
+        private final Map<String, TokenRow> tokens = new HashMap<>();
+        private int ceiling = 365;
         private final Map<List<String>, Limit> limits = new HashMap<>();
         private final List<AuditRow> audit = new ArrayList<>();
 
@@ -138,6 +141,8 @@ public final class MemoryAccess extends Accounts {
             c.users.putAll(users);
             grants.forEach((user, held) -> c.grants.put(user, new EnumMap<>(held)));
             c.sessions.putAll(sessions);
+            c.tokens.putAll(tokens);
+            c.ceiling = ceiling;
             c.limits.putAll(limits);
             c.audit.addAll(audit);
             return c;
@@ -262,6 +267,66 @@ public final class MemoryAccess extends Accounts {
             SessionRow s = sessions.get(id);
             if (s == null) return;
             sessions.put(id, new SessionRow(s.id(), s.user(), s.fingerprint(), false, s.createdAt(), s.lastSeenAt(), s.expiresAt()));
+        }
+
+        @Override public Optional<TokenOfUser> token(String id) {
+            TokenRow t = tokens.get(id);
+            if (t == null) return Optional.empty();
+            Set<Role> roles = EnumSet.noneOf(Role.class);
+            roles.addAll(grants.getOrDefault(t.user(), Map.of()).keySet());
+            return Optional.of(new TokenOfUser(t, existing(t.user()), roles));
+        }
+
+        @Override public List<TokenRow> unrevokedTokens(long user) {
+            return tokens.values().stream().filter(t -> t.user() == user && t.revokedAt().isEmpty()).toList();
+        }
+
+        @Override public List<Access.Token> liveTokens(OptionalLong user, Instant now, Optional<Instant> until) {
+            return tokens.values().stream()
+                    .filter(t -> t.revokedAt().isEmpty() && t.expiresAt().isAfter(now) && (user.isEmpty() || user.getAsLong() == t.user())
+                            && until.map(u -> !t.expiresAt().isAfter(u)).orElse(true))
+                    .sorted(Comparator.comparing(TokenRow::expiresAt).thenComparing(TokenRow::id))
+                    .map(t -> new Access.Token(t.id(), existing(t.user()).name(), t.name(), t.createdAt(), t.createdBy(), t.expiresAt(),
+                            t.lastUsedAt())).toList();
+        }
+
+        @Override public void insertToken(TokenRow row) {
+            tokens.put(row.id(), row);
+        }
+
+        @Override public boolean revokeToken(String id, Instant at, String by) {
+            TokenRow t = tokens.get(id);
+            if (t == null || t.revokedAt().isPresent()) return false;
+            tokens.put(id, new TokenRow(t.id(), t.user(), t.name(), t.fingerprint(), t.createdAt(), t.createdBy(), t.expiresAt(), t.lastUsedAt(),
+                    Optional.of(at)));
+            return true;
+        }
+
+        @Override public void used(String id, Instant at, Instant before) {
+            TokenRow t = tokens.get(id);
+            if (t == null || t.lastUsedAt().filter(last -> last.isAfter(before)).isPresent()) return;
+            tokens.put(id, new TokenRow(t.id(), t.user(), t.name(), t.fingerprint(), t.createdAt(), t.createdBy(), t.expiresAt(), Optional.of(at),
+                    t.revokedAt()));
+        }
+
+        @Override public int ceiling(Lock lock) {
+            return ceiling;
+        }
+
+        @Override public void setCeiling(int maxDays) {
+            ceiling = maxDays;
+        }
+
+        @Override public int shortenTokens(int maxDays, Instant now) {
+            int shortened = 0;
+            for (TokenRow t : List.copyOf(tokens.values())) {
+                Instant end = t.createdAt().plus(Duration.ofDays(maxDays));
+                if (t.revokedAt().isPresent() || !t.expiresAt().isAfter(now) || !t.expiresAt().isAfter(end)) continue;
+                tokens.put(t.id(), new TokenRow(t.id(), t.user(), t.name(), t.fingerprint(), t.createdAt(), t.createdBy(), end, t.lastUsedAt(),
+                        t.revokedAt()));
+                shortened++;
+            }
+            return shortened;
         }
 
         @Override public OptionalInt claim(String name, String device, Instant at) {
