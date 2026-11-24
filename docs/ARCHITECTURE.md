@@ -1139,6 +1139,13 @@ compares the file once more with what its `If-Match` names, just before the rena
 removed or is now another file is never overwritten. At most 9 writes are under way, one holding the lock and 8
 waiting, counted from each write's arrival, and one more is refused with 503.
 
+The Users screen lists every user of the node with their kind, roles, block, live sessions and tokens, and who granted
+each role and how, never a secret. An administrator logged in creates a person, whose first password shows once, or a
+technical account, changes roles by difference, blocks and unblocks a user, resets a person's password and ends a user's
+sessions. What the caller may not do is disabled with the reason `GET /admin/me` gives; a change the node refuses, such
+as one that would leave no administrator, shows the node's reason. A role a user gives themselves is marked as their
+own, and while the node holds the emergency key the screen says to unset it.
+
 The UI's end-to-end scenarios (`ui/e2e/`, Playwright) run nightly: the 20,128-field tree scrolled
 over a fake mapping service on a development-only page, and the `@stack` scenarios against the
 development server and the quickstart's node in Docker. The admin API answers JSON and refuses browsers. `site/` is the project's
@@ -1325,7 +1332,7 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Named tokens at the command line and in the UI, the UI's login and its Users screen, device credentials for the login, and the
+- Named tokens at the command line and in the UI, device credentials for the login, and the
   audit's view at a message and the Audit screen
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.

@@ -231,6 +231,25 @@ order of `demo/order-jq`. Choose the flow `demo/order-jq`, or type the step name
 its timeline lists the steps `ingress`, `pick` and `partner`, and the payload `pick` recorded is that JSON. The same
 through the admin API: `curl -H "$auth" 'localhost:8081/admin/messages?flow=demo/order-jq&step=pick'` gives its `<id>`.
 
+## Users
+
+The UI started above runs in token mode: there is no login, and every call to the node is the token's. To log in as a
+person and manage the users, make the first administrator with the token, then start the UI without one:
+
+```sh
+bin/rail8 user add alice --role administrator   # where RAIL8_ADMIN_TOKEN is exported; prints alice's first password, once
+cd ui && RAIL8_ADMIN_TOKEN= RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev   # no token: session mode, with the login
+```
+
+Open **http://localhost:5173**, log in as `alice` with that password and choose her own, 12 to 128 characters, without
+her name. **Users**, under Administration, lists every user with their kind, roles, status, live sessions and tokens; a
+row opens to show who granted each role and how. New user creates a person, whose first password shows once, or a
+technical account, which has tokens only. Roles… gives and takes roles; Block, Reset password and End sessions act on one
+user. An administrator holds no other role unless it is given, so give yourself the roles the other screens need, such
+as developer and operator. A change the node refuses, such as blocking yourself or taking the administrator role from
+the last administrator, shows the node's reason. Users are never deleted; `docker compose down -v` removes them with the
+database.
+
 ## Stop
 
 ```sh
