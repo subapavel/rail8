@@ -308,8 +308,11 @@ class DeploymentsRecordTest {
         List<DeployedFlow> flowsBefore = deployments.flows();
         Doors.Door a = doors.door("shop/a");
         Ledger.Hold held = records.holdNextDelete();
+        int pending = rt.timer().pending();
         OnVirtualThread.Call<UndeployResult> undeploying = OnVirtualThread.start(() -> deployments.undeploy("shop"));
         reachedWhile(undeploying, held.reached(), "the undeploy calls the delete of shop's record");
+        // the delete is called a moment before its bound is on the node's timer: advanced earlier, the bound would never fall due
+        untilWhile(undeploying, () -> rt.timer().pending() > pending, "the delete is bounded on the node's timer");
 
         rt.clock().advance(STOP_DEADLINE);
         IOException unknown = assertThrows(IOException.class, () -> OnVirtualThread.join(undeploying), "the delete did not answer in time");
