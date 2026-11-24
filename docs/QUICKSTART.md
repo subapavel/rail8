@@ -10,7 +10,7 @@ repository root.
 | --- | --- | --- |
 | JDK | 25 | any distribution, e.g. Temurin |
 | Maven | none | the repository's `./mvnw` wrapper fetches the Maven it needs (3.9.11) and builds everything |
-| Node.js | 22.12 or newer | with npm |
+| Node.js | 22.19 or newer | with npm |
 | Docker | Compose v2 | Docker Engine on Linux, Docker Desktop on macOS and Windows |
 | `curl`, `git` | `git` 2.30 or newer | `git` with your name and email set (`git config --global user.name`, `user.email`): you commit what you deploy |
 

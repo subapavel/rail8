@@ -1091,7 +1091,7 @@ pages (`Sec-Fetch-Site: same-origin`, an `Origin` from its fixed list), drops ev
 `Accept` and `Content-Type`, and adds the token from `RAIL8_ADMIN_TOKEN` itself, so the browser
 never holds it. It does not start for a plain `http://` URL to a host other than loopback unless
 `RAIL8_ADMIN_TLS=off`; for `https://` it trusts Node's default CA list, or only the certificates of
-`RAIL8_ADMIN_CA` (Node 22.19 or newer). The mapping studio's `/api` requests are answered by the development server itself: it lists the
+`RAIL8_ADMIN_CA`. The mapping studio's `/api` requests are answered by the development server itself: it lists the
 `*.mapping.json` files of the working folder without the node, and asks the node's mapping module
 (`/admin/modules/mapping/*`, with the same token) to read, check, create, compile, test and refresh a mapping, sending
 the files of its bundles that the node asks for: those inside the mapping's package (the nearest folder holding
