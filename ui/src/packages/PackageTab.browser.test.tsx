@@ -404,6 +404,16 @@ describe('the tab of a package', () => {
     await expect.element(page.getByText('Read again 0 times')).toBeVisible();
   });
 
+  test('a commit git was stopped in after it committed says that git may have committed, never that nothing was', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n' }, edits: { 'notes.txt': 'two\n' }, hook: { stopsGit: true } }] });
+    await startCommit('Edit the notes');
+    await commitButton().click();
+
+    await expect.element(dialog().getByText('The commit was refused')).toBeVisible();
+    await expect.element(dialog().getByText(/HEAD moved to [0-9a-f]{7} meanwhile, so git may have committed/)).toBeVisible();
+    expect(dialog().getByText(/nothing was committed/i).elements()).toHaveLength(0);
+  });
+
   test('a refused commit says why with what the hooks said, keeps the dialog, and a commit refused for a stale file goes through once the package is read again', async () => {
     const { folder } = await openOrders({
       clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n' }, edits: { 'notes.txt': 'two\n' }, hook: { refuses: true, says: 'lint: notes.txt ends without a full stop' } }],
@@ -411,7 +421,7 @@ describe('the tab of a package', () => {
     await startCommit('Edit the notes');
     await commitButton().click();
 
-    await expect.element(dialog().getByText('Nothing was committed')).toBeVisible();
+    await expect.element(dialog().getByText('The commit was refused')).toBeVisible();
     await expect.element(dialog().getByText('git commit failed, as git and the hooks say; nothing was committed')).toBeVisible();
     await expect.element(dialog().getByLabelText('What git and the hooks said')).toHaveTextContent('lint: notes.txt ends without a full stop');
 

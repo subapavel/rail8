@@ -451,7 +451,8 @@ reviewed.
    - a renamed file is named without the path it was renamed from, or with that path as not on disk while it is on disk
      again (412). The author reviewed a rename between two paths, and git's rename detection can pair the new path
      with another old one meanwhile;
-   - a path's index `differs` (409): `commit --only` would replace what the author staged.
+   - a path's index `differs` (409): `commit --only` would replace what the author staged. The 412s of the paths and
+     their tags come first.
 2. **What the author saw.** Under the working folder's lock, `branch` and `head` must still be the branch and `HEAD`,
    and each path's `tag` must still be the tag of its bytes on disk (`null` for a deleted file). When any differs, the
    answer is 412 and nothing is done.
@@ -464,7 +465,7 @@ reviewed.
    - When the commit fails, or the development server closes during it, the paths this request added that `HEAD`
      lacks are taken out of the index again (`rm --cached`), and the hook's words come back as `output` (422). A path
      leaves only while its index entry is the blob the half hashed under the lock before the add, through the path's
-     clean filters (`hash-object`). A path the author had staged stays staged, as does one another git staged with
+     clean filters (`hash-object`); a symbolic link's blob is the text of its target, as git stores it. A path the author had staged stays staged, as does one another git staged with
      other content meanwhile; the error names it. git refuses the whole removal when a path's bytes on disk changed
      since the add, as when a hook rewrote a new file before it refused; the half then hashes the paths again and
      takes out, in a second removal, those whose bytes did not change. A path that stays staged this way is named in
