@@ -26,6 +26,12 @@ final class NoServices implements Services {
         }
 
         @Override
+        public void remove(String key, String value) {
+            check(key);
+            Objects.requireNonNull(value, "value");
+        }
+
+        @Override
         public String toString() {
             return "Cache[keeps nothing]";
         }

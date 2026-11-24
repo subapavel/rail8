@@ -759,7 +759,11 @@ script in SAP Integration Suite works with security material.
 - **Cache.** `get(key, loader)` returns the value kept under `key`, or runs the loader and keeps what
   it returns for its time to live (at most 24 h): a token fetched an unusual way, a key derived once
   a day. Keys are up to 256 characters, values up to 64 KiB. The steps of one type in one package share
-  their keys, and no one else sees them; entries stay across a redeploy.
+  their keys, and no one else sees them; entries stay across a redeploy. `remove(key)` forgets a key, and
+  a load under way is not kept. On a 401 a step calls `remove(key, token)` with the token that failed,
+  then `get` again: the cache forgets the key only while it still keeps that token, and leaves a load
+  under way alone. Of K messages that see one token fail at once, the first forgets it and the others
+  find the next token or wait for its load, so one load fetches it for the pool.
   - With Valkey, the nodes share the cache, so a partner that limits token requests sees one per
     pool. A key loads on one node at a time while that node holds the key's lock, which it renews
     every 3 s and which lapses 10 s after its node stops. A node that stalls for longer, or a Valkey
@@ -767,7 +771,9 @@ script in SAP Integration Suite works with security material.
     still holds the lock is kept. Callers on other nodes ask Valkey again, 10 ms apart doubling to
     200 ms, for at most 30 s, and fail when the load they waited for failed. A value lives in Valkey
     for its ttl and is AES-256-GCM under a key derived from the master key; a node whose clock runs
-    ahead of the writer's loads it early. Each package keeps at most 1,000 entries and 8 MiB; the
+    ahead of the writer's loads it early. Beside it Valkey keeps a digest of the value, HMAC-SHA256 under
+    another key derived from the master key, so a remove with a value compares and deletes in one script
+    without the value leaving the node. Each package keeps at most 1,000 entries and 8 MiB; the
     entry nearest its expiry goes first. When Valkey does not answer within 1 s, the node loads on
     its own and keeps the value for at most a minute. A full Valkey counts as not answering: it
     refuses every read and write of the cache whole, so it also loses the hits on the values it

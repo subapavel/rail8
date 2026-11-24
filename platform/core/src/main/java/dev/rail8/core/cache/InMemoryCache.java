@@ -118,6 +118,20 @@ public final class InMemoryCache implements Caches {
             }
         }
 
+        @Override
+        public void remove(String key, String value) {
+            check(key);
+            Objects.requireNonNull(value, "value");
+            Slot slot = new Slot(scope, key);
+            lock.lock();
+            try {
+                Kept k = kept.get(slot);
+                if (k != null && k.value().equals(value)) drop(slot);
+            } finally {
+                lock.unlock();
+            }
+        }
+
         /** The scope's package and step type, never a key or a value. */
         @Override
         public String toString() {

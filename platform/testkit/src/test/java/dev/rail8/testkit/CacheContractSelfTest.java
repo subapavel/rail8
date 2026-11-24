@@ -32,7 +32,10 @@ class CacheContractSelfTest {
                 "aTtlAboveTheLimitIsCutToIt",
                 "aLoaderThatAsksForItsOwnKeyFails",
                 "callersOfOneKeyShareOneLoad",
-                "aCallerThatWaitedForALoadThatFailedGetsAnIllegalStateWithTheFailureAsCause"), failures.keySet());
+                "aCallerThatWaitedForALoadThatFailedGetsAnIllegalStateWithTheFailureAsCause",
+                "aRemoveWithAnotherValueKeepsTheKey",
+                "aRemoveWithAValueLeavesALoadUnderWayAlone",
+                "callersThatSawOneValueFailLoadTheNextOnce"), failures.keySet());
         ContractRun.caughtBy(failures, "callersOfOneKeyShareOneLoad", "the second caller waited for the first one's load");
     }
 }

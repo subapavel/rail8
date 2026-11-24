@@ -10,7 +10,7 @@ import java.util.Objects;
  * kept may vanish at any time: at a restart, under the cache's limits, on another node. So a value here is always
  * one the step can load again, and never state whose loss loses a message.
  *
- * <p>Both methods block, so they run only on a virtual thread, such as the message's thread a step runs on. On any other
+ * <p>Its methods block, so they run only on a virtual thread, such as the message's thread a step runs on. On any other
  * thread they throw {@link IllegalStateException}. A key is 1 to {@link #MAX_KEY_CHARS} characters with no control
  * characters; any other key is refused with an {@link IllegalArgumentException} naming it. A key is not secret: errors may
  * show it. A value is never shown. A key stands for one value wherever the step's flows use it, so a value that depends on a
@@ -50,12 +50,36 @@ public interface Cache {
 
     /**
      * Forgets {@code key}: a later {@link #get} loads it again, and a load already under way is not kept. Best effort: a
-     * cache that cannot be reached logs it and returns, and the value then ages out on its ttl.
+     * cache that cannot be reached logs it and returns, and the value then ages out on its ttl. For a value seen to fail, use
+     * {@link #remove(String, String)}: this method also drops a newer value and a load under way.
      *
      * @throws IllegalArgumentException naming the key when it is not a key
      * @throws IllegalStateException    off a virtual thread
      */
     void remove(String key);
+
+    /**
+     * Forgets {@code key} only while the cache keeps {@code value} under it: a value another caller kept since stays, and a load
+     * under way is left alone and keeps its value. It is for a value seen to fail, such as a token a partner refused: pass it
+     * as {@link #get} returned it, then call {@code get} again. When many callers saw one value fail, the first forgets it and
+     * the others find the newer value or its load, so the key is loaded once. The value is compared whole; one too long to be
+     * kept matches nothing. Best effort, as {@link #remove(String)}.
+     *
+     * <pre>{@code
+     * String token = cache.get(key, this::fetchToken);
+     * Response answer = partner.call(token);
+     * if (answer.status() == 401) {
+     *     cache.remove(key, token);
+     *     answer = partner.call(cache.get(key, this::fetchToken));
+     * }
+     * }</pre>
+     *
+     * @throws IllegalArgumentException naming the key when it is not a key; the value is not shown
+     * @throws IllegalStateException    off a virtual thread
+     * @throws NullPointerException     when {@code value} is null
+     * @since 0.3
+     */
+    void remove(String key, String value);
 
     /**
      * Loads the value of a key that is not kept. It runs on the thread of the caller that asked, and may block.

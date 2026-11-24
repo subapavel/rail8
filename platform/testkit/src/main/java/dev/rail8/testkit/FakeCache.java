@@ -113,6 +113,19 @@ final class FakeCache implements Cache {
         }
     }
 
+    @Override
+    public void remove(String key, String value) {
+        check(key);
+        Objects.requireNonNull(value, "value");
+        lock.lock();
+        try {
+            Kept k = kept.get(key);
+            if (k != null && k.value().equals(value)) kept.remove(key);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** How many entries are kept, never a value. */
     @Override
     public String toString() {
