@@ -34,7 +34,10 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
   `/repos/rail8`, `RAIL8_GIT_BASE=file:///repos/`) and deploys its folder `examples/demo` (`RAIL8_GIT_PATH`). `deploy` deploys
   the checkout's `HEAD`: a change to the demo is deployed once it is committed, by `docker compose up deploy`. The checkout
   needs its full history and its own `.git` folder: a shallow clone or a `git worktree` of Rail8 cannot be deployed from.
-- Admin API and `/health`: `localhost:8081`. The node's HTTP port, shared by every inbound HTTP endpoint: `localhost:8080`; the demo's http-in at `/http/in`, its async door `http-in-async` at `/http/invoice/async` (answers 202).
+- Admin API and `/health`: `localhost:8081`, plain HTTP under `RAIL8_ADMIN_TLS=off` on the node and on `deploy`, which calls
+  `http://rail8:8081` (the node logs a WARNING at its start): the port is published on the host's loopback only. A node other
+  hosts reach is given `RAIL8_ADMIN_TLS_CERT` and `RAIL8_ADMIN_TLS_KEY` in place of `off`; the image's health check,
+  `/opt/rail8/health.sh`, then asks `/health` over HTTPS. The node's HTTP port, shared by every inbound HTTP endpoint: `localhost:8080`; the demo's http-in at `/http/in`, its async door `http-in-async` at `/http/invoice/async` (answers 202).
 - Postgres password: `RAIL8_PG_PASSWORD` (default `rail8`).
 - A secret mounted as a file: each of the node's secrets can be given as the path of a file that holds it, the variable's
   name with `_FILE` added (`docs/ARCHITECTURE.md`, part 10). The stack gives the SFTP host key's fingerprint this way:

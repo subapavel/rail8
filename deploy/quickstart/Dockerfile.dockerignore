@@ -2,6 +2,7 @@
 *
 !platform/node/target/lib/
 !platform/node/target/rail8-node-*.jar
+!deploy/quickstart/health.sh
 platform/node/target/rail8-node-*-sources.jar
 platform/node/target/rail8-node-*-tests.jar
 platform/node/target/rail8-node-*-javadoc.jar

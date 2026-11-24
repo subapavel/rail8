@@ -441,7 +441,10 @@ a dependency by its content among the packages it holds.
 that repository (`POST /admin/deploy`) and prints the node's answer; `--check` deploys nothing.
 `rail8 user add <name> [--role <role>]` makes a person through a node's admin API with
 `RAIL8_ADMIN_TOKEN`, the emergency key, and prints their first password; it makes the first
-administrator. `rail8 key new` prints a new emergency key and sends nothing.
+administrator. `rail8 key new` prints a new emergency key and sends nothing. Both commands that call
+a node refuse, before anything is sent, a plain `http://` URL whose host is not loopback (`localhost`,
+`127.0.0.0/8` or `::1`, as written, never resolved), unless `RAIL8_ADMIN_TLS=off`; for `https://`
+they trust the JVM's certificates, or only those of the PEM file `RAIL8_ADMIN_CA`.
 `rail8 new-adapter` writes the skeleton of a new adapter as a git repository with a first commit
 (part 5). `rail8 <module> [arguments]` runs the command that the module of that name brings, and
 `rail8 help` lists each module's command after the CLI's own (part 5); both load the modules of the
@@ -1086,7 +1089,9 @@ passes the UI's `/admin` requests on to the node (`RAIL8_ADMIN_URL`, default
 `http://127.0.0.1:8081`), as the node answers no browser: it takes only GET and POST from its own
 pages (`Sec-Fetch-Site: same-origin`, an `Origin` from its fixed list), drops every header but
 `Accept` and `Content-Type`, and adds the token from `RAIL8_ADMIN_TOKEN` itself, so the browser
-never holds it. The mapping studio's `/api` requests are answered by the development server itself: it lists the
+never holds it. It does not start for a plain `http://` URL to a host other than loopback unless
+`RAIL8_ADMIN_TLS=off`; for `https://` it trusts Node's default CA list, or only the certificates of
+`RAIL8_ADMIN_CA` (Node 22.19 or newer). The mapping studio's `/api` requests are answered by the development server itself: it lists the
 `*.mapping.json` files of the working folder without the node, and asks the node's mapping module
 (`/admin/modules/mapping/*`, with the same token) to read, check, create, compile, test and refresh a mapping, sending
 the files of its bundles that the node asks for: those inside the mapping's package (the nearest folder holding
@@ -1147,6 +1152,18 @@ run's records are written in groups, after the bodies they refer to are durable.
 On `127.0.0.1:8081` by default; without `RAIL8_ADMIN_TOKEN` it may only listen on loopback. Every
 `/admin` request but the login carries `Authorization: Bearer <credential>`: a user's session, or the
 emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
+
+- With `RAIL8_ADMIN_TLS_CERT` and `RAIL8_ADMIN_TLS_KEY`, absolute paths of PEM files (each at most
+  64 KiB, read once at the start), the port serves HTTPS only: the certificate file holds the
+  server's certificate first, then its chain in order, and the key, PKCS#8, PKCS#1 or SEC1 without a
+  password, must be the first certificate's. A refused file names the variable and the path, never
+  the content. `/live`, `/ready` and `/health` are then HTTPS too, and so is a probe of them (scheme
+  HTTPS in Kubernetes).
+- On a bind other than loopback without a certificate, the node starts with a WARNING and answers
+  403 `tls-required` to every login and every session, before the login's body is read; the
+  emergency key and the shared token go on. `RAIL8_ADMIN_TLS=off` states that the network to the
+  port is protected another way: logins and sessions are taken, and the node logs a WARNING of its
+  own at the start. `off` with a certificate, or any other value, refuses the start.
 
 - A user is a person or a technical account and holds roles: `administrator`, `developer`,
   `operator`, `message-bodies` and `secret-administrator`. Every route is mounted with its action,
@@ -1257,7 +1274,6 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Named tokens for the command line and for machines, HTTPS on the admin port, the UI's login and its
-  Users screen, device credentials for the login, and the audit's view at a message and the Audit screen
+- Named tokens for the command line and for machines, the UI's login and its Users screen, device credentials for the login, and the audit's view at a message and the Audit screen
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.

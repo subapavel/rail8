@@ -183,7 +183,7 @@ class ComposeStackTest {
             assertFalse(test.isMissingNode() || joined(test).isBlank(), e.getKey() + " has a healthcheck with a test");
         }
         assertTrue(joined(service("postgres").path("healthcheck").path("test")).contains("pg_isready"), "postgres is checked with pg_isready");
-        assertTrue(joined(service("rail8").path("healthcheck").path("test")).contains("/health"), "the node is checked on GET /health");
+        assertEquals("CMD /opt/rail8/health.sh", joined(service("rail8").path("healthcheck").path("test")), "the node is checked by the image's script");
     }
 
     @Test
@@ -380,6 +380,28 @@ class ComposeStackTest {
             assertTrue(names.contains("rail8"), file + ": netns carries the alias rail8 on the default network, was " + names);
             assertFalse(serviceIn(file, "rail8").has("networks"), file + ": the node joins the holder's namespace, it has no networks of its own");
         }
+    }
+
+    /**
+     * Both stacks serve the admin API in plain HTTP on 0.0.0.0, stated by {@code RAIL8_ADMIN_TLS=off} (the port is published on
+     * the host's loopback only), and so does the one-shot deploy, which calls {@code http://rail8:8081}. The node is checked by
+     * the image's script, which asks {@code GET /health} over HTTPS when the node has a certificate and over plain HTTP otherwise.
+     */
+    @Test
+    void theStacksStatePlainHttpAndCheckTheNodeWithTheImagesScript() throws IOException {
+        for (Path file : NODE_PORTS.keySet()) {
+            JsonNode node = serviceIn(file, "rail8");
+            assertEquals("off", environment(node).get("RAIL8_ADMIN_TLS"), file + ": the node states plain HTTP");
+            assertEquals("CMD /opt/rail8/health.sh", joined(node.path("healthcheck").path("test")), file + ": the image's health check");
+        }
+        assertEquals("off", environment(service("deploy")).get("RAIL8_ADMIN_TLS"), "the one-shot states plain HTTP to rail8:8081");
+        Path image = Path.of("..", "..", "deploy", "quickstart");
+        assertTrue(Files.readString(image.resolve("Dockerfile")).contains("COPY --chmod=755 deploy/quickstart/health.sh ./"), "the image carries the script");
+        assertTrue(Files.readString(image.resolve("Dockerfile.dockerignore")).lines().anyMatch("!deploy/quickstart/health.sh"::equals),
+                "and its build context sends it");
+        String script = Files.readString(image.resolve("health.sh"));
+        assertTrue(script.contains("RAIL8_ADMIN_TLS_CERT") && script.contains("openssl s_client") && script.contains("/dev/tcp/127.0.0.1/"),
+                "HTTPS through openssl with a certificate, plain HTTP through bash otherwise: " + script);
     }
 
     @Test
