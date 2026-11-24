@@ -31,13 +31,15 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * CORE-5b1 T11 (packet: the holder pauses its socket above HOLD_AT 8 MiB queued, resumes at 4 MiB): with the link's writer
- * held in its first DATA's write, an owner sends 64 MiB more in 4 MiB DATA frames; once node-a stopped reading — the owner's
+ * held in its first DATA's write, an owner sends more 4 MiB DATA frames than node-a may read and both kernel queues may hold
+ * ({@link #kernelQueuesMax}); once node-a stopped reading — the owner's
  * sender parked in a socket write, node-a's socket holding bytes it has not read that stay unread, with nothing more sent,
  * across three tasks of node-a's one event loop — what node-a's process took off the socket beyond the held frame is at most
  * HOLD_AT plus one DATA (12 MiB) plus the one Netty read loop that may be in flight when the pause lands (1 MiB). It is
- * measured outside the holder: the bytes the sender wrote less its socket's unsent queue and node-a's unread one
- * ({@code /proc/net/tcp}); a byte node-a received but has not ACKed is in both queues and is subtracted twice, so a reading
- * may fall short of what node-a read. Hence both false-stall floors leave room for it: T11's is HOLD_AT less DATA 0's wire
+ * measured outside the holder: the bytes the sender wrote less its socket's send queue and node-a's unread one
+ * ({@code /proc/net/tcp}). A byte node-a received but has not ACKed is in both queues and would be subtracted twice (a paused
+ * node-a ACKs on its delayed-ACK timer, and the owner's send queue autotunes to megabytes), so the stall is taken only once
+ * the owner's socket has nothing in flight ({@link #notReading}). Both false-stall floors: T11's is HOLD_AT less DATA 0's wire
  * length less 1 MiB, {@link #STALL_FLOOR} (1-byte frames) HOLD_AT less 128 KiB. Released, every frame is receipted in order,
  * the ends strictly increasing, and the {@code .part} is the bytes sent.
  */
@@ -45,7 +47,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 class ReplicaBackpressureTest {
 
     static final int FRAME = ReplWire.DATA_MAX;
-    static final int FRAMES = 16;
     /** What node-a may hold of the link beyond its writer's held frame: HOLD_AT, one DATA, one read loop in flight. */
     static final long QUEUED_MAX = ReplWire.HOLD_AT + FRAME + MIB;
     /**
@@ -56,6 +57,21 @@ class ReplicaBackpressureTest {
      * vacuously.
      */
     static final long STALL_FLOOR = ReplWire.HOLD_AT - 128 * 1024;
+
+    /**
+     * The most the two kernel queues between an owner and node-a may hold here: the maxima of {@code tcp_rmem} (node-a's receive
+     * queue) and {@code tcp_wmem} (the owner's send queue), the bounds of their autotuning; neither socket sets a buffer of its
+     * own. A case sends more than that and what node-a may read, or its sender finishes before node-a stopped.
+     */
+    static long kernelQueuesMax() throws java.io.IOException {
+        return autotunedMax("tcp_rmem") + autotunedMax("tcp_wmem");
+    }
+
+    private static long autotunedMax(String name) throws java.io.IOException {
+        // a proc file: its size reads 0, so read it as lines
+        String[] minDefaultMax = Files.readAllLines(Path.of("/proc/sys/net/ipv4", name)).get(0).trim().split("\\s+");
+        return Long.parseLong(minDefaultMax[2]);
+    }
 
     @TempDir Path tmp;
     ReplicaWorld world;
@@ -73,22 +89,22 @@ class ReplicaBackpressureTest {
     void aHeldWriterStopsTheHolderReadingPastHoldAtAndReleasedEveryFrameIsReceiptedInOrder() throws Exception {
         world = new ReplicaWorld(tmp);
         Owner o = world.dial(B);
-        byte[] h = o.opened(1, HDR + (long) (FRAMES + 1) * FRAME);
+        int frames = (int) ((QUEUED_MAX + kernelQueuesMax() + MIB) / FRAME) + 1;
+        byte[] h = o.opened(1, HDR + (long) (frames + 1) * FRAME);
         HeldFiles.Hold held = world.files.holdWrite("T11-D00-");
         byte[] d0 = o.raw.sealed(ReplWire.DATA, ReplWire.data("node-b", ReplicaWorld.JOURNAL_B, 1, HDR, frameBytes(0)));
         o.raw.write(d0, 0, d0.length);
         held.awaitReached();
         // The floor follows from the holder's count: the held DATA 0 stays in its queued bytes until its write returns, so a
         // holder pausing above HOLD_AT queued has read beyond DATA 0 more than HOLD_AT less DATA 0's full wire length; less
-        // 1 MiB for the reading's error: one 64 KiB sender chunk still in the socket queues, not yet in written, and the bytes
-        // node-a received but has not ACKed, in both the owner's send queue and node-a's receive queue and so subtracted twice
-        // by readByHolder. Below it the stall was false and the upper bound passed vacuously.
+        // 1 MiB for the reading's error: one 64 KiB sender chunk still in the socket queues, not yet in written. Below it the
+        // stall was false and the upper bound passed vacuously.
         long floor = ReplWire.HOLD_AT - d0.length - MIB;
 
         AtomicLong written = new AtomicLong();
         java.util.concurrent.atomic.AtomicBoolean writing = new java.util.concurrent.atomic.AtomicBoolean();
         OnVirtualThread.Call<Void> sender = OnVirtualThread.start(() -> {
-            for (int i = 1; i <= FRAMES; i++) {
+            for (int i = 1; i <= frames; i++) {
                 byte[] f = o.raw.sealed(ReplWire.DATA, ReplWire.data("node-b", ReplicaWorld.JOURNAL_B, 1, HDR + (long) i * FRAME, frameBytes(i)));
                 for (int off = 0; off < f.length; off += 64 * 1024) {
                     int n = Math.min(64 * 1024, f.length - off);
@@ -119,18 +135,18 @@ class ReplicaBackpressureTest {
                     + ", queues " + java.util.Arrays.toString(o.queues()) + ", sender " + sender.thread().getState());
             Thread.onSpinWait();
         }
-        assertTrue(written.get() < (long) FRAMES * (FRAME + 64), "fixture: the sender stalled before its last byte (else nothing was bounded)");
+        assertTrue(written.get() < (long) frames * (FRAME + 64), "fixture: the sender stalled before its last byte (else nothing was bounded)");
         beyond = readByHolder(o, written.get());
         System.out.println("aHeldWriter: stalled, node-a read " + (beyond >> 10) + " KiB beyond its held frame, floor " + (floor >> 10)
                 + " KiB, bound " + (QUEUED_MAX >> 10) + " KiB, queues " + java.util.Arrays.toString(o.queues()));
         assertTrue(beyond <= QUEUED_MAX, "stalled, node-a holds " + (beyond >> 10) + " KiB beyond its held frame: at most " + (QUEUED_MAX >> 10));
         assertTrue(beyond >= floor, "false stall: node-a read only " + (beyond >> 10) + " KiB beyond its held frame, below "
-                + (floor >> 10) + " KiB (HOLD_AT less DATA 0's wire length less 1 MiB for a sender chunk not yet counted and the bytes"
-                + " node-a received but has not ACKed, counted in both queues), where a holder pausing above HOLD_AT queued cannot have paused");
+                + (floor >> 10) + " KiB (HOLD_AT less DATA 0's wire length less 1 MiB for a sender chunk not yet counted), where a"
+                + " holder pausing above HOLD_AT queued cannot have paused");
 
         held.release();
         long last = -1;
-        long end = HDR + (long) (FRAMES + 1) * FRAME;
+        long end = HDR + (long) (frames + 1) * FRAME;
         while (last < end) {
             Answer a = o.next();
             assertTrue(a.is(ReplWire.RECEIPT, 1, ReplWire.WRITTEN), "only RECEIPT WRITTEN of segment 1, was " + a);
@@ -143,7 +159,7 @@ class ReplicaBackpressureTest {
 
         MessageDigest sent = MessageDigest.getInstance("SHA-256");
         sent.update(h);
-        for (int i = 0; i <= FRAMES; i++) sent.update(frameBytes(i));
+        for (int i = 0; i <= frames; i++) sent.update(frameBytes(i));
         MessageDigest onDisk = MessageDigest.getInstance("SHA-256");
         try (InputStream in = Files.newInputStream(world.part(B, 1))) {
             byte[] buf = new byte[1 << 16];
@@ -156,17 +172,17 @@ class ReplicaBackpressureTest {
 
     /**
      * CORE-5b1 r1 (queued counts a frame's length, not its payload): with the writer held in its first DATA's write, an owner
-     * sends 3 × HOLD_AT of 1-byte DATA frames (70 bytes each on the wire; 2 × HOLD_AT fit node-a's reads and the two kernel
-     * queues, ~6 MiB observed, and the sender finished). node-a stops reading with what it took off the socket
+     * sends 1-byte DATA frames (70 bytes each on the wire), more than the bound below and the kernel queues at their largest
+     * ({@link #kernelQueuesMax}) hold, so its sender stalls. node-a stops reading with what it took off the socket
      * beyond the held frame at most HOLD_AT + {@link #PAUSE_SLACK} (4 MiB), in wire bytes; counted by payload (1 byte
-     * a frame) it would read all of them (24 MiB, the bound 12 MiB). Released, every frame is receipted in order and the
+     * a frame) it would read all of them (the bound 12 MiB). Released, every frame is receipted in order and the
      * .part holds every byte.
      *
      * <p>{@link #PAUSE_SLACK}: what node-a may take off the socket past HOLD_AT, in frame bytes, is empirical headroom over
      * what Vert.x 5.1 was observed to deliver after {@code pause()}, not derived from it: up to ~2.1 MiB observed (9611–10350
      * KiB beyond the held frame against HOLD_AT's 8192, agent/work/CORE-5b1-r1-flake.log; the holder paused at queued =
      * 8388653 in a debug run). 4 MiB is about twice that, and 12 MiB below what a holder counting payload reads (all
-     * 24 MiB). Every run prints what it read.
+     * it is sent, 24 MiB and more). Every run prints what it read.
      */
     static final long PAUSE_SLACK = 4 * MIB;
 
@@ -179,7 +195,8 @@ class ReplicaBackpressureTest {
         o.raw.close();   // that seal moved its session on: a fresh link for the case
         o = world.dial(B);
         final Owner owner = o;
-        long frames = 3 * ReplWire.HOLD_AT / wire;
+        long bound = ReplWire.HOLD_AT + PAUSE_SLACK;
+        long frames = (bound + kernelQueuesMax() + MIB) / wire;
         long end = HDR + first.length + frames;
         o.opened(1, end);
         HeldFiles.Hold held = world.files.holdWrite("FLEN-D00-");
@@ -187,7 +204,6 @@ class ReplicaBackpressureTest {
         held.awaitReached();
         world.files.recordNothing();   // 10^5 pwrites follow
 
-        long bound = ReplWire.HOLD_AT + PAUSE_SLACK;
         AtomicLong written = new AtomicLong();
         java.util.concurrent.atomic.AtomicBoolean writing = new java.util.concurrent.atomic.AtomicBoolean();
         OnVirtualThread.Call<Void> sender = OnVirtualThread.start(() -> {
@@ -231,8 +247,8 @@ class ReplicaBackpressureTest {
                 + (bound >> 10) + " KiB (HOLD_AT " + (ReplWire.HOLD_AT >> 10) + " KiB), queues " + java.util.Arrays.toString(o.queues()));
         assertTrue(beyond <= bound, "stalled, node-a holds " + (beyond >> 10) + " KiB beyond its held frame: at most " + (bound >> 10));
         assertTrue(beyond >= STALL_FLOOR, "false stall: node-a read only " + (beyond >> 10) + " KiB of 1-byte DATA frames beyond its held frame, below "
-                + (STALL_FLOOR >> 10) + " KiB (HOLD_AT less 128 KiB for the held frame, a sender chunk not yet counted and the bytes"
-                + " node-a received but has not ACKed, counted in both queues), where a holder pausing above HOLD_AT queued cannot have paused");
+                + (STALL_FLOOR >> 10) + " KiB (HOLD_AT less 128 KiB for the held frame and a sender chunk not yet counted), where a"
+                + " holder pausing above HOLD_AT queued cannot have paused");
 
         held.release();
         o.untilWritten(1, end);
@@ -461,13 +477,15 @@ class ReplicaBackpressureTest {
     /**
      * node-a does not read: its socket holds unread bytes, and across three loop tasks nothing more is counted as sent and
      * neither queue changes. Both queues are compared: while node-a reads, the kernel can refill its receive queue to the same
-     * length from the owner's send queue, so an unchanged receive queue alone is no witness.
+     * length from the owner's send queue, so an unchanged receive queue alone is no witness. And the owner's socket has nothing
+     * in flight, before and after: every byte it sent is acknowledged, so none is in both queues and {@link #readByHolder}
+     * counts each byte once (node-a's closed window ends in a zero-window probe, never in bytes in flight).
      */
     boolean notReading(Owner o, AtomicLong written) throws Exception {
         long before = written.get();
         long[] q = o.queues();
-        if (q[1] == 0) return false;
+        if (q[1] == 0 || o.inFlight()) return false;
         for (int i = 0; i < 3; i++) world.onLoop();
-        return java.util.Arrays.equals(o.queues(), q) && written.get() == before;
+        return java.util.Arrays.equals(o.queues(), q) && written.get() == before && !o.inFlight();
     }
 }

@@ -241,6 +241,11 @@ final class ReplicaWorld implements AutoCloseable {
             return new long[] {mine.map(LoopbackQueues.Queues::tx).orElse(0L), theirs.map(LoopbackQueues.Queues::rx).orElse(0L)};
         }
 
+        /** Whether this owner's socket has bytes sent that node-a has not acknowledged (loopback, /proc/net/tcp). */
+        boolean inFlight() throws IOException {
+            return LoopbackQueues.inFlight(raw.localPort(), raw.remotePort());
+        }
+
         /** Whether node-a's process has read every byte this owner wrote. */
         boolean allRead() {
             try {

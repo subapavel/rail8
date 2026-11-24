@@ -72,6 +72,9 @@ class StoreAppendWaitTest {
         List<Future<TieredBlobStore.Durable>> taken = new ArrayList<>();
         taken.add(forced(store, "aw-0", Promise.<Void>promise().future()));
         held.awaitReached();
+        // the writer forces aw-0 while its appender is still on its way from the reservation into the open saves: once aw-0 is
+        // there, every taken save is counted before the next key is forced, so a key's own save is what grows the set
+        until(() -> store.openSaves().size() == 1, () -> "aw-0 is an open save: " + store.openSaves());
         Future<TieredBlobStore.Durable> waiting = null;
         Promise<Void> answer = null;
         BlobKey waitingKey = null;
