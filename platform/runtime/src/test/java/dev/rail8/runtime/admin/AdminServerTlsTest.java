@@ -33,6 +33,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -117,7 +118,8 @@ class AdminServerTlsTest extends AdminAccessFixture {
 
         assertEquals(List.of("the admin API on 0.0.0.0:" + plain + " serves plain HTTP to other hosts: it refuses logins and sessions until it has"
                 + " a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY), or until RAIL8_ADMIN_TLS=off states that the network to it is"
-                + " protected another way"), warnings());
+                + " protected another way; the emergency key, the shared token and the first passwords given to them still cross it in clear"),
+                warnings());
     }
 
     @Test
@@ -127,9 +129,23 @@ class AdminServerTlsTest extends AdminAccessFixture {
         int plain = start(new AdminServer.Config("0.0.0.0", 0, Optional.of(KEY)));
 
         Answer ended = send(plain, "GET", "/admin/me", Optional.of(root), null);
+        Answer lowerCase = send(plain, "GET", "/admin/me", Optional.empty(), null, Map.of("Authorization", "bearer  " + root));
+        Answer noRoute = send(plain, "GET", "/admin/no-such-route", Optional.of(root), null);
 
         assertEquals(403, ended.status(), "not 401 session-ended: the store is never asked, so a live session is not kept alive either");
         assertEquals("tls-required", ended.code());
+        assertEquals(403, lowerCase.status(), "read as the authentication reads it: Bearer in any case, the credential stripped");
+        assertEquals("tls-required", lowerCase.code());
+        assertEquals(403, noRoute.status(), "before the router's 404: a path no route takes is refused too");
+        assertEquals("tls-required", noRoute.code());
+    }
+
+    @Test
+    void aHostNameBindRefusesLoginsAsAnyBindButALoopbackLiteral() {
+        assertTrue(new AdminServer.Config("localhost", 0, Optional.of(KEY)).refusesLogins(), "a host name may resolve to any address");
+        assertTrue(new AdminServer.Config("::", 0, Optional.of(KEY)).refusesLogins());
+        assertFalse(new AdminServer.Config("127.0.0.1", 0, Optional.of(KEY)).refusesLogins());
+        assertFalse(new AdminServer.Config("::1", 0, Optional.of(KEY)).refusesLogins());
     }
 
     @Test

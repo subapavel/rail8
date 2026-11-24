@@ -28,12 +28,11 @@ public interface Access {
     Caller authenticate(Optional<String> authorization, Optional<String> declaredActor);
 
     /**
-     * Whether {@code authorization} presents a session's credential, {@code Bearer rail8s_<id>_<secret>}, by its form alone:
-     * nothing is read from the store.
+     * Whether {@code authorization} presents a session's credential, {@code Bearer rail8s_<id>_<secret>}, by its form alone, read
+     * as {@link #authenticate} reads it: nothing is read from the store.
      */
     static boolean presentsSession(Optional<String> authorization) {
-        return authorization.filter(h -> h.regionMatches(true, 0, "Bearer ", 0, 7))
-                .flatMap(h -> Credentials.sessionId(h.substring(7).strip())).isPresent();
+        return authorization.flatMap(Credentials::presented).flatMap(Credentials::sessionId).isPresent();
     }
 
     /**

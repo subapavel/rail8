@@ -117,6 +117,8 @@ class AdminApiTest {
         Cli.Usage refused = assertThrows(Cli.Usage.class, () -> AdminApi.of("deploy", Optional.empty(), Map.of("RAIL8_ADMIN_TLS", "on")));
 
         assertEquals("deploy: RAIL8_ADMIN_TLS must be off or not set, was 'on'", refused.getMessage());
+        Cli.Usage upperCase = assertThrows(Cli.Usage.class, () -> AdminApi.of("deploy", Optional.empty(), Map.of("RAIL8_ADMIN_TLS", "OFF")));
+        assertEquals("deploy: RAIL8_ADMIN_TLS must be off or not set, was 'OFF'", upperCase.getMessage(), "off in lower case only");
         Cli.Usage empty = assertThrows(Cli.Usage.class, () -> AdminApi.of("deploy", Optional.of("http://node.example"), Map.of("RAIL8_ADMIN_TLS", "")));
         assertTrue(empty.getMessage().contains("is plain HTTP to a host other than loopback"), "empty is not set: " + empty.getMessage());
     }
