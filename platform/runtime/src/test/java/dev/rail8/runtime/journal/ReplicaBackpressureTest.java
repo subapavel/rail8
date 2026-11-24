@@ -1,6 +1,7 @@
 package dev.rail8.runtime.journal;
 
 import dev.rail8.runtime.journal.ReplicaWorld.Owner;
+import dev.rail8.runtime.journal.peer.PeerServerProbe;
 import dev.rail8.runtime.journal.peer.ReplWire;
 import dev.rail8.runtime.journal.peer.ReplWire.Answer;
 import dev.rail8.runtime.node.OnVirtualThread;
@@ -190,6 +191,9 @@ class ReplicaBackpressureTest {
     void oneByteDataFramesPauseTheSocketWithinHoldAtCountedInFrameBytes() throws Exception {
         world = new ReplicaWorld(tmp);
         Owner o = world.dial(B);
+        // the dialer's handshake ends at node-a's proof, before node-a read the dialer's: once node-a gave the link's place back
+        // it established it, so it cannot establish it after the next link and supersede that one (two sockets' reads have no order)
+        JournalFixture.until(() -> PeerServerProbe.sourcesHeld(world.server) == 0, () -> "node-a ends the first link's handshake");
         byte[] first = ReplWire.filled("FLEN-D00-", 64);
         int wire = o.raw.sealed(ReplWire.DATA, ReplWire.data("node-b", ReplicaWorld.JOURNAL_B, 1, 0, new byte[1])).length;
         o.raw.close();   // that seal moved its session on: a fresh link for the case
