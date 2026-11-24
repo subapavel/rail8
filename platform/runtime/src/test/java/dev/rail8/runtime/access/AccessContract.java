@@ -377,7 +377,7 @@ abstract class AccessContract {
         many(2);
         int few = statements(Access::users);
         many(10);
-        assertEquals(few, statements(Access::users), "as many statements for 21 users as for 5");
+        assertEquals(few, statements(Access::users), "as many statements for 25 users as for 5");
     }
 
     /** {@code count} more persons with a role and a session, and as many technical accounts with a role and a token. */
