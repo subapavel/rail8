@@ -1,5 +1,6 @@
 import type { NodeIngress } from './inbound';
 import type { Options, SettingsDescription } from './settings';
+import { uiFetch } from '../session';
 
 /** One endpoint file of the working folder: its path relative to the folder, and its envelope or why it cannot be read. */
 export type EndpointItem = { path: string; id: string; scheme: string; direction: 'in' | 'out' } | { path: string; problem: string };
@@ -80,9 +81,9 @@ async function refusal(res: Response): Promise<EndpointsError> {
 
 /**
  * The working folder's endpoint files at `/files/endpoints`, and the node's components at `/admin/components`, of the
- * server that serves the UI, through `send` (the browser's `fetch` by default).
+ * server that serves the UI, through `send` (the page's `uiFetch` by default).
  */
-export function httpEndpointsApi(send: typeof fetch = (input, init) => fetch(input, init)): EndpointsApi {
+export function httpEndpointsApi(send: typeof fetch = uiFetch): EndpointsApi {
   const fileUrl = (path: string) => `/files/endpoints/${path.split('/').map(encodeURIComponent).join('/')}`;
 
   async function call(url: string, init: RequestInit = {}): Promise<Response> {

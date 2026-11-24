@@ -232,7 +232,7 @@ import java.util.stream.Collectors;
  * <p>The users and their sessions ({@link Access}): {@code POST /admin/sessions {name, password, device?}} (at most
  * {@link #LOGIN_BODY_MAX} bytes; a {@code device} is taken and not read) answers 201 {@code {session, expiresAt, idleSeconds,
  * me}}, or 401 {@code login-refused}, 429 {@code too-many-attempts} with {@code Retry-After}, 503 {@code busy}.
- * {@code GET /admin/me} answers {@code {name, kind, roles, actions, via, firstPassword, expiresAt, emergencyKey}};
+ * {@code GET /admin/me} answers {@code {name, kind, roles, actions, refused, via, firstPassword, expiresAt, emergencyKey}};
  * {@code POST /admin/me/password {current, next}} and {@code POST /admin/me/logout} 204. {@code GET /admin/users} lists every
  * user ({@code {items}}) and {@code GET /admin/users/{name}} shows one: {@code {name, kind, roles:[{role, grantedAt, grantedBy,
  * grantedVia}], blockedAt, firstPassword, createdAt, createdBy, sessions:[{id, createdAt, lastSeenAt, expiresAt}], tokens}},
@@ -1403,13 +1403,19 @@ public final class AdminServer {
      * {@code GET /admin/me}: the caller's name (for a caller without an account the name the audit records), its kind (null
      * without an account), its roles, every action it may do, how it proved who it is, whether it holds a first password, when
      * its session or token ends at the latest (null for any other caller), and whether the node holds an emergency key, which only an
-     * administrator is told.
+     * administrator is told. {@code refused} names each action it may not do, with the {@code code} and {@code needs} its 403 would
+     * carry.
      */
     private JsonObject me(Caller who, Optional<Instant> expiresAt) {
         JsonArray actions = new JsonArray();
-        who.actions().forEach(a -> actions.add(a.id()));
+        JsonObject refused = new JsonObject();
+        for (Action action : Action.values()) {
+            Optional<AccessRefused> refusal = who.refusal(action, PackageRef.ANY);
+            if (refusal.isEmpty()) actions.add(action.id());
+            else refused.put(action.id(), new JsonObject().put("code", refusal.get().code().orElseThrow()).put("needs", ids(refusal.get().needs())));
+        }
         return new JsonObject().put("name", who.name()).put("kind", who.kind() == Kind.NONE ? null : who.kind().id())
-                .put("roles", ids(who.roles())).put("actions", actions).put("via", who.via().id()).put("firstPassword", who.firstPassword())
+                .put("roles", ids(who.roles())).put("actions", actions).put("refused", refused).put("via", who.via().id()).put("firstPassword", who.firstPassword())
                 .put("expiresAt", expiresAt.map(Instant::toString).orElse(null))
                 .put("emergencyKey", access.emergencyKey() && who.roles().contains(Role.ADMINISTRATOR));
     }

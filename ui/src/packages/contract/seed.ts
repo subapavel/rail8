@@ -255,7 +255,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     seed.node === 'silent'
       ? { host, answers: false, error: `the node at ${host} does not answer (is it running?)` }
       : seed.tokenRefused
-        ? { host, answers: false, error: `the node at ${host} refuses RAIL8_ADMIN_TOKEN (401)`, refusesToken: true }
+        ? { host, answers: false, error: `the node at ${host} refuses the UI server's token (401)`, refusesToken: true }
       : {
           host,
           answers: true,

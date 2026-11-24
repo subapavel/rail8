@@ -144,13 +144,14 @@ describe('the development server of vite.config.ts', () => {
     // the node answers with the path it was asked, a module's service in JSON
     upstream = createHttpServer((req, res) => {
       if (req.url?.startsWith('/admin/modules/')) res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ asked: req.url }));
-      else res.end(`upstream ${req.url}`);
+      else res.end(`upstream ${req.url} ${req.headers.authorization}`);
     });
     const upstreamPort = await listen(upstream);
     const workspace = await mkdtemp(join(tmpdir(), 'rail8-workspace-'));
     temp = workspace;
     vi.stubEnv('RAIL8_ADMIN_URL', `http://127.0.0.1:${upstreamPort}`);
     vi.stubEnv('RAIL8_WORKSPACE', workspace);
+    vi.stubEnv('RAIL8_TOKEN', 'dev-token');
 
     vite = await createServer({
       configFile: join(ui, 'vite.config.ts'),
@@ -160,12 +161,31 @@ describe('the development server of vite.config.ts', () => {
     front = createHttpServer(vite.middlewares);
     const port = await listen(front);
 
-    expect(await get(port, '/admin/messages')).toEqual({ status: 200, body: 'upstream /admin/messages' });
+    expect(await get(port, '/admin/messages')).toEqual({ status: 200, body: 'upstream /admin/messages Bearer dev-token' });
     expect(await get(port, '/api/mappings')).toEqual({ status: 200, body: '[]' });
     expect(await get(port, '/api/catalogue')).toEqual({ status: 200, body: '{"asked":"/admin/modules/mapping/catalogue"}' });
     const endpoints = await get(port, '/files/endpoints');
     expect(endpoints.status).toBe(200);
     expect(JSON.parse(endpoints.body)).toMatchObject({ configured: true, items: [] });
     expect(vite.config.server.fs.allow).toEqual(expect.arrayContaining([join(ui, '../mapping/corpus'), join(ui, '../mapping/contract')]));
+  });
+
+  test('without a token asks for a session before it calls the node', async () => {
+    let calls = 0;
+    upstream = createHttpServer((_, res) => (calls++, res.end('upstream')));
+    vi.stubEnv('RAIL8_ADMIN_URL', `http://127.0.0.1:${await listen(upstream)}`);
+    temp = await mkdtemp(join(tmpdir(), 'rail8-workspace-'));
+    vi.stubEnv('RAIL8_WORKSPACE', temp);
+    vi.stubEnv('RAIL8_TOKEN', '');
+    vi.stubEnv('RAIL8_ADMIN_TOKEN', '');
+
+    vite = await createServer({ configFile: join(ui, 'vite.config.ts'), logLevel: 'silent', server: { middlewareMode: true, ws: false, watch: null } });
+    front = createHttpServer(vite.middlewares);
+    const port = await listen(front);
+
+    for (const path of ['/admin/messages', '/api/mappings', '/git/packages', '/session']) {
+      expect((await get(port, path)).status).toBe(401);
+    }
+    expect(calls).toBe(0);
   });
 });

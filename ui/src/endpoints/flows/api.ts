@@ -1,6 +1,7 @@
 import type { FlowFile, FlowItem } from '../files/flowFiles';
 import type { NodeComponents } from '../api';
 import type { FlowIngress, ServedSteps } from './types';
+import { uiFetch } from '../../session';
 
 export type { FlowFile, FlowItem };
 
@@ -58,9 +59,9 @@ async function refusal(res: Response): Promise<FlowsError> {
 
 /**
  * The working folder's flow files at `/files/flows`, and the node's step types at `/admin/steps` and components at
- * `/admin/components`, of the server that serves the UI, through `send` (the browser's `fetch` by default).
+ * `/admin/components`, of the server that serves the UI, through `send` (the page's `uiFetch` by default).
  */
-export function httpFlowsApi(send: typeof fetch = (input, init) => fetch(input, init)): FlowsApi {
+export function httpFlowsApi(send: typeof fetch = uiFetch): FlowsApi {
   async function call(url: string, init: RequestInit = {}): Promise<Response> {
     let res: Response;
     try {

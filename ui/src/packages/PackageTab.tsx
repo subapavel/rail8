@@ -5,6 +5,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
+import { useMay } from '../SessionGate';
 import type { Commit, PackagesApi, PackageState } from './api';
 import { CommitDialog } from './CommitDialog';
 import { DeployDialog } from './DeployDialog';
@@ -102,6 +103,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
   const state = read.kind === 'read' ? read.state : null;
   const at = read.kind === 'read' ? read.at : now();
   const deployed = state === null ? null : deployedStatus(state);
+  const readable = useMay('deployment.read');
   const refused = commitRefused(writable, state);
   const undeployable = deployRefused(state);
   const onState = (next: PackageState | null) => (next === null ? refresh() : show(next));
@@ -175,7 +177,11 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
           state !== null &&
           deployed !== null && (
             <Flex gap="large">
-              <Statistic title="Deployed" value={deployed.text} prefix={<Badge status={deployed.status} />} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+              {readable === true ? (
+                <Statistic title="Deployed" value={deployed.text} prefix={<Badge status={deployed.status} />} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+              ) : (
+                <Statistic title="Deployed" value="-" suffix={<Typography.Text type="secondary">{readable}</Typography.Text>} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+              )}
               <Statistic title="Changed files" value={state.changes.length} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
             </Flex>
           )

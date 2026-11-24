@@ -1,9 +1,10 @@
+import { isSessionRefused, type NodeCall } from '../../../server/session.ts';
 import { Refusal } from '../../../server/workingFolder.ts';
 import type { DeployBody, NodeDeploy } from '../api.ts';
 import { actorOf, deployBodyOf, DEPLOY_MS } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import { holds } from './git.ts';
-import { hostOf, NODE_READ, type NodeTarget } from './node.ts';
+import { hostOf, NODE_READ } from './node.ts';
 import { identityOf } from './package.ts';
 import type { Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
@@ -39,35 +40,36 @@ function answerOf(json: unknown): { deploy: NodeDeploy; replaces: string } | nul
 
 /**
  * Deploys the commit `body.commit` of the package `repository`, whose clone is at the real path `clone`, on the node
- * `node`, or checks it (`body.check`). The clone must hold the commit (404 otherwise). The node gets
- * `POST /admin/deploy` (with `?check=true` for the check) and `{repository, commit}`, with the deploy's `expect`, the
- * bearer token and `X-Rail8-Actor`: git's identity in the clone as {@link actorOf} writes it. It answers the node's
- * deploy and what it replaces. The node's refusals are passed on with its status, its error and its problems, but for:
+ * `node`, the request's client, or checks it (`body.check`). The clone must hold the commit (404 otherwise). The node
+ * gets `POST /admin/deploy` (with `?check=true` for the check) and `{repository, commit}`, with the deploy's `expect`
+ * and `X-Rail8-Actor`: git's identity in the clone as {@link actorOf} writes it, which the client drops in session mode,
+ * where the node names the session's user. It answers the node's deploy and what it replaces. The node's refusals are
+ * passed on with its status, its error and its problems, but for:
  *
+ * - the session's refusal: rejected as it is, and the node did nothing;
  * - its 412, the pool's record changed since the check: 412, saying so;
- * - its 401: 502, naming RAIL8_ADMIN_TOKEN;
+ * - its 401 in token mode: 502, saying the token is refused;
  * - no connection: 502;
  * - an answer broken off, over 8 MiB, or a 200 that is no deploy: 502 for a check, and 504 for a deploy, its outcome
  *   unknown;
  * - no answer within 5 min on `timer`: 504, the outcome of a deploy unknown.
  *
- * Every text of the node passes through the formatter, its token removed.
+ * Every text of the node passes through the formatter, the credential removed.
  */
 export async function deployCommit(
   git: Runner,
   clone: string,
   repository: string,
   body: DeployBody,
-  node: NodeTarget,
+  node: NodeCall,
   timer: Timer,
-  send: typeof fetch = fetch,
 ): Promise<{ deploy: NodeDeploy; replaces: string }> {
   if (!(await holds(git, clone, ['rev-parse', '--verify', '-q', '--end-of-options', `${body.commit}^{commit}`], [1, 128]))) {
     throw new Refusal(404, `the clone holds no commit ${body.commit}`);
   }
   const actor = actorOf(await identityOf(git, clone));
   const host = hostOf(node.target);
-  const said = (text: string) => formatted(text, node.token);
+  const said = (text: string) => formatted(node.redact(text));
   const what = body.check ? 'the check' : 'the deploy';
   const nothing = body.check ? 'the check changes nothing' : 'nothing was deployed';
   const lost = () =>
@@ -87,18 +89,14 @@ export async function deployCommit(
   try {
     let answer: Response;
     try {
-      answer = await send(`${node.target}/admin/deploy${body.check ? '?check=true' : ''}`, {
+      answer = await node.send(`${node.target}/admin/deploy${body.check ? '?check=true' : ''}`, {
         method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          'x-rail8-actor': actor,
-          ...(node.token ? { authorization: `Bearer ${node.token}` } : {}),
-        },
+        headers: { accept: 'application/json', 'content-type': 'application/json', 'x-rail8-actor': actor },
         body: JSON.stringify(body.check ? { repository, commit: body.commit } : { repository, commit: body.commit, expect: body.expect }),
         signal: stop.signal,
       });
     } catch (error) {
+      if (isSessionRefused(error)) throw error;
       if (stop.signal.aborted) throw lost();
       const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : '';
       throw new Refusal(502, said(`the node at ${host} does not answer (is it running?): ${String(error)}${cause}; ${nothing}`));
@@ -116,7 +114,7 @@ export async function deployCommit(
     } catch {
       json = undefined;
     }
-    if (answer.status === 401) throw new Refusal(502, `the node at ${host} refuses RAIL8_ADMIN_TOKEN (401); ${nothing}`);
+    if (answer.status === 401) throw new Refusal(502, `the node at ${host} refuses the UI server's token (401); ${nothing}`);
     if (answer.ok) {
       const found = answerOf(json);
       if (found === null) throw unreadable(`answered ${what} with ${answer.status}, but with no deploy the UI can read`);

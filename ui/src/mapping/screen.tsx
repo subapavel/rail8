@@ -27,6 +27,7 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
     id: `mapping:${id}`,
     group: 'Design',
     title: id.slice(id.lastIndexOf('/') + 1),
+    action: 'module.call',
     render: () => (
       <Studio
         mappingId={id}
@@ -56,6 +57,7 @@ export function mappingsScreen(api: ApiClient, browserState: BrowserStateStore):
     icon: <PartitionOutlined />,
     description: 'Design and test message mappings in the working folder.',
     title: 'Mappings',
+    action: 'module.call',
     render: (open) => (
       <QueryClientProvider client={queryClient}>
         <Page title={false}>

@@ -116,10 +116,10 @@ describe.each<[string, Build]>([
     expect((await api.get('orders')).deployed).toMatchObject({ node: 'answered' });
   });
 
-  test('a node that refuses the token is 502, naming RAIL8_ADMIN_TOKEN', async () => {
+  test('a node that refuses the token is 502, saying so', async () => {
     const { api } = await one({}, { tokenRefused: true });
     const refused = await refusalOf(api.deploy('orders', { commit: world!.id('orders', 'first'), check: true }));
-    expect(refused).toMatchObject({ status: 502, message: expect.stringContaining('refuses RAIL8_ADMIN_TOKEN (401)') });
+    expect(refused).toMatchObject({ status: 502, message: expect.stringContaining("refuses the UI server's token (401)") });
   });
 
   test('a node that does not answer at all is 502', async () => {

@@ -38,6 +38,12 @@ const expand = (table, text) => (page) =>
 const press = (name) => (page) => page.getByRole('button', { name, exact: true }).click();
 /** Collapses the side menu to its icons. */
 const collapse = (page) => page.getByRole('button', { name: 'Collapse menu' }).click();
+/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first or in). */
+const visit = (scene) => (page) => page.goto(`${page.url().split('?')[0]}?session=${scene}`);
+/** Types `text` into the field labelled `label`. */
+const fill = (label, text) => (page) => page.getByLabel(label, { exact: true }).fill(text);
+/** Ends the session of the page, so the login shows over its tabs. */
+const end = (page) => page.evaluate(() => window.endSession());
 /** Opens the first mapping of the Mappings screen in its studio. */
 const studio = (page) => shown(page).getByRole('button', { name: 'Open in studio' }).first().click();
 
@@ -53,6 +59,11 @@ const SCENES = {
   'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],
   'menu-collapsed': [menu('Packages'), pkg('orders'), collapse],
   canvas: [menu('Mappings'), studio, tab('Definition')],
+  login: [visit('out')],
+  'login-refused': [visit('out'), fill('Name', 'anna'), fill('Password', 'not the password'), press('Log in')],
+  'first-password': [visit('first')],
+  'session-home': [visit('in')],
+  'session-asking': [visit('in'), menu('Packages'), end],
 };
 
 /** The page of the Ant Design Pro demo that matches each picture taken of it, and whether its menu is collapsed. */

@@ -4,8 +4,13 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import { MountedModal } from './MountedModal';
 import type { Screen } from './screens';
 
-export function WorkspaceQuickOpen({ screens, choose, dismiss }: {
+/**
+ * Finds a screen or an open tab by name. A screen the caller may not open, for which `refusedOf` gives why, is listed
+ * disabled with that reason.
+ */
+export function WorkspaceQuickOpen({ screens, choose, dismiss, refusedOf = () => undefined }: {
   screens: readonly Screen[];
+  refusedOf?: (screen: Screen) => string | undefined;
   choose: (screen: Screen) => void;
   dismiss: () => void;
 }) {
@@ -42,22 +47,29 @@ export function WorkspaceQuickOpen({ screens, choose, dismiss }: {
           placeholder="Find a screen or open tab…"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          onPressEnter={() => { if (matches[0]) choose(matches[0]); }}
+          onPressEnter={() => {
+            const first = matches.find((screen) => refusedOf(screen) === undefined);
+            if (first) choose(first);
+          }}
         />
-        {matches.map((screen) => (
-          <Button
-            type="text"
-            data-choice
-            key={screen.id}
-            icon={screen.icon ?? <FileTextOutlined aria-hidden />}
-            onClick={() => choose(screen)}
-          >
-            {screen.title}
-            <Typography.Text type="secondary" ellipsis>
-              {screen.id.includes(':') ? screen.id.slice(screen.id.indexOf(':') + 1) : screen.group}
-            </Typography.Text>
-          </Button>
-        ))}
+        {matches.map((screen) => {
+          const refused = refusedOf(screen);
+          return (
+            <Button
+              type="text"
+              data-choice
+              key={screen.id}
+              disabled={refused !== undefined}
+              icon={screen.icon ?? <FileTextOutlined aria-hidden />}
+              onClick={() => choose(screen)}
+            >
+              {screen.title}
+              <Typography.Text type="secondary" ellipsis>
+                {refused ?? (screen.id.includes(':') ? screen.id.slice(screen.id.indexOf(':') + 1) : screen.group)}
+              </Typography.Text>
+            </Button>
+          );
+        })}
         {matches.length === 0 && <Typography.Text type="secondary" role="status">No matching screens or tabs</Typography.Text>}
       </div>
     </MountedModal>

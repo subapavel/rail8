@@ -120,7 +120,7 @@ export interface FakeState {
   identity: { name: string; email: string } | null;
   /**
    * The node at RAIL8_ADMIN_URL: its host, and what it runs, or why it gives no answer (with `refusesToken` when it
-   * refuses RAIL8_ADMIN_TOKEN). A node that answers takes a deploy as it runs, unless `deploys` scripts it: a refusal
+   * refuses the UI server's token). A node that answers takes a deploy as it runs, unless `deploys` scripts it: a refusal
    * of its own of every deploy and check, or `silent`, no answer to a deploy, though it answers its check.
    */
   node:
@@ -597,7 +597,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       if (!folder.commits.some((c) => c.id === asked.commit)) throw refused(404, `the clone holds no commit ${asked.commit}`);
       const node = state.node;
       const nothing = asked.check ? 'the check changes nothing' : 'nothing was deployed';
-      if (!node.answers) throw refused(502, node.refusesToken ? `the node at ${node.host} refuses RAIL8_ADMIN_TOKEN (401); ${nothing}` : `${node.error}; ${nothing}`);
+      if (!node.answers) throw refused(502, node.refusesToken ? `the node at ${node.host} refuses the UI server's token (401); ${nothing}` : `${node.error}; ${nothing}`);
       state.sent.push({
         check: asked.check,
         body: asked.check ? { repository, commit: asked.commit } : { repository, commit: asked.commit, expect: asked.expect! },

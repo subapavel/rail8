@@ -77,19 +77,26 @@ public record Caller(OptionalLong user, String name, Kind kind, Set<Role> roles,
     }
 
     /**
-     * {@link #may}, else a 403: {@code password-change-required} for a session of a first password, {@code session-required}
-     * for a token of an action that needs a session, {@code not-allowed} otherwise; each names the roles that grant it.
+     * Why this caller may not do {@code action} on {@code pkg}, or empty when it may: a 403 of {@code password-change-required}
+     * for a session of a first password, {@code session-required} for a token of an action that needs a session,
+     * {@code not-allowed} otherwise; each names the roles that grant it. {@link #require} throws exactly this refusal.
      */
-    public void require(Action action, PackageRef pkg) {
-        if (may(action, pkg)) return;
+    public Optional<AccessRefused> refusal(Action action, PackageRef pkg) {
+        if (may(action, pkg)) return Optional.empty();
         boolean account = via == Via.SESSION || via == Via.TOKEN;
         if (account && firstPassword) {
-            throw AccessRefused.forbidden("password-change-required", "change the first password before " + action.id(), action.roles());
+            return Optional.of(AccessRefused.forbidden("password-change-required", "change the first password before " + action.id(), action.roles()));
         }
         if (via == Via.TOKEN && action.needsSession()) {
-            throw AccessRefused.forbidden("session-required", action.id() + " needs a person logged in, not a token", action.roles());
+            return Optional.of(AccessRefused.forbidden("session-required", action.id() + " needs a person logged in, not a token", action.roles()));
         }
-        throw AccessRefused.forbidden("not-allowed", action.id() + " is not allowed to " + name + needs(action), action.roles());
+        return Optional.of(AccessRefused.forbidden("not-allowed", action.id() + " is not allowed to " + name + needs(action), action.roles()));
+    }
+
+    /** {@link #may}, else the 403 of {@link #refusal}. */
+    public void require(Action action, PackageRef pkg) {
+        Optional<AccessRefused> refused = refusal(action, pkg);
+        if (refused.isPresent()) throw refused.get();
     }
 
     /**

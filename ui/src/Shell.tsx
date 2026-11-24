@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from 'react';
 import { ReadSpinner } from './ReadSpinner';
+import { SessionActions, SessionPrompt, useAccess } from './SessionGate';
 import { groupedScreens, RegisteredScreens, type Screen } from './screens';
 import { closedBy, closeTab, isPinned, noTabs, openTab, pinTab, unpinTab, type CloseCommand } from './tabs';
 import { Rail8Theme } from './theme';
@@ -84,6 +85,12 @@ export function Shell({ screens, start }: ShellProps) {
   const [saving, setSaving] = useState(false);
   const [workingFiles] = useState(() => workingFileRegistry((id) => setTabs((current) => openTab(current, id))));
   const byId = new Map(screens.map((screen) => [screen.id, screen]));
+  const access = useAccess();
+  // why the caller may not open a screen, or undefined when they may
+  const refusedOf = (screen: Screen | undefined) => {
+    const may = access(screen?.action);
+    return may === true ? undefined : may;
+  };
   const screenOf = (id: string) => opened.get(id)?.screen ?? byId.get(id);
 
   useEffect(() => {
@@ -250,6 +257,7 @@ export function Shell({ screens, start }: ShellProps) {
               >
                 Quick open
               </Button>,
+              <SessionActions key="session" />,
               <Button
                 key="theme"
                 size="small"
@@ -270,6 +278,7 @@ export function Shell({ screens, start }: ShellProps) {
                   key: screen.id,
                   name: screen.title,
                   path: `/${screen.id}`,
+                  disabled: refusedOf(screen) !== undefined,
                   icon: <span aria-hidden>{screen.icon ?? <AppstoreOutlined />}</span>,
                 })),
               })),
@@ -279,7 +288,7 @@ export function Shell({ screens, start }: ShellProps) {
               selectedKeys: tabs.active ? [tabs.active] : [],
               onClick: ({ key }) => {
                 const screen = byId.get(key);
-                if (screen) open(screen);
+                if (screen && refusedOf(screen) === undefined) open(screen);
               },
             }}
             menuItemRender={(item, dom, { collapsed: folded }) => (
@@ -293,7 +302,7 @@ export function Shell({ screens, start }: ShellProps) {
                   else entry?.removeAttribute('aria-current');
                 }}
               >
-                <Tooltip title={folded ? item.name : undefined} placement="right">
+                <Tooltip title={refusedOf(byId.get(String(item.key))) ?? (folded ? item.name : undefined)} placement="right">
                   {dom}
                 </Tooltip>
               </span>
@@ -361,6 +370,7 @@ export function Shell({ screens, start }: ShellProps) {
                 items={tabs.open.map((id) => {
                   const screen = screenOf(id);
                   const title = screen?.title ?? id;
+                  const refused = refusedOf(screen);
                   return {
                     key: id,
                     label: isPinned(tabs, id) ? (
@@ -379,7 +389,11 @@ export function Shell({ screens, start }: ShellProps) {
                     ),
                     children: (
                       <div className="rail8-panel">
-                        {screen && (
+                        {refused !== undefined ? (
+                          <div className="rail8-empty">
+                            <Empty description={<><h1>{title} cannot open</h1>{refused}.</>} />
+                          </div>
+                        ) : screen && (
                           <TabRoute breadcrumb={breadcrumbOf(screen)}>
                             <RegisteredWorkingFiles.Provider value={workingFiles}>
                               <WorkingTab.Provider value={id}>
@@ -413,6 +427,7 @@ export function Shell({ screens, start }: ShellProps) {
                 ...screens,
                 ...Array.from(opened.values(), ({ screen }) => screen).filter((screen) => !byId.has(screen.id)),
               ]}
+              refusedOf={refusedOf}
               dismiss={() => setQuickOpen(false)}
               choose={(screen) => {
                 open(screen);
@@ -420,6 +435,7 @@ export function Shell({ screens, start }: ShellProps) {
               }}
             />
           )}
+          <SessionPrompt />
         </RegisteredScreens.Provider>
       )}
     </Rail8Theme>

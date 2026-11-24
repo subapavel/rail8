@@ -330,6 +330,8 @@ server puts it in the login's body and sets it from the login's answer. No page 
   caller's own session from the cookie. A request without a session is answered 401 by the UI server and is sent
   nowhere. There is no fallback to a token. After a logout, `GET /session` is 401.
 
+The development server listens on loopback in both modes for now, and refuses to start on another address.
+
 **The UI server's own routes**, each under today's rule (`Sec-Fetch-Site: same-origin` and an `Origin` from the fixed
 list):
 - `POST /session {name, password}` sends the login to the node's `POST /admin/sessions` with the device credential, and
@@ -342,14 +344,17 @@ bodies of POST requests up to 64 KiB, which the users' routes, the password chan
 passes `Retry-After` back. It clears the session's cookie when the node answers 401 `unknown-credential`,
 `session-ended` or `blocked`, and on no other answer.
 
-**A write names its session.** The page keeps the id of the session it was shown. Every request other than `GET` that
-it sends to the node, through the proxy, the git half or the mapping half, names that id in the header
-`Rail8-Session`. The UI server answers 409 `session-changed` when the cookie holds another session or none. The page
-then reloads, so a tab shown to one user never writes as another.
+**A request names its session.** The page keeps the id of the session it was shown, in memory only. Every request it
+sends through the proxy, the git half or the mapping half names that id in the header `Rail8-Session`, reads included.
+Every request other than `GET` must name it. The UI server answers 409 `session-changed` when the cookie holds another
+session or none, or when a request names another id. The page then reads `GET /session`: when it names the same user,
+the page takes the new id and sends the request again once, and a second 409 reloads the page; when it names another
+user, the page reloads. So a tab shown to one user never reads or writes as another.
 
-`GET /admin/me` answers `{name, kind, roles, actions, via, firstPassword, expiresAt}`. `actions` lists the actions the
-caller may do. The UI hides or disables what the caller may not do, saying which role it needs, and holds no table of
-roles of its own.
+`GET /admin/me` answers `{name, kind, roles, actions, refused, via, firstPassword, expiresAt, emergencyKey}`. `actions`
+lists the actions the caller may do. `refused` gives each other action with why: `{code, needs}`, the code
+`not-allowed`, `session-required` or `password-change-required` and the roles that may do it, as the node would refuse
+it. The UI disables what the caller may not do, saying why from `refused`, and holds no table of roles of its own.
 
 **A deploy from the UI.** The check and the deploy itself are both `package.deploy`, and both pass the node's rule that
 a deployed node takes only a commit reachable from its `RAIL8_GIT_REF`. In session mode, the git half sends the
@@ -369,10 +374,12 @@ eleventh login ends the oldest.
 A change of roles ends nothing. Roles are read on every request, so a role gained or lost holds at the next request, on
 every node.
 
-When the node answers 401 because the session ended, the UI shows the login over the open tabs. Then:
-- a refused read is sent again;
-- a refused write is sent again only when the same user logged in. Otherwise the screen reloads, and the new user
-  decides for themselves.
+When the node answers 401 because the session ended, the UI shows the login over the open tabs, and from then on sends
+nothing new. It holds each refused request, and each new one, with its method, headers and body: at most 100 requests and
+32 MiB of their bodies, beyond which a request gets its 401. The login is sent once every request of the ended session
+has answered, or after 10 s. Then:
+- when the same user logged in, each held request is sent again once; after a first password, only once it is changed;
+- when another user logged in, the page reloads, and no held request is sent, so the new user decides for themselves.
 
 That is safe because the node did nothing for a 401.
 
@@ -616,7 +623,7 @@ A session ends by deleting its row. At most 10,000 users; one more is 409.
 | Route | Answer |
 | --- | --- |
 | `POST /admin/sessions {name, password, device?}` | 201 `{session, expiresAt, idleSeconds, device?, me}`; 401 `login-refused`, one text for every failure; 429; 503 `busy` |
-| `GET /admin/me` | `{name, kind, roles, actions, via, firstPassword, expiresAt, emergencyKey}` |
+| `GET /admin/me` | `{name, kind, roles, actions, refused, via, firstPassword, expiresAt, emergencyKey}` |
 | `POST /admin/me/password {current, next}` | 204; 403 `wrong-password`; 400 for a password the rules refuse; 429 |
 | `POST /admin/me/logout` | 204 |
 | `GET /admin/me/tokens`; `POST /admin/me/tokens {name, days, password}`; `POST /admin/me/tokens/{id}/revoke` | `{tokens, maxDays, defaultDays}`; 201 `{id, name, expiresAt, token}`, 403 `wrong-password`; 204 |
@@ -723,6 +730,12 @@ These are accepted:
 - Cookies are not kept apart by port. On `localhost` in development, another local server can receive the session's
   cookie; prefer token mode there.
 - An administrator can give themselves any role. The audit is the only brake.
+- Across browser tabs nothing coordinates the cookie, because the UI server keeps no state. A late 401 of the node
+  answered in another tab can clear a cookie set by a newer login in this one. The next request is then 401 and the
+  login shows again; nothing is written as another user.
+- Local writes are not authorized by the session. `/files` and the git commit are kept only by the loopback listener,
+  and the commit also by the cookie's form and `Rail8-Session`. Whoever reaches the loopback port can write the working
+  folder directly anyway. A UI server outside development must authorize local writes by the session before it exists.
 - Reads are not audited, except a view of a body and every use of the emergency key.
 - A new certificate comes with a rolling restart.
 

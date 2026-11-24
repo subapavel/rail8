@@ -6,7 +6,9 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { SESSION, SESSION_MODE, tokenMode } from '../../../server/gatedRequest';
 import { heldWrites } from '../../../server/heldWrites';
+import { uiSession, type Mode } from '../../../server/session';
 import { MAX_WAITING_WRITES, workingFolderWrites } from '../../../server/workingFolder';
 import { mappingApi, type MappingApiOptions } from './mappingApi';
 
@@ -72,18 +74,20 @@ let ended: number;
 const listen = (server: Server) =>
   new Promise<number>((done) => server.listen(0, '127.0.0.1', () => done((server.address() as AddressInfo).port)));
 
-async function startFront(options: Partial<MappingApiOptions> = {}) {
+/** The mapping half behind the session gate in `mode`, as the development server mounts them. */
+async function startFront(options: Partial<MappingApiOptions> = {}, mode: Mode = tokenMode('secret')) {
   const middleware = mappingApi({
     workspace: root,
     editable: true,
     origins: ['http://localhost:5173'],
-    node: { target: nodeUrl, token: 'secret' },
+    node: { target: nodeUrl },
     writes: workingFolderWrites(),
     ...options,
   });
+  const gate = uiSession({ mode, origins: ['http://localhost:5173'], target: options.node?.target ?? nodeUrl });
   front = createServer((req, res) => {
     req.on('end', () => ended++);
-    middleware(req, res, () => res.writeHead(418).end('next'));
+    gate(req, res, () => middleware(req, res, () => res.writeHead(418).end('next')));
   });
   frontPort = await listen(front);
 }
@@ -140,8 +144,8 @@ interface Reply {
 
 const SAME_ORIGIN = { 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' };
 
-/** Calls the development server; a request with a body comes from its own page unless `headers` says otherwise. */
-function call(method: string, path: string, body?: string | Buffer, headers: Record<string, string> = body === undefined ? {} : SAME_ORIGIN): Promise<Reply> {
+/** Calls the development server; a request comes from its own page unless `headers` says otherwise. */
+function call(method: string, path: string, body?: string | Buffer, headers: Record<string, string> = body === undefined ? { 'sec-fetch-site': 'same-origin' } : SAME_ORIGIN): Promise<Reply> {
   return new Promise((done, fail) => {
     const req = request({ host: '127.0.0.1', port: frontPort, method, path, headers }, (res) => {
       const chunks: Buffer[] = [];
@@ -402,11 +406,13 @@ describe('saving a mapping', () => {
     expect(await read('mappings/order.mapping.json')).toBe(canonical(1));
   });
 
-  test('is 403 foreign-origin from a page that is not this server’s', async () => {
+  test('is 403 foreign-origin from a page that is not this server’s, its reads too', async () => {
     const json = { 'content-type': 'application/json' };
-    expectProblem(await call('PUT', '/api/mappings/mappings/order', '{}', json), 403, `${STUDIO}foreign-origin`);
-    expectProblem(await call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, origin: 'http://evil.example' }), 403, `${STUDIO}foreign-origin`);
-    expectProblem(await call('POST', '/api/mappings/mappings/order/compile', '{}', { ...json, 'sec-fetch-site': 'cross-site' }), 403, `${STUDIO}foreign-origin`);
+    const UI = 'urn:rail8:ui:problem:';
+    expectProblem(await call('PUT', '/api/mappings/mappings/order', '{}', json), 403, `${UI}foreign-origin`);
+    expectProblem(await call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, origin: 'http://evil.example' }), 403, `${UI}foreign-origin`);
+    expectProblem(await call('POST', '/api/mappings/mappings/order/compile', '{}', { ...json, 'sec-fetch-site': 'cross-site' }), 403, `${UI}foreign-origin`);
+    expectProblem(await call('GET', '/api/mappings/mappings/order', undefined, {}), 403, `${UI}foreign-origin`);
     expect(calls).toEqual([]);
   });
 
@@ -738,7 +744,7 @@ describe('the node', () => {
     await put('mappings/order.mapping.json', '{}');
     handler = () => ({ status: 200, text: canonical(1) });
 
-    await call('GET', '/api/mappings/mappings/order', undefined, { origin: 'http://localhost:5173', cookie: 'a=b', authorization: 'Bearer browser' });
+    await call('GET', '/api/mappings/mappings/order', undefined, { 'sec-fetch-site': 'same-origin', origin: 'http://localhost:5173', cookie: 'a=b', authorization: 'Bearer browser' });
 
     expect(nodeCall(0).headers.authorization).toBe('Bearer secret');
     expect(nodeCall(0).headers.origin).toBeUndefined();
@@ -780,6 +786,41 @@ describe('the node', () => {
     const down = await call('GET', '/api/mappings/mappings/order');
     expectProblem(down, 502, `${STUDIO}node-unavailable`);
     expect(down.json.detail).toContain('is it running?');
+  });
+
+  test('in session mode answers its end of the session as 401, clearing the cookie, and sends the session', async () => {
+    await put('mappings/order.mapping.json', '{}');
+    await new Promise((done) => front.close(done));
+    await startFront({}, SESSION_MODE);
+    handler = () => ({ status: 401, json: { error: 'the session ended', code: 'session-ended' } });
+    const holding = { 'sec-fetch-site': 'same-origin', cookie: `rail8-session=${SESSION}` };
+
+    const reply = await call('GET', '/api/mappings/mappings/order', undefined, holding);
+
+    expectProblem(reply, 401, 'urn:rail8:ui:problem:session-ended');
+    expect(reply.headers['set-cookie']).toEqual(['rail8-session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0']);
+    expect(nodeCall(0).headers.authorization).toBe(`Bearer ${SESSION}`);
+    expect(nodeCall(0).headers.cookie).toBeUndefined();
+    const none = await call('GET', '/api/mappings/mappings/order', undefined, { 'sec-fetch-site': 'same-origin' });
+    expectProblem(none, 401, 'urn:rail8:ui:problem:no-credential');
+    expect(calls).toHaveLength(1);
+  });
+
+  test("passes the node's 403 forbidden on with what it needs, and a save's If-Match read refused so is 403, not 409", async () => {
+    await put('mappings/order.mapping.json', canonical(1));
+    const forbidden: NodeAnswer = {
+      status: 403,
+      type: 'application/problem+json',
+      json: { type: 'urn:rail8:admin:problem:forbidden', title: 'Forbidden', status: 403, detail: 'module.call needs the role developer', code: 'not-allowed', needs: ['developer'] },
+    };
+    handler = () => forbidden;
+
+    const opened = await call('GET', '/api/mappings/mappings/order');
+    expectProblem(opened, 403, 'urn:rail8:admin:problem:forbidden');
+    expect(opened.json).toMatchObject({ code: 'not-allowed', needs: ['developer'] });
+    const saved = await call('PUT', '/api/mappings/mappings/order', '{}', { ...SAME_ORIGIN, 'if-match': tagOf(canonical(1)) });
+    expectProblem(saved, 403, 'urn:rail8:admin:problem:forbidden');
+    expect(await read('mappings/order.mapping.json')).toBe(canonical(1));
   });
 
   test("is no longer called once the browser's request closes", async () => {

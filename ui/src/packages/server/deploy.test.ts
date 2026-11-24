@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest';
+import { gatedRequest, SESSION, SESSION_MODE, tokenMode } from '../../../server/gatedRequest.ts';
+import { nodeFor, type Mode } from '../../../server/session.ts';
 import { actorOf } from '../rules.ts';
 import { deployCommit } from './deploy.ts';
 import { FakeTimer } from './fakeTimer.ts';
@@ -20,9 +22,8 @@ function gitWith(ident: string | null = 'Jiří Novák <jiri@example.com> 170000
 /** A node that answers every call with `status` and `body`. */
 const answering = (status: number, body: string) => (async () => new Response(body, { status, headers: { 'content-type': 'application/json' } })) as typeof fetch;
 
-const node = { target: 'http://127.0.0.1:8081', token: TOKEN };
-const deploy = (send: typeof fetch, timer = new FakeTimer(), check = false) =>
-  deployCommit(gitWith(), '/clone', 'orders', check ? { commit: COMMIT, check } : { commit: COMMIT, check, expect: 'none' }, node, timer, send);
+const deploy = (send: typeof fetch, timer = new FakeTimer(), check = false, mode: Mode = tokenMode(TOKEN)) =>
+  deployCommit(gitWith(), '/clone', 'orders', check ? { commit: COMMIT, check } : { commit: COMMIT, check, expect: 'none' }, nodeFor(gatedRequest(mode, 'POST'), 'http://127.0.0.1:8081', send), timer);
 
 describe('actorOf', () => {
   test('is the identity as Name <email>, each character outside printable ASCII as ?, cut to 128 characters, or ui', () => {
@@ -42,9 +43,24 @@ describe('deployCommit', () => {
     }) as typeof fetch;
 
     expect(await deploy(send)).toEqual({ deploy: { package: 'orders', version: '1.0.0', repository: 'orders', commit: COMMIT, flows: ['orders/a'], added: ['orders/a'], swapped: [], removed: [] }, replaces: 'none' });
-    expect(asked!.url).toBe('http://127.0.0.1:8081/admin/deploy');
+    expect(String(asked!.url)).toBe('http://127.0.0.1:8081/admin/deploy');
     expect(JSON.parse(asked!.init.body as string)).toEqual({ repository: 'orders', commit: COMMIT, expect: 'none' });
     expect(asked!.init.headers).toMatchObject({ authorization: `Bearer ${TOKEN}`, 'x-rail8-actor': 'Ji?? Nov?k <jiri@example.com>' });
+  });
+
+  test('in session mode sends the session and no actor: the node names the session\'s user', async () => {
+    let headers: Record<string, string> | undefined;
+    const send = (async (_url: string, init: RequestInit) => {
+      headers = init.headers as Record<string, string>;
+      return new Response(JSON.stringify({ package: 'orders', version: '1.0.0', repository: 'orders', commit: COMMIT, flows: [], added: [], swapped: [], removed: [], replaces: 'none' }));
+    }) as typeof fetch;
+    await deploy(send, new FakeTimer(), false, SESSION_MODE);
+    expect(headers).toEqual({ accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${SESSION}` });
+  });
+
+  test('in session mode rejects with the session\'s refusal, as the node did nothing', async () => {
+    const refused = deploy(answering(401, JSON.stringify({ error: 'ended', code: 'session-ended' })), new FakeTimer(), false, SESSION_MODE);
+    await expect(refused).rejects.toMatchObject({ code: 'session-ended', clear: true });
   });
 
   test('removes the token from what the node says', async () => {

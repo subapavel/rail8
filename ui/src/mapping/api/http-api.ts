@@ -14,9 +14,10 @@ import {
   type TestRequest,
   type TestResult,
 } from './client';
+import { uiFetch } from '../../session';
 
 /** The `ApiClient` over the service's HTTP API. `baseUrl` is `''` when the editor shares the origin. */
-export function httpApiClient(baseUrl = '', fetchPort: typeof fetch = (input, init) => fetch(input, init)): ApiClient {
+export function httpApiClient(baseUrl = '', fetchPort: typeof fetch = uiFetch): ApiClient {
   const mapping = (id: string) => `${baseUrl}/api/mappings/${id.split('/').map(encodeURIComponent).join('/')}`;
 
   async function send(

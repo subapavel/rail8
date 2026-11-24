@@ -1,3 +1,4 @@
+import { isSessionRefused, type NodeCall } from '../../../server/session.ts';
 import { formatted } from './formatter.ts';
 import type { Timer } from './timer.ts';
 
@@ -16,10 +17,9 @@ export interface Running {
 /** What the node answered for `GET /admin/packages`: every package it runs from a repository, or why it gave no answer. */
 export type NodeRead = { answered: true; running: Running[] } | { answered: false; error: string };
 
-/** The node the git half reads: its admin API, such as `http://127.0.0.1:8081`, and the bearer token it needs, if any. */
+/** The node the git half reads: its admin API, such as `http://127.0.0.1:8081`. Each request reaches it with its own credential. */
 export interface NodeTarget {
   target: string;
-  token?: string;
 }
 
 /** The host of the node's admin API, as every answer names it: never the user information of its URL. */
@@ -47,24 +47,23 @@ async function bodyOf(answer: Response, limit: number): Promise<Buffer | null> {
 }
 
 /**
- * What the node at `node.target` runs: `GET /admin/packages` with its token, within 10 s on `timer` and 8 MiB. Its
- * packages deployed with no repository are left out. Every way it gives no answer (no connection, a refused token,
- * another status, an answer that is too large or no list of packages) is an answer with `answered: false` and the
- * reason through the formatter.
+ * What the node at `node.target` runs: `GET /admin/packages` through the request's client `node`, within 10 s on
+ * `timer` and 8 MiB. Its packages deployed with no repository are left out. The session's refusal rejects as it is.
+ * Every other way it gives no answer (no connection, a refused token, another status, an answer that is too large or
+ * no list of packages) is an answer with `answered: false` and the reason, its credential hidden, through the formatter.
  */
-export async function readNode(node: NodeTarget, timer: Timer, send: typeof fetch = fetch): Promise<NodeRead> {
+export async function readNode(node: NodeCall, timer: Timer): Promise<NodeRead> {
   const host = hostOf(node.target);
-  const failed = (error: string): NodeRead => ({ answered: false, error: formatted(error, node.token) });
+  const said = (text: string) => formatted(node.redact(text));
+  const failed = (error: string): NodeRead => ({ answered: false, error: said(error) });
   const stop = new AbortController();
   const cancel = timer.after(NODE_READ.ms, () => stop.abort());
   try {
     let answer: Response;
     try {
-      answer = await send(`${node.target}/admin/packages`, {
-        headers: { accept: 'application/json', ...(node.token ? { authorization: `Bearer ${node.token}` } : {}) },
-        signal: stop.signal,
-      });
+      answer = await node.send(`${node.target}/admin/packages`, { headers: { accept: 'application/json' }, signal: stop.signal });
     } catch (error) {
+      if (isSessionRefused(error)) throw error;
       if (stop.signal.aborted) return failed(`the node at ${host} did not answer within ${NODE_READ.ms / 1000} s`);
       const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : '';
       return failed(`the node at ${host} does not answer (is it running?): ${String(error)}${cause}`);
@@ -78,7 +77,7 @@ export async function readNode(node: NodeTarget, timer: Timer, send: typeof fetc
     } catch {
       json = undefined;
     }
-    if (answer.status === 401) return failed(`the node at ${host} refuses RAIL8_ADMIN_TOKEN (401)`);
+    if (answer.status === 401) return failed(`the node at ${host} refuses the UI server's token (401)`);
     if (answer.status !== 200) {
       const said = isRecord(json) && typeof json.error === 'string' ? `: ${json.error}` : '';
       return failed(`the node at ${host} answered ${answer.status}${said}`);
@@ -91,7 +90,7 @@ export async function readNode(node: NodeTarget, timer: Timer, send: typeof fetc
         repository: item.repository,
         commit: item.commit,
         state: item.state === 'FAILED' ? 'FAILED' : 'RUNNING',
-        problems: Array.isArray(item.problems) ? item.problems.filter((p): p is string => typeof p === 'string').map((p) => formatted(p, node.token)) : [],
+        problems: Array.isArray(item.problems) ? item.problems.filter((p): p is string => typeof p === 'string').map(said) : [],
         deployedAt: typeof item.deployedAt === 'string' ? item.deployedAt : '',
       });
     }

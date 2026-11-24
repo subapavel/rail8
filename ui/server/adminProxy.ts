@@ -1,10 +1,12 @@
 import { X509Certificate } from 'node:crypto';
 import { closeSync, openSync, readSync } from 'node:fs';
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
-import { isIPv4 } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import tls from 'node:tls';
+import { foreign, isJson, isLoopbackName, isSessionRefused, nodeFor, refusedSession } from './session.ts';
+
+export { foreign } from './session.ts';
 
 /** Where the development proxy sends the UI's admin requests, and whom it lets through. */
 export interface AdminProxyOptions {
@@ -12,9 +14,12 @@ export interface AdminProxyOptions {
   target: string;
   /** The development server's own origins (scheme, host and port); a request with any other `Origin` is refused. */
   origins: readonly string[];
-  /** The bearer token the node needs; undefined for a node without one. */
-  token?: string;
+  /** The node's client; `fetch` by default. The credential is the session gate's, never the proxy's. */
+  send?: typeof fetch;
 }
+
+/** The most bytes of a POST's body the proxy passes on. */
+export const PROXY_BODY_MAX_BYTES = 64 * 1024;
 
 /** The most bytes RAIL8_ADMIN_CA may hold. */
 export const CA_MAX_BYTES = 64 * 1024;
@@ -22,24 +27,24 @@ export const CA_MAX_BYTES = 64 * 1024;
 type Env = Readonly<Record<string, string | undefined>>;
 
 /**
- * The node the development server calls, from its environment: RAIL8_ADMIN_URL, by default http://127.0.0.1:8081, and
- * RAIL8_ADMIN_TOKEN, when it is set and not blank. Both are read on the server and never reach the browser. It throws,
+ * The node the development server calls, from its environment: RAIL8_ADMIN_URL, by default http://127.0.0.1:8081. It
+ * is read on the server and never reaches the browser; the credential is the session gate's. It throws,
  * so the development server does not start and sends nothing, when RAIL8_ADMIN_URL is no http or https URL, when
  * RAIL8_ADMIN_TLS is neither `off` nor unset (empty counts as unset), or when the URL is plain `http://` to a host other
  * than loopback without RAIL8_ADMIN_TLS=off. Loopback is the host as the URL parser writes it, never resolved:
- * `localhost`, an IPv4 address in 127.0.0.0/8, or `[::1]`. A refusal never names the token.
+ * `localhost`, an IPv4 address in 127.0.0.0/8, or `[::1]`.
  */
-export function nodeOf(env: Env): { target: string; token?: string } {
+export function nodeOf(env: Env): { target: string } {
   const target = env.RAIL8_ADMIN_URL ?? 'http://127.0.0.1:8081';
   const url = adminUrl(target);
   const off = tlsOff(env);
-  if (url.protocol === 'http:' && !off && !loopback(url.hostname)) {
+  if (url.protocol === 'http:' && !off && !isLoopbackName(url.hostname)) {
     throw new Error(
       `RAIL8_ADMIN_URL '${target}' is plain HTTP to a host other than loopback, so the UI server does not start and sends nothing: ` +
         'use https://, or RAIL8_ADMIN_TLS=off where the network to the node is protected another way',
     );
   }
-  return { target, token: env.RAIL8_ADMIN_TOKEN?.trim() || undefined };
+  return { target };
 }
 
 /**
@@ -89,10 +94,6 @@ function tlsOff(env: Env): boolean {
   return value === 'off';
 }
 
-function loopback(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '[::1]' || (isIPv4(hostname) && hostname.startsWith('127.'));
-}
-
 /** At most {@link CA_MAX_BYTES} bytes of the file `path`; it throws when there are more, or the file cannot be read. */
 function boundedRead(path: string): Buffer {
   const buffer = Buffer.alloc(CA_MAX_BYTES + 1);
@@ -119,56 +120,69 @@ function boundedRead(path: string): Buffer {
 const PASSED = ['accept', 'content-type'] as const;
 
 /** The response headers passed back to the browser. */
-const RETURNED = ['content-type', 'content-length', 'www-authenticate'] as const;
+const RETURNED = ['content-type', 'content-length', 'www-authenticate', 'retry-after'] as const;
 
-/** What to do with a request: refuse it, saying why, or send it on with these headers. */
-export type Forward = { refused: string } | { headers: Record<string, string> };
-
-/**
- * Why a request does not come from a page of this server, or undefined when it does: it must carry
- * `Sec-Fetch-Site: same-origin`, and an `Origin`, when there is one, from `origins` (never compared with the request's
- * `Host`, which a page on a re-bound domain controls). `what` names what the request is for in the refusal.
- */
-export function foreign(headers: IncomingHttpHeaders, origins: readonly string[], what: string): string | undefined {
-  if (headers['sec-fetch-site'] !== 'same-origin') {
-    return `only this server's own pages may call ${what} through it (Sec-Fetch-Site must be same-origin)`;
-  }
-  if (headers.origin !== undefined && !origins.includes(headers.origin)) {
-    return `the origin ${headers.origin} may not call ${what} through this server`;
-  }
-  return undefined;
-}
+/** What to do with a request: refuse it, saying why, or send it to this URL of the node with these headers. */
+export type Forward = { refused: { status: number; code: string; error: string } } | { url: URL; headers: Record<string, string> };
 
 /**
- * Decides whether a browser request may reach the node, and with which headers. It must come from a page of this
- * server: `Sec-Fetch-Site: same-origin`, and an `Origin`, when there is one, from the fixed list (never compared with
- * the request's `Host`, which a page on a re-bound domain controls). Only `Accept` and `Content-Type` go on; the token,
- * when one is configured, is set here, so the browser never holds it.
+ * Decides whether a browser request to `url` may reach the node at `target`, where, and with which headers. It must come
+ * from a page of this server (403 as {@link foreign} refuses). The URL is parsed once against `target`, and that same
+ * URL is the one sent. Its path, each segment percent-decoded (400 when one does not decode), empty segments dropped and
+ * lower-cased, may not begin `admin`, `sessions` (403 `sessions-refused`): no page script ever sees a session's secret.
+ * Only `Accept` and `Content-Type` go on; the credential is set by the session gate's client.
  */
-export function forward(headers: IncomingHttpHeaders, options: Pick<AdminProxyOptions, 'origins' | 'token'>): Forward {
+export function forward(url: string, headers: IncomingHttpHeaders, options: Pick<AdminProxyOptions, 'origins' | 'target'>): Forward {
   const refused = foreign(headers, options.origins, 'the admin API');
-  if (refused !== undefined) return { refused };
+  if (refused !== undefined) return { refused: { status: 403, code: 'foreign-origin', error: refused } };
+  const sent = new URL(url, options.target);
+  let segments: string[];
+  try {
+    segments = sent.pathname.split('/').filter((segment) => segment !== '').map((segment) => decodeURIComponent(segment).toLowerCase());
+  } catch {
+    return { refused: { status: 400, code: 'bad-path', error: 'a segment of the path is not well encoded' } };
+  }
+  if (segments[0] === 'admin' && segments[1] === 'sessions') {
+    return { refused: { status: 403, code: 'sessions-refused', error: "the UI server passes nothing to the node's sessions: log in through /session" } };
+  }
   const passed: Record<string, string> = {};
   for (const name of PASSED) {
     const value = headers[name];
     if (typeof value === 'string') passed[name] = value;
   }
-  if (options.token) passed.authorization = `Bearer ${options.token}`;
-  return { headers: passed };
+  return { url: sent, headers: passed };
 }
 
 function isAdmin(url: string): boolean {
   return url === '/admin' || url.startsWith('/admin/') || url.startsWith('/admin?');
 }
 
-function refuse(res: ServerResponse, status: number, error: string) {
-  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify({ error }));
+function refuse(res: ServerResponse, status: number, error: string, code?: string) {
+  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(code === undefined ? { error } : { error, code }));
+}
+
+/** The body of a POST: none, or JSON of at most {@link PROXY_BODY_MAX_BYTES} bytes, counted while it is read. */
+async function bodyOf(req: IncomingMessage): Promise<{ body: Buffer | undefined } | { status: number; code: string; error: string }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > PROXY_BODY_MAX_BYTES) return { status: 413, code: 'too-large', error: `this server passes bodies of at most ${PROXY_BODY_MAX_BYTES} bytes on to the admin API` };
+    chunks.push(chunk);
+  }
+  if (size === 0) return { body: undefined };
+  if (!isJson(req.headers['content-type'])) return { status: 415, code: 'unsupported-media-type', error: 'this server passes only JSON bodies on to the admin API' };
+  return { body: Buffer.concat(chunks) };
 }
 
 /**
  * A development-server middleware that sends `/admin` requests from the UI's own pages on to the node, as the node
- * answers no browser. It takes GET and POST without a body, which is all the UI sends (405 otherwise), refuses what
- * {@link forward} refuses (403), and answers 502 when the node cannot be reached. Every other path goes to `next`.
+ * answers no browser. It is mounted after the session gate, whose credential every call carries. It takes GET and POST
+ * (405 otherwise) and refuses what {@link forward} refuses. A POST's body is passed on when it is JSON of at most
+ * {@link PROXY_BODY_MAX_BYTES} bytes (415, 413 otherwise, before anything is sent), and a POST without one goes on
+ * without one. It passes back the status, `Content-Type`, `Content-Length`, `WWW-Authenticate` and `Retry-After`. The
+ * session's refusal by the node is answered as the gate answers it; a node that cannot be reached, or that redirects,
+ * is 502. Every other path goes to `next`.
  */
 export function adminProxy(options: AdminProxyOptions) {
   return (req: IncomingMessage, res: ServerResponse, next: () => void) => {
@@ -181,27 +195,37 @@ export function adminProxy(options: AdminProxyOptions) {
       refuse(res, 405, 'this server passes only GET and POST on to the admin API');
       return;
     }
-    const decided = forward(req.headers, options);
+    const decided = forward(url, req.headers, options);
     if ('refused' in decided) {
-      refuse(res, 403, decided.refused);
+      refuse(res, decided.refused.status, decided.refused.error, decided.refused.code);
       return;
     }
     const stop = new AbortController();
     res.on('close', () => stop.abort());
-    fetch(options.target + url, { method: req.method, headers: decided.headers, signal: stop.signal }).then(
-      (answer) => {
-        const returned: Record<string, string> = {};
-        for (const name of RETURNED) {
-          const value = answer.headers.get(name);
-          if (value !== null) returned[name] = value;
-        }
-        res.writeHead(answer.status, returned);
-        if (answer.body === null) res.end();
-        else Readable.fromWeb(answer.body as WebReadableStream<Uint8Array>).on('error', () => res.destroy()).pipe(res);
-      },
-      (failed: unknown) => {
-        if (!res.headersSent) refuse(res, 502, `the node's admin API at ${options.target} does not answer: ${String(failed)}`);
-      },
-    );
+    const sent = async () => {
+      const node = nodeFor(req, options.target, options.send);
+      let body: Buffer | undefined;
+      if (req.method === 'POST') {
+        const read = await bodyOf(req);
+        if ('status' in read) return refuse(res, read.status, read.error, read.code);
+        body = read.body;
+      }
+      const headers = { ...decided.headers };
+      if (body === undefined) delete headers['content-type'];
+      const answer = await node.send(decided.url, { method: req.method, headers, body: body === undefined ? undefined : new Uint8Array(body), signal: stop.signal });
+      const returned: Record<string, string> = {};
+      for (const name of RETURNED) {
+        const value = answer.headers.get(name);
+        if (value !== null) returned[name] = value;
+      }
+      res.writeHead(answer.status, returned);
+      if (answer.body === null) res.end();
+      else Readable.fromWeb(answer.body as WebReadableStream<Uint8Array>).on('error', () => res.destroy()).pipe(res);
+    };
+    sent().catch((failed: unknown) => {
+      if (res.headersSent) res.destroy();
+      else if (isSessionRefused(failed)) refusedSession(res, failed);
+      else refuse(res, 502, `the node's admin API at ${options.target} does not answer: ${String(failed)}`);
+    });
   };
 }

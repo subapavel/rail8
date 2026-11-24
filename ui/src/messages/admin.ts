@@ -1,3 +1,5 @@
+import { uiFetch } from '../session';
+
 /** How a recorded step ended: it handed a message on, it handed nothing on, or it threw. */
 export type Outcome = 'OK' | 'FILTERED' | 'FAILED';
 
@@ -149,10 +151,10 @@ async function readStart(res: Response, limit: number): Promise<{ bytes: Uint8Ar
 }
 
 /**
- * The admin API at `/admin` of the server that serves the UI, through `send` (the browser's `fetch` by default). In
+ * The admin API at `/admin` of the server that serves the UI, through `send` (the page's `uiFetch` by default). In
  * development, that server passes the requests on to the node.
  */
-export function httpAdminApi(send: typeof fetch = (input, init) => fetch(input, init)): AdminApi {
+export function httpAdminApi(send: typeof fetch = uiFetch): AdminApi {
   const message = (id: string) => `/admin/messages/${encodeURIComponent(id)}`;
 
   async function json<T>(url: string, init?: RequestInit): Promise<T> {

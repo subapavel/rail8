@@ -130,3 +130,24 @@ body {
 .rail8-table-scroll {
   overflow-x: auto;
 }
+/* the pages of the session before the frame: the login, the first password, the failure */
+.rail8-gate {
+  min-height: 100vh;
+  padding: var(--ant-padding-lg);
+  background: var(--ant-color-bg-layout);
+}
+.rail8-gate h1.ant-typography {
+  margin: 0;
+  font-size: var(--ant-font-size-heading-3);
+}
+.rail8-gate-body {
+  width: 100%;
+  max-width: calc(var(--ant-size-xxl) * 8);
+  padding: var(--ant-padding-lg);
+  background: var(--ant-color-bg-container);
+  border-radius: var(--ant-border-radius-lg);
+}
+.rail8-gate-body h2.ant-typography {
+  margin: 0;
+  font-size: var(--ant-font-size-heading-4);
+}

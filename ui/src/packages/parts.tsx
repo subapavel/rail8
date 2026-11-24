@@ -4,6 +4,7 @@ import { useCallback, useContext } from 'react';
 import { ArtifactKinds } from '../artifacts';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
+import { useMay } from '../SessionGate';
 import { ageOf } from './age';
 import type { Artifact, Busy, Change, Commit, PackageRow, PackagesApi, PackageState } from './api';
 import { CHANGE, inside, KIND, nameOf, useCommitChanges } from './data';
@@ -81,6 +82,8 @@ export function deployedStatus(state: PackageRow): { status: 'success' | 'warnin
 export function DeployedFact({ state, at, withStatus = true }: { state: PackageRow; at: Date; withStatus?: boolean }) {
   const deployed = state.deployed;
   const { status, text, hint } = deployedStatus(state);
+  const readable = useMay('deployment.read');
+  if (readable !== true) return <Typography.Text type="secondary">{readable}</Typography.Text>;
   return (
     <Flex vertical>
       <Flex gap="small" wrap align="center">
