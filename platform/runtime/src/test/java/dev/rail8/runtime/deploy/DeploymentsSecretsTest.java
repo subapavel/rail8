@@ -460,6 +460,21 @@ class DeploymentsSecretsTest {
         assertEquals(List.of(), n.doors.openProducers(), "no producer left open");
     }
 
+    /**
+     * A missing secret whose variable ends in {@code _FILE} is read by a node as the file form of another secret: the problem
+     * names the variable its value is given in, its own file form.
+     */
+    @Test
+    void aMissingSecretWhoseVariableEndsInFileNamesItsFileForm() {
+        Node n = node(Map.of());
+
+        DeployRefusedException refused = n.refused(one("file-name", url("rec://inbound"), url("secret://db-file")));
+
+        assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
+        assertEquals(List.of("endpoint 'partner': secret 'secret://db-file' is not set (RAIL8_SECRET_DB_FILE_FILE, the path of a file that holds it)"),
+                refused.problems());
+    }
+
     /** A variable that is set but empty is refused as a missing one: the same problem line, nothing listed, built or left open. */
     @Test
     void anEmptyVariableRefusesTheDeployAsAMissingOne() {

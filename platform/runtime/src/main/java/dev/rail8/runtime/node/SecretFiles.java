@@ -34,7 +34,7 @@ final class SecretFiles {
     /** The named secret variables that have a file form, beside every {@code RAIL8_SECRET_<NAME>}. */
     static final Set<String> NAMED = Set.of("RAIL8_PG_PASSWORD", "RAIL8_ADMIN_TOKEN", "RAIL8_GIT_TOKEN", "RAIL8_VALKEY_URI");
     /** The most bytes a secret file may hold: enough for a PEM key or a service account's JSON. */
-    static final int MAX_BYTES = 64 * 1024;
+    static final long MAX_BYTES = 64L * 1024;
 
     private static final String SECRET = "RAIL8_SECRET_";
     private static final String SUFFIX = "_FILE";
@@ -87,7 +87,7 @@ final class SecretFiles {
         }
         byte[] bytes;
         try (InputStream in = Files.newInputStream(path)) {
-            bytes = in.readNBytes(MAX_BYTES + 1);
+            bytes = in.readNBytes(Math.toIntExact(MAX_BYTES + 1));
         } catch (NoSuchFileException missing) {
             throw new IllegalArgumentException(fileKey + " names a file that does not exist: " + path, missing);
         } catch (IOException | RuntimeException unreadable) {
