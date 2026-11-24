@@ -49,6 +49,12 @@ export function useMe(): Me | null {
   return state?.kind === 'in' || state?.kind === 'asking' ? state.me : null;
 }
 
+/** What reads the session again after a change of the caller's own roles; it does nothing without a gate. */
+export function useSessionRefresh(): () => Promise<void> {
+  const client = useContext(SessionContext);
+  return () => client?.refresh() ?? Promise.resolve();
+}
+
 /** True when the caller may do `action`, else the words for why not. */
 export function useMay(action: string): true | string {
   return useAccess()(action);

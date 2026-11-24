@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { MountedModal } from '../MountedModal';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
-import { Allowed, useAccess, useMe } from '../SessionGate';
+import { Allowed, useAccess, useMe, useSessionRefresh } from '../SessionGate';
 import { ROLES, type Grant, type Kind, type LiveSession, type LiveToken, type Role, type TokensApi, type User, type UsersApi } from './api';
 import { IssueTokenDialog } from './IssueTokenDialog';
 import { tokenColumns } from './tokenColumns';
@@ -76,6 +76,7 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const me = useMe();
   const access = useAccess();
+  const refreshSession = useSessionRefresh();
   const { notification } = App.useApp();
 
   useEffect(() => {
@@ -105,7 +106,7 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
   const rolesAllowed = rolesMay.includes(true) ? true : rolesMay[0];
 
   const actions = (user: User): ReactNode => (
-    <Space size={0} wrap>
+    <Space size={0}>
       <Tooltip title={rolesAllowed === true ? undefined : rolesAllowed}>
         <Button type="link" size="small" disabled={rolesAllowed !== true} onClick={() => setDialog({ kind: 'roles', user })}>
           Roles…
@@ -255,6 +256,8 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
           onClose={(changed) => {
             setDialog(null);
             if (changed !== null) notification.success({ title: changed, role: 'status' });
+            // what the page allows follows the caller's own new roles
+            if (changed !== null && dialog.user.name === me?.name) void refreshSession();
             refresh();
           }}
         />
