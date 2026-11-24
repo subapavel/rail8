@@ -280,6 +280,7 @@ describe('the Users screen', () => {
       root?.unmount();
       host?.remove();
     }
+    await page.viewport(1280, 800);
   });
 
   test('shows the invariants the node keeps as plain messages', async () => {

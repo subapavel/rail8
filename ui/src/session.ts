@@ -225,7 +225,7 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
     });
   };
 
-  /** Reads `GET /session` after a 409; one read at a time answers every call that asked. */
+  /** Reads `GET /session` after a 409, or after a change of the caller's own roles; one read at a time answers every call that asked. */
   const recheck = () => {
     rechecking ??= (async () => {
       try {
