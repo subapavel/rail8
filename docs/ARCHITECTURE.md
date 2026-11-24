@@ -442,10 +442,15 @@ a dependency by its content among the packages it holds.
 that commit of that repository over the state `--expect` names (`POST /admin/deploy`) and prints the
 node's answer; without `--expect` a deploy is a usage error and sends nothing. `--check` deploys
 nothing, needs no `--expect`, and answers the state as `replaces`.
+It sends `RAIL8_TOKEN`, or, while the shared token lasts, `RAIL8_ADMIN_TOKEN` when that is not of the
+emergency key's form; a value of the key's form stops it before anything is sent.
 `rail8 user add <name> [--role <role>]` makes a person through a node's admin API with
 `RAIL8_ADMIN_TOKEN`, the emergency key, and prints their first password; it makes the first
-administrator. `rail8 key new` prints a new emergency key and sends nothing. Both commands that call
-a node refuse, before anything is sent, a plain `http://` URL whose host is not loopback (`localhost`,
+administrator. `rail8 bootstrap --admin <name> --deploy-account <name> --token-file <path>` makes the
+first users of a stack that starts itself: the administrator with the key, a login with the first
+password, a new generated password printed once, and in that session a technical account with the
+developer role whose token it writes to the file. `rail8 key new` prints a new emergency key and
+sends nothing. The commands that call a node refuse, before anything is sent, a plain `http://` URL whose host is not loopback (`localhost`,
 `127.0.0.0/8` or `::1`, as written, never resolved), unless `RAIL8_ADMIN_TLS=off`; for `https://`
 they trust the JVM's certificates, or only those of the PEM file `RAIL8_ADMIN_CA`.
 `rail8 new-adapter` writes the skeleton of a new adapter as a git repository with a first commit

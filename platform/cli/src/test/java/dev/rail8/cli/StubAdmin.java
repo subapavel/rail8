@@ -17,12 +17,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * A node's admin API as {@code rail8 deploy} sees it (P2-03a test fixture): the JDK's HTTP server on 127.0.0.1 and an ephemeral
  * port that records every request whole — method, path, raw query, headers (names lower-cased), body — before it answers the
- * status and body the case set (200 {@code {}} by default). A request is recorded before its answer leaves, so once the CLI
+ * status and body the case set for its path, else for every path (200 {@code {}} by default). A request is recorded before its answer leaves, so once the CLI
  * returned, what it sent is here; {@link #requests()} empty after a run is the witness that nothing was sent. Built with an
  * {@link SSLContext}, it serves HTTPS instead: a request is recorded only once the handshake completed.
  */
@@ -41,6 +42,7 @@ final class StubAdmin implements AutoCloseable {
     private final List<Request> requests = new CopyOnWriteArrayList<>();
     private volatile int status = 200;
     private volatile String answer = "{}";
+    private final Map<String, Map.Entry<Integer, String>> answers = new ConcurrentHashMap<>();
 
     StubAdmin() throws IOException {
         this(HttpServer.create(new InetSocketAddress(InetAddress.ofLiteral("127.0.0.1"), 0), 0), "http://127.0.0.1:");
@@ -68,6 +70,12 @@ final class StubAdmin implements AutoCloseable {
     StubAdmin answer(int status, String body) {
         this.status = status;
         this.answer = body;
+        return this;
+    }
+
+    /** From now on every request to {@code path} is answered {@code status} with {@code body}, whatever {@link #answer(int, String)} set. */
+    StubAdmin answer(String path, int status, String body) {
+        answers.put(path, Map.entry(status, body));
         return this;
     }
 
@@ -100,8 +108,9 @@ final class StubAdmin implements AutoCloseable {
             Map<String, List<String>> headers = new TreeMap<>();
             exchange.getRequestHeaders().forEach((name, values) -> headers.put(name.toLowerCase(Locale.ROOT), List.copyOf(values)));
             requests.add(new Request(exchange.getRequestMethod(), exchange.getRequestURI().getRawPath(), exchange.getRequestURI().getRawQuery(), headers, body));
-            int s = status;
-            byte[] bytes = answer.getBytes(StandardCharsets.UTF_8);
+            Map.Entry<Integer, String> set = answers.getOrDefault(exchange.getRequestURI().getRawPath(), Map.entry(status, answer));
+            int s = set.getKey();
+            byte[] bytes = set.getValue().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             if (s == 204 || s == 304 || bytes.length == 0) {
                 exchange.sendResponseHeaders(s, -1);

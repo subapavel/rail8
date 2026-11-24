@@ -17,7 +17,8 @@ import java.util.Optional;
  * with {@code ?check=true} for {@code --check}, the body {@code {"repository": "<repository>", "commit": "<commit|ref>",
  * "expect": "<state>"}}, {@code expect} left out of a check that does not give it, through {@link AdminApi}: the admin URL is
  * {@code --admin}, else RAIL8_ADMIN, else {@code http://localhost:8081}; plain HTTP only to loopback unless RAIL8_ADMIN_TLS=off;
- * the token is RAIL8_ADMIN_TOKEN, taken from the environment only. The expected state is what the caller wrote: the command
+ * the bearer is {@link AdminApi#token}: RAIL8_TOKEN, else a shared token in RAIL8_ADMIN_TOKEN, never the emergency key, taken
+ * from the environment only. The expected state is what the caller wrote: the command
  * fills in no default and never reads the state itself. The node judges the repository, the commit and the expected state: a
  * ref ({@code HEAD}, {@code main}) only in dev and ci. Prints the node's answer body; exit 0 on a 2xx, 1 on any other status (a
  * redirect is not followed, a 412 for another state is one) or a node that cannot be reached, 2 on a usage error (nothing
@@ -82,13 +83,14 @@ final class Deploy {
     }
 
     static int run(Arguments arguments, Map<String, String> env, PrintStream out, PrintStream err) {
+        Optional<String> token = AdminApi.token("deploy", env);
         AdminApi admin = AdminApi.of("deploy", arguments.admin(), env);
         JsonObject request = new JsonObject().put("repository", arguments.repository()).put("commit", arguments.commit());
         arguments.expect().ifPresent(expect -> request.put("expect", expect));
         byte[] body = request.encode().getBytes(StandardCharsets.UTF_8);
         HttpResponse<String> answer;
         try {
-            answer = admin.post("/admin/deploy" + (arguments.check() ? "?check=true" : ""), body, ANSWER);
+            answer = admin.post("/admin/deploy" + (arguments.check() ? "?check=true" : ""), body, token, ANSWER);
         } catch (AdminApi.NoAnswer unreachable) {
             err.println("rail8 deploy: " + unreachable.getMessage());
             return 1;

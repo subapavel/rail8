@@ -57,6 +57,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * not compile is refused (422, exit 1) and nothing is deployed; without the token the node refuses (401, exit 1). A pipeline
  * reads the state with {@code --check} and sends it with {@code --expect}; a deploy that expects another state is refused (412,
  * exit 1) and changes nothing.
+ * On a node whose RAIL8_ADMIN_TOKEN is a key from {@code rail8 key new}, {@code rail8 bootstrap} makes the administrator, whose
+ * printed password logs in, and the deploy account, whose token in the file deploys the demo through RAIL8_TOKEN, while the key
+ * alone deploys nothing.
  */
 class DeployCommandIT {
 
@@ -85,7 +88,15 @@ class DeployCommandIT {
 
     @BeforeEach
     void startTheNode() throws Exception {
-        String database = "cli_deploy_" + cases.incrementAndGet();
+        repos = Files.createDirectories(work.resolve("repos"));
+        node = startNode(work, repos, "cli_deploy_" + cases.incrementAndGet(), TOKEN);
+    }
+
+    /**
+     * A dev node in this JVM on a new database {@code database} of {@link #pg}, its data under {@code work}, its repositories in
+     * {@code repos}, {@code adminToken} its RAIL8_ADMIN_TOKEN, every port on any free port.
+     */
+    static Node startNode(Path work, Path repos, String database, String adminToken) throws Exception {
         try (Connection admin = DriverManager.getConnection(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword());
              Statement create = admin.createStatement()) {
             create.execute("CREATE DATABASE \"" + database + "\"");
@@ -97,7 +108,6 @@ class DeployCommandIT {
         env.put("RAIL8_PEER_PORT", "0");   // any free port: test JVMs run side by side
         env.put("RAIL8_HTTP_PORT", "0");   // the node's HTTP port on any free port too
         env.put("RAIL8_DATA_DIR", Files.createDirectories(work.resolve("data")).toString());
-        repos = Files.createDirectories(work.resolve("repos"));
         env.put("RAIL8_GIT_BASE", repos.toUri().toString());   // file://: a dev node reads its repositories from this folder
         env.put("RAIL8_PG_HOST", pg.getHost());
         env.put("RAIL8_PG_PORT", String.valueOf(pg.getMappedPort(5432)));
@@ -105,7 +115,7 @@ class DeployCommandIT {
         env.put("RAIL8_PG_USER", pg.getUsername());
         env.put("RAIL8_PG_PASSWORD", pg.getPassword());
         env.put("RAIL8_PG_POOL_SIZE", "4");
-        env.put("RAIL8_ADMIN_TOKEN", TOKEN);
+        env.put("RAIL8_ADMIN_TOKEN", adminToken);
         // a node needs a journal master key (CORE-4c1, D-106): a required configuration, a key made for this run and never stored
         byte[] journalKey = new byte[32];
         new java.security.SecureRandom().nextBytes(journalKey);
@@ -115,7 +125,7 @@ class DeployCommandIT {
         env.put("RAIL8_SECRET_SFTP_HOST_KEY", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
         NodeConfig config = NodeConfig.from(env);
         Plugins shipped = Plugins.fromEnv(env);
-        node = onVirtualThread(() -> Node.start(config, vertx, shipped::components, shipped.steps(), shipped.languages()));
+        return onVirtualThread(() -> Node.start(config, vertx, shipped::components, shipped.steps(), shipped.languages()));
     }
 
     @AfterEach
@@ -255,5 +265,40 @@ class DeployCommandIT {
         Ran again = run(env, "deploy", "demo", "HEAD", "--expect", replaces, "--admin", adminUrl());
         assertEquals(0, again.exit(), again.toString());
         assertEquals(first, new JsonObject(again.out().trim()).getString("replaces"), again.toString());
+    }
+
+    @Test
+    void bootstrapMakesTheAdministratorAndADeployAccountWhoseTokenDeploys() throws Exception {
+        String key = run(Map.of(), "key", "new").out().strip();
+        Node keyed = startNode(Files.createDirectories(work.resolve("keyed")), repos, "cli_bootstrap_" + cases.incrementAndGet(), key);
+        try {
+            String url = "http://127.0.0.1:" + keyed.adminPort();
+            String commit = committed(DEMO, "demo");
+            Path tokenFile = work.resolve("deploy.token");
+
+            Ran bootstrap = run(Map.of("RAIL8_ADMIN_TOKEN", key, "RAIL8_ADMIN", url),
+                    "bootstrap", "--admin", "alice", "--deploy-account", "ci-deploy", "--token-file", tokenFile.toString());
+
+            assertEquals(0, bootstrap.exit(), bootstrap.toString());
+            String password = bootstrap.out().strip();
+            String token = Files.readString(tokenFile);
+            assertTrue(token.startsWith("rail8t_"), "a named token in the file");
+            Ran keyOnly = run(Map.of("RAIL8_ADMIN_TOKEN", key), "deploy", "demo", commit, "--expect", "none", "--admin", url);
+            assertEquals(2, keyOnly.exit(), "the key alone deploys nothing: " + keyOnly);
+            Ran deploy = run(Map.of("RAIL8_TOKEN", token, "RAIL8_ADMIN_TOKEN", key), "deploy", "demo", commit, "--expect", "none", "--admin", url);
+            assertEquals(0, deploy.exit(), "the deploy account's token deploys: " + deploy);
+            try (HttpClient client = HttpClient.newHttpClient()) {
+                HttpResponse<String> login = client.send(HttpRequest.newBuilder(URI.create(url + "/admin/sessions")).timeout(Duration.ofSeconds(20))
+                        .header("content-type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(new JsonObject().put("name", "alice").put("password", password).encode())).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(201, login.statusCode(), login.body());
+                JsonObject me = new JsonObject(login.body()).getJsonObject("me");
+                assertEquals(false, me.getBoolean("firstPassword"), "the first password was changed: " + me.encode());
+                assertEquals(new JsonArray().add("administrator"), me.getJsonArray("roles"), me.encode());
+            }
+        } finally {
+            onVirtualThread(() -> { keyed.close(); return null; });
+        }
     }
 }
