@@ -2,6 +2,7 @@ package dev.rail8.runtime.node;
 
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.testkit.PostgresImage;
+import dev.rail8.testkit.TestCertificates;
 import io.vertx.core.Vertx;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnection;
