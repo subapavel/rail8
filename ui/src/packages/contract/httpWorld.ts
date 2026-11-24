@@ -206,7 +206,7 @@ export const httpWorld: Build = async (seed) => {
     const shown = manifestOf(git(join(work, asked.repository), 'show', `${asked.commit}:package.yaml`)).package!;
     const before = record === undefined ? new Map<string, string>() : flowsAt(asked.repository, record.commit, shown.name);
     const after = flowsAt(asked.repository, asked.commit, shown.name);
-    if (!check) running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: new Date().toISOString() });
+    if (!check) running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
     answer(res, 200, {
       package: shown.name,
       version: shown.version,

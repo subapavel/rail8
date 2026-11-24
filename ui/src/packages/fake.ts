@@ -149,7 +149,7 @@ export interface FakeSent {
  * The flows of the files `files` of a package, as a node names them by the files under `flows/`: the qualified id
  * `<package>/<file name without .yaml>` of each, sorted, with the text of its file.
  */
-export function flowsOf(name: string, files: Record<string, string>): Map<string, string> {
+function flowsOf(name: string, files: Record<string, string>): Map<string, string> {
   const flows = sorted(Object.keys(files).filter((p) => /^flows\/[^/]+\.yaml$/.test(p)));
   return new Map(flows.map((p) => [`${name}/${p.slice('flows/'.length, -'.yaml'.length)}`, files[p]!]));
 }
@@ -622,7 +622,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       if (!asked.check) {
         node.running = [
           ...node.running.filter((r) => r.repository !== repository),
-          { repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: new Date().toISOString() },
+          { repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: folder.commits.find((c) => c.id === asked.commit)!.at },
         ];
       }
       return {
