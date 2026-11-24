@@ -497,7 +497,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
 
   if (!picture.readable) {
     return (
-      <div className="rail8-flow-editor rail8-flow-unavailable" data-fill-workspace>
+      <div className="rail8-flow-editor rail8-flow-unavailable">
         {header}
         <Alert type="warning" showIcon title="The flow cannot be drawn" description="Correct the listed problems in the working folder, then refresh the diagram." />
       </div>
@@ -514,7 +514,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   return (
-    <div className="rail8-flow-editor" data-fill-workspace>
+    <div className="rail8-flow-editor">
       {header}
       <div className="rail8-flow-tools" role="toolbar" aria-label="Flow editing">
         <Select

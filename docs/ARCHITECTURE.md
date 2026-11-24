@@ -994,10 +994,13 @@ where `-am` builds the engine in the same build; the engine's own tests run in `
 
 The Rail8 web application in `ui/` uses React, Ant Design 6 and ProComponents v3. The theme
 provider applies compact sizing and the light or dark algorithm to both the workspace and its dialogs.
-The screen registry supplies navigation groups and the Home screen's shortcuts. The Open Canvas shell puts tabs
-and workspace actions in the top bar. The navigation opens over the editor from the left edge. Quick navigation
-(Ctrl+K or Cmd+K) finds screens and open tabs. Opening a screen again selects its existing tab. A screen can open
-additional tabs and ask for confirmation when a user closes a dirty editor. Reloading starts again with Home.
+The screen registry supplies the menu's groups and the Home screen's shortcuts. The frame is ProLayout: a header with
+Quick open and the theme switch, a side menu that stays in place and collapses to its icons (Ctrl+B or Cmd+B, and by
+itself below 1280 px wide), and the workspace tabs in a row of their own under the header. Each screen draws its page in
+PageContainer, with a breadcrumb back to the screen that opened it; the flow editor and the mapping studio fill the
+content area. `docs/UI-PATTERNS.md` describes the pages. Quick open (Ctrl+K or Cmd+K) finds screens and open tabs.
+Opening a screen again selects its existing tab. A screen can open additional tabs and ask for confirmation when a user
+closes a dirty editor. Reloading starts again with Home.
 
 Each folder of `ui/src/` is a module of the UI. Its `module.tsx` names its screens and its place in the
 navigation, after Home, and `main.tsx` finds every module as the build runs; the application refuses to start,

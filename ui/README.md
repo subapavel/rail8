@@ -1,6 +1,6 @@
 # Rail8 web application
 
-Open Canvas keeps workspace tabs in the top bar. Use the left-edge navigation or press Ctrl+K (Cmd+K on macOS) to open a screen or switch to an open tab. The shell discovers each module through its `module.tsx`. Each editor owns its working copy until its tab closes. Right-click a tab, or press the menu key or Shift+F10 on it, to close it, the others, those to its left or right, or all but the pinned ones, and to pin or unpin it. When tabs about to close have unsaved changes, the shell asks once whether to save them; an editor tells it through `unsaved`, which also saves them. The button with three dots at the end of the row lists the tabs that do not fit.
+The frame has a side menu of the screens in their groups and a row of workspace tabs under the header. Ctrl+B (Cmd+B on macOS) collapses the menu to its icons, and it collapses by itself below 1280 px wide. Choose a screen in the menu, or press Ctrl+K (Cmd+K on macOS), to open it or switch to an open tab. Screens follow `docs/UI-PATTERNS.md`. The shell discovers each module through its `module.tsx`. Each editor owns its working copy until its tab closes. Right-click a tab, or press the menu key or Shift+F10 on it, to close it, the others, those to its left or right, or all but the pinned ones, and to pin or unpin it. When tabs about to close have unsaved changes, the shell asks once whether to save them; an editor tells it through `unsaved`, which also saves them. The button with three dots at the end of the row lists the tabs that do not fit.
 
 ## Development
 
@@ -15,7 +15,7 @@ Open `http://localhost:5173`. On Windows, run Vite in the same WSL distribution 
 
 ## Presentation
 
-Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. ProTable fits file listings and monitor results. The owner approved the exact ProComponents v3 prerelease pinned in the lockfile for its Ant Design 6 peer support. The workspace uses Ant Layout with Rail8's own tab lifecycle.
+Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. ProTable fits file listings and monitor results. The owner approved the exact ProComponents v3 prerelease pinned in the lockfile for its Ant Design 6 peer support. The frame is ProLayout with Rail8's own tab lifecycle, and each screen draws its page in PageContainer through `Page`. `npm run pictures` takes the pictures of the frame in `docs/ui/frame/`.
 
 `Rail8Theme` configures the Ant application context, English locale, compact theme and component size. The theme initially follows the OS preference. The switch stores the chosen mode in `rail8.theme`. Use `theme.useToken()` in components and `var(--ant-...)` in CSS. Both graph editors keep their React Flow layouts. The virtualized schema pane uses native table rows and token-styled field buttons to limit rendering work while scrolling.
 
