@@ -107,7 +107,7 @@ describe('Shell', () => {
   test('lists Home, then the screens of the modules in their order', async () => {
     render(screens, screens[0]?.id);
     await expect.element(menuItem('Home')).toBeVisible();
-    expect(nav().getByRole('menuitem').elements().map((button) => button.textContent)).toEqual(['Home', 'Messages', 'Packages', 'Endpoints', 'Flows', 'Mappings', 'Users']);
+    expect(nav().getByRole('menuitem').elements().map((button) => button.textContent)).toEqual(['Home', 'Messages', 'Packages', 'Endpoints', 'Flows', 'Mappings', 'Users', 'Tokens', 'My tokens']);
   });
 
   test('opens a screen chosen in the navigation in a new tab, and shows the tab it already has', async () => {

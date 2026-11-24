@@ -1,9 +1,13 @@
-import { UsersError, type Kind, type Role, type User, type UsersApi } from './api';
+import { UsersError, type Issued, type Kind, type LiveToken, type Role, type Token, type TokensApi, type User, type UsersApi } from './api';
 
-/** The users a fake node holds, which its acts change in place, and the first passwords it handed out, in order. */
+/**
+ * The users a fake node holds, which its acts change in place, and the first passwords it handed out, in order; with
+ * `maxDays`, the installation's ceiling of a token's life, 365 days without it.
+ */
 export interface FakeUsers {
   users: User[];
   firstPasswords: string[];
+  maxDays?: number;
 }
 
 /**
@@ -77,6 +81,93 @@ export function fakeUsersApi(state: FakeUsers, actor: string, now: () => Date): 
     },
     async endSessions(name) {
       replace({ ...find(name), sessions: [] });
+    },
+  };
+}
+
+const TOKEN_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The tokens of the users of `state`, acted on by `actor` at `now`, whose password is `password`. It keeps the node's
+ * rules, each refused with the node's own words: a name of the token's form, 1 day to the ceiling, one live token of a
+ * name and 20 per user, a technical account's tokens issued by an administrator and a person's by the person, the
+ * password asked again (403), and the ceiling 1 to 365 days, which shortens a live token that would outlive it. A token's id is 16 hex digits, different each time; an id
+ * it does not find is 404.
+ */
+export function fakeTokensApi(state: FakeUsers, actor: string, now: () => Date, password: string): TokensApi {
+  let issued = 0;
+  const ceiling = () => {
+    const maxDays = state.maxDays ?? 365;
+    return { maxDays, defaultDays: Math.min(90, maxDays) };
+  };
+  const live = (users: readonly User[]): Token[] =>
+    users
+      .flatMap((user) => user.tokens.map((t) => ({ ...t, user: user.name })))
+      .filter((t) => Date.parse(t.expiresAt) > now().getTime())
+      .sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
+  const find = (name: string) => {
+    const user = state.users.find((u) => u.name === name);
+    if (user === undefined) throw new UsersError(404, `no user ${name}`);
+    return user;
+  };
+  const issue = (user: User, name: string, days: number): Issued => {
+    const { maxDays } = ceiling();
+    if (!TOKEN_NAME.test(name)) throw new UsersError(400, `a token's name matches ^[a-z0-9][a-z0-9-]{0,63}$: ${name}`);
+    if (!Number.isInteger(days) || days < 1 || days > maxDays) throw new UsersError(400, `a token lives 1 to ${maxDays} days, the installation's ceiling, not ${days}`);
+    const held = live([user]);
+    if (held.some((t) => t.name === name)) throw new UsersError(409, `${user.name} holds a live token named ${name}`);
+    if (held.length >= 20) throw new UsersError(409, `${user.name} holds 20 live tokens, the most a user holds`);
+    issued += 1;
+    const id = (0xa000_0000_0000 + issued).toString(16).padStart(16, '0');
+    const at = now();
+    const token: LiveToken = { id, name, createdAt: at.toISOString(), createdBy: actor, expiresAt: new Date(at.getTime() + days * DAY_MS).toISOString(), lastUsedAt: null };
+    state.users = state.users.map((u) => (u.name === user.name ? { ...u, tokens: [...u.tokens.filter((t) => t.name !== name), token] } : u));
+    return { id, name, expiresAt: token.expiresAt, token: `rail8t_${id}_${'s'.repeat(42)}${issued % 10}` };
+  };
+  /** Revokes the token `id` of a user `owns` admits; 404 when there is none. */
+  const revoke = (id: string, owns: (user: User) => boolean) => {
+    const user = state.users.find((u) => owns(u) && u.tokens.some((t) => t.id === id));
+    if (user === undefined) throw new UsersError(404, `no token ${id}`);
+    state.users = state.users.map((u) => (u === user ? { ...u, tokens: u.tokens.filter((t) => t.id !== id) } : u));
+  };
+
+  return {
+    async mine() {
+      return { tokens: live([find(actor)]), ...ceiling() };
+    },
+    async issueMine(name, days, given) {
+      if (given !== password) throw new UsersError(403, 'the password is wrong');
+      return issue(find(actor), name, days);
+    },
+    async revokeMine(id) {
+      revoke(id, (u) => u.name === actor);
+    },
+    async list(days) {
+      const tokens = live(state.users);
+      const until = days === undefined ? Infinity : now().getTime() + days * DAY_MS;
+      return { tokens: tokens.filter((t) => Date.parse(t.expiresAt) <= until), ...ceiling() };
+    },
+    async ceiling() {
+      return ceiling();
+    },
+    async issue(name, tokenName, days) {
+      const user = find(name);
+      if (user.kind !== 'technical') throw new UsersError(409, 'a person issues their own tokens');
+      return issue(user, tokenName, days);
+    },
+    async revoke(id) {
+      revoke(id, () => true);
+    },
+    async setCeiling(maxDays) {
+      if (!Number.isInteger(maxDays) || maxDays < 1 || maxDays > 365) throw new UsersError(400, `the ceiling is 1 to 365 days, not ${maxDays}`);
+      state.maxDays = maxDays;
+      const latest = (t: LiveToken) => {
+        const end = Date.parse(t.createdAt) + maxDays * DAY_MS;
+        return end < Date.parse(t.expiresAt) ? new Date(end).toISOString() : t.expiresAt;
+      };
+      state.users = state.users.map((u) => ({ ...u, tokens: u.tokens.map((t) => ({ ...t, expiresAt: latest(t) })) }));
+      return ceiling();
     },
   };
 }

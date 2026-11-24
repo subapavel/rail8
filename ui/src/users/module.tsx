@@ -1,6 +1,8 @@
 import type { UiModule } from '../screens';
-import { httpUsersApi } from './api';
-import { usersScreen } from './screen';
+import { httpTokensApi, httpUsersApi } from './api';
+import { myTokensScreen, tokensScreen, usersScreen } from './screen';
 
-/** The Users screen, over the node's admin API: the screen of the Administration group. */
-export default { order: 40, screens: [usersScreen(httpUsersApi())] } satisfies UiModule;
+const tokens = httpTokensApi();
+
+/** The screens of users and tokens, over the node's admin API: the Administration group, and the caller's own tokens. */
+export default { order: 40, screens: [usersScreen(httpUsersApi(), tokens), tokensScreen(tokens), myTokensScreen(tokens)] } satisfies UiModule;

@@ -4,13 +4,13 @@ import { page, userEvent } from 'vitest/browser';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
 import { Shell } from '../Shell';
-import type { User, UsersApi } from './api';
-import { fakeUsersApi, type FakeUsers } from './fake';
+import type { TokensApi, User, UsersApi } from './api';
+import { fakeTokensApi, fakeUsersApi, type FakeUsers } from './fake';
 import { usersScreen } from './screen';
 
 const NOW = new Date('2026-11-24T10:00:00Z');
 
-const ADMIN_ACTIONS = ['self.read', 'user.read', 'user.create', 'roles.change', 'administrators.change', 'user.block', 'user.password-reset', 'session.end'];
+const ADMIN_ACTIONS = ['self.read', 'user.read', 'user.create', 'roles.change', 'administrators.change', 'user.block', 'user.password-reset', 'session.end', 'token.issue', 'token.revoke'];
 
 const ALICE: Me = {
   name: 'alice',
@@ -70,8 +70,13 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-/** The Users screen of a Shell behind the session's gate, as `me`, over the users of `state`, which `me` acts on. */
-function render(state: FakeUsers = seed(), me: Me = ALICE, api: UsersApi = fakeUsersApi(state, me.name, () => NOW)) {
+/** The Users screen of a Shell behind the session's gate, as `me`, over the users and tokens of `state`, which `me` acts on. */
+function render(
+  state: FakeUsers = seed(),
+  me: Me = ALICE,
+  api: UsersApi = fakeUsersApi(state, me.name, () => NOW),
+  tokens: TokensApi = fakeTokensApi(state, me.name, () => NOW, 'alice password'),
+) {
   const client = sessionClient({
     send: (async () => new Response(JSON.stringify(me), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
     reload: () => undefined,
@@ -82,7 +87,7 @@ function render(state: FakeUsers = seed(), me: Me = ALICE, api: UsersApi = fakeU
   root = createRoot(host);
   root.render(
     <SessionGate client={client}>
-      <Shell screens={[usersScreen(api)]} start="users" />
+      <Shell screens={[usersScreen(api, tokens)]} start="users" />
     </SessionGate>,
   );
   return state;
@@ -92,6 +97,8 @@ const table = () => page.getByRole('table', { name: 'Users' });
 const rowOf = (name: string) => table().getByRole('row').filter({ has: page.getByText(name, { exact: true }) }).first();
 const button = (name: string) => page.getByRole('button', { name, exact: true });
 const dialog = () => page.getByRole('dialog');
+/** Issue in the open dialog; once it has been loading, antd keeps its hidden loading icon in the name. */
+const issue = () => dialog().getByRole('button', { name: /Issue$/ });
 /** Runs `action` on the user `row`, confirming in that user's popover: another may still be fading out. */
 const confirm = async (row: string, action: string) => {
   await rowOf(row).getByRole('button', { name: action, exact: true }).click();
@@ -247,6 +254,45 @@ describe('the Users screen', () => {
     await expect.element(rowOf('alice')).toMatchTextContent(/Active\s*0\s*0/);
   });
 
+  test("issues a technical account's token within the ceiling, and shows it once", async () => {
+    const state = render({ ...seed(), maxDays: 30 });
+    await expect.element(rowOf('anna')).toBeVisible();
+    expect(rowOf('anna').getByRole('button', { name: 'New token…' }).query()).toBeNull();
+    await rowOf('ci-deploy').getByRole('button', { name: 'New token…' }).click();
+    await expect.element(dialog().getByText('New token of ci-deploy')).toBeVisible();
+    await expect.element(dialog().getByLabelText('Valid for')).toHaveValue('30');
+    expect(dialog().getByLabelText('Your password').query()).toBeNull();
+    await dialog().getByLabelText('Name').fill('ci');
+    await issue().click();
+    await expect.element(dialog().getByText('The token was not issued')).toBeVisible();
+    await expect.element(dialog().getByText(/holds a live token named ci\./)).toBeVisible();
+
+    await dialog().getByLabelText('Name').fill('release');
+    await dialog().getByLabelText('Valid for').fill('');
+    await expect.element(issue()).toBeDisabled();
+    await dialog().getByLabelText('Valid for').fill('7');
+    await issue().click();
+    const issued = state.users.find((u) => u.name === 'ci-deploy')!.tokens.find((t) => t.name === 'release')!;
+    expect(issued).toMatchObject({ createdBy: 'alice', expiresAt: '2026-12-01T10:00:00.000Z' });
+    await expect.element(dialog().getByText('The token release, valid until 2026-12-01 10:00 UTC:')).toBeVisible();
+    const secret = dialog().getByLabelText('Token').element().textContent!;
+    expect(secret).toMatch(new RegExp(`^rail8t_${issued.id}_`));
+    await button('Done').click();
+    expect(page.getByText(secret).query()).toBeNull();
+    await expect.element(rowOf('ci-deploy')).toMatchTextContent(/Technical account.*Developer.*Active.*0.*2/);
+  });
+
+  test("revokes a user's token from the user's row", async () => {
+    const state = render();
+    await rowOf('ci-deploy').getByRole('button', { name: /expand row/i }).click();
+    const tokens = page.getByRole('table', { name: 'Tokens of ci-deploy' });
+    await tokens.getByRole('button', { name: 'Revoke' }).click();
+    await page.getByRole('tooltip').filter({ hasText: 'Revoke the token ci?' }).getByRole('button', { name: 'Revoke' }).click();
+    await expect.element(page.getByText('The token ci of ci-deploy is revoked')).toBeVisible();
+    expect(state.users.find((u) => u.name === 'ci-deploy')!.tokens).toEqual([]);
+    await expect.element(rowOf('ci-deploy')).toMatchTextContent(/Active\s*0\s*0/);
+  });
+
   test('shows the notice of the emergency key while the node holds it', async () => {
     render(seed(), { ...ALICE, emergencyKey: true });
     await expect.element(page.getByText('The node holds an emergency key')).toBeVisible();
@@ -260,8 +306,11 @@ describe('the Users screen', () => {
       via: 'token',
       session: null,
       actions: ['self.read', 'user.read'],
-      refused: Object.fromEntries(['user.create', 'roles.change', 'administrators.change', 'user.block', 'user.password-reset', 'session.end'].map((a) => [a, refused])),
+      refused: Object.fromEntries(['user.create', 'roles.change', 'administrators.change', 'user.block', 'user.password-reset', 'session.end', 'token.issue', 'token.revoke'].map((a) => [a, refused])),
     });
+    await expect.element(rowOf('ci-deploy').getByRole('button', { name: 'New token…' })).toBeDisabled();
+    await rowOf('ci-deploy').getByRole('button', { name: /expand row/i }).click();
+    await expect.element(page.getByRole('table', { name: 'Tokens of ci-deploy' }).getByRole('button', { name: 'Revoke' })).toBeDisabled();
     await expect.element(button('New user')).toBeDisabled();
     const anna = rowOf('anna');
     for (const action of ['Roles…', 'Block', 'Reset password', 'End sessions']) await expect.element(anna.getByRole('button', { name: action })).toBeDisabled();

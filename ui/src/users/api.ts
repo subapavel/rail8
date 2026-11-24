@@ -34,6 +34,30 @@ export interface LiveToken {
   lastUsedAt: string | null;
 }
 
+/** A live token of any user, as the lists of tokens give it. */
+export interface Token extends LiveToken {
+  user: string;
+}
+
+/** The installation's ceiling of a token's life, and the life of a token whose issuer names none, both in days. */
+export interface Ceiling {
+  maxDays: number;
+  defaultDays: number;
+}
+
+/** Live tokens, soonest expiry first, with the ceiling. */
+export interface Tokens extends Ceiling {
+  tokens: Token[];
+}
+
+/** A token just issued: the one answer that carries the token itself, which is never shown again. */
+export interface Issued {
+  id: string;
+  name: string;
+  expiresAt: string;
+  token: string;
+}
+
 /** A user as `GET /admin/users` lists it. No secret is ever part of it. */
 export interface User {
   name: string;
@@ -94,21 +118,26 @@ async function refusal(res: Response): Promise<UsersError> {
   return new UsersError(res.status, `the node answered ${res.status}`);
 }
 
+const userPath = (name: string) => `/admin/users/${encodeURIComponent(name)}`;
+
+/**
+ * Reads `url` through `send`, or posts to it: `body` as JSON when there is one, else nothing, as the acts on one user take
+ * none. Gives the answer's JSON, or undefined for a 204; rejects with a {@link UsersError} for a refusal.
+ */
+async function callNode<T>(send: typeof fetch, url: string, post?: { body?: unknown }): Promise<T> {
+  let init: RequestInit = { headers: { accept: 'application/json' } };
+  if (post !== undefined && post.body === undefined) init = { ...init, method: 'POST' };
+  else if (post !== undefined) {
+    init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(post.body) };
+  }
+  const res = await send(url, init);
+  if (!res.ok) throw await refusal(res);
+  return (res.status === 204 ? undefined : await res.json()) as T;
+}
+
 /** The users of the node's admin API, through `send`, the page's `fetch` by default. */
 export function httpUsersApi(send: typeof fetch = uiFetch): UsersApi {
-  const user = (name: string) => `/admin/users/${encodeURIComponent(name)}`;
-
-  /** Reads `url`, or posts to it: `body` as JSON when there is one, else nothing, as the acts on one user take none. */
-  async function call<T>(url: string, post?: { body?: unknown }): Promise<T> {
-    let init: RequestInit = { headers: { accept: 'application/json' } };
-    if (post !== undefined && post.body === undefined) init = { ...init, method: 'POST' };
-    else if (post !== undefined) {
-      init = { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(post.body) };
-    }
-    const res = await send(url, init);
-    if (!res.ok) throw await refusal(res);
-    return (await res.json()) as T;
-  }
+  const call = <T>(url: string, post?: { body?: unknown }) => callNode<T>(send, url, post);
 
   return {
     async list() {
@@ -119,19 +148,57 @@ export function httpUsersApi(send: typeof fetch = uiFetch): UsersApi {
       return created.firstPassword ?? null;
     },
     changeRoles(name, add, remove) {
-      return call<RolesChanged>(`${user(name)}/roles`, { body: { add, remove } });
+      return call<RolesChanged>(`${userPath(name)}/roles`, { body: { add, remove } });
     },
     async block(name) {
-      await call(`${user(name)}/block`, {});
+      await call(`${userPath(name)}/block`, {});
     },
     async unblock(name) {
-      await call(`${user(name)}/unblock`, {});
+      await call(`${userPath(name)}/unblock`, {});
     },
     async resetPassword(name) {
-      return (await call<{ firstPassword: string }>(`${user(name)}/password-reset`, {})).firstPassword;
+      return (await call<{ firstPassword: string }>(`${userPath(name)}/password-reset`, {})).firstPassword;
     },
     async endSessions(name) {
-      await call(`${user(name)}/sessions/end`, {});
+      await call(`${userPath(name)}/sessions/end`, {});
     },
+  };
+}
+
+/** What the token screens ask of the node. Every call rejects with a {@link UsersError} when the node refuses it. */
+export interface TokensApi {
+  /** The caller's own live tokens, with the ceiling. */
+  mine(): Promise<Tokens>;
+  /** Issues a token of the caller's own, asking the caller's password again; `days` within the ceiling. */
+  issueMine(name: string, days: number, password: string): Promise<Issued>;
+  revokeMine(id: string): Promise<void>;
+  /** Every user's live tokens, or those that expire within `days` days, with the ceiling. */
+  list(days?: number): Promise<Tokens>;
+  /** The ceiling alone. */
+  ceiling(): Promise<Ceiling>;
+  /** Issues a token of the technical account `user`. */
+  issue(user: string, name: string, days: number): Promise<Issued>;
+  /** Revokes any user's token. */
+  revoke(id: string): Promise<void>;
+  /** Sets the installation's ceiling, 1 to 365 days. */
+  setCeiling(maxDays: number): Promise<Ceiling>;
+}
+
+/** The tokens of the node's admin API, through `send`, the page's `fetch` by default. */
+export function httpTokensApi(send: typeof fetch = uiFetch): TokensApi {
+  const token = (id: string) => encodeURIComponent(id);
+  return {
+    mine: () => callNode<Tokens>(send, '/admin/me/tokens'),
+    issueMine: (name, days, password) => callNode<Issued>(send, '/admin/me/tokens', { body: { name, days, password } }),
+    revokeMine: (id) => callNode<void>(send, `/admin/me/tokens/${token(id)}/revoke`, {}),
+    list: (days) => callNode<Tokens>(send, days === undefined ? '/admin/tokens' : `/admin/tokens?expiringWithin=P${days}D`),
+    // the node gives the ceiling with a list of tokens: the shortest it lists is of those that expire within a day
+    ceiling: async () => {
+      const { maxDays, defaultDays } = await callNode<Tokens>(send, '/admin/tokens?expiringWithin=P1D');
+      return { maxDays, defaultDays };
+    },
+    issue: (user, name, days) => callNode<Issued>(send, `${userPath(user)}/tokens`, { body: { name, days } }),
+    revoke: (id) => callNode<void>(send, `/admin/tokens/${token(id)}/revoke`, {}),
+    setCeiling: (maxDays) => callNode<Ceiling>(send, '/admin/tokens/ceiling', { body: { maxDays } }),
   };
 }

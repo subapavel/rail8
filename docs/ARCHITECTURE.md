@@ -1144,7 +1144,10 @@ each role and how, never a secret. An administrator logged in creates a person, 
 technical account, changes roles by difference, blocks and unblocks a user, resets a person's password and ends a user's
 sessions. What the caller may not do is disabled with the reason `GET /admin/me` gives; a change the node refuses, such
 as one that would leave no administrator, shows the node's reason. A role a user gives themselves is marked as their
-own, and while the node holds the emergency key the screen says to unset it.
+own, and while the node holds the emergency key the screen says to unset it. There an administrator also issues a
+technical account's tokens and revokes any user's token. The Tokens screen shows the installation's ceiling of a token's
+life, which an administrator changes, and every user's tokens that expire within 14 days. On My tokens a person lists
+and revokes their own tokens, and issues one with the password asked again. A token issued in the UI shows once, to copy.
 
 The UI's end-to-end scenarios (`ui/e2e/`, Playwright) run nightly: the 20,128-field tree scrolled
 over a fake mapping service on a development-only page, and the `@stack` scenarios against the

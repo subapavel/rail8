@@ -6,7 +6,10 @@ import { MountedModal } from '../MountedModal';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed, useAccess, useMe } from '../SessionGate';
-import { ROLES, type Grant, type Kind, type LiveSession, type LiveToken, type Role, type User, type UsersApi } from './api';
+import { ROLES, type Grant, type Kind, type LiveSession, type LiveToken, type Role, type TokensApi, type User, type UsersApi } from './api';
+import { IssueTokenDialog } from './IssueTokenDialog';
+import { tokenColumns } from './tokenColumns';
+import { reasonOf, when } from './words';
 
 export const ROLE_NAMES: Record<Role, string> = {
   administrator: 'Administrator',
@@ -24,14 +27,6 @@ const VIA: Record<string, string> = {
   'emergency-key': 'with the emergency key',
   'shared-token': 'with the shared token',
 };
-
-/** An instant as minutes in UTC, such as `2026-11-20 09:00 UTC`. */
-const when = (iso: string) => `${iso.slice(0, 16).replace('T', ' ')} UTC`;
-
-/** The node's words as a sentence: its first letter capital, and a full stop. */
-const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? '' : '.'}`;
-
-const reasonOf = (error: unknown) => (error instanceof Error ? sentence(error.message) : sentence(String(error)));
 
 /** Whether the grant is the user's own: a role the user gave themselves. */
 const own = (user: User, grant: Grant) => grant.grantedBy === user.name;
@@ -62,17 +57,18 @@ interface Refusal {
   reason: string;
 }
 
-type Dialog = { kind: 'create' } | { kind: 'roles'; user: User } | { kind: 'password'; name: string; password: string };
+type Dialog = { kind: 'create' } | { kind: 'roles'; user: User } | { kind: 'password'; name: string; password: string } | { kind: 'token'; name: string };
 
 /**
  * The Users screen: every user of the installation with their kind, their roles, whether they are blocked or still on a
  * first password, and their live sessions and tokens. A row opens to show who granted each role and how, the sessions
  * and the tokens, never a secret. An administrator creates a person or a technical account, changes a user's roles,
- * blocks and unblocks them, resets a person's password and ends a user's sessions; a first password shows once. What
+ * blocks and unblocks them, resets a person's password and ends a user's sessions; a first password shows once. They
+ * issue a technical account's tokens, each shown once, and revoke any user's token. What
  * the caller may not do is disabled, saying why. A refusal by the node, such as the last administrator, shows in its
  * own words. While the node holds an emergency key, a notice says to unset it.
  */
-export function UserList({ api }: { api: UsersApi }) {
+export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) {
   const [shown, setShown] = useState<Shown>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
@@ -134,6 +130,13 @@ export function UserList({ api }: { api: UsersApi }) {
           />
         </Allowed>
       )}
+      {user.kind === 'technical' && (
+        <Allowed action="token.issue">
+          <Button type="link" size="small" onClick={() => setDialog({ kind: 'token', name: user.name })}>
+            New token…
+          </Button>
+        </Allowed>
+      )}
       {user.kind === 'person' && (
         <Allowed action="user.password-reset">
           <ConfirmButton
@@ -190,7 +193,14 @@ export function UserList({ api }: { api: UsersApi }) {
             </Button>
           </Allowed>,
         ]}
-        expandable={{ expandedRowRender: (user) => <UserDetails user={user} /> }}
+        expandable={{
+          expandedRowRender: (user) => (
+            <UserDetails
+              user={user}
+              revoke={(token) => act(() => tokens.revoke(token.id), `The token ${token.name} of ${user.name} is revoked`, `The token ${token.name} of ${user.name} was not revoked`)}
+            />
+          ),
+        }}
         columns={[
           {
             title: 'Name',
@@ -245,6 +255,18 @@ export function UserList({ api }: { api: UsersApi }) {
           onClose={(changed) => {
             setDialog(null);
             if (changed !== null) notification.success({ title: changed, role: 'status' });
+            refresh();
+          }}
+        />
+      )}
+      {dialog?.kind === 'token' && (
+        <IssueTokenDialog
+          title={`New token of ${dialog.name}`}
+          password={false}
+          read={() => tokens.ceiling()}
+          issue={(name, days) => tokens.issue(dialog.name, name, days)}
+          onClose={() => {
+            setDialog(null);
             refresh();
           }}
         />
@@ -307,8 +329,11 @@ function Status({ user }: { user: User }) {
   return <Badge status="success" text="Active" />;
 }
 
-/** The facts of one user: when they were made and by whom, who granted each role and how, their live sessions and tokens. */
-function UserDetails({ user }: { user: User }) {
+/**
+ * The facts of one user: when they were made and by whom, who granted each role and how, their live sessions and tokens,
+ * each token with Revoke, which runs `revoke`.
+ */
+function UserDetails({ user, revoke }: { user: User; revoke: (token: LiveToken) => Promise<void> }) {
   return (
     <Flex vertical gap="middle">
       <Descriptions
@@ -363,13 +388,7 @@ function UserDetails({ user }: { user: User }) {
         pagination={false}
         dataSource={user.tokens}
         locale={{ emptyText: 'No live token' }}
-        columns={[
-          { title: 'Token', dataIndex: 'name' },
-          { title: 'Id', dataIndex: 'id', render: (_, t) => <Typography.Text code>{t.id}</Typography.Text> },
-          { title: 'Created', dataIndex: 'createdAt', width: 180, render: (_, t) => `${when(t.createdAt)} by ${t.createdBy}` },
-          { title: 'Expires', dataIndex: 'expiresAt', width: 180, render: (_, t) => when(t.expiresAt) },
-          { title: 'Last used', dataIndex: 'lastUsedAt', width: 180, render: (_, t) => (t.lastUsedAt === null ? '-' : when(t.lastUsedAt)) },
-        ]}
+        columns={tokenColumns<LiveToken>({ revoke: { action: 'token.revoke', run: revoke } })}
       />
     </Flex>
   );
