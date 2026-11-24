@@ -366,6 +366,16 @@ open is a problem naming its key's id.
   still sends nothing.
 - A fake clock and an injected timer move every tick. No test sleeps.
 
+## Values that are not secret, later
+
+A per-environment value that is not secret, such as an address or a user name entered in each installation, fits this
+storage format with no change to it. It would be a fourth kind. Adding it widens the check on `kind`, and the seal
+already binds the kind. Its rows, the key, the notices, the tick and the node's in-memory read path stay as they are, and
+so do the rebuild of the flows that hold it and `secret_uses`. What would have to be added:
+- a reference form of its own in flow files, and the form noted in each entry of `secret_uses`;
+- a route that answers its value back, with actions of its own, since the secret administrator's role is about secrets;
+- its history: an audit detail that holds the old and the new value for that kind only, or a table of its own.
+
 ## Out
 
 - OAuth clients and partners' trusted certificates.
