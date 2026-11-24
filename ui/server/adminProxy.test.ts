@@ -9,6 +9,9 @@ import tls from 'node:tls';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { adminProxy, CA_MAX_BYTES, forward, nodeOf, trustAdminCa } from './adminProxy';
 
+/** Whether this Node has tls.setDefaultCACertificates and tls.getCACertificates (22.19 or newer), which trusting a CA needs. */
+const settable = typeof (tls as Partial<typeof tls>).setDefaultCACertificates === 'function';
+
 const origins = ['http://localhost:5173'];
 
 describe('nodeOf', () => {
@@ -73,7 +76,7 @@ describe('trustAdminCa', () => {
     return 'not refused';
   }
 
-  it('refuses a file that does not exist, holds no certificate or is too large', () => {
+  it.skipIf(!settable)('refuses a file that does not exist, holds no certificate or is too large', () => {
     const missing = join(dir, 'missing.pem');
     const notACertificate = join(dir, 'not.pem');
     writeFileSync(notACertificate, 'not a certificate\n');
@@ -85,7 +88,7 @@ describe('trustAdminCa', () => {
     expect(refusal(dir)).toBe(`RAIL8_ADMIN_CA names a file that cannot be read: ${dir}`);
   });
 
-  it('reads nothing for plain HTTP, and installs nothing without RAIL8_ADMIN_CA', () => {
+  it.skipIf(!settable)('reads nothing for plain HTTP, and installs nothing without RAIL8_ADMIN_CA', () => {
     const install = vi.spyOn(tls, 'setDefaultCACertificates').mockImplementation(() => undefined);
     trustAdminCa({ RAIL8_ADMIN_URL: 'http://localhost:8081', RAIL8_ADMIN_CA: join(dir, 'missing.pem') });
     trustAdminCa({ RAIL8_ADMIN_URL: 'https://localhost:8443', RAIL8_ADMIN_CA: '' });
@@ -96,7 +99,7 @@ describe('trustAdminCa', () => {
     const ca = join(dir, 'self.crt');
     execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', join(dir, 'self.key'),
       '-out', ca, '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost', '-days', '1'], { stdio: 'ignore' });
-    vi.spyOn(tls as unknown as Record<string, unknown>, 'setDefaultCACertificates', 'get').mockReturnValue(undefined);
+    if (settable) vi.spyOn(tls as unknown as Record<string, unknown>, 'setDefaultCACertificates', 'get').mockReturnValue(undefined);
     expect(() => trustAdminCa({ RAIL8_ADMIN_URL: 'https://localhost:8443', RAIL8_ADMIN_CA: ca })).toThrow(
       new Error(`RAIL8_ADMIN_CA needs Node 22.19 or newer to be trusted; this is Node ${process.version}`),
     );
@@ -216,7 +219,7 @@ describe('adminProxy', () => {
     expect(target.seen).toHaveLength(0);
   });
 
-  describe('over HTTPS', () => {
+  describe.skipIf(!settable)('over HTTPS', () => {
     let dir: string;
     let ca: string;
     let defaults: string[];
