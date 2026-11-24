@@ -292,7 +292,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
             Migrations.Result r = Migrations.migrate(url, pg.getUsername(), pg.getPassword());
 
-            assertEquals("29", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
+            assertEquals("30", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
             PgDeploymentStore store = store(own, options);
             assertEquals(new DeploymentStore.Snapshot(0, List.of()), store.read().await(), "the row is deleted; the generation starts at 0");
             DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
