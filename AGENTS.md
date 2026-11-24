@@ -38,7 +38,9 @@ The dispatcher (`.claude/routines/dispatcher.md`) picks the tasks and starts the
 session removes the label `in-progress` from its issue once its pull request is merged.
 
 Design first only for `class:C` work (skill `design-it-twice`). The owner-proxy judges the design
-and a second model argues against it. No records beyond the issue, the pull request and the commits.
+and a second model argues against it. A `class:C` issue takes two sessions: the first designs, writes
+the agreed contract into the issue, labels it `design-agreed` and stops; the second builds from that
+contract and opens the pull request. No records beyond the issue, the pull request and the commits.
 
 ## Task class
 
@@ -48,7 +50,7 @@ Every task issue carries one class label (an `owner-question` issue carries none
 | --- | --- | --- | --- | --- |
 | `class:A` mechanical | docs, CI scripts, fixtures, mock behaviour, compose files | Sonnet 5.5, medium | Opus 5.5, medium | no |
 | `class:B` standard | a component with its mock or a step behind an agreed contract, a fix in existing code, the admin API, the CLI | Opus 5.5, high | Opus 5.5, high | no |
-| `class:C` hard | a new contract, public types in `rail8-api`, JSON Schemas, storage format, security, batcher, admission, `BlobStore`, concurrency, leases | Opus 5.5, xhigh | Opus 5.5, xhigh | yes, `design-it-twice` |
+| `class:C` hard | a new contract, public types in `rail8-api`, JSON Schemas, storage format, security, batcher, admission, `BlobStore`, concurrency, leases | design: Opus 5.5, xhigh; build: Opus 5.5, high | Opus 5.5, xhigh | yes, `design-it-twice` |
 
 Whoever opens the issue sets the class; when it is unclear, the owner-proxy decides. When a task
 turns out harder than its class, raise the label and say why in the issue. Never lower it mid-task.
