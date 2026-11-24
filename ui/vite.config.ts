@@ -1,6 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
-import { adminProxy, nodeOf } from './server/adminProxy.ts';
+import { adminProxy, nodeOf, trustAdminCa } from './server/adminProxy.ts';
 import { moduleServers } from './server/modules.ts';
 import { uiPort } from './server/uiPort.ts';
 
@@ -11,12 +11,14 @@ const origins = [`http://localhost:${port}`, `http://127.0.0.1:${port}`];
 /**
  * Sends the UI's `/admin` requests on to a node's admin API, which answers no browser. The node is RAIL8_ADMIN_URL
  * (default http://127.0.0.1:8081); RAIL8_ADMIN_TOKEN, when set, is the token the proxy adds. It is read here, on the
- * server, and never reaches the browser.
+ * server, and never reaches the browser. The server does not start for plain HTTP to a host other than loopback unless
+ * RAIL8_ADMIN_TLS=off; for https://, RAIL8_ADMIN_CA, when set, is the one CA its calls to the node trust.
  */
 function adminApi(): Plugin {
   return {
     name: 'rail8-admin-api',
     configureServer(server) {
+      trustAdminCa(process.env);
       server.middlewares.use(adminProxy({ ...nodeOf(process.env), origins }));
     },
   };
