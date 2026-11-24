@@ -3,8 +3,9 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { Shell } from '../Shell';
 import { fakeStateOf, type Seed } from './contract/seed';
+import type { PackagesApi } from './api';
 import { fakePackagesApi, type FakeState } from './fake';
-import { GIT_MISSING, REASONS } from './rules';
+import { GIT_MISSING, NEW_PACKAGE_REFUSALS, REASONS } from './rules';
 import { packagesScreen } from './screen';
 
 /** The fake world's seeded commits are made from 09:01 on 1 November 2026; deploys at 10:00 on 20 November. */
@@ -12,11 +13,11 @@ const NOW = new Date('2026-11-23T10:00:00Z');
 
 let root: Root | undefined;
 
-function render(state: FakeState) {
+function render(state: FakeState, api: PackagesApi = fakePackagesApi(state)) {
   const host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[packagesScreen(fakePackagesApi(state), () => NOW)]} start="packages" />);
+  root.render(<Shell screens={[packagesScreen(api, () => NOW)]} start="packages" />);
 }
 
 const open = (seed: Seed) => {
@@ -150,6 +151,9 @@ describe('the Packages screen', () => {
     await expect.element(page.getByRole('table', { name: 'Folders that are no package' })).toBeVisible();
     await packages().getByRole('button', { name: 'Get a package…' }).click();
     await expect.element(page.getByRole('dialog', { name: 'Get a package' })).toBeVisible();
+    await page.getByRole('dialog', { name: 'Get a package' }).getByRole('button', { name: 'Cancel' }).click();
+    await packages().getByRole('button', { name: 'New package' }).click();
+    await expect.element(page.getByRole('dialog', { name: 'New package' })).toBeVisible();
   });
 
   test('is marked read-only under RAIL8_READ_ONLY, and says when not every folder is listed', async () => {
@@ -217,5 +221,81 @@ describe('Get a package', () => {
     open({ readOnly: true, clones: [{ folder: 'billing' }] });
 
     await expect.element(getButton()).toBeDisabled();
+  });
+});
+
+describe('New package', () => {
+  const dialog = () => page.getByRole('dialog', { name: 'New package' });
+  const repositoryField = () => dialog().getByLabelText('Repository', { exact: true });
+  const nameField = () => dialog().getByLabelText('Package name', { exact: true });
+  const create = () => dialog().getByRole('button', { name: 'Create', exact: true });
+  // the toolbar's, which comes before the one an empty table offers
+  const newButton = () => page.getByRole('button', { name: 'New package' }).first();
+
+  test('makes the package in the folder of its name, says a deployed environment needs the git host, lists it, and opens its tab', async () => {
+    open({ clones: [{ folder: 'billing' }] });
+
+    await newButton().click();
+    await expect.element(dialog().getByText('A deployed environment needs the repository on the git host first', { exact: false })).toBeVisible();
+    await expect.element(create()).toBeDisabled();
+    await repositoryField().fill('.hidden');
+    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.repository)).toBeVisible();
+    await repositoryField().fill('orders');
+    await nameField().fill('Orders');
+    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.name)).toBeVisible();
+    await expect.element(create()).toBeDisabled();
+    await nameField().fill('orders-app');
+    await create().click();
+
+    await expect.element(page.getByRole('tab', { name: /orders$/, selected: true })).toBeVisible();
+    await expect.element(dialog()).not.toBeInTheDocument();
+    await page.getByRole('tab', { name: /Packages$/ }).click();
+    await expect.element(rowOf('orders')).toMatchTextContent('orders-app 0.1.0');
+    await expect.element(rowOf('orders')).toMatchTextContent('Create package orders-app');
+  });
+
+  test('says why it was refused, and keeps the names to try again', async () => {
+    open({ clones: [{ folder: 'orders' }] });
+
+    await newButton().click();
+    await repositoryField().fill('orders');
+    await nameField().fill('orders');
+    await create().click();
+
+    await expect.element(dialog().getByRole('alert').filter({ hasText: 'The package was not made' })).toMatchTextContent(NEW_PACKAGE_REFUSALS.exists);
+    await expect.element(repositoryField()).toHaveValue('orders');
+  });
+
+  test('says when the new package is in place but its state could not be read, and lists it again', async () => {
+    const { state } = fakeStateOf({});
+    const fake = fakePackagesApi(state);
+    let listed = 0;
+    render(state, {
+      ...fake,
+      list: () => {
+        listed += 1;
+        return fake.list();
+      },
+      create: async (repository) => ({ repository, package: null, problem: 'the server is closing' }),
+    });
+
+    await newButton().click();
+    await repositoryField().fill('orders');
+    await nameField().fill('orders');
+    const before = listed;
+    await create().click();
+
+    const made = page.getByRole('dialog', { name: 'Made orders' });
+    await expect.element(made.getByText('The folder orders holds the new package, but its state could not be read')).toBeVisible();
+    await expect.element(made).toMatchTextContent('the server is closing');
+    expect(listed).toBeGreaterThan(before);
+    await made.getByRole('button', { name: 'Close' }).last().click();
+    await expect.element(made).not.toBeInTheDocument();
+  });
+
+  test('is off on a server that takes no writes', async () => {
+    open({ readOnly: true, clones: [{ folder: 'billing' }] });
+
+    await expect.element(newButton()).toBeDisabled();
   });
 });

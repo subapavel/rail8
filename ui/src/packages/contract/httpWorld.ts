@@ -19,6 +19,7 @@ import { gitPackages } from '../server/routes.ts';
 import { runner, type Spawn } from '../server/runner.ts';
 import { realTimer } from '../server/timer.ts';
 import { HIDDEN_PREFIX } from '../server/clone.ts';
+import { NEW_PREFIX } from '../server/newPackage.ts';
 import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed, type SourceSeed, type Zone } from './seed';
 
 const ORIGIN = 'http://localhost:5173';
@@ -633,7 +634,7 @@ export const httpWorld: Build = async (seed) => {
     address: (path) => `https://localhost:${hostPort}/${path}`,
     waiting: () => (waited ? Promise.resolve() : new Promise<void>((done) => waiters.push(done))),
     release: () => releaseHeld(),
-    leftovers: async () => (await readdir(work)).filter((name) => name.startsWith(HIDDEN_PREFIX)),
+    leftovers: async () => (await readdir(work)).filter((name) => name.startsWith(HIDDEN_PREFIX) || name.startsWith(NEW_PREFIX)),
     async close() {
       releaseHeld();
       await shut(front);

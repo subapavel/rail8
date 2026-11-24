@@ -3,13 +3,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
 import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
-import type { CloneAnswer, PackageList, PackageState } from '../api.ts';
-import { cloneSourceOf, CLONE_REFUSALS, LOCK_REFUSALS, REMOTE_REFUSALS } from '../rules.ts';
+import type { CloneAnswer, NewPackageAnswer, PackageList, PackageState } from '../api.ts';
+import { cloneSourceOf, CLONE_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS, newPackageBodyOf, REMOTE_REFUSALS } from '../rules.ts';
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
 import { discardBodyOf, discardPaths, DiscardRefused } from './discard.ts';
 import { lockBodyOf, lockPackage, LockRefused } from './lock.ts';
+import { createPackage } from './newPackage.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
@@ -72,6 +73,14 @@ const PREFIX = '/git';
  *   working folder; 503 when the server is closing; 422 with git's `output` when git fails, and over the size limit;
  *   504 past 300 s. It holds one admission of the working folder's writes for its whole run, and the lock only for
  *   the move into place.
+ * - `POST /git/packages` `{repository, name}`: 201 {@link NewPackageAnswer}, New package (see {@link createPackage}): a
+ *   new folder of the working folder named `repository`, a clone of its own whose first commit holds the package
+ *   `name`. Refused, in this order: 403 under RAIL8_READ_ONLY=true; 503 before its body is read while 9 writes of the
+ *   working folder are under way; 413 for a body over 1 MiB; 400 for a body that is no `{repository, name}` of two
+ *   texts, or a repository name that is no name of a package's folder; 422 for a package name `package.yaml`'s schema
+ *   refuses; 404 without a working folder; 409 when anything of that name is in the working folder; 503 when the server
+ *   is closing; 422 without an author identity, and with git's `output` when git or a hook fails. It holds the working
+ *   folder's lock for its whole run.
  * - `POST …/{repository}/lock` `{manifestTag, lockTag, dependencies}`: 200 `{pins, package}`, the pins `rail8 lock`
  *   wrote into `package.lock` (see {@link lockPackage}), with the package's state after it. Refused with 403 under
  *   RAIL8_READ_ONLY=true, with 503 before its body is read while 9 writes of the working folder are under way, with 413
@@ -223,6 +232,24 @@ export function gitPackages(options: GitPackagesOptions) {
     });
   };
 
+  const create = (req: IncomingMessage): Promise<NewPackageAnswer> => {
+    if (!options.writable) throw new Refusal(403, NEW_PACKAGE_REFUSALS.readOnly);
+    return admitted(options.writes, async (lock) => {
+      const body = newPackageBodyOf(await jsonBody(req));
+      if ('error' in body) throw new Refusal(body.status, body.error);
+      if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+      const { repository } = body;
+      const done = await createPackage(options.git, lock, await rootOf(options.workspace), repository, body.name);
+      try {
+        const state = await stateOf(options.git, done.clone, repository, nodeState(req));
+        return done.problem === undefined ? { repository, package: state } : { repository, package: null, problem: done.problem };
+      } catch (error) {
+        const unread = `the package's state could not be read after it was made: ${error instanceof Error ? error.message : String(error)}`;
+        return { repository, package: null, problem: done.problem === undefined ? unread : `${done.problem}; ${unread}` };
+      }
+    });
+  };
+
   const deploy = async (req: IncomingMessage, repository: string) => {
     const body = deployBodyFrom(await jsonBody(req));
     if (!body.check && !options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
@@ -269,6 +296,8 @@ export function gitPackages(options: GitPackagesOptions) {
       if (req.method !== 'POST') throw new Refusal(405, `POST is the only way to call ${path}`);
       return { value: await clone(req), status: 201 };
     }
+    if (path === '/git/packages' && req.method === 'POST') return { value: await create(req), status: 201 };
+    if (path === '/git/packages' && req.method !== 'GET') throw new Refusal(405, `GET and POST are the only ways to call ${path}`);
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
     const writes = ['commit', 'discard', 'deploy', 'lock', 'fetch', 'pull', 'push'];

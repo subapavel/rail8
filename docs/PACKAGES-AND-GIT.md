@@ -268,7 +268,7 @@ success with `package: null` and the reason.
 | `GET /git/packages/{repository}/changes?from=&to=` | `{changes: Change[], truncated}`: the files that differ between two revisions |
 | `GET /git/packages/{repository}/artifacts?rev=` | `{artifacts: Artifact[], truncated}`: the package's artifacts at a revision |
 | `GET /git/packages/{repository}/log?before=&limit=` | `{items: Commit[], next}`: the first-parent history of `HEAD`, or of `before`, 50 to a page by default and at most 100 |
-| `POST /git/packages` `{repository, name}` | 201 `PackageState`: a new package ("New package") |
+| `POST /git/packages` `{repository, name}` | 201 `{repository, package}`, with `problem` when `package` is null ("New package") |
 | `POST /git/clone` `{address}` | 201 `{repository, package}`, with `reason` or `problem` when `package` is null ("Get a package") |
 | `POST /git/packages/{repository}/commit` `{message, branch, head, paths}` | `{commit, output, package}` ("Commit") |
 | `POST /git/packages/{repository}/discard` `{head, paths}` | `{discarded, left, package}`, with `problem` ("Discard") |
@@ -923,9 +923,9 @@ It leaves these to a terminal:
 
 `POST /git/packages {repository, name}` makes a new package in the working folder, under the working folder's lock:
 
-1. **The names.** The repository name follows the rule above, and the package name follows `package.yaml`'s schema
-   (`^[a-z][a-z0-9-]*$`, at most 64 characters).
-2. **The files.** In a hidden temporary folder of the working folder, it writes:
+1. **The names.** The repository name follows the rule above (400), and the package name follows `package.yaml`'s
+   schema (`^[a-z][a-z0-9-]*$`, at most 64 characters; 422).
+2. **The files.** In a hidden temporary folder `.rail8-new-*` of the working folder, it writes:
    - `package.yaml`: the name, version `0.1.0`, no dependencies;
    - `package.lock`, as `rail8 lock` writes it with no dependency;
    - `.gitattributes`, holding `* -text`.
@@ -935,7 +935,7 @@ It leaves these to a terminal:
    `moveIntoPlace` of `ui/server/workingFolder.ts`: an exclusive `mkdir` claims the name and keeps its `dev` and `ino`,
    `lstat` must still give them just before the rename, and the rename replaces only that empty claim. It is refused
    (409) when that name exists. A failure at any point deletes the temporary folder, which is the server's own, and
-   nothing else.
+   nothing else. The rename is the commit point: a failure after it is still a 201, with `problem`.
 
 It adds no remote. In the local run, the node reads the working folder as its base, so the new package can be
 deployed at once. A deployed environment needs the repository on the git host first.
@@ -1109,7 +1109,7 @@ Modules still import no other module. The shell gains two contracts, as files di
       file.
     - A pull or a push after the branch was switched at the same commit (412).
     - A rejected push, and a push without an upstream.
-  - **New package.** A new package, and one over an existing folder.
+  - **New package.** A new package, one over an existing folder, and one without a git identity.
   - **Refusals everywhere.** Every write under `RAIL8_READ_ONLY=true`, and every route for a foreign page.
   - **Hostile values.** `-x`, `:(glob)*` and `..` as a path, a revision or a name.
 - **The readable changes.** Each comparison (`flowChanges`, `mappingChanges`, `endpointChanges` and the package

@@ -322,6 +322,12 @@ export type CloneAnswer =
   | { repository: string; package: null; reason: string }
   | { repository: string; package: null; problem: string };
 
+/**
+ * What New package answers: the new folder, named as its repository, and its state as a package, or why that could not
+ * be read though the folder is in place.
+ */
+export type NewPackageAnswer = { repository: string; package: PackageState } | { repository: string; package: null; problem: string };
+
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
 export interface PackagesApi {
   list(): Promise<PackageList>;
@@ -360,6 +366,12 @@ export interface PackagesApi {
    * submodules or LFS content. An entry of that name is never written into.
    */
   clone(address: string): Promise<CloneAnswer>;
+  /**
+   * Makes a new package: the new folder `repository` of the working folder, a clone of its own on `main` whose first
+   * commit, with the author's own git identity, holds `package.yaml` naming `name` at version 0.1.0, `package.lock`
+   * with no dependency and `.gitattributes`. It adds no remote. An entry of that name is never written into.
+   */
+  create(repository: string, name: string): Promise<NewPackageAnswer>;
   /**
    * Pins the package's dependencies: once it has checked under the working folder's lock that `package.yaml`,
    * `package.lock` and each candidate are still what the author saw, it runs `rail8 lock`, which writes `package.lock`.
@@ -446,6 +458,7 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     discard: (repository, body) => post<DiscardAnswer>(of(repository, '/discard'), body),
     deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
     clone: (address) => post<CloneAnswer>('/git/clone', { address }),
+    create: (repository, name) => post<NewPackageAnswer>('/git/packages', { repository, name }),
     lock: (repository, body) => post<LockAnswer>(of(repository, '/lock'), body),
     fetch: (repository) => post<FetchAnswer>(of(repository, '/fetch'), {}),
     pull: (repository, body) => post<PullAnswer>(of(repository, '/pull'), body),
