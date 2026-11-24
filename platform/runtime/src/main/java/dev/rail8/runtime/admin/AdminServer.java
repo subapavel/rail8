@@ -122,7 +122,8 @@ import java.util.stream.Collectors;
  *
  * <p>With a {@link Deployments} it also deploys from git: {@code POST /admin/deploy} with the body
  * {@code {"repository": "<name>", "commit": "<40 hex, or a ref in dev and ci>"}} and nothing else (else 400; above
- * {@link #DEPLOY_BODY_MAX} bytes 413), the actor its {@code X-Rail8-Actor} header (400 above {@link #ACTOR_MAX} characters). The
+ * {@link #DEPLOY_BODY_MAX} bytes 413), the actor the authenticated caller (the shared token and the open loopback API name it
+ * by their {@code X-Rail8-Actor} header, 400 above {@link #ACTOR_MAX} characters). The
  * deploy runs on the route's virtual thread: 200 {@code {package, version, repository, commit, flows, added, swapped, removed}}
  * (the last three sorted qualified flow ids: a redeploy swaps only the flows that changed), or a refusal by its kind — 400, 403,
  * 409 (another deploy runs on the node, or the package is deployed from another repository), 422 {@code {error, problems}}, 500

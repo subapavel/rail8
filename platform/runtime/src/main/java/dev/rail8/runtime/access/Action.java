@@ -3,8 +3,6 @@ package dev.rail8.runtime.access;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 
 import static dev.rail8.runtime.access.Role.ADMINISTRATOR;
@@ -94,11 +92,5 @@ public enum Action {
     /** What grants it: the roles, or for the caller's own actions who the caller is. */
     public Who who() {
         return who;
-    }
-
-    /** The action of {@code id}, or empty for an id that names none. */
-    public static Optional<Action> byId(String id) {
-        Objects.requireNonNull(id, "id");
-        return Arrays.stream(values()).filter(a -> a.id.equals(id)).findFirst();
     }
 }
