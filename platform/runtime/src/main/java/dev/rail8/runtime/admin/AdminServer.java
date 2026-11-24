@@ -71,6 +71,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -241,6 +242,9 @@ public final class AdminServer {
 
     private static final System.Logger LOG = System.getLogger(AdminServer.class.getName());
 
+    /** How long before its {@code notAfter} the listener's certificate is named in the {@code notices} of {@code /health}. */
+    static final Duration CERTIFICATE_NOTICE = Duration.ofDays(14);
+
     /** The header a caller of the bridge declares its name in, for the audit row; and its length at most. */
     static final String ACTOR = "X-Rail8-Actor";
     static final int ACTOR_MAX = Access.ACTOR_MAX;
@@ -328,7 +332,8 @@ public final class AdminServer {
     /**
      * What {@code /health} reports: each check by name (a check that fails is DOWN), the snapshot writes that failed, and —
      * only when there is one — the node's {@code notices}: facts an operator should act on that fail nothing (a
-     * generated master key), never a key or a check's detail.
+     * generated master key), never a key or a check's detail. The server adds one of its own while the listener's certificate
+     * expires within {@link #CERTIFICATE_NOTICE} by the node's clock, or has expired, judged on each request.
      *
      * @param checks the checks, by name
      * @param snapshotWriteFailures read on every request
@@ -993,7 +998,9 @@ public final class AdminServer {
         boolean up = !checks.getMap().containsValue(Health.Status.DOWN.name());
         JsonObject answer = new JsonObject().put("status", (up ? Health.Status.UP : Health.Status.DOWN).name()).put("checks", checks)
                 .put("snapshotWriteFailures", health.snapshotWriteFailures().getAsLong());
-        if (!health.notices().isEmpty()) answer.put("notices", new JsonArray(health.notices()));
+        List<String> notices = new ArrayList<>(health.notices());
+        config.tls().flatMap(c -> c.expiryNotice(modules.clock().instant(), CERTIFICATE_NOTICE)).ifPresent(notices::add);
+        if (!notices.isEmpty()) answer.put("notices", new JsonArray(notices));
         return Json.of(up ? 200 : 503, answer);
     }
 

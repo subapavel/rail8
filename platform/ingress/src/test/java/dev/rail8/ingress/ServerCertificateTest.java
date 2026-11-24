@@ -22,6 +22,8 @@ import java.nio.file.Path;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
@@ -34,7 +36,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * A server certificate is read from {@code <prefix>_CERT} and {@code <prefix>_KEY} at the start: both or neither, each the
  * absolute path of a PEM file of at most 64 KiB, the key the first certificate's. Each refusal names the variable and the path
- * and never the content; a pair that passes serves HTTPS that a client trusting the CA completes.
+ * and never the content; a pair that passes serves HTTPS that a client trusting the CA completes, and gives a notice from the
+ * given time before its certificate's {@code notAfter} on.
  */
 class ServerCertificateTest {
 
@@ -146,6 +149,25 @@ class ServerCertificateTest {
         String text = ServerCertificate.fromEnv(env(cert, key), PREFIX).orElseThrow().toString();
         assertTrue(text.startsWith("ServerCertificate[" + CERT + "=" + cert + ", subject=CN=localhost, notAfter="), text);
         assertTrue(text.endsWith(", " + KEY + "=" + key + "]"), text);
+    }
+
+    @Test
+    void itsExpiryNoticeStartsWithinTheGivenTimeAndSaysWhenItHasExpired() {
+        ServerCertificate certificate = ServerCertificate.fromEnv(env(cert, key), PREFIX).orElseThrow();
+        Instant notAfter = certificate.notAfter();
+        Duration within = Duration.ofDays(14);
+
+        assertEquals(Optional.empty(), certificate.expiryNotice(notAfter.minus(Duration.ofDays(15)), within));
+        assertEquals(Optional.empty(), certificate.expiryNotice(notAfter.minus(within).minusMillis(1), within));
+        String soon = certificate.expiryNotice(notAfter.minus(within), within).orElseThrow();
+        assertEquals("the certificate in " + CERT + " (" + cert + ", CN=localhost) expires at " + notAfter
+                + ": put a new one in that file and restart the node to serve it", soon);
+        assertTrue(certificate.expiryNotice(notAfter, within).orElseThrow().contains(" expires at "), "valid through its notAfter");
+        String expired = certificate.expiryNotice(notAfter.plusSeconds(1), within).orElseThrow();
+        assertEquals("the certificate in " + CERT + " (" + cert + ", CN=localhost) expired at " + notAfter
+                + ": put a new one in that file and restart the node to serve it", expired);
+        String body = new String(keyBytes, StandardCharsets.US_ASCII).lines().filter(l -> !l.startsWith("-----")).findFirst().orElseThrow();
+        assertFalse(soon.contains(body) || expired.contains(body), "a notice never shows the key");
     }
 
     @Test

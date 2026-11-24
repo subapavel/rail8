@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -41,7 +42,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The admin listener with a certificate serves HTTPS only. On a bind other than loopback without a certificate it starts with a
  * WARNING and refuses logins and sessions with 403 {@code tls-required} before the login reads its body, while the emergency key
  * and the shared token go on as during the bridge; {@code RAIL8_ADMIN_TLS=off} takes logins and sessions there and starts with a
- * WARNING of its own. A loopback bind and a bind with a certificate start without either.
+ * WARNING of its own. A loopback bind and a bind with a certificate start without either. {@code /health} names the certificate
+ * in its notices from 14 days before its expiry by the node's clock on.
  */
 class AdminServerTlsTest extends AdminAccessFixture {
 
@@ -192,6 +194,30 @@ class AdminServerTlsTest extends AdminAccessFixture {
         assertThrows(UncheckedIOException.class, () -> send(secured, "GET", "/live", Optional.empty(), null), "no plain HTTP on it");
 
         assertEquals(List.of(), warnings());
+    }
+
+    @Test
+    void healthNamesTheCertificateFromFourteenDaysBeforeItsExpiryOn() throws Exception {
+        int secured = start(new AdminServer.Config("127.0.0.1", 0, Optional.of(KEY), Optional.of(certificate), false));
+        Instant notAfter = certificate.notAfter();
+
+        rt.clock().set(notAfter.minus(Duration.ofDays(15)));
+        assertFalse(health(secured).containsKey("notices"), "none 15 days before");
+        rt.clock().set(notAfter.minus(Duration.ofDays(14)));
+        assertEquals(List.of(certificate.expiryNotice(notAfter, Duration.ofDays(14)).orElseThrow()), health(secured).getJsonArray("notices").getList());
+        rt.clock().set(notAfter.plusSeconds(1));
+        List<?> expired = health(secured).getJsonArray("notices").getList();
+        assertEquals(1, expired.size(), expired.toString());
+        assertTrue(expired.getFirst().toString().contains("RAIL8_ADMIN_TLS_CERT") && expired.getFirst().toString().contains(" expired at " + notAfter),
+                expired.toString());
+        assertFalse(send(key, "GET", "/health", Optional.empty(), null).json().containsKey("notices"), "none without a certificate");
+    }
+
+    JsonObject health(int port) throws Exception {
+        HttpResponse<String> answer = trusting.send(HttpRequest.newBuilder(URI.create("https://localhost:" + port + "/health")).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, answer.statusCode(), answer.body());
+        return new JsonObject(answer.body());
     }
 
     @Test
