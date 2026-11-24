@@ -75,6 +75,9 @@ class NodeConfigAdminTlsTest {
                 () -> NodeConfig.from(with(offLoopback(), "RAIL8_ADMIN_TLS", "on")));
 
         assertEquals("RAIL8_ADMIN_TLS must be off or not set, was 'on'", refused.getMessage());
+        IllegalArgumentException upperCase = assertThrows(IllegalArgumentException.class,
+                () -> NodeConfig.from(with(offLoopback(), "RAIL8_ADMIN_TLS", "OFF")));
+        assertEquals("RAIL8_ADMIN_TLS must be off or not set, was 'OFF'", upperCase.getMessage(), "off in lower case only");
     }
 
     @Test

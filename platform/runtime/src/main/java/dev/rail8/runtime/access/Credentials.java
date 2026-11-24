@@ -27,6 +27,11 @@ final class Credentials {
 
     private Credentials() {}
 
+    /** The credential an {@code Authorization} header presents: what follows {@code Bearer } (in any case), stripped; else empty. */
+    static Optional<String> presented(String header) {
+        return header.regionMatches(true, 0, "Bearer ", 0, 7) ? Optional.of(header.substring(7).strip()) : Optional.empty();
+    }
+
     /** Whether {@code value} has the emergency key's form. */
     static boolean isKey(String value) {
         return KEY_FORM.matcher(value).matches();

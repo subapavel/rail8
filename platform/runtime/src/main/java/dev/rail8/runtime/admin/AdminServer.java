@@ -573,7 +573,8 @@ public final class AdminServer {
             } else if (config.refusesLogins()) {
                 LOG.log(System.Logger.Level.WARNING, "the admin API on " + where + " serves plain HTTP to other hosts: it refuses logins and"
                         + " sessions until it has a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY), or until RAIL8_ADMIN_TLS=off"
-                        + " states that the network to it is protected another way");
+                        + " states that the network to it is protected another way; the emergency key, the shared token and the first passwords"
+                        + " given to them still cross it in clear");
             }
             return port;
         });

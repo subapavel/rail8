@@ -84,9 +84,7 @@ abstract class Accounts implements Access {
             if (key.isEmpty() && shared.isEmpty() && query(Tx::bridgeOpen)) return Caller.bridge(Via.LOCAL, declared(declaredActor));
             throw AccessRefused.unauthenticated("no-credential", "the admin API needs a credential: Authorization: Bearer <credential>");
         }
-        String header = authorization.get();
-        if (!header.regionMatches(true, 0, "Bearer ", 0, 7)) throw unknownCredential();
-        String presented = header.substring(7).strip();
+        String presented = Credentials.presented(authorization.get()).orElseThrow(Accounts::unknownCredential);
         String fingerprint = Credentials.fingerprint(presented);
         if (key.isPresent() && Credentials.isKey(presented) && Credentials.same(fingerprint, key.get())) return Caller.emergencyKey();
         if (shared.isPresent() && Credentials.same(fingerprint, shared.get())) {
