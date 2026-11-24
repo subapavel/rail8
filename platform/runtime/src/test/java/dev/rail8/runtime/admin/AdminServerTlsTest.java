@@ -121,6 +121,18 @@ class AdminServerTlsTest extends AdminAccessFixture {
     }
 
     @Test
+    void aSessionIsRefusedByItsCredentialsFormBeforeTheStoreIsAsked() throws Exception {
+        String root = root();
+        assertEquals(204, send(key, "POST", "/admin/me/logout", Optional.of(root), null).status());
+        int plain = start(new AdminServer.Config("0.0.0.0", 0, Optional.of(KEY)));
+
+        Answer ended = send(plain, "GET", "/admin/me", Optional.of(root), null);
+
+        assertEquals(403, ended.status(), "not 401 session-ended: the store is never asked, so a live session is not kept alive either");
+        assertEquals("tls-required", ended.code());
+    }
+
+    @Test
     void aLoginIsRefusedBeforeItsBodyIsRead() throws Exception {
         int plain = start(new AdminServer.Config("0.0.0.0", 0, Optional.of(KEY)));
 
