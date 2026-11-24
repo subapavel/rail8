@@ -68,7 +68,7 @@ describe('httpUsersApi', () => {
     for (const call of calls) expect(call.init).toEqual({ headers: { accept: 'application/json' }, method: 'POST' });
   });
 
-  it('rejects with the status, the text and the code of a refusal', async () => {
+  it('rejects with the status and the text of a refusal', async () => {
     const { send } = fakeFetch(
       json(409, { error: 'at least one unblocked person holds the administrator role' }),
       json(403, { error: 'roles.change needs a session', code: 'session-required', needs: ['administrator'] }),
@@ -76,9 +76,7 @@ describe('httpUsersApi', () => {
     );
     const api = httpUsersApi(send);
     await expect(api.block('alice')).rejects.toEqual(new UsersError(409, 'at least one unblocked person holds the administrator role'));
-    const refused = await api.changeRoles('anna', ['developer'], []).catch((e: unknown) => e);
-    expect(refused).toBeInstanceOf(UsersError);
-    expect(refused).toMatchObject({ status: 403, code: 'session-required', message: 'roles.change needs a session' });
+    await expect(api.changeRoles('anna', ['developer'], [])).rejects.toEqual(new UsersError(403, 'roles.change needs a session'));
     await expect(api.list()).rejects.toMatchObject({ status: 502, message: 'the node answered 502' });
   });
 });

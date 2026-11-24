@@ -121,6 +121,18 @@ describe('the Users screen', () => {
     await expect.element(page.getByRole('table', { name: 'Sessions of alice' })).toMatchTextContent(/0123456789abcdef.*2026-11-24 09:55 UTC/);
   });
 
+  test('pages a list longer than one page', async () => {
+    const many = seed();
+    for (let i = 10; i < 40; i++) many.users.push(user(`user-${i}`));
+    render(many);
+    await expect.element(rowOf('alice')).toBeVisible();
+    await expect.element(rowOf('user-30')).toBeVisible();
+    expect(rowOf('user-31').query()).toBeNull();
+    await page.getByRole('listitem', { name: '2' }).click();
+    await expect.element(rowOf('user-39')).toBeVisible();
+    expect(rowOf('alice').query()).toBeNull();
+  });
+
   test('creates a person and shows the first password once', async () => {
     const state = render();
     await button('New user').click();
