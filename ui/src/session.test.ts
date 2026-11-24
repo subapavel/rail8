@@ -93,9 +93,7 @@ describe('the start', () => {
     expect(w.client.state()).toEqual({ kind: 'failed', error: 'the node is busy', retryAfter: '1' });
 
     start = w.client.start();
-    const lost = w.open('/session')[0]!;
-    (lost as { done?: true }).done = true;
-    lost.fail(new TypeError('offline'));
+    w.open('/session')[0]!.fail(new TypeError('offline'));
     await start;
     expect(w.client.state()).toMatchObject({ kind: 'failed' });
 
