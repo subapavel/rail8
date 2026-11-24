@@ -42,10 +42,10 @@ const closeItems: readonly { key: CloseCommand; label: string }[] = [
 /** Windows narrower than this show the menu collapsed to its icons when they open or shrink below it. */
 const narrow = '(max-width: 1279.98px)';
 
-/** An open tab's screen, and the screen it was opened from when another screen opened it. */
+/** An open tab's screen, and the screens that led to it when another screen opened it, the first one first. */
 interface Opened {
   screen: Screen;
-  from?: Screen;
+  trail: readonly Screen[];
 }
 
 /**
@@ -108,13 +108,23 @@ export function Shell({ screens, start }: ShellProps) {
     return () => query.removeEventListener('change', follow);
   }, []);
 
-  /** Opens `screen` in a tab, or shows the tab it has; a tab it opens for the first time remembers `from`. */
+  /**
+   * Opens `screen` in a tab, or shows the tab it has. A tab it opens for the first time remembers the screens that led
+   * to it, which `trailOf` gives from the tabs open now, up to `screen` itself when it led there before.
+   */
+  const openAfter = useCallback((screen: Screen, trailOf: (current: ReadonlyMap<string, Opened>) => readonly Screen[]) => {
+    setOpened((current) => {
+      if (current.has(screen.id)) return current;
+      const trail = trailOf(current);
+      const own = trail.findIndex((step) => step.id === screen.id);
+      return new Map(current).set(screen.id, { screen, trail: own === -1 ? trail : trail.slice(0, own) });
+    });
+    setTabs((current) => openTab(current, screen.id));
+  }, []);
+  /** Opens a screen in a tab, as `from` opens it: after the screens that led to `from`, and `from` itself. */
   const openFrom = useCallback(
-    (from?: Screen) => (screen: Screen) => {
-      setOpened((current) => (current.has(screen.id) ? current : new Map(current).set(screen.id, { screen, from })));
-      setTabs((current) => openTab(current, screen.id));
-    },
-    [],
+    (from?: Screen) => (screen: Screen) => openAfter(screen, (current) => (from === undefined ? [] : [...(current.get(from.id)?.trail ?? []), from])),
+    [openAfter],
   );
   const open = openFrom();
 
@@ -150,26 +160,22 @@ export function Shell({ screens, start }: ShellProps) {
 
   /**
    * The breadcrumb of `screen`'s tab: its group, then, for a tab another screen opened, the screens that led to it,
-   * each opening again when chosen, then its own title. A screen of the menu has its place there, so its trail is
-   * its group alone.
+   * from the last screen of the menu among them, each opening again when chosen, after the screens that led to it;
+   * then its own title. A screen of the menu has its place there, so its trail is its group alone. The trail stays
+   * when the tabs of the screens on it close.
    */
   const breadcrumbOf = (screen: Screen): BreadcrumbProps['items'] => {
-    const trail: Screen[] = [];
-    const seen = new Set([screen.id]);
-    let from = byId.has(screen.id) ? undefined : opened.get(screen.id)?.from;
-    while (from !== undefined && !seen.has(from.id)) {
-      trail.unshift(from);
-      seen.add(from.id);
-      from = byId.has(from.id) ? undefined : opened.get(from.id)?.from;
-    }
+    const led = byId.has(screen.id) ? [] : (opened.get(screen.id)?.trail ?? []);
+    const first = Math.max(led.findLastIndex((step) => byId.has(step.id)), 0);
+    const trail = led.slice(first);
     return [
       { title: (trail[0] ?? screen).group ?? 'Workspace' },
-      ...trail.map((step) => ({
+      ...trail.map((step, n) => ({
         title: step.title,
         href: '#',
         onClick: (event: MouseEvent) => {
           event.preventDefault();
-          open(step);
+          openAfter(step, () => led.slice(0, first + n));
         },
       })),
       { title: screen.title },
@@ -422,8 +428,8 @@ export function Shell({ screens, start }: ShellProps) {
 
 /**
  * ProLayout with the sizes of the frame taken from the theme: the header as tall as the extra large size, a page's
- * sides as wide as the large padding, and its top and bottom from the extra large padding, which PageContainer halves
- * between a page's header and its body.
+ * sides as wide as the large padding, and its top and bottom from the extra large padding, of which PageContainer puts
+ * parts around the page's header and all of it below the page's body.
  */
 function Frame(props: ProLayoutProps) {
   const { token } = theme.useToken();

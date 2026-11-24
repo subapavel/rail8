@@ -246,6 +246,42 @@ describe('Shell', () => {
     await expect.poll(titles).toEqual(['Child', 'Opener']);
   });
 
+  test('the breadcrumb keeps the screens that led to a tab after their tabs close, and each opens again with its own trail', async () => {
+    const grandchild: Screen = { id: 'doc:grandchild', title: 'Grandchild', render: () => <Page title="Grandchild">Grandchild screen</Page> };
+    const child: Screen = { id: 'doc:child', title: 'Child', render: (open) => <Page title="Child"><button onClick={() => open(grandchild)}>Open grandchild</button></Page> };
+    const opener: Screen = { id: 'opener', title: 'Opener', group: 'Design', render: (open) => <button onClick={() => open(child)}>Open child</button> };
+    render([opener, ...plain('Other')], 'opener');
+    await button('Open child').click();
+    await button('Open grandchild').click();
+    const trail = page.getByRole('navigation', { name: 'Breadcrumb' });
+    const crumbs = () => trail.getByRole('listitem').elements().map((crumb) => crumb.textContent);
+    await expect.poll(crumbs).toEqual(['Design', 'Opener', 'Child', 'Grandchild']);
+
+    await button('Close Child').click();
+    await button('Close Opener').click();
+    await expect.poll(titles).toEqual(['Grandchild']);
+    await expect.poll(crumbs).toEqual(['Design', 'Opener', 'Child', 'Grandchild']);
+
+    await trail.getByRole('link', { name: 'Child' }).click();
+    await expect.element(tab('Child')).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(crumbs).toEqual(['Design', 'Opener', 'Child']);
+  });
+
+  test('a screen opened again from a screen it led to keeps the trail it had', async () => {
+    const child: Screen = { id: 'doc:child', title: 'Child', render: (open) => <Page title="Child"><button onClick={() => open(grandchild)}>Open grandchild</button></Page> };
+    const grandchild: Screen = { id: 'doc:grandchild', title: 'Grandchild', render: (open) => <Page title="Grandchild"><button onClick={() => open(child)}>Back to child</button></Page> };
+    const opener: Screen = { id: 'opener', title: 'Opener', group: 'Design', render: (open) => <button onClick={() => open(child)}>Open child</button> };
+    render([opener, ...plain('Other')], 'opener');
+    await button('Open child').click();
+    await button('Open grandchild').click();
+    await button('Close Child').click();
+    await button('Back to child').click();
+
+    await expect.element(tab('Child')).toHaveAttribute('aria-selected', 'true');
+    const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('listitem');
+    await expect.poll(() => crumbs.elements().map((crumb) => crumb.textContent)).toEqual(['Design', 'Opener', 'Child']);
+  });
+
   test('quick open finds screens and open documents with the keyboard', async () => {
     const child: Screen = { id: 'doc:orders', title: 'Orders', render: () => <p>Order document</p> };
     const launcher: Screen = {

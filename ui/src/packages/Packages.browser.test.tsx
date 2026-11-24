@@ -90,9 +90,22 @@ describe('the Packages screen', () => {
     });
 
     await expect.element(rowOf('orders').getByText('Ahead 2')).toBeVisible();
+    await rowOf('orders').getByText('Ahead 2').hover();
+    await expect.element(page.getByRole('tooltip').getByText('The node runs commits that HEAD lacks: pull them.')).toBeVisible();
     await expect.element(rowOf('billing').getByText('Other commit')).toBeVisible();
     await expect.element(rowOf('stock').getByText('Detached HEAD')).toBeVisible();
     await expect.element(rowOf('returns').getByText('Merge in progress')).toBeVisible();
+  });
+
+  test('cuts a long commit subject to its column, and shows it whole on hover', async () => {
+    const subject = `Rework ${'the order mapping and its tests, '.repeat(8)}once more`;
+    open({ clones: [{ folder: 'orders', commits: [subject] }] });
+
+    const cut = rowOf('orders').getByText(subject);
+    await expect.element(cut).toBeVisible();
+    expect(cut.element().scrollWidth).toBeGreaterThan(cut.element().clientWidth);
+    await cut.hover();
+    await expect.element(page.getByRole('tooltip').getByText(subject)).toBeVisible();
   });
 
   test('lists the folders that are no package below the packages, each with the reason', async () => {
