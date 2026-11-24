@@ -1325,15 +1325,19 @@ public final class Deployments {
      * writes no record and no audit row. A deploy, an undeploy or a restore holding the node's lock skips the tick, and one that
      * comes while the tick runs waits for it ({@link #lockForChange}). A read that fails or does not answer within the stop
      * deadline changes nothing and turns {@link #health} DEGRADED until a tick reads the records; so does a tick that fails, until a
-     * tick brings the node to them. {@link #close} aborts a git fetch the tick runs. Blocking: on a virtual thread.
+     * tick brings the node to them. {@link #close} aborts a git fetch the tick runs. A tick that took the node's lock writes what
+     * this node runs ({@link #writeListing}) once it has ended, so a deploy waiting for it never waits for that write. Blocking: on
+     * a virtual thread.
      *
      * @throws IOException the data directory cannot be written: the node's failure
      */
     public void follow() throws IOException {
         Promise<Void> ended = Promise.promise();
         ticking = ended.future();
+        boolean locked = false;
         try {
             if (!deploying.tryLock()) return;
+            locked = true;
             try {
                 if (closing) return;
                 endMarks();
@@ -1361,11 +1365,11 @@ public final class Deployments {
                 settleDrains(read.result().marked());
             } finally {
                 deploying.unlock();
-                writeListing();
             }
         } finally {
             ticking = null;
             ended.complete();
+            if (locked) writeListing();
         }
     }
 
