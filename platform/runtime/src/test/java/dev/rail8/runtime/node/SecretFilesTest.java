@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SecretFilesTest {
 
     static final String VALUE = "s3cr3t-value-0815";
+    static final int LIMIT = Math.toIntExact(SecretFiles.MAX_BYTES);
 
     @TempDir
     Path dir;
@@ -137,10 +138,10 @@ class SecretFilesTest {
     /** A file of exactly the limit is read; one byte more is refused. */
     @Test
     void aFileLargerThanTheLimitIsRefused() throws IOException {
-        Path atLimit = file("at-limit", "a".repeat(SecretFiles.MAX_BYTES));
+        Path atLimit = file("at-limit", "a".repeat(LIMIT));
         assertEquals(SecretFiles.MAX_BYTES, SecretFiles.resolve(Map.of("RAIL8_SECRET_KEY_FILE", atLimit.toString())).get("RAIL8_SECRET_KEY").length());
 
-        Path tooLarge = file("too-large", "a".repeat(SecretFiles.MAX_BYTES + 1));
+        Path tooLarge = file("too-large", "a".repeat(LIMIT + 1));
         IllegalArgumentException refused = refused("RAIL8_SECRET_KEY_FILE", tooLarge.toString());
         assertEquals("RAIL8_SECRET_KEY_FILE names a file of more than 65536 bytes: " + tooLarge, refused.getMessage());
     }
@@ -167,7 +168,7 @@ class SecretFilesTest {
         List<Map<String, String>> envs = List.of(
                 Map.of("RAIL8_ADMIN_TOKEN", VALUE, "RAIL8_ADMIN_TOKEN_FILE", file("both", VALUE).toString()),
                 Map.of("RAIL8_ADMIN_TOKEN_FILE", VALUE),
-                Map.of("RAIL8_ADMIN_TOKEN_FILE", file("large", VALUE.repeat(SecretFiles.MAX_BYTES / VALUE.length() + 1)).toString()),
+                Map.of("RAIL8_ADMIN_TOKEN_FILE", file("large", VALUE.repeat(LIMIT / VALUE.length() + 1)).toString()),
                 Map.of("RAIL8_ADMIN_TOKEN_FILE", Files.write(dir.resolve("bad"), (VALUE + "\u00e9").getBytes(StandardCharsets.ISO_8859_1)).toString()));
         for (Map<String, String> env : envs) {
             IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> SecretFiles.resolve(env));
