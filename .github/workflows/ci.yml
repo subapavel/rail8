@@ -278,14 +278,14 @@ jobs:
           echo "::add-mask::$token"
           echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
           RAIL8_TOKEN=$token bin/rail8 deploy demo HEAD --expect none
-          # the UI below runs as the deploy account, as the quickstart's readers do: the administrator gives it the operator role, which
-          # reads the messages
+          # CI cannot log in through a browser, so the UI below runs in token mode as the deploy account; the administrator gives
+          # it the operator role, which reads the messages
           session=$(curl -sf -X POST localhost:8081/admin/sessions -H 'Content-Type: application/json' \
             -d "$(jq -n --arg password "$password" '{name: "owner", password: $password}')" | jq -r .session)
           echo "::add-mask::$session"
           curl -sf -X POST localhost:8081/admin/users/deploy/roles -H "Authorization: Bearer $session" -H 'Content-Type: application/json' \
             -d '{"add":["operator"],"remove":[]}' > /dev/null
-      - name: Start the UI as the quickstart does
+      - name: Start the UI in token mode as the deploy account
         run: |
           set -euo pipefail
           (cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace nohup npm run dev > "$RUNNER_TEMP/ui.log" 2>&1 &)
