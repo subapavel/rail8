@@ -11,7 +11,7 @@ import { screenList, type Screen } from '../../src/screens';
 import { sessionClient, type Me } from '../../src/session';
 import { SessionGate } from '../../src/SessionGate';
 import { Shell } from '../../src/Shell';
-import { usersScreen } from '../../src/users/screen';
+import { myTokensScreen, tokensScreen, usersScreen } from '../../src/users/screen';
 import { pictureMessages } from './messages';
 import { pictureUsers } from './users';
 import { NOW, pictureWorld } from './world';
@@ -19,12 +19,15 @@ import { NOW, pictureWorld } from './world';
 // The application with every screen of its modules, for the pictures that scripts/pictures.mjs takes: Packages over
 // the fake world of world.ts at a fixed time, Mappings over the fake mapping service, and the other screens as the
 // application has them, which the pictures never open. The production build of the application leaves the page out.
+const people = pictureUsers(() => NOW);
 const modules = import.meta.glob('../../src/*/module.tsx', { eager: true });
 const fakes: Record<string, Screen> = {
   packages: packagesScreen(pictureWorld(), () => NOW),
   mappings: mappingsScreen(fakeApiClient(), storageBrowserState(window.sessionStorage)),
   messages: messagesScreen(pictureMessages(), () => NOW),
-  users: usersScreen(pictureUsers(() => NOW)),
+  users: usersScreen(people.users, people.tokens),
+  tokens: tokensScreen(people.tokens),
+  'my-tokens': myTokensScreen(people.tokens),
 };
 const screens = screenList(home, modules).map((screen) => fakes[screen.id] ?? screen);
 
@@ -36,7 +39,7 @@ const OPERATOR: Me = {
   name: 'anna',
   kind: 'person',
   roles: ['operator'],
-  actions: ['self.read', 'self.password', 'self.logout', 'message.read', 'message.retry', 'deployment.read'],
+  actions: ['self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue', 'message.read', 'message.retry', 'deployment.read'],
   refused: {
     'module.call': { code: 'not-allowed', needs: ['developer', 'administrator'] },
     'message.body': { code: 'not-allowed', needs: ['message-bodies'] },
@@ -52,7 +55,7 @@ const NOBODY: Me = {
   ...OPERATOR,
   name: 'bob',
   roles: [],
-  actions: ['self.read', 'self.password', 'self.logout'],
+  actions: ['self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue'],
   refused: {
     ...OPERATOR.refused,
     'message.read': { code: 'not-allowed', needs: ['operator'] },
@@ -63,7 +66,10 @@ const ADMINISTRATOR: Me = {
   ...OPERATOR,
   name: 'alice',
   roles: ['administrator'],
-  actions: ['self.read', 'self.password', 'self.logout', 'user.read', 'user.create', 'roles.change', 'administrators.change', 'user.block', 'user.password-reset', 'session.end'],
+  actions: [
+    'self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue', 'user.read', 'user.create', 'roles.change', 'administrators.change',
+    'user.block', 'user.password-reset', 'session.end', 'token.read', 'token.issue', 'token.revoke', 'token.ceiling',
+  ],
   refused: {
     'message.read': { code: 'not-allowed', needs: ['operator'] },
     'deployment.read': { code: 'not-allowed', needs: ['developer', 'operator'] },

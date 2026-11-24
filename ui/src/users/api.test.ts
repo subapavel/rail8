@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { httpUsersApi, UsersError, type User } from './api';
+import { httpTokensApi, httpUsersApi, UsersError, type User } from './api';
 
 /** A fetch that records every call and answers each with the next of `answers`. */
 function fakeFetch(...answers: Response[]) {
@@ -78,5 +78,60 @@ describe('httpUsersApi', () => {
     await expect(api.block('alice')).rejects.toEqual(new UsersError(409, 'at least one unblocked person holds the administrator role'));
     await expect(api.changeRoles('anna', ['developer'], [])).rejects.toEqual(new UsersError(403, 'roles.change needs a session'));
     await expect(api.list()).rejects.toMatchObject({ status: 502, message: 'the node answered 502' });
+  });
+});
+
+describe('httpTokensApi', () => {
+  const TOKEN = { id: '0123456789abcdef', user: 'alice', name: 'laptop', createdAt: '2026-11-20T09:00:00Z', createdBy: 'alice', expiresAt: '2027-02-18T09:00:00Z', lastUsedAt: null };
+  const ISSUED = { id: '0123456789abcdef', name: 'laptop', expiresAt: '2027-02-18T09:00:00Z', token: `rail8t_0123456789abcdef_${'s'.repeat(43)}` };
+  const listed = { tokens: [TOKEN], maxDays: 365, defaultDays: 90 };
+  const post = (body: unknown) => ({ method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const get = { headers: { accept: 'application/json' } };
+  const bare = { headers: { accept: 'application/json' }, method: 'POST' };
+
+  it("reads, issues and revokes the caller's own tokens, the password asked again", async () => {
+    const { send, calls } = fakeFetch(json(200, listed), json(201, ISSUED), new Response(null, { status: 204 }));
+    const api = httpTokensApi(send);
+    expect(await api.mine()).toEqual(listed);
+    expect(await api.issueMine('laptop', 90, 'my password')).toEqual(ISSUED);
+    expect(await api.revokeMine('0123456789abcdef')).toBeUndefined();
+    expect(calls).toEqual([
+      { url: '/admin/me/tokens', init: get },
+      { url: '/admin/me/tokens', init: post({ name: 'laptop', days: 90, password: 'my password' }) },
+      { url: '/admin/me/tokens/0123456789abcdef/revoke', init: bare },
+    ]);
+  });
+
+  it("lists every user's tokens, those expiring within days, the ceiling, and issues, revokes and sets the ceiling", async () => {
+    const { send, calls } = fakeFetch(
+      json(200, listed),
+      json(200, listed),
+      json(200, listed),
+      json(201, ISSUED),
+      new Response(null, { status: 204 }),
+      json(200, { maxDays: 30, defaultDays: 30 }),
+    );
+    const api = httpTokensApi(send);
+    expect(await api.list()).toEqual(listed);
+    expect(await api.list(14)).toEqual(listed);
+    expect(await api.ceiling()).toEqual({ maxDays: 365, defaultDays: 90 });
+    expect(await api.issue('ci deploy', 'nightly', 30)).toEqual(ISSUED);
+    await api.revoke('fedcba9876543210');
+    expect(await api.setCeiling(30)).toEqual({ maxDays: 30, defaultDays: 30 });
+    expect(calls).toEqual([
+      { url: '/admin/tokens', init: get },
+      { url: '/admin/tokens?expiringWithin=P14D', init: get },
+      { url: '/admin/tokens?expiringWithin=P1D', init: get },
+      { url: '/admin/users/ci%20deploy/tokens', init: post({ name: 'nightly', days: 30 }) },
+      { url: '/admin/tokens/fedcba9876543210/revoke', init: bare },
+      { url: '/admin/tokens/ceiling', init: post({ maxDays: 30 }) },
+    ]);
+  });
+
+  it('rejects with the status and the text of a refusal', async () => {
+    const { send } = fakeFetch(json(403, { error: 'the password is wrong', code: 'wrong-password', needs: [] }), json(404, { error: 'no token abc' }));
+    const api = httpTokensApi(send);
+    await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'the password is wrong'));
+    await expect(api.revoke('abc')).rejects.toEqual(new UsersError(404, 'no token abc'));
   });
 });

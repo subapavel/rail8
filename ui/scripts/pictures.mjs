@@ -82,6 +82,14 @@ const SCENES = {
   'users-roles': [visit('admin'), menu('Users'), row('alice', 'Roles…'), check('Message bodies')],
   'users-new': [visit('admin'), menu('Users'), press('New user'), fill('Name', 'dana'), check('Operator'), press('Create')],
   'users-refused': [visit('admin'), menu('Users'), row('alice', 'Block'), confirmIn('alice', 'Block')],
+  'users-tokens': [visit('admin'), menu('Users'), expand('Users', 'ci-deploy')],
+  'users-token-new': [visit('admin'), menu('Users'), row('ci-deploy', 'New token…'), fill('Name', 'release')],
+  'my-tokens': [visit('admin'), menu('My tokens')],
+  'my-tokens-new': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'alice password')],
+  'my-tokens-issued': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'alice password'), press('Issue')],
+  'my-tokens-wrong-password': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'not it'), press('Issue')],
+  tokens: [visit('admin'), menu('Tokens')],
+  'tokens-ceiling': [visit('admin'), menu('Tokens'), press('Change…'), fill('Longest life of a token', '30')],
 };
 
 /** The page of the Ant Design Pro demo that matches each picture taken of it, and whether its menu is collapsed. */

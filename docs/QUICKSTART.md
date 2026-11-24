@@ -250,6 +250,11 @@ as developer and operator. A change the node refuses, such as blocking yourself 
 the last administrator, shows the node's reason. Users are never deleted; `docker compose down -v` removes them with the
 database.
 
+**My tokens**, under Account, issues a token for the command line: its name, the days it holds and your password again.
+The token shows once; `bin/rail8` sends it from `RAIL8_TOKEN`. Revoke ends one at once. New token… in a technical
+account's row of Users issues that account's tokens. **Tokens**, under Administration, shows the longest life a token may
+have, which Change… sets for the whole installation, and every user's tokens that expire within 14 days.
+
 ## Stop
 
 ```sh
