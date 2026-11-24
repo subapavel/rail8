@@ -306,13 +306,12 @@ public final class PgAccess extends Accounts {
         }
 
         @Override public int ceiling(Lock lock) {
-            // a store emptied of every row but the migrations' history has the migration's ceiling
-            return first(run("select max_days from token_ceiling" + lock(lock), Tuple.tuple()), r -> r.getInteger(0)).orElse(365);
+            return first(run("select max_days from token_ceiling" + lock(lock), Tuple.tuple()), r -> r.getInteger(0))
+                    .orElseThrow(() -> new IllegalStateException("token_ceiling has no row: the migration's row was deleted"));
         }
 
         @Override public void setCeiling(int maxDays) {
-            run("insert into token_ceiling (only_row, max_days) values (true, $1) on conflict (only_row) do update set max_days = $1",
-                    Tuple.of(maxDays));
+            run("update token_ceiling set max_days = $1", Tuple.of(maxDays));
         }
 
         @Override public int shortenTokens(int maxDays) {

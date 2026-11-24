@@ -59,7 +59,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * whose RAIL8_ADMIN_TOKEN is the emergency key {@link #KEY}, one whose token is the shared token {@link #SHARED}, and one on
  * loopback without a token. The password hash is a {@link FakeHash}, the clock {@link #rt}'s; the node's modules are one plugin,
  * {@code demo}, with {@code GET} and {@code POST ping}. While {@link #auditFails} is set, the audit rows of a use of the key and
- * of a view of a body are not written; {@link #viewsAtOpen} holds, for each stream of a body opened, how many views the audit
+ * of a view of a body are not written; while {@link #revokeFails} is set, a revoke of a token throws as a failed store would; {@link #viewsAtOpen} holds, for each stream of a body opened, how many views the audit
  * held at that moment.
  */
 abstract class AdminAccessFixture {
@@ -78,6 +78,7 @@ abstract class AdminAccessFixture {
     final InMemoryMessageStore messages = new InMemoryMessageStore();
     final InMemoryWorkQueue rows = new InMemoryWorkQueue(rt.clock());
     final AtomicBoolean auditFails = new AtomicBoolean();
+    final AtomicBoolean revokeFails = new AtomicBoolean();
     final List<Long> viewsAtOpen = new CopyOnWriteArrayList<>();
     final List<AdminServer> started = new ArrayList<>();
     Deployments deployments;
@@ -131,6 +132,7 @@ abstract class AdminAccessFixture {
         Optional<String> token = config.token();
         Access access = around(Access.class, new MemoryAccess(store, rt.clock(), hash, new HashPlaces(), new SecureRandom(), token), m -> {
             if (auditFails.get() && (m.getName().equals("keyUsed") || m.getName().equals("bodyViewed"))) throw AccessRefused.unaudited("the audit is down");
+            if (revokeFails.get() && m.getName().equals("revokeToken")) throw new IllegalStateException("the store is down");
         });
         BlobStore blobs = around(BlobStore.class, rt.blobs(), m -> {
             if (m.getName().equals("open")) viewsAtOpen.add(views());
