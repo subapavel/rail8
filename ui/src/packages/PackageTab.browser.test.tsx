@@ -146,6 +146,25 @@ describe('the tab of a package', () => {
     await expect.element(page.getByText('Uncommitted changes are never deployed.')).not.toBeInTheDocument();
   });
 
+  test('lists what each node of the pool runs among its facts', async () => {
+    const { ids } = await openOrders({
+      clones: [{ folder: 'orders', commits: ['first', 'second'] }],
+      node: [{ repository: 'orders', commit: 'second' }],
+      pool: {
+        records: [{ repository: 'orders', commit: 'second' }],
+        nodes: [
+          { node: 'node-a', packages: [{ repository: 'orders', commit: 'second' }] },
+          { node: 'node-b', packages: [] },
+        ],
+      },
+    });
+
+    const tab = page.getByLabelText('orders', { exact: true });
+    await expect.element(tab.getByText('Nodes of the pool')).toBeVisible();
+    await expect.element(tab.getByText('Not running', { exact: true })).toBeVisible();
+    await expect.element(tab.getByText(`Behind the pool's commit ${ids.get('orders/second')!.slice(0, 7)}: node-b`)).toBeVisible();
+  });
+
   test('shows why, in place of what the node runs, to a session that may not read deployments', async () => {
     await openOrders({ clones: [{ folder: 'orders', commits: ['first', 'second'] }], node: [{ repository: 'orders', commit: 'first' }] }, undefined, NO_DEPLOYMENTS);
 

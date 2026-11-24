@@ -20,7 +20,7 @@ import { runner, type Spawn } from '../server/runner.ts';
 import { realTimer } from '../server/timer.ts';
 import { HIDDEN_PREFIX } from '../server/clone.ts';
 import { NEW_PREFIX } from '../server/newPackage.ts';
-import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed, type SourceSeed, type Zone } from './seed';
+import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, POOL_FAILS, type Build, type CloneSeed, type SourceSeed, type Zone } from './seed';
 
 const ORIGIN = 'http://localhost:5173';
 const TOKEN = 'the-admin-token';
@@ -404,6 +404,8 @@ export const httpWorld: Build = async (seed) => {
         .map(([path, blob]) => [`${name}/${path.slice('flows/'.length, -'.yaml'.length)}`, blob]),
     );
   };
+  // the pool: its records, as a deploy changes them, and its nodes
+  const pool = typeof seed.pool === 'object' ? { records: [...seed.pool.records], nodes: seed.pool.nodes } : null;
   const sent: FakeSent[] = [];
   const held: ServerResponse[] = [];
   const hearing: (() => void)[] = [];
@@ -428,7 +430,11 @@ export const httpWorld: Build = async (seed) => {
     const shown = manifestOf(git(join(work, asked.repository), 'show', `${asked.commit}:package.yaml`)).package!;
     const before = record === undefined ? new Map<string, string>() : flowsAt(asked.repository, record.commit, shown.name);
     const after = flowsAt(asked.repository, asked.commit, shown.name);
-    if (!check) running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
+    if (!check) {
+      running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
+      // the deploy writes the pool's record; the pool's nodes follow it later
+      if (pool !== null) pool.records = [...pool.records.filter((r) => r.repository !== asked.repository), { repository: asked.repository, commit: asked.commit }];
+    }
     answer(res, 200, {
       package: shown.name,
       version: shown.version,
@@ -453,6 +459,21 @@ export const httpWorld: Build = async (seed) => {
       const chunks: Buffer[] = [];
       req.on('data', (chunk: Buffer) => chunks.push(chunk));
       req.on('end', () => deploy(url.searchParams.get('check') === 'true', JSON.parse(Buffer.concat(chunks).toString('utf8')) as FakeSent['body'], String(req.headers['x-rail8-actor']), res));
+      return;
+    }
+    if (url.pathname === '/admin/pool/packages') {
+      if (seed.pool === undefined) answer(res, 404, { error: 'not found' });
+      else if (pool === null) answer(res, 500, { error: POOL_FAILS });
+      else {
+        const named = (r: { repository: string; commit: string }) => ({ name: r.repository, version: '1.0.0', repository: r.repository, commit: commitOf(r.repository, r.commit) });
+        answer(res, 200, {
+          records: pool.records.map(named),
+          nodes: pool.nodes.map((n) => ({
+            node: n.node,
+            packages: n.packages.map((p) => ({ ...named(p), deployedAt: DEPLOYED_AT, state: p.state ?? 'RUNNING', behind: p.behind ?? [] })),
+          })),
+        });
+      }
       return;
     }
     const items = [...running].map(([repository, r]) => ({

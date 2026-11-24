@@ -22,10 +22,12 @@ export interface Commit {
  * - `behind`: it runs an ancestor of `HEAD`, `commits` back;
  * - `ahead`: `HEAD` is an ancestor of what it runs, `commits` back;
  * - `other`: the commit is not in `HEAD`'s history, or the clone lacks it.
+ *
+ * `pool` is what every node of the node's pool runs of the package; it is absent when the node answers no pool route.
  */
 export type Deployed =
   | { node: 'unreachable'; host: string; error: string }
-  | { node: 'answered'; host: string; relation: 'none' }
+  | { node: 'answered'; host: string; relation: 'none'; pool?: Pool }
   | {
       node: 'answered';
       host: string;
@@ -35,7 +37,25 @@ export type Deployed =
       state: 'RUNNING' | 'FAILED';
       problems: string[];
       deployedAt: string;
+      pool?: Pool;
     };
+
+/**
+ * What the pool runs of a package, from the node's `GET /admin/pool/packages`: the commit the pool records of it (null:
+ * it records no such package) and every node whose lease holds, sorted by id; or why that route gave no answer.
+ */
+export type Pool = { record: string | null; nodes: PoolNode[] } | { error: string };
+
+/**
+ * One node of the pool and what it runs of a package: nothing of the package's repository (`none`), or the commit it
+ * runs with its relation to the clone's `HEAD`, as {@link Deployed} relates it, its state and when it was deployed.
+ * `follows` is false while what it runs differs from the pool's record: a node that has not followed yet, or one that is
+ * behind, and `behind` then says why once a tick failed.
+ */
+export type PoolNode = { node: string; follows: boolean; behind: string[] } & (
+  | { relation: 'none' }
+  | { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commit: string; commits?: number; state: 'RUNNING' | 'FAILED'; deployedAt: string }
+);
 
 /** An operation git left open in a clone, or a path in conflict; null when there is none. */
 export type Busy = null | 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect' | 'conflict';

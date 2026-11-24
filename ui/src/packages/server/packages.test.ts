@@ -95,7 +95,7 @@ describe('the list of packages over real git', () => {
       { repository: 'stock', commit: ids.next, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
     ];
 
-    const listed = await listPackages(recording, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running }) });
+    const listed = await listPackages(recording, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running }), pool: async () => null });
 
     const argsOf = (name: string) => calls.filter((c) => c.clone === join(root, name)).map((c) => c.args);
     const status = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--', ':(literal).'];
@@ -128,11 +128,50 @@ describe('the list of packages over real git', () => {
     ]);
   });
 
+  test('a commit that the node and several nodes of its pool run is related to HEAD once', async () => {
+    const { root, ids, env } = await workspace();
+    const real = runner({ env, timer: realTimer });
+    git = real;
+    const calls: Call[] = [];
+    const recording: Runner = { run: (call) => (calls.push(call), real.run(call)), undoable: (work, undo) => real.undoable(work, undo), close: () => real.close() };
+    const runs = (commit: string) => ({ repository: 'orders', commit, state: 'RUNNING' as const, deployedAt: '2026-11-20T10:00:00Z', behind: [] });
+    const running: Running[] = [{ repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] }];
+
+    const listed = await listPackages(recording, root, {
+      host: '127.0.0.1:8081',
+      read: async () => ({ answered: true, running }),
+      pool: async () => ({
+        records: [{ repository: 'orders', commit: ids.second }],
+        nodes: [
+          { node: 'node-a', packages: [runs(ids.first)] },
+          { node: 'node-b', packages: [runs(ids.first)] },
+          { node: 'node-c', packages: [runs(ids.second)] },
+        ],
+      }),
+    });
+
+    const relating = calls.filter((c) => c.clone === join(root, 'orders') && ['cat-file', 'merge-base', 'rev-list'].includes(c.args[0]!)).map((c) => c.args);
+    expect(relating).toEqual([
+      ['cat-file', '-e', '--end-of-options', `${ids.first}^{commit}`],
+      ['merge-base', '--is-ancestor', '--end-of-options', ids.first, ids.second],
+      ['rev-list', '--count', '--end-of-options', `${ids.first}..${ids.second}`, '--'],
+    ]);
+    const deployed = listed.packages.find((p) => p.repository === 'orders')!.deployed;
+    expect(deployed.node === 'answered' && deployed.pool).toMatchObject({
+      record: ids.second,
+      nodes: [
+        { node: 'node-a', relation: 'behind', commits: 1, follows: false },
+        { node: 'node-b', relation: 'behind', commits: 1, follows: false },
+        { node: 'node-c', relation: 'deployed', follows: true },
+      ],
+    });
+  });
+
   test('a hidden folder and a plain file are passed over, and an upstream whose remote-tracking branch is gone reads as none', async () => {
     const { root, env } = await workspace();
     git = runner({ env, timer: realTimer });
 
-    const listed = await listPackages(git, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running: [] }) });
+    const listed = await listPackages(git, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running: [] }), pool: async () => null });
 
     expect(listed.packages.map((p) => p.repository)).toEqual(['billing', 'orders', 'stock']);
     expect(listed.others).toEqual([]);

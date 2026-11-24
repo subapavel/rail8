@@ -38,6 +38,19 @@ describe.each<[string, Build]>([
       },
     );
 
+  test("a deploy in a pool answers the pool as it is after the deploy: its record names the commit, which its nodes have not followed yet", async () => {
+    const { api } = await one(FLOWS, {
+      node: [{ repository: 'orders', commit: 'first' }],
+      pool: { records: [{ repository: 'orders', commit: 'first' }], nodes: [{ node: 'node-a', packages: [{ repository: 'orders', commit: 'first' }] }] },
+    });
+    const first = world!.id('orders', 'first');
+    const second = world!.id('orders', 'second');
+
+    const deployed = await api.deploy('orders', { commit: second, check: false, expect: first });
+
+    expect(deployed.package?.deployed).toMatchObject({ relation: 'deployed', commit: second, pool: { record: second, nodes: [{ node: 'node-a', relation: 'behind', commit: first, follows: false }] } });
+  });
+
   test('a check, then a deploy of what it checked, then a deploy of an earlier commit: each sends 40 hex digits, the check’s replaces as expect, and the actor', async () => {
     const { api } = await one(FLOWS);
     const first = world!.id('orders', 'first');

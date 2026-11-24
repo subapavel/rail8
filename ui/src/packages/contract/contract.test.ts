@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { PackagesError, type PackageList, type PackageRow } from '../api';
 import { GIT_MISSING, gitTooOld, MAX_PACKAGES, REASONS } from '../rules';
 import { httpWorld } from './httpWorld';
-import { DEPLOYED_AT, fakeWorld, OLD_GIT, type Build, type Seed, type World } from './seed';
+import { DEPLOYED_AT, fakeWorld, OLD_GIT, POOL_FAILS, type Build, type Seed, type World } from './seed';
 
 const ABSENT = '0123456789abcdef0123456789abcdef01234567';
 const UUID = '0b6f3c1e-7d2a-4c5b-9e8f-1a2b3c4d5e6f';
@@ -203,6 +203,98 @@ describe.each<[string, Build]>([
       for (const row of listed.packages) {
         expect(row.deployed).toEqual({ node: 'unreachable', host: listed.node, error: expect.stringContaining(`the node at ${listed.node} does not answer`) });
       }
+    });
+
+    describe('every node of the pool', () => {
+      const runs = (node: string, commit: string, more: Record<string, unknown> = {}) => ({
+        node,
+        follows: true,
+        behind: [],
+        relation: 'deployed',
+        commit: world!.id('orders', commit),
+        state: 'RUNNING',
+        deployedAt: DEPLOYED_AT,
+        ...more,
+      });
+
+      test('one node current, one behind and one failed: each with its relation, and whether it follows the record', async () => {
+        const why = 'the commit could not be fetched: connection refused';
+        const listed = await list({
+          clones: [{ folder: 'orders', commits: ['first', 'second'] }],
+          node: [{ repository: 'orders', commit: 'second' }],
+          pool: {
+            records: [{ repository: 'orders', commit: 'second' }],
+            nodes: [
+              { node: 'node-a', packages: [{ repository: 'orders', commit: 'second' }] },
+              { node: 'node-b', packages: [{ repository: 'orders', commit: 'first', behind: [why] }] },
+              { node: 'node-c', packages: [{ repository: 'orders', commit: 'second', state: 'FAILED' }] },
+            ],
+          },
+        });
+
+        expect(rowOf(listed, 'orders').deployed).toEqual({
+          node: 'answered',
+          host: listed.node,
+          relation: 'deployed',
+          commit: world!.id('orders', 'second'),
+          state: 'RUNNING',
+          problems: [],
+          deployedAt: DEPLOYED_AT,
+          pool: {
+            record: world!.id('orders', 'second'),
+            nodes: [runs('node-a', 'second'), runs('node-b', 'first', { follows: false, behind: [why], relation: 'behind', commits: 1 }), runs('node-c', 'second', { state: 'FAILED' })],
+          },
+        });
+      });
+
+      test('a node that runs nothing of a recorded package, and a node that runs a package the pool records nothing of', async () => {
+        const listed = await list({
+          clones: [{ folder: 'orders' }, { folder: 'billing' }],
+          node: [{ repository: 'orders', commit: 'first' }],
+          pool: {
+            records: [{ repository: 'orders', commit: 'first' }],
+            nodes: [
+              { node: 'node-a', packages: [{ repository: 'billing', commit: 'first' }, { repository: 'orders', commit: 'first' }] },
+              { node: 'node-b', packages: [] },
+            ],
+          },
+        });
+
+        expect(rowOf(listed, 'orders').deployed).toMatchObject({
+          pool: { record: world!.id('orders', 'first'), nodes: [runs('node-a', 'first'), { node: 'node-b', follows: false, behind: [], relation: 'none' }] },
+        });
+        expect(rowOf(listed, 'billing').deployed).toEqual({
+          node: 'answered',
+          host: listed.node,
+          relation: 'none',
+          pool: {
+            record: null,
+            nodes: [
+              { ...runs('node-a', 'first'), commit: world!.id('billing', 'first'), follows: false },
+              { node: 'node-b', follows: true, behind: [], relation: 'none' },
+            ],
+          },
+        });
+      });
+
+      test('a node that answers no pool route keeps the single node at RAIL8_ADMIN_URL', async () => {
+        const listed = await list({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }] });
+
+        expect(rowOf(listed, 'orders').deployed).toMatchObject({ node: 'answered', host: listed.node, relation: 'deployed' });
+        expect(rowOf(listed, 'orders').deployed).not.toHaveProperty('pool');
+      });
+
+      test('a pool route that fails says why, beside what the node runs', async () => {
+        const listed = await list({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }], pool: 'fails' });
+
+        expect(rowOf(listed, 'orders').deployed).toMatchObject({ relation: 'deployed', pool: { error: `the node at ${listed.node} answered 500: ${POOL_FAILS}` } });
+      });
+
+      test("a package's own read carries the pool too", async () => {
+        await open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }], pool: { records: [{ repository: 'orders', commit: 'first' }], nodes: [{ node: 'node-a', packages: [{ repository: 'orders', commit: 'first' }] }] } });
+
+        expect((await world!.api.get('orders')).deployed).toMatchObject({ pool: { record: world!.id('orders', 'first'), nodes: [runs('node-a', 'first')] } });
+      });
     });
 
     test('every row names the node the list names', async () => {
