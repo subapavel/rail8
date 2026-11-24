@@ -22,6 +22,7 @@ import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepCpu;
+import dev.rail8.ingress.ServerCertificate;
 import dev.rail8.runtime.access.Access;
 import dev.rail8.runtime.access.AccessRefused;
 import dev.rail8.runtime.access.Action;
@@ -104,7 +105,8 @@ import java.util.stream.Collectors;
  * messages of that list in each status ({@link PgMessageList#counts}), of {@code flow} when it is given: an object
  * {@code {completed, failed, running, cancelled}}, 400 for the same refusals as the list.
  *
- * <p>A verticle owns the socket and routes on its event loop; every route body runs on a fresh virtual thread — it awaits
+ * <p>A verticle owns the socket and routes on its event loop; with a certificate ({@link Config#tls}) the socket serves HTTPS
+ * only; every route body runs on a fresh virtual thread — it awaits
  * the stores, encodes the answer and checks its headers there — and the answer is written back on the verticle's context.
  * {@code /health} is open and shows status only, never a check's detail. {@code /live} and {@code /ready} are open too:
  * {@code /live} answers 200 {@code {"status":"UP"}} while the server runs and reads nothing; {@code /ready} reads its
@@ -200,7 +202,10 @@ import java.util.stream.Collectors;
  *
  * <p>Every {@code /admin/**} request goes in one order. First the browser guard: a request that carries an {@code Origin}
  * header, or a {@code Sec-Fetch-Site} other than {@code none}, is 403 {@code {error, code: "browser"}}: what a browser sends,
- * never the CLI. Then {@code POST /admin/sessions}, the login, takes no credential. Every other request is authenticated
+ * never the CLI. Then {@code POST /admin/sessions}, the login, takes no credential; on a listener that refuses logins
+ * ({@link Config#refusesLogins}: plain HTTP on a bind other than loopback, without {@code RAIL8_ADMIN_TLS=off}) it is 403
+ * {@code {error, code: "tls-required"}} before its body is read, and so is any request of a session once authenticated. Every
+ * other request is authenticated
  * ({@link Access#authenticate}) from {@code Authorization: Bearer <credential>} before the router looks at its path, so a
  * path no route takes is authenticated too: a session; the emergency key, a {@code RAIL8_ADMIN_TOKEN} of its form; and while
  * the bridge is open, the shared token, a {@code RAIL8_ADMIN_TOKEN} of another form, and on a node without one a request
@@ -248,8 +253,9 @@ public final class AdminServer {
     /** The largest body of the routes of users and of the caller's own password, in bytes. */
     static final int USERS_BODY_MAX = 4 * 1024;
     /**
-     * The metadata of every route of {@code /admin}: {@value #ACTIONS} the list of actions its door lets through, or for the three
-     * routes mounted without one — the browser guard, the login and the authentication — {@value #UNCHECKED} their name.
+     * The metadata of every route of {@code /admin}: {@value #ACTIONS} the list of actions its door lets through, or for the routes
+     * mounted without one — the browser guard, the login and the authentication, and on a listener that refuses logins the
+     * refusal of a login before it, {@code plain HTTP} — {@value #UNCHECKED} their name.
      */
     static final String ACTIONS = "rail8.actions";
     static final String UNCHECKED = "rail8.unchecked";
@@ -259,31 +265,54 @@ public final class AdminServer {
     private static final String JSON = "application/json";
     private static final String PROBLEM = "application/problem+json";
     private static final String OCTETS = "application/octet-stream";
+    /** The refusal of a login or a session on a listener that {@link Config#refusesLogins refuses them}. */
+    private static final String PLAIN_HTTP = "the admin API on this address serves plain HTTP: it takes no login and no session here until"
+            + " the node has a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY) or RAIL8_ADMIN_TLS=off";
     /** What the router answers itself: no route, a method the route does not take, a request it cannot read, a handler that threw. */
     private static final Map<Integer, String> ROUTER_ERRORS = Map.of(400, "bad request", 404, "no such route", 405, "method not allowed",
             500, "internal error");
 
     /**
-     * Where the API listens and the token {@code /admin/**} needs. A blank token is no token; a host that is not a loopback
-     * address literal (a host name included: where it resolves is not known here) without a token is refused.
+     * Where the API listens, the token {@code /admin/**} needs and how the listener is encrypted. A blank token is no token; a
+     * host that is not a loopback address literal (a host name included: where it resolves is not known here) without a token is
+     * refused. With a certificate the listener serves HTTPS only. Without one, on a host that is not a loopback literal, it
+     * refuses logins and sessions ({@link #refusesLogins}) unless {@code tlsOff} states that the network to it is protected
+     * another way; a certificate and {@code tlsOff} together are refused.
      *
      * @param host the bind address
      * @param port the port; 0 binds any free one
      * @param token the bearer token, empty for none
+     * @param tls the certificate the listener serves ({@code RAIL8_ADMIN_TLS_CERT} and {@code RAIL8_ADMIN_TLS_KEY}), empty for plain HTTP
+     * @param tlsOff {@code RAIL8_ADMIN_TLS=off}: plain HTTP takes logins and sessions on any bind
      */
-    public record Config(String host, int port, Optional<String> token) {
+    public record Config(String host, int port, Optional<String> token, Optional<ServerCertificate> tls, boolean tlsOff) {
         public Config {
             Objects.requireNonNull(host, "host");
             token = token.filter(t -> !t.isBlank());
+            Objects.requireNonNull(tls, "tls");
             if (token.isEmpty() && !loopback(host)) {
                 throw new IllegalArgumentException("the admin API on " + host + " is not loopback-only: it needs a token (RAIL8_ADMIN_TOKEN)");
             }
+            if (tls.isPresent() && tlsOff) {
+                throw new IllegalArgumentException("RAIL8_ADMIN_TLS=off and a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY) are both set:"
+                        + " the admin API serves HTTPS with the certificate, or plain HTTP with off");
+            }
+        }
+
+        /** Plain HTTP, without {@code RAIL8_ADMIN_TLS=off}. */
+        public Config(String host, int port, Optional<String> token) {
+            this(host, port, token, Optional.empty(), false);
+        }
+
+        /** Whether the listener refuses logins and sessions: plain HTTP on a host that is not a loopback literal, without off. */
+        public boolean refusesLogins() {
+            return tls.isEmpty() && !tlsOff && !loopback(host);
         }
 
         /** The token redacted: a log line never carries it. */
         @Override
         public String toString() {
-            return "Config[host=" + host + ", port=" + port + ", token=" + token.map(t -> "***") + "]";
+            return "Config[host=" + host + ", port=" + port + ", token=" + token.map(t -> "***") + ", tls=" + tls + ", tlsOff=" + tlsOff + "]";
         }
 
         private static boolean loopback(String host) {
@@ -527,12 +556,25 @@ public final class AdminServer {
         this.access = Objects.requireNonNull(access, "access");
     }
 
-    /** Deploys the listening verticle; completes with the bound port (the actual one when configured 0). */
+    /**
+     * Deploys the listening verticle; completes with the bound port (the actual one when configured 0). Once it listens, it logs
+     * a WARNING for {@code RAIL8_ADMIN_TLS=off}, and one for a listener that refuses logins and sessions.
+     */
     public Future<Integer> start(Vertx vertx) {
         Listener listener = new Listener();
         return vertx.deployVerticle(listener).map(id -> {
             undeploy = () -> vertx.undeploy(id);
-            return listener.server.actualPort();
+            int port = listener.server.actualPort();
+            String where = config.host() + ":" + port;
+            if (config.tlsOff()) {
+                LOG.log(System.Logger.Level.WARNING, "RAIL8_ADMIN_TLS=off: the admin API on " + where + " takes passwords and credentials over"
+                        + " plain HTTP; the network between the UI server, the command line and the nodes must be protected another way");
+            } else if (config.refusesLogins()) {
+                LOG.log(System.Logger.Level.WARNING, "the admin API on " + where + " serves plain HTTP to other hosts: it refuses logins and"
+                        + " sessions until it has a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY), or until RAIL8_ADMIN_TLS=off"
+                        + " states that the network to it is protected another way");
+            }
+            return port;
         });
     }
 
@@ -545,7 +587,7 @@ public final class AdminServer {
 
     /**
      * The router once the server started, for a test that walks its routes: each route of {@code /admin} carries its actions, or
-     * its name when it is one of the three without, as the metadata {@link #ACTIONS} and {@link #UNCHECKED}.
+     * its name when it is one of those without, as the metadata {@link #ACTIONS} and {@link #UNCHECKED}.
      */
     Router router() {
         return Objects.requireNonNull(router, "the server has not started");
@@ -562,8 +604,12 @@ public final class AdminServer {
             routes.get("/health").handler(offload(context, (c, who) -> health(c)));
             routes.get("/live").handler(offload(context, (c, who) -> Json.of(200, new JsonObject().put("status", Health.Status.UP.name()))));   // reads nothing
             routes.get("/ready").handler(offload(context, (c, who) -> ready(c)));
-            // the three routes of /admin without an action, in this order: the guard, the login, the authentication
+            // the three routes of /admin without an action, in this order: the guard, the login, the authentication; on a listener
+            // that refuses logins, the login's refusal comes before the login, so a password sent there is never read
             routes.route("/admin/*").putMetadata(UNCHECKED, "browser guard").handler(AdminServer::browserGuard);
+            if (config.refusesLogins()) {
+                routes.post("/admin/sessions").putMetadata(UNCHECKED, "plain HTTP").handler(ctx -> refuse(ctx, failed(plainHttp(), ctx)));
+            }
             routes.post("/admin/sessions").putMetadata(UNCHECKED, "login").handler(BodyHandler.create(false).setBodyLimit(LOGIN_BODY_MAX)).handler(offload(context, (c, who) -> login(c)));
             routes.route("/admin/*").putMetadata(UNCHECKED, "authentication").handler(this::authenticate);
             Admin admin = new Admin(routes, context);
@@ -626,7 +672,8 @@ public final class AdminServer {
             routes.errorHandler(413, ctx -> answer(ctx.response(), Json.of(413, error("the request body is above "
                     + Objects.requireNonNullElse(ctx.<Integer>get(BODY_MAX), LOGIN_BODY_MAX) + " bytes"))));
             router = routes;
-            return vertx.createHttpServer(new HttpServerOptions().setHost(config.host()).setPort(config.port())).requestHandler(routes).listen()
+            HttpServerOptions plain = new HttpServerOptions().setHost(config.host()).setPort(config.port());
+            return vertx.createHttpServer(config.tls().map(c -> c.secure(plain)).orElse(plain)).requestHandler(routes).listen()
                     .map(listening -> server = listening);
         }
 
@@ -649,6 +696,7 @@ public final class AdminServer {
                 Caller who;
                 try {
                     who = access.authenticate(authorization, declared);
+                    if (who.via() == Via.SESSION && config.refusesLogins()) throw plainHttp();
                 } catch (Throwable refused) {   // a refusal, the pool's, or a store that failed: answered, never a hang
                     Reply reply = failed(refused, ctx);
                     context.runOnContext(v -> refuse(ctx, reply));
@@ -902,6 +950,11 @@ public final class AdminServer {
             answer(ctx.response(), refusal(AccessRefused.forbidden("browser",
                     "the admin API does not answer a browser: a request with Origin or Sec-Fetch-Site other than none is refused", Set.of()), false));
         }
+    }
+
+    /** 403 {@code tls-required}: a login or a session on a listener that {@link Config#refusesLogins refuses them}. */
+    private static AccessRefused plainHttp() {
+        return AccessRefused.forbidden("tls-required", PLAIN_HTTP, Set.of());
     }
 
     /** The address the request came from, for the audit. */

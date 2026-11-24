@@ -13,7 +13,7 @@
   <artifactId>rail8-ingress</artifactId>
   <packaging>jar</packaging>
   <name>Rail8 :: ingress</name>
-  <description>The node's shared HTTP port: one Vert.x server, the in endpoints of every component with a prefix mounted on it by path. The node runs it; a component's own tests run it on a free port.</description>
+  <description>The node's shared HTTP port: one Vert.x server, the in endpoints of every component with a prefix mounted on it by path. The node runs it; a component's own tests run it on a free port. Also the loader of a server certificate for a Vert.x HTTPS listener.</description>
 
   <dependencies>
     <!-- api only: the node and the tests of HTTP-based components both use it -->
