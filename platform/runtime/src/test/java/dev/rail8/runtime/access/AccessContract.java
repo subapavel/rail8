@@ -833,6 +833,7 @@ abstract class AccessContract {
         issue("ci-deploy", "five", 5);
         clockA.advance(Duration.ofDays(10));
         clockB.advance(Duration.ofDays(20));
+        Access.Issued week = issue("ci-deploy", "week", 7);
         Actor root = admin(Action.TOKEN_CEILING);
 
         assertEquals(new Access.Ceiling(15, 15), a.changeCeiling(root, 15));
@@ -841,8 +842,9 @@ abstract class AccessContract {
         Caller live = b.authenticate(bearer(hundred.token()), Optional.empty());
         assertEquals(Optional.of(T0.plus(Duration.ofDays(25))), b.expiresAt(live), "its issue plus the ceiling");
         Access.Tokens listed = b.tokens(Optional.empty(), Optional.empty());
-        assertEquals(List.of(hundred.id()), ids(listed));
-        assertEquals(List.of(T0.plus(Duration.ofDays(25))), listed.tokens().stream().map(Access.Token::expiresAt).toList());
+        assertEquals(List.of(hundred.id(), week.id()), ids(listed));
+        assertEquals(List.of(T0.plus(Duration.ofDays(25)), T0.plus(Duration.ofDays(27))),
+                listed.tokens().stream().map(Access.Token::expiresAt).toList(), "a token shorter than the ceiling keeps its end");
         assertEquals(new Access.Ceiling(15, 15), listed.ceiling());
         refused(400, () -> issue("ci-deploy", "sixteen", 16));
         assertEquals(clockA.instant().plus(Duration.ofDays(15)),
@@ -901,6 +903,9 @@ abstract class AccessContract {
         clockA.advance(Duration.ofMinutes(1));
         a.authenticate(bearer(ci.token()), Optional.empty());
         assertEquals(Optional.of(T0.plus(Duration.ofHours(1))), lastUsed(ci));
+        Instant onB = clockB.instant();
+        ((Accounts) b).query(tx -> { tx.used(ci.id(), onB, onB.minus(Duration.ofHours(1))); return null; });
+        assertEquals(Optional.of(T0.plus(Duration.ofHours(1))), lastUsed(ci), "node b read the token before node a wrote its use");
     }
 
     private Optional<Instant> lastUsed(Access.Issued token) {
