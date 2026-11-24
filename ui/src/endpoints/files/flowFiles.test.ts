@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -162,6 +162,40 @@ describe('flowFiles', () => {
     expect((await call(`${base}/files/flows/demo/package.json`)).status).toBe(400);
   });
 
+  describe('a symbolic link of a package into a sibling package', () => {
+    const target = partner.replace('id: partner', 'id: target');
+    const sibling = () => Promise.all(['target.yaml', 'kept.yaml'].map((name) => readFile(join(root, 'other', 'flows', name))));
+
+    beforeEach(async () => {
+      await writeFile(join(root, 'other', 'flows', 'target.yaml'), target);
+      await writeFile(join(root, 'other', 'flows', 'kept.yaml'), partner);
+      await symlink(join('..', '..', 'other', 'flows', 'target.yaml'), join(root, 'demo', 'flows', 'to-file.yaml'));
+      await symlink(join('..', 'other', 'flows'), join(root, 'demo', 'to-folder'));
+    });
+
+    it('is refused when a flow file is opened, saved or created through it, and the sibling stays as it was', async () => {
+      const before = await sibling();
+      const base = await serve();
+      const refused = { status: 403, body: { error: 'the path leaves the working folder' } };
+      const put = (path: string, headers: Record<string, string>) => call(`${base}/files/flows/${path}`, 'PUT', { ...page, ...headers }, JSON.stringify({ text: caller }));
+      for (const path of ['demo/flows/to-file.yaml', 'demo/to-folder/target.yaml']) {
+        expect(await call(`${base}/files/flows/${path}`)).toMatchObject(refused);
+        expect(await put(path, { 'if-match': etagOf(target) })).toMatchObject(refused);
+      }
+      expect(await put('demo/to-folder/fresh.yaml', { 'if-none-match': '*' })).toMatchObject(refused);
+      expect((await put('demo/flows/to-file.yaml', { 'if-none-match': '*' })).status).toBe(412);
+      expect(await sibling()).toEqual(before);
+      expect(await readdir(join(root, 'other', 'flows'))).toEqual(['kept.yaml', 'target.yaml']);
+    });
+
+    it('leaves a path with no link as it was: it opens, saves and creates', async () => {
+      const base = await serve();
+      expect((await call(`${base}/files/flows/other/flows/target.yaml`)).status).toBe(200);
+      expect((await call(`${base}/files/flows/other/flows/target.yaml`, 'PUT', { ...page, 'if-match': etagOf(target) }, JSON.stringify({ text: caller }))).status).toBe(200);
+      expect((await call(`${base}/files/flows/other/flows/fresh.yaml`, 'PUT', { ...page, 'if-none-match': '*' }, JSON.stringify({ text: partner }))).status).toBe(201);
+    });
+  });
+
   it('refuses a request from elsewhere, and every method but GET and a PUT of one file', async () => {
     const base = await serve();
     expect((await call(`${base}/files/flows`, 'GET', { 'sec-fetch-site': 'cross-site', origin: 'http://evil.example' })).status).toBe(403);
@@ -270,16 +304,15 @@ describe('flowFiles', () => {
     });
 
     it('waits while another write holds the lock, then is refused by its recheck when its path led to another file meanwhile', async () => {
-      const alias = join(root, 'demo', 'flows', 'alias.yaml');
-      await symlink('caller.yaml', alias);
+      const file = join(root, 'demo', 'flows', 'caller.yaml');
       const { writes, waiting, release } = heldWrites();
-      const saving = put(await serve({ writes }), edited, etagOf(caller), 'demo/flows/alias.yaml');
+      const saving = put(await serve({ writes }), edited);
       await waiting;
-      await rm(alias);
-      await symlink('partner.yml', alias);
+      await rm(file);
+      await symlink('partner.yml', file);
       release();
       expect(await saving).toMatchObject({ status: 412, body: { error: 'the file changed since it was read; nothing was saved' } });
-      expect(await onDisk()).toBe(caller);
+      expect((await lstat(file)).isSymbolicLink()).toBe(true);
       expect(await readFile(join(root, 'demo', 'flows', 'partner.yml'), 'utf8')).toBe(partner);
     });
 

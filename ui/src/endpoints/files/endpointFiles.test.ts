@@ -229,6 +229,43 @@ describe('endpointFiles', () => {
     expect((await call(`${base}/files/endpoints/demo/flows/missing.yaml`)).status).toBe(404);
   });
 
+  describe('a symbolic link of a package into a sibling package', () => {
+    const target = httpIn.replace('id: http-in', 'id: target');
+    const created = `schemaVersion: 1\nkind: endpoint\nid: fresh\nscheme: direct\ndirection: out\nconfig:\n  address: /fresh\n`;
+    const sibling = () => Promise.all(['target.yaml', 'kept.yaml'].map((name) => readFile(join(root, 'other', 'endpoints', name))));
+    const create = (base: string, path: string) =>
+      call(`${base}/files/endpoints/${path}`, 'PUT', { ...page, 'content-type': 'application/json', 'if-none-match': '*' }, JSON.stringify({ text: created }));
+
+    beforeEach(async () => {
+      await mkdir(join(root, 'other', 'endpoints'), { recursive: true });
+      await writeFile(join(root, 'other', 'endpoints', 'target.yaml'), target);
+      await writeFile(join(root, 'other', 'endpoints', 'kept.yaml'), httpIn);
+      await symlink(join('..', '..', 'other', 'endpoints', 'target.yaml'), join(root, 'demo', 'endpoints', 'to-file.yaml'));
+      await symlink(join('..', 'other', 'endpoints'), join(root, 'demo', 'to-folder'));
+    });
+
+    it('is refused when an endpoint file is opened, saved or created through it, and the sibling stays as it was', async () => {
+      const before = await sibling();
+      const base = await serve();
+      const refused = { status: 403, body: { error: 'the path leaves the working folder' } };
+      for (const path of ['demo/endpoints/to-file.yaml', 'demo/to-folder/target.yaml']) {
+        expect(await call(`${base}/files/endpoints/${path}`)).toMatchObject(refused);
+        expect(await save(`${base}/files/endpoints/${path}`, { host: '0.0.0.0', port: 9090 }, etagOf(target))).toMatchObject(refused);
+      }
+      expect(await create(base, 'demo/to-folder/fresh.yaml')).toMatchObject(refused);
+      expect((await create(base, 'demo/endpoints/to-file.yaml')).status).toBe(412);
+      expect(await sibling()).toEqual(before);
+      expect(await readdir(join(root, 'other', 'endpoints'))).toEqual(['kept.yaml', 'target.yaml']);
+    });
+
+    it('leaves a path with no link as it was: it opens, saves and creates', async () => {
+      const base = await serve();
+      expect((await call(`${base}/files/endpoints/other/endpoints/target.yaml`)).status).toBe(200);
+      expect((await save(`${base}/files/endpoints/other/endpoints/target.yaml`, { host: '0.0.0.0', port: 9090 }, etagOf(target))).status).toBe(200);
+      expect((await create(base, 'other/endpoints/fresh.yaml')).status).toBe(201);
+    });
+  });
+
   describe('a create', () => {
     const call2 = `schemaVersion: 1\nkind: endpoint\nid: call-orders\nscheme: direct\ndirection: out\nconfig:\n  address: /orders\n`;
     const create = (base: string, path: string, text: unknown = call2, headers: Record<string, string> = { ...page, 'content-type': 'application/json', 'if-none-match': '*' }) =>
