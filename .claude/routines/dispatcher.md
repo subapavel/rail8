@@ -49,8 +49,8 @@ issue and fewer than two workers run, start a further worker in the stream with 
 issues, on an issue that touches a different part of the code than the worker already running there.
 
 1. Pick one ready issue: open, has the stream's label, and has none of `in-progress`,
-   `owner-question`, `later`, `blocked`. Order: `priority` first, then `krok-1`, then the lowest
-   number. Skip an issue another stream picked in this run.
+   `owner-question`, `later`, `blocked`. Order: `priority` first, then `design-agreed`, then `krok-1`,
+   then the lowest number. Skip an issue another stream picked in this run.
 2. Class: read the issue's `class:A`, `class:B` or `class:C` label. With none, pick the class by
    the table in `AGENTS.md`, add the label, and when torn between two take the higher one.
 3. Add `in-progress` to the issue.
@@ -59,7 +59,9 @@ issues, on an issue that touches a different part of the code than the worker al
    - `title`: `dispatcher-worker: #N <stream> <issue title>`
    - `tags`: `["dispatcher-worker", "stream:<stream>"]`
    - `model` and `effort` from the class: `class:A` `claude-sonnet-5-5`, medium; `class:B`
-     `claude-opus-5-5`, high; `class:C` `claude-opus-5-5`, xhigh.
+     `claude-opus-5-5`, high; `class:C` `claude-opus-5-5`, xhigh while the issue has
+     no label `design-agreed` (the session designs and stops), and high once it has it (the
+     session builds from the agreed design).
    - `prompt` (replace N):
 
      > Solve issue #N in subapavel/rail8 following AGENTS.md on main. The owner is away: do not
