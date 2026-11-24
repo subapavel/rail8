@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -31,17 +32,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Every {@code /admin} route is mounted with its actions, the {@link Action} enum is the table of actions of
  * {@code docs/USERS-AND-ROLES.md}, and every route lets each kind of caller through or refuses it as that table says: a session
- * of each role, a session of a first password, the emergency key, and with the bridge's marker open and closed the shared token
- * and the open loopback API. A refusal is 403 with the code the decision point names and the roles that grant the action.
+ * of each role, a session of a first password, a token of each role and of a technical account, the emergency key, and with the
+ * bridge's marker open and closed the shared token and the open loopback API. A refusal is 403 with the code the decision point names and the roles that grant the action.
  */
 class AdminServerAccessTest extends AdminAccessFixture {
 
-    /** The routes of the table that later steps mount: the tokens, the audit and a message's audit. */
-    static final Set<String> LATER = Set.of(
-            "GET /admin/messages/{id}/audit",
-            "GET /admin/tokens", "POST /admin/users/{name}/tokens", "POST /admin/tokens/{id}/revoke", "POST /admin/tokens/ceiling",
-            "GET /admin/audit",
-            "GET /admin/me/tokens", "POST /admin/me/tokens", "POST /admin/me/tokens/{id}/revoke");
+    /** The routes of the table that later steps mount: the audit and a message's audit. */
+    static final Set<String> LATER = Set.of("GET /admin/messages/{id}/audit", "GET /admin/audit");
 
     /** What a first password may do, by the decision point's rule: read itself, change the password and log out. */
     static final Set<String> FIRST_PASSWORD = Set.of("self.read", "self.password", "self.logout");
@@ -113,8 +110,15 @@ class AdminServerAccessTest extends AdminAccessFixture {
         }
     }
 
-    /** A kind of caller: its credential and the port it calls, and which rows of the table let it through. */
-    record Kind(String name, int port, Optional<String> bearer, Predicate<ActionsTable.Row> allowed, String refusal) {}
+    /** A kind of caller: its credential and the port it calls, which rows of the table let it through, and the code of a refusal. */
+    record Kind(String name, int port, Optional<String> bearer, Predicate<ActionsTable.Row> allowed, Function<ActionsTable.Row, String> refusal) {
+        Kind(String name, int port, Optional<String> bearer, Predicate<ActionsTable.Row> allowed, String refusal) {
+            this(name, port, bearer, allowed, r -> refusal);
+        }
+    }
+
+    /** A token's refusal: {@code session-required} for an action that needs a person logged in, {@code not-allowed} otherwise. */
+    static final Function<ActionsTable.Row, String> TOKEN_REFUSAL = r -> r.needsSession() ? "session-required" : "not-allowed";
 
     @Test
     void everyCallerIsLetThroughOrRefusedAsTheTableSays() {
@@ -125,6 +129,12 @@ class AdminServerAccessTest extends AdminAccessFixture {
         }
         String plain = changed("plain", person(root, "plain"));
         String first = login("fresh", person(root, "fresh", Arrays.stream(Role.values()).map(Role::id).toArray(String[]::new)));
+        Map<String, String> tokens = new LinkedHashMap<>();
+        tokens.put(Role.ADMINISTRATOR.id(), token(root, "cli"));
+        sessions.forEach((role, session) -> tokens.put(role.id(), token(session, "cli")));
+        String plainToken = token(plain, "cli");
+        Set<Role> technicalRoles = EnumSet.complementOf(EnumSet.of(Role.ADMINISTRATOR));
+        String ci = technical(root, "ci-deploy", technicalRoles.stream().map(Role::id).toArray(String[]::new));
         Set<String> before = table.beforeUsers();
 
         List<Kind> kinds = new ArrayList<>();
@@ -132,6 +142,11 @@ class AdminServerAccessTest extends AdminAccessFixture {
         sessions.forEach((role, session) -> kinds.add(new Kind(role.id(), key, Optional.of(session), sessionOf(Set.of(role)), "not-allowed")));
         kinds.add(new Kind("a person without a role", key, Optional.of(plain), sessionOf(Set.of()), "not-allowed"));
         kinds.add(new Kind("a first password of every role", key, Optional.of(first), r -> FIRST_PASSWORD.contains(r.id()), "password-change-required"));
+        tokens.forEach((role, token) -> kinds.add(new Kind("a token of the role " + role, key, Optional.of(token),
+                tokenOf(Set.of(Role.byId(role).orElseThrow()), true), TOKEN_REFUSAL)));
+        kinds.add(new Kind("a token of a person without a role", key, Optional.of(plainToken), tokenOf(Set.of(), true), TOKEN_REFUSAL));
+        kinds.add(new Kind("a token of a technical account of every role it may hold", key, Optional.of(ci), tokenOf(technicalRoles, false),
+                TOKEN_REFUSAL));
         kinds.add(new Kind("the emergency key", key, Optional.of(KEY), ActionsTable.Row::emergencyKey, "not-allowed"));
         kinds.add(new Kind("the shared token", shared, Optional.of(SHARED), r -> before.contains(r.id()) || r.emergencyKey(), "not-allowed"));
         kinds.add(new Kind("the open loopback API", open, Optional.empty(), r -> before.contains(r.id()) || r.who() == Who.EVERY, "not-allowed"));
@@ -149,7 +164,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
                     assertFalse(refused(answer), "let through by the table: " + said);
                 } else {
                     assertTrue(refused(answer), "refused by the table: " + said);
-                    assertEquals(kind.refusal(), answer.code(), said);
+                    assertEquals(kind.refusal().apply(rows.getFirst()), answer.code(), said);
                     assertEquals(ids(rows.getFirst().roles()), answer.json().getJsonArray("needs"), "the roles that grant it: " + said);
                 }
             }
@@ -162,7 +177,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
                 Answer answer = call(bridge, route);
                 String said = bridge.name() + " with the marker closed, " + route + ": " + answer.status() + " " + answer.body();
                 assertEquals(401, answer.status(), said);
-                assertEquals(bridge.refusal(), answer.code(), said);
+                assertEquals(bridge.refusal().apply(table.of(route).getFirst()), answer.code(), said);
             }
         }
         Answer key = call(new Kind("the emergency key", this.key, Optional.of(KEY), r -> true, ""), "GET /admin/users");
@@ -172,6 +187,16 @@ class AdminServerAccessTest extends AdminAccessFixture {
     /** A session of a person who holds {@code roles}, past the first password: by the table, the roles and every self action. */
     static Predicate<ActionsTable.Row> sessionOf(Set<Role> roles) {
         return r -> r.who() != Who.ROLES || r.roles().stream().anyMatch(roles::contains);
+    }
+
+    /** A token of a user who holds {@code roles}, a person's when {@code person}: by the table, nothing that needs a session. */
+    static Predicate<ActionsTable.Row> tokenOf(Set<Role> roles, boolean person) {
+        return r -> !r.needsSession() && switch (r.who()) {
+            case EVERY -> true;
+            case PERSON -> person;
+            case SESSION -> false;
+            case ROLES -> r.roles().stream().anyMatch(roles::contains);
+        };
     }
 
     /** A refusal at the door: 403 with one of the decision point's codes. */

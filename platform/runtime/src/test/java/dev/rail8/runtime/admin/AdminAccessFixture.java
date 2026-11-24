@@ -245,6 +245,24 @@ abstract class AdminAccessFixture {
         return login.json().getString("session");
     }
 
+    /** A token {@code name} of the person of {@code session}, whose password is {@link #PASSWORD}: the token. */
+    String token(String session, String name) {
+        Answer issued = send(key, "POST", "/admin/me/tokens", Optional.of(session),
+                new JsonObject().put("name", name).put("password", PASSWORD).encode());
+        assertEquals(201, issued.status(), issued.body());
+        return issued.json().getString("token");
+    }
+
+    /** A technical account {@code name} of {@code roles}, made by the administrator of {@code admin}, and its token {@code ci}: the token. */
+    String technical(String admin, String name, String... roles) {
+        Answer made = send(key, "POST", "/admin/users", Optional.of(admin), new JsonObject().put("name", name).put("kind", "technical")
+                .put("roles", new JsonArray(List.of((Object[]) roles))).encode());
+        assertEquals(201, made.status(), made.body());
+        Answer issued = send(key, "POST", "/admin/users/" + name + "/tokens", Optional.of(admin), new JsonObject().put("name", "ci").encode());
+        assertEquals(201, issued.status(), issued.body());
+        return issued.json().getString("token");
+    }
+
     /** A login with {@code first}, then the password changed to {@link #PASSWORD}: the session, which goes on. */
     String changed(String name, String first) {
         String session = login(name, first);

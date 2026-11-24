@@ -225,12 +225,23 @@ import java.util.stream.Collectors;
  * {@code GET /admin/me} answers {@code {name, kind, roles, actions, via, firstPassword, expiresAt, emergencyKey}};
  * {@code POST /admin/me/password {current, next}} and {@code POST /admin/me/logout} 204. {@code GET /admin/users} lists every
  * user ({@code {items}}) and {@code GET /admin/users/{name}} shows one: {@code {name, kind, roles:[{role, grantedAt, grantedBy,
- * grantedVia}], blockedAt, firstPassword, createdAt, createdBy, sessions:[{id, createdAt, lastSeenAt, expiresAt}]}}.
+ * grantedVia}], blockedAt, firstPassword, createdAt, createdBy, sessions:[{id, createdAt, lastSeenAt, expiresAt}], tokens}},
+ * {@code tokens} its live tokens as the lists of tokens show them.
  * {@code POST /admin/users {name, kind, roles}} answers 201 {@code {name, firstPassword}} for a person, {@code {name}} for a
  * technical account; {@code POST /admin/users/{name}/roles {add, remove}} 200 {@code {name, roles, added, removed}}, each role
  * checked by its own action ({@code administrators.change} for the administrator role, {@code roles.change} for any other);
  * {@code /block}, {@code /unblock} and {@code /sessions/end} 200 {@code {name}}, {@code /password-reset} 200
  * {@code {firstPassword}}. Their bodies are at most {@link #USERS_BODY_MAX} bytes. An invariant a change would break is 409.
+ *
+ * <p>The tokens ({@link Access}), each shown by its id and never its secret: {@code GET /admin/me/tokens} lists the caller's
+ * own live tokens and {@code GET /admin/tokens?expiringWithin=P14D} every user's (the parameter optional, at most
+ * {@code P365D}), soonest expiry first, as {@code {tokens:[{id, user, name, createdAt, createdBy, expiresAt, lastUsedAt}],
+ * maxDays, defaultDays}}. {@code POST /admin/me/tokens {name, days?, password}} issues one of the caller's own in a session,
+ * the password asked again (403 {@code wrong-password}, 429 as the login), and {@code POST /admin/users/{name}/tokens {name,
+ * days?}} one of a technical account (409 for a person): 201 {@code {id, name, expiresAt, token}}, the token shown once.
+ * {@code POST /admin/me/tokens/{id}/revoke} revokes one of the caller's own and {@code POST /admin/tokens/{id}/revoke} anyone's:
+ * 204, and 404 for an id it does not find. {@code POST /admin/tokens/ceiling {maxDays}} sets the installation's ceiling of a
+ * token's life, 1 to 365 days: 200 {@code {maxDays, defaultDays}}.
  * A view of a body ({@code message.body}) is written to the audit before any byte of it is sent, 503 when it cannot be.
  *
  * @since 0.1
@@ -644,6 +655,19 @@ public final class AdminServer {
             admin.post("/admin/users/:name/sessions/end", Action.SESSION_END, (c, who) -> {
                 access.endSessions(who.acting(Action.SESSION_END, PackageRef.ANY, remote(c)), c.pathParam("name"));
                 return named(c);
+            });
+            admin.get("/admin/me/tokens", Action.SELF_TOKENS, (c, who) -> tokens(access.tokens(Optional.of(who.name()), Optional.empty())));
+            admin.post("/admin/me/tokens", Action.SELF_TOKEN_ISSUE, USERS_BODY_MAX, AdminServer.this::issueOwnToken);
+            admin.post("/admin/me/tokens/:id/revoke", Action.SELF_TOKENS, (c, who) -> {
+                access.revokeOwnToken(who.acting(Action.SELF_TOKENS, PackageRef.ANY, remote(c)), c.pathParam("id"));
+                return NO_CONTENT;
+            });
+            admin.post("/admin/users/:name/tokens", Action.TOKEN_ISSUE, USERS_BODY_MAX, AdminServer.this::issueToken);
+            admin.get("/admin/tokens", Action.TOKEN_READ, (c, who) -> tokens(access.tokens(Optional.empty(), expiringWithin(c))));
+            admin.post("/admin/tokens/ceiling", Action.TOKEN_CEILING, USERS_BODY_MAX, AdminServer.this::ceiling);
+            admin.post("/admin/tokens/:id/revoke", Action.TOKEN_REVOKE, (c, who) -> {
+                access.revokeToken(who.acting(Action.TOKEN_REVOKE, PackageRef.ANY, remote(c)), c.pathParam("id"));
+                return NO_CONTENT;
             });
             admin.get("/admin/modules", Action.DEPLOYMENT_READ, (c, who) -> listed(modules));
             admin.get("/admin/messages", Action.MESSAGE_READ, (c, who) -> search(c));
@@ -1367,7 +1391,7 @@ public final class AdminServer {
     /**
      * {@code GET /admin/me}: the caller's name (for a caller without an account the name the audit records), its kind (null
      * without an account), its roles, every action it may do, how it proved who it is, whether it holds a first password, when
-     * its session ends at the latest (null for any other caller), and whether the node holds an emergency key, which only an
+     * its session or token ends at the latest (null for any other caller), and whether the node holds an emergency key, which only an
      * administrator is told.
      */
     private JsonObject me(Caller who, Optional<Instant> expiresAt) {
@@ -1435,6 +1459,51 @@ public final class AdminServer {
         Access.RolesChanged changed = access.changeRoles(who.acting(acting, PackageRef.ANY, remote(ctx)), ctx.pathParam("name"), add, remove);
         return Json.of(200, new JsonObject().put("name", changed.name()).put("roles", ids(changed.roles())).put("added", ids(changed.added()))
                 .put("removed", ids(changed.removed())));
+    }
+
+    /**
+     * {@code POST /admin/me/tokens {name, days?, password}}: a token of the caller's own, the password asked again; 201
+     * {@code {id, name, expiresAt, token}}, the token shown once.
+     */
+    private Reply issueOwnToken(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"name\": \"<name>\", \"days\": <days>, \"password\": \"<password>\"}, days optional";
+        JsonObject o = object(ctx, shape, Set.of("name", "password"), Set.of("days"));
+        return issued(access.issueOwnToken(who.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, remote(ctx)), text(o, "password", shape),
+                text(o, "name", shape), days(o, shape)));
+    }
+
+    /** {@code POST /admin/users/{name}/tokens {name, days?}}: a token of the technical account, 201 as {@link #issueOwnToken}. */
+    private Reply issueToken(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"name\": \"<name>\", \"days\": <days>}, days optional";
+        JsonObject o = object(ctx, shape, Set.of("name"), Set.of("days"));
+        return issued(access.issueToken(who.acting(Action.TOKEN_ISSUE, PackageRef.ANY, remote(ctx)), ctx.pathParam("name"),
+                text(o, "name", shape), days(o, shape)));
+    }
+
+    /** {@code POST /admin/tokens/ceiling {maxDays}}: 200 {@code {maxDays, defaultDays}}. */
+    private Reply ceiling(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"maxDays\": <days>}";
+        JsonObject o = object(ctx, shape, Set.of("maxDays"), Set.of());
+        if (!(o.getValue("maxDays") instanceof Integer maxDays)) throw new Refused(shape);
+        return Json.of(200, ceiling(access.changeCeiling(who.acting(Action.TOKEN_CEILING, PackageRef.ANY, remote(ctx)), maxDays)));
+    }
+
+    /** The whole number in the member {@code days} of {@code o}, empty when it is absent; else a 400 saying {@code shape}. */
+    private static OptionalInt days(JsonObject o, String shape) {
+        if (!o.containsKey("days")) return OptionalInt.empty();
+        if (o.getValue("days") instanceof Integer days) return OptionalInt.of(days);
+        throw new Refused(shape);
+    }
+
+    /** The {@code expiringWithin} parameter, an ISO-8601 duration such as {@code P14D}; empty without one, else a 400. */
+    private static Optional<Duration> expiringWithin(RoutingContext ctx) {
+        String within = ctx.request().getParam("expiringWithin");
+        if (within == null) return Optional.empty();
+        try {
+            return Optional.of(Duration.parse(within));
+        } catch (DateTimeParseException notADuration) {
+            throw new Refused("expiringWithin is an ISO-8601 duration such as P14D, not '" + within + "'");
+        }
     }
 
     /** The action that grants or takes {@code role}: {@code administrators.change} for the administrator role, {@code roles.change} for any other. */
@@ -1789,6 +1858,30 @@ public final class AdminServer {
         return ids;
     }
 
+    /** 201 {@code {id, name, expiresAt, token}}: the one answer that carries the token. */
+    private static Reply issued(Access.Issued issued) {
+        return Json.of(201, new JsonObject().put("id", issued.id()).put("name", issued.name()).put("expiresAt", issued.expiresAt().toString())
+                .put("token", issued.token()));
+    }
+
+    /** 200 {@code {tokens, maxDays, defaultDays}}. */
+    private static Reply tokens(Access.Tokens listed) {
+        JsonArray tokens = new JsonArray();
+        listed.tokens().forEach(t -> tokens.add(token(t)));
+        return Json.of(200, new JsonObject().put("tokens", tokens).mergeIn(ceiling(listed.ceiling())));
+    }
+
+    private static JsonObject ceiling(Access.Ceiling ceiling) {
+        return new JsonObject().put("maxDays", ceiling.maxDays()).put("defaultDays", ceiling.defaultDays());
+    }
+
+    /** A live token by its id: never the secret. */
+    private static JsonObject token(Access.Token t) {
+        return new JsonObject().put("id", t.id()).put("user", t.user()).put("name", t.name()).put("createdAt", t.createdAt().toString())
+                .put("createdBy", t.createdBy()).put("expiresAt", t.expiresAt().toString())
+                .put("lastUsedAt", t.lastUsedAt().map(Instant::toString).orElse(null));
+    }
+
     /** A user as an administrator sees them: never a secret. */
     private static JsonObject user(Access.User u) {
         JsonArray roles = new JsonArray();
@@ -1799,7 +1892,8 @@ public final class AdminServer {
                 .put("lastSeenAt", live.lastSeenAt().toString()).put("expiresAt", live.expiresAt().toString())));
         return new JsonObject().put("name", u.name()).put("kind", u.kind().id()).put("roles", roles)
                 .put("blockedAt", u.blockedAt().map(Instant::toString).orElse(null)).put("firstPassword", u.firstPassword())
-                .put("createdAt", u.createdAt().toString()).put("createdBy", u.createdBy()).put("sessions", sessions);
+                .put("createdAt", u.createdAt().toString()).put("createdBy", u.createdBy()).put("sessions", sessions)
+                .put("tokens", new JsonArray(u.tokens().stream().map(AdminServer::token).toList()));
     }
 
     // --- answers (on the verticle's context)

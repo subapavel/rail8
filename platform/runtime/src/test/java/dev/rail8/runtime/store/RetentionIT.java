@@ -31,6 +31,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -1168,14 +1169,15 @@ class RetentionIT {
         assertEquals(batch, held, "the batch holds exactly its " + batch + " rows: never " + batch + " per table");
     }
 
-    // --- the audit, the expired sessions and the login limit go by age
+    // --- the audit, the expired sessions and tokens, and the login limit go by age
 
     /**
-     * Audit rows older than the clock minus the audit's max age go, and sessions that expired longer ago than that; a row of the
-     * login limit goes a day after its last failure. A row exactly at its cutoff stays; batches of 2 bound every delete.
+     * Audit rows older than the clock minus the audit's max age go, and sessions that expired longer ago than that, and tokens
+     * that expired or were revoked longer ago than that; a row of the login limit goes a day after its last failure. A row
+     * exactly at its cutoff stays; batches of 2 bound every delete.
      */
     @Test
-    void theAuditExpiredSessionsAndOldLoginLimitsGoByAge() {
+    void theAuditExpiredSessionsAndTokensAndOldLoginLimitsGoByAge() {
         Duration auditAge = Duration.ofDays(30);
         Instant auditCutoff = clock.instant().minus(auditAge);
         Instant limitCutoff = clock.instant().minus(Duration.ofHours(24));
@@ -1186,6 +1188,12 @@ class RetentionIT {
         for (int i = 1; i <= 3; i++) session("000000000000000" + i, anna, auditCutoff.minus(MICRO.multipliedBy(i)));
         session("00000000000000a0", anna, auditCutoff);
         session("00000000000000b0", anna, auditCutoff.plus(MICRO));
+        Instant later = clock.instant().plus(Duration.ofDays(30));
+        token("00000000000000c1", anna, auditCutoff.minus(MICRO), Optional.empty());
+        token("00000000000000c2", anna, auditCutoff, Optional.empty());
+        token("00000000000000c3", anna, later, Optional.of(auditCutoff.minus(MICRO)));
+        token("00000000000000c4", anna, later, Optional.of(auditCutoff));
+        token("00000000000000c5", anna, later, Optional.empty());
         limit("anna", "", limitCutoff.minus(MICRO));
         limit("bob", "0123456789abcdef", limitCutoff.minus(DAY));
         limit("carol", "", limitCutoff);
@@ -1201,9 +1209,11 @@ class RetentionIT {
                 "the sessions that expired at the audit's cutoff or later");
         assertEquals(List.of("carol", "*"), strings("select name from login_limits order by last_failure_at"),
                 "the rows of the login limit with a failure in the last 24 hours");
-        assertEquals(List.of(3L, 3L, 2L), List.of(run.audit(), run.sessions(), run.limits()), "audit, sessions, limits");
-        assertEquals(8, run.batches(), "one batch each for messages and bodies; the audit and the sessions in 2 batches (2 rows, then 1); "
-                + "the login limit in 2 (2 rows, then 0)");
+        assertEquals(List.of("00000000000000c2", "00000000000000c4", "00000000000000c5"), strings("select id from tokens order by id"),
+                "the tokens that expired, or were revoked, at the audit's cutoff or later, and the live one");
+        assertEquals(List.of(3L, 3L, 2L, 2L), List.of(run.audit(), run.sessions(), run.tokens(), run.limits()), "audit, sessions, tokens, limits");
+        assertEquals(10, run.batches(), "one batch each for messages and bodies; the audit and the sessions in 2 batches (2 rows, then 1); "
+                + "the tokens and the login limit in 2 each (2 rows, then 0)");
     }
 
     /** An audit row of {@code subject} at {@code at}. */
@@ -1224,6 +1234,14 @@ class RetentionIT {
         db.preparedQuery("insert into sessions (id, user_id, fingerprint, first_password, created_at, last_seen_at, expires_at) "
                         + "values ($1, $2, $3, false, $4, $4, $5)")
                 .execute(Tuple.of(id, user, Buffer.buffer(new byte[32]), created, at(expires))).await();
+    }
+
+    /** A token {@code id}, named by its id, of {@code user} that expires at {@code expires}, revoked at {@code revoked} when given. */
+    void token(String id, long user, Instant expires, Optional<Instant> revoked) {
+        db.preparedQuery("insert into tokens (id, user_id, name, fingerprint, created_at, created_by, expires_at, revoked_at, revoked_by)"
+                        + " values ($1, $2, $1, $3, $4, 'ops', $5, $6, $7)")
+                .execute(Tuple.of(id, user, Buffer.buffer(new byte[32]), at(expires.minus(DAY)), at(expires),
+                        revoked.map(RetentionIT::at).orElse(null), revoked.map(r -> "ops").orElse(null))).await();
     }
 
     /** A row of the login limit for {@code name} on {@code device}, its last failure at {@code last}. */

@@ -26,8 +26,8 @@ import java.util.function.Function;
 import java.util.random.RandomGenerator;
 
 /**
- * {@link Access} in Postgres: the tables {@code users}, {@code role_assignments}, {@code sessions}, {@code login_limits} and
- * {@code admin_bridge}, and the {@code audit}. Every request is authenticated from Postgres and nothing is cached, so a block, a
+ * {@link Access} in Postgres: the tables {@code users}, {@code role_assignments}, {@code sessions}, {@code tokens},
+ * {@code token_ceiling}, {@code login_limits} and {@code admin_bridge}, and the {@code audit}. Every request is authenticated from Postgres and nothing is cached, so a block, a
  * logout or a role taken away holds on every node of the pool for every request admitted after it commits. The changes that
  * can lower the number of administrators take the pool's transaction advisory lock {@code (296, 0)} first.
  */
@@ -37,6 +37,9 @@ public final class PgAccess extends Accounts {
             + " u.created_at, u.created_by, u.blocked_at";
     private static final String SESSION_COLUMNS = "s.id, s.user_id, encode(s.fingerprint, 'hex') as fingerprint, s.first_password,"
             + " s.created_at, s.last_seen_at, s.expires_at";
+    private static final String TOKEN_COLUMNS = "t.id as t_id, t.user_id as t_user_id, t.name as t_name,"
+            + " encode(t.fingerprint, 'hex') as t_fingerprint, t.created_at as t_created_at, t.created_by as t_created_by,"
+            + " t.expires_at as t_expires_at, t.last_used_at as t_last_used_at, t.revoked_at as t_revoked_at";
     private static final String CLAIM = "insert into login_limits as l (name, device, failures, last_failure_at) values ($1, $2, 1, $3)"
             + " on conflict (name, device) do update"
             + " set failures = least(l.failures + 1, 1000000), last_failure_at = greatest(l.last_failure_at, $3)"
@@ -115,6 +118,18 @@ public final class PgAccess extends Accounts {
         private static SessionRow session(Row r) {
             return new SessionRow(r.getString("id"), r.getLong("user_id"), r.getString("fingerprint"), r.getBoolean("first_password"),
                     instant(r, "created_at"), instant(r, "last_seen_at"), instant(r, "expires_at"));
+        }
+
+        private static TokenRow token(Row r) {
+            return new TokenRow(r.getString("t_id"), r.getLong("t_user_id"), r.getString("t_name"), r.getString("t_fingerprint"),
+                    instant(r, "t_created_at"), r.getString("t_created_by"), instant(r, "t_expires_at"), maybe(r, "t_last_used_at"),
+                    maybe(r, "t_revoked_at"));
+        }
+
+        private static Set<Role> roles(Row r) {
+            Set<Role> roles = EnumSet.noneOf(Role.class);
+            for (String role : r.getArrayOfStrings("roles")) roles.add(Role.byId(role).orElseThrow());
+            return roles;
         }
 
         private static <T> Optional<T> first(RowSet<Row> rows, Function<Row, T> map) {
@@ -211,8 +226,7 @@ public final class PgAccess extends Accounts {
                     + " u.password_set_at, u.generation, u.created_at as user_created_at, u.created_by, u.blocked_at,"
                     + " array(select r.role from role_assignments r where r.user_id = u.id and r.scope = 'installation') as roles"
                     + " from sessions s join users u on u.id = s.user_id where s.id = $1", Tuple.of(id)), r -> {
-                Set<Role> roles = EnumSet.noneOf(Role.class);
-                for (String role : r.getArrayOfStrings("roles")) roles.add(Role.byId(role).orElseThrow());
+                Set<Role> roles = roles(r);
                 UserRow user = new UserRow(r.getLong("uid"), r.getString("name"), Kind.ofAccount(r.getString("kind")).orElseThrow(),
                         Optional.ofNullable(r.getString("password")), r.getBoolean("user_first_password"), maybe(r, "password_set_at"),
                         r.getLong("generation"), instant(r, "user_created_at"), r.getString("created_by"), maybe(r, "blocked_at"));
@@ -247,6 +261,63 @@ public final class PgAccess extends Accounts {
 
         @Override public void passwordChanged(String id) {
             run("update sessions set first_password = false where id = $1", Tuple.of(id));
+        }
+
+        @Override public Optional<TokenOfUser> token(String id) {
+            return first(run("select " + USER_COLUMNS + ", " + TOKEN_COLUMNS + ","
+                    + " array(select r.role from role_assignments r where r.user_id = u.id and r.scope = 'installation') as roles"
+                    + " from tokens t join users u on u.id = t.user_id where t.id = $1", Tuple.of(id)),
+                    r -> new TokenOfUser(token(r), user(r), roles(r)));
+        }
+
+        @Override public List<TokenRow> unrevokedTokens(long user) {
+            List<TokenRow> out = new ArrayList<>();
+            run("select " + TOKEN_COLUMNS + " from tokens t where t.user_id = $1 and t.revoked_at is null", Tuple.of(user))
+                    .forEach(r -> out.add(token(r)));
+            return out;
+        }
+
+        @Override public List<Access.Token> liveTokens(OptionalLong user, Instant now, Optional<Instant> until) {
+            List<Access.Token> out = new ArrayList<>();
+            run("select t.id, u.name as user_name, t.name, t.created_at, t.created_by, t.expires_at, t.last_used_at"
+                    + " from tokens t join users u on u.id = t.user_id"
+                    + " where t.revoked_at is null and t.expires_at > $1 and ($2::bigint is null or t.user_id = $2)"
+                    + " and ($3::timestamptz is null or t.expires_at <= $3) order by t.expires_at, t.id",
+                    Tuple.of(at(now), user.isPresent() ? user.getAsLong() : null, until.map(Statements::at).orElse(null)))
+                    .forEach(r -> out.add(new Access.Token(r.getString("id"), r.getString("user_name"), r.getString("name"),
+                            instant(r, "created_at"), r.getString("created_by"), instant(r, "expires_at"), maybe(r, "last_used_at"))));
+            return out;
+        }
+
+        @Override public void insertToken(TokenRow row) {
+            run("insert into tokens (id, user_id, name, fingerprint, created_at, created_by, expires_at)"
+                    + " values ($1, $2, $3, decode($4, 'hex'), $5, $6, $7)", Tuple.of(row.id(), row.user(), row.name(), row.fingerprint(),
+                    at(row.createdAt()), row.createdBy(), at(row.expiresAt())));
+        }
+
+        @Override public boolean revokeToken(String id, Instant at, String by) {
+            return run("update tokens set revoked_at = $2, revoked_by = $3 where id = $1 and revoked_at is null", Tuple.of(id, at(at), by))
+                    .rowCount() > 0;
+        }
+
+        @Override public void used(String id, Instant at, Instant before) {
+            run("update tokens set last_used_at = $2 where id = $1 and (last_used_at is null or last_used_at <= $3)",
+                    Tuple.of(id, at(at), at(before)));
+        }
+
+        @Override public int ceiling(Lock lock) {
+            // a store emptied of every row but the migrations' history has the migration's ceiling
+            return first(run("select max_days from token_ceiling" + lock(lock), Tuple.tuple()), r -> r.getInteger(0)).orElse(365);
+        }
+
+        @Override public void setCeiling(int maxDays) {
+            run("insert into token_ceiling (only_row, max_days) values (true, $1) on conflict (only_row) do update set max_days = $1",
+                    Tuple.of(maxDays));
+        }
+
+        @Override public int shortenTokens(int maxDays, Instant now) {
+            return run("update tokens set expires_at = created_at + make_interval(hours => $1) where revoked_at is null and expires_at > $2"
+                    + " and expires_at > created_at + make_interval(hours => $1)", Tuple.of(maxDays * 24, at(now))).rowCount();
         }
 
         @Override public OptionalInt claim(String name, String device, Instant at) {

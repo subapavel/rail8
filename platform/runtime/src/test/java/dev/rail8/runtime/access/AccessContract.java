@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -134,6 +135,25 @@ abstract class AccessContract {
     /** The number of names the login limit counts. */
     long limited() {
         return ((Accounts) a).query(Tx::limitedNames);
+    }
+
+    /** {@link #keeper()}'s actor of {@code action}. */
+    Actor admin(Action action) {
+        return keeper().acting(action, PackageRef.ANY, REMOTE);
+    }
+
+    /** A technical account {@code name} with {@code roles}, made by {@link #keeper()} on A. */
+    void technical(String name, Role... roles) {
+        a.createUser(admin(Action.USER_CREATE), name, Kind.TECHNICAL, Set.of(roles));
+    }
+
+    /** A token {@code name} of the technical account {@code user} that lives {@code days}, issued by {@link #keeper()} on A. */
+    Access.Issued issue(String user, String name, int days) {
+        return a.issueToken(admin(Action.TOKEN_ISSUE), user, name, OptionalInt.of(days));
+    }
+
+    static List<String> ids(Access.Tokens tokens) {
+        return tokens.tokens().stream().map(Access.Token::id).toList();
     }
 
     /** The failures the login limit counts for {@code name}, or empty when it has no row. */
@@ -610,6 +630,282 @@ abstract class AccessContract {
         } catch (InterruptedException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    // --- tokens
+
+    @Test
+    void aPersonIssuesTheirOwnTokenWithThePasswordAskedAgain() {
+        String session = session("anna", Role.OPERATOR);
+        Actor self = a.authenticate(bearer(session), Optional.empty()).acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        Access.Issued issued = a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty());
+        assertTrue(issued.token().matches("rail8t_[0-9a-f]{16}_[A-Za-z0-9_-]{43}"), issued.token());
+        assertEquals(List.of(issued.token().substring(7, 23), "laptop", T0.plus(Duration.ofDays(90))),
+                List.of(issued.id(), issued.name(), issued.expiresAt()), "the id from the token; 90 days by default");
+
+        Caller cli = b.authenticate(bearer(issued.token()), Optional.empty());
+        assertEquals(List.of(Via.TOKEN, "anna", Kind.PERSON, Set.of(Role.OPERATOR), Optional.of(issued.id()), false),
+                List.of(cli.via(), cli.name(), cli.kind(), cli.roles(), cli.credential(), cli.firstPassword()), "on any node");
+        assertTrue(cli.may(Action.MESSAGE_RETRY, PackageRef.ANY), "the user's roles");
+        assertEquals(Optional.of(issued.expiresAt()), b.expiresAt(cli));
+
+        JsonObject row = audit("token.issue").getFirst();
+        assertEquals(List.of("anna", "user/anna", "session", session.substring(7, 23)), List.of(row.getString("actor"),
+                row.getString("subject"), row.getString("via"), row.getString("credential")));
+        assertEquals(new JsonObject().put("token", issued.id()).put("name", "laptop").put("expiresAt", issued.expiresAt().toString())
+                .put("remote", REMOTE), row.getJsonObject("detail"));
+        assertFalse(audit().toString().contains(issued.token()), "never a token in the audit");
+        assertEquals(Optional.of(Credentials.fingerprint(issued.token())),
+                ((Accounts) a).query(tx -> tx.token(issued.id())).map(t -> t.token().fingerprint()), "only its fingerprint is kept");
+
+        assertEquals(T0.plus(Duration.ofDays(365)), a.issueOwnToken(self, NEW_PASSWORD, "a-year", OptionalInt.of(365)).expiresAt());
+        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "beyond", OptionalInt.of(366)));
+        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "never", OptionalInt.of(0)));
+        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "Laptop", OptionalInt.empty()));
+        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "-laptop", OptionalInt.empty()));
+        refused(409, () -> b.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        assertEquals(2, audit("token.issue").size());
+    }
+
+    @Test
+    void aWrongPasswordIsRefusedAndCountedOnTheLoginLimit() {
+        String session = session("anna");
+        Actor self = a.authenticate(bearer(session), Optional.empty()).acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        for (int i = 1; i <= 5; i++) {
+            refused(403, "wrong-password", () -> a.issueOwnToken(self, "a wrong password", "laptop", OptionalInt.empty()));
+        }
+        assertEquals(Optional.of(5), failures("anna"));
+        assertEquals("wrong-password", audit("login.refused").getFirst().getJsonObject("detail").getString("reason"));
+        assertEquals("anna", a.authenticate(bearer(session), Optional.empty()).name(), "the session goes on");
+        refused(429, "too-many-attempts", () -> b.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        refused(429, "too-many-attempts", () -> a.login("anna", NEW_PASSWORD, REMOTE));
+
+        clockA.advance(Duration.ofSeconds(1));
+        a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty());
+        assertEquals(Optional.of(0), failures("anna"), "a success forgives the failures up to its claim");
+    }
+
+    @Test
+    void aTokenIsNotIssuedWhenTheAccountChangedWhileThePasswordWasChecked() {
+        Caller anna = a.authenticate(bearer(session("anna")), Optional.empty());
+        Actor self = anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        String other = "another password of mine";
+        hash.duringNextMatch(() -> b.changePassword(anna.acting(Action.SELF_PASSWORD, PackageRef.ANY, REMOTE), NEW_PASSWORD, other));
+        refused(409, () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        hash.duringNextMatch(() -> b.endSessions(key(b).acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna"));
+        refused(401, "session-ended", () -> a.issueOwnToken(self, other, "laptop", OptionalInt.empty()));
+        assertEquals(List.of(), a.tokens(Optional.of("anna"), Optional.empty()).tokens(), "no token was made");
+        assertEquals(List.of(), audit("token.issue"));
+    }
+
+    @Test
+    void anAdministratorLoggedInIssuesTheTokensOfATechnicalAccount() {
+        technical("ci-deploy", Role.DEVELOPER);
+        Access.Issued issued = issue("ci-deploy", "pipeline", 30);
+        assertEquals(T0.plus(Duration.ofDays(30)), issued.expiresAt());
+        Caller ci = b.authenticate(bearer(issued.token()), Optional.empty());
+        assertEquals(List.of(Via.TOKEN, "ci-deploy", Kind.TECHNICAL, Set.of(Role.DEVELOPER)), List.of(ci.via(), ci.name(), ci.kind(), ci.roles()));
+        assertTrue(ci.may(Action.PACKAGE_DEPLOY, PackageRef.ANY));
+        assertFalse(ci.may(Action.SELF_TOKENS, PackageRef.ANY), "a technical account manages no tokens of its own");
+        JsonObject row = audit("token.issue").getFirst();
+        assertEquals(List.of("keeper", "user/ci-deploy"), List.of(row.getString("actor"), row.getString("subject")));
+
+        Actor root = admin(Action.TOKEN_ISSUE);
+        refused(409, () -> a.issueToken(root, "keeper", "laptop", OptionalInt.empty()));   // a person issues their own
+        refused(404, () -> a.issueToken(root, "nobody", "pipeline", OptionalInt.empty()));
+        refused(409, () -> b.issueToken(root, "ci-deploy", "pipeline", OptionalInt.empty()));
+        refused(400, () -> a.issueToken(root, "ci-deploy", "x".repeat(65), OptionalInt.empty()));
+        a.block(admin(Action.USER_BLOCK), "ci-deploy");
+        refused(409, () -> a.issueToken(root, "ci-deploy", "another", OptionalInt.empty()));
+    }
+
+    @Test
+    void anAdministratorsTokenReadsButNeverChangesAnAccount() {
+        Caller root = a.authenticate(bearer(session("root", Role.ADMINISTRATOR)), Optional.empty());
+        Access.Issued issued = a.issueOwnToken(root.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE), NEW_PASSWORD, "cli",
+                OptionalInt.empty());
+        Caller token = b.authenticate(bearer(issued.token()), Optional.empty());
+        assertTrue(token.may(Action.USER_READ, PackageRef.ANY) && token.may(Action.TOKEN_READ, PackageRef.ANY)
+                && token.may(Action.SELF_TOKENS, PackageRef.ANY));
+        for (Action change : List.of(Action.USER_CREATE, Action.ROLES_CHANGE, Action.USER_BLOCK, Action.SESSION_END, Action.TOKEN_ISSUE,
+                Action.TOKEN_REVOKE, Action.TOKEN_CEILING, Action.SELF_TOKEN_ISSUE, Action.SELF_PASSWORD, Action.SELF_LOGOUT)) {
+            refused(403, "session-required", () -> token.require(change, PackageRef.ANY));
+        }
+    }
+
+    @Test
+    void aTokenExpiresAndANewOneTakesItsName() {
+        technical("ci-deploy");
+        Access.Issued old = issue("ci-deploy", "pipeline", 1);
+        clockA.advance(Duration.ofDays(1).minusMillis(1));
+        a.authenticate(bearer(old.token()), Optional.empty());
+        refused(409, () -> issue("ci-deploy", "pipeline", 1));
+        clockA.advance(Duration.ofMillis(1));
+        refused(401, "token-expired", () -> a.authenticate(bearer(old.token()), Optional.empty()));
+
+        Access.Issued next = issue("ci-deploy", "pipeline", 1);
+        refused(401, "token-revoked", () -> a.authenticate(bearer(old.token()), Optional.empty()));
+        assertEquals(old.id(), audit("token.issue").getLast().getJsonObject("detail").getString("replaced"));
+        assertEquals(List.of(next.id()), ids(a.tokens(Optional.of("ci-deploy"), Optional.empty())));
+    }
+
+    @Test
+    void aUserHoldsAtMostTwentyLiveTokens() {
+        technical("ci-deploy");
+        issue("ci-deploy", "t-0", 1);
+        List<Access.Issued> held = new ArrayList<>();
+        for (int i = 1; i < 20; i++) held.add(issue("ci-deploy", "t-" + i, 90));
+        refused(409, () -> issue("ci-deploy", "t-20", 90));
+        clockA.advance(Duration.ofDays(1));
+        issue("ci-deploy", "t-20", 90);   // t-0 expired: it no longer counts
+        refused(409, () -> issue("ci-deploy", "t-21", 90));
+        a.revokeToken(admin(Action.TOKEN_REVOKE), held.getFirst().id());
+        issue("ci-deploy", "t-21", 90);
+        assertEquals(20, a.tokens(Optional.of("ci-deploy"), Optional.empty()).tokens().size());
+    }
+
+    /** Two nodes each issue a token of one account at once while it holds 19: one of the two is refused. */
+    @Test
+    void twoNodesIssuingTheTwentiethTokenAtOnceLeaveTwenty() throws Exception {
+        Actor root = admin(Action.TOKEN_ISSUE);
+        for (int round = 0; round < 5; round++) {
+            String user = "ci-" + round;
+            technical(user);
+            for (int i = 0; i < 19; i++) issue(user, "t-" + i, 90);
+            CountDownLatch start = new CountDownLatch(1);
+            Thread first = Thread.ofVirtual().start(() -> attempt(start, () -> a.issueToken(root, user, "on-a", OptionalInt.empty())));
+            Thread second = Thread.ofVirtual().start(() -> attempt(start, () -> b.issueToken(root, user, "on-b", OptionalInt.empty())));
+            start.countDown();
+            first.join();
+            second.join();
+            assertEquals(20, a.tokens(Optional.of(user), Optional.empty()).tokens().size(), "round " + round);
+        }
+    }
+
+    @Test
+    void aRevokedTokenIsRefusedOnEveryNode() {
+        Caller anna = a.authenticate(bearer(session("anna")), Optional.empty());
+        Actor self = anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        Access.Issued laptop = a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty());
+        Access.Issued phone = a.issueOwnToken(self, NEW_PASSWORD, "phone", OptionalInt.empty());
+        b.authenticate(bearer(laptop.token()), Optional.empty());
+
+        Actor own = b.authenticate(bearer(phone.token()), Optional.empty()).acting(Action.SELF_TOKENS, PackageRef.ANY, REMOTE);
+        a.revokeOwnToken(own, laptop.id());
+        refused(401, "token-revoked", () -> a.authenticate(bearer(laptop.token()), Optional.empty()));
+        refused(401, "token-revoked", () -> b.authenticate(bearer(laptop.token()), Optional.empty()));
+        b.revokeOwnToken(own, laptop.id());
+        assertEquals(1, audit("token.revoke").size(), "a token revoked once is in the audit once");
+        JsonObject row = audit("token.revoke").getFirst();
+        assertEquals(List.of("anna", "user/anna", "token", phone.id()), List.of(row.getString("actor"), row.getString("subject"),
+                row.getString("via"), row.getString("credential")));
+        assertEquals(new JsonObject().put("token", laptop.id()).put("name", "laptop").put("remote", REMOTE), row.getJsonObject("detail"));
+
+        Actor bob = b.authenticate(bearer(session("bob")), Optional.empty()).acting(Action.SELF_TOKENS, PackageRef.ANY, REMOTE);
+        refused(404, () -> b.revokeOwnToken(bob, phone.id()));
+        refused(404, () -> a.revokeOwnToken(own, "0123456789abcdef"));
+        refused(404, () -> a.revokeOwnToken(own, "not an id"));
+        a.authenticate(bearer(phone.token()), Optional.empty());
+
+        b.revokeToken(key(b).acting(Action.TOKEN_REVOKE, PackageRef.ANY, REMOTE), phone.id());
+        refused(401, "token-revoked", () -> a.authenticate(bearer(phone.token()), Optional.empty()));
+        assertEquals(Caller.EMERGENCY_KEY, audit("token.revoke").getLast().getString("actor"));
+        refused(404, () -> a.revokeToken(admin(Action.TOKEN_REVOKE), "0123456789abcdef"));
+    }
+
+    @Test
+    void aBlockedUsersTokensAreRefusedWhileTheBlockLasts() {
+        technical("ci-deploy");
+        Access.Issued ci = issue("ci-deploy", "pipeline", 90);
+        a.block(admin(Action.USER_BLOCK), "ci-deploy");
+        refused(401, "blocked", () -> b.authenticate(bearer(ci.token()), Optional.empty()));
+        a.unblock(admin(Action.USER_BLOCK), "ci-deploy");
+        assertEquals("ci-deploy", b.authenticate(bearer(ci.token()), Optional.empty()).name());
+    }
+
+    @Test
+    void aLoweredCeilingShortensLiveTokensAndARaisedOneLengthensNone() {
+        technical("ci-deploy");
+        assertEquals(new Access.Ceiling(365, 90), a.tokens(Optional.empty(), Optional.empty()).ceiling());
+        Access.Issued year = issue("ci-deploy", "year", 365);
+        clockA.advance(Duration.ofDays(10));
+        Access.Issued hundred = issue("ci-deploy", "hundred", 100);
+        issue("ci-deploy", "five", 5);
+        clockA.advance(Duration.ofDays(10));
+        clockB.advance(Duration.ofDays(20));
+        Actor root = admin(Action.TOKEN_CEILING);
+
+        assertEquals(new Access.Ceiling(15, 15), a.changeCeiling(root, 15));
+        refused(401, "token-expired", () -> a.authenticate(bearer(year.token()), Optional.empty()));   // older than the ceiling
+        refused(401, "token-expired", () -> b.authenticate(bearer(year.token()), Optional.empty()));
+        Caller live = b.authenticate(bearer(hundred.token()), Optional.empty());
+        assertEquals(Optional.of(T0.plus(Duration.ofDays(25))), b.expiresAt(live), "its issue plus the ceiling");
+        Access.Tokens listed = b.tokens(Optional.empty(), Optional.empty());
+        assertEquals(List.of(hundred.id()), ids(listed));
+        assertEquals(List.of(T0.plus(Duration.ofDays(25))), listed.tokens().stream().map(Access.Token::expiresAt).toList());
+        assertEquals(new Access.Ceiling(15, 15), listed.ceiling());
+        refused(400, () -> issue("ci-deploy", "sixteen", 16));
+        assertEquals(clockA.instant().plus(Duration.ofDays(15)),
+                a.issueToken(admin(Action.TOKEN_ISSUE), "ci-deploy", "default", OptionalInt.empty()).expiresAt(), "the default is the ceiling below 90");
+
+        assertEquals(new Access.Ceiling(365, 90), a.changeCeiling(root, 365));
+        refused(401, "token-expired", () -> a.authenticate(bearer(year.token()), Optional.empty()));   // a raised ceiling revives nothing
+        assertEquals(Optional.of(T0.plus(Duration.ofDays(25))), a.expiresAt(a.authenticate(bearer(hundred.token()), Optional.empty())));
+        int rows = audit().size();
+        a.changeCeiling(root, 365);
+        assertEquals(rows, audit().size(), "the same ceiling writes nothing");
+        refused(400, () -> a.changeCeiling(root, 0));
+        refused(400, () -> a.changeCeiling(root, 366));
+        assertEquals(List.of(new JsonObject().put("from", 365).put("to", 15).put("shortened", 2).put("remote", REMOTE),
+                new JsonObject().put("from", 15).put("to", 365).put("shortened", 0).put("remote", REMOTE)),
+                audit("token.ceiling").stream().map(r -> r.getJsonObject("detail")).toList(), "the expired token was not shortened");
+        assertEquals(List.of("keeper", "token-ceiling"), List.of(audit("token.ceiling").getFirst().getString("actor"),
+                audit("token.ceiling").getFirst().getString("subject")));
+    }
+
+    @Test
+    void theListsShowTheLiveTokensSoonestFirstWithTheCeiling() {
+        Caller anna = a.authenticate(bearer(session("anna")), Optional.empty());
+        Access.Issued laptop = a.issueOwnToken(anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE), NEW_PASSWORD, "laptop",
+                OptionalInt.of(30));
+        technical("ci-deploy");
+        Access.Issued pipeline = issue("ci-deploy", "pipeline", 10);
+        Access.Issued nightly = issue("ci-deploy", "nightly", 60);
+        a.revokeToken(admin(Action.TOKEN_REVOKE), issue("ci-deploy", "gone", 5).id());
+
+        Access.Tokens all = b.tokens(Optional.empty(), Optional.empty());
+        assertEquals(List.of(pipeline.id(), laptop.id(), nightly.id()), ids(all));
+        assertEquals(new Access.Ceiling(365, 90), all.ceiling());
+        assertEquals(List.of(pipeline.id(), laptop.id()), ids(a.tokens(Optional.empty(), Optional.of(Duration.ofDays(30)))),
+                "within 30 days, its end included");
+        assertEquals(List.of(new Access.Token(laptop.id(), "anna", "laptop", T0, "anna", T0.plus(Duration.ofDays(30)), Optional.empty())),
+                b.tokens(Optional.of("anna"), Optional.empty()).tokens());
+        assertEquals(List.of(pipeline.id(), nightly.id()), a.user("ci-deploy").orElseThrow().tokens().stream().map(Access.Token::id).toList());
+        refused(400, () -> a.tokens(Optional.empty(), Optional.of(Duration.ZERO)));
+        refused(400, () -> a.tokens(Optional.empty(), Optional.of(Duration.ofDays(365).plusSeconds(1))));
+        refused(404, () -> a.tokens(Optional.of("nobody"), Optional.empty()));
+    }
+
+    @Test
+    void aTokensLastUseIsWrittenAtMostOnceAnHour() {
+        technical("ci-deploy");
+        Access.Issued ci = issue("ci-deploy", "pipeline", 90);
+        assertEquals(Optional.empty(), lastUsed(ci));
+        a.authenticate(bearer(ci.token()), Optional.empty());
+        assertEquals(Optional.of(T0), lastUsed(ci));
+        clockA.advance(Duration.ofMinutes(59));
+        clockB.advance(Duration.ofHours(1));   // 20 s short of the hour
+        a.authenticate(bearer(ci.token()), Optional.empty());
+        b.authenticate(bearer(ci.token()), Optional.empty());
+        assertEquals(Optional.of(T0), lastUsed(ci), "within the hour, on either node");
+        clockA.advance(Duration.ofMinutes(1));
+        a.authenticate(bearer(ci.token()), Optional.empty());
+        assertEquals(Optional.of(T0.plus(Duration.ofHours(1))), lastUsed(ci));
+    }
+
+    private Optional<Instant> lastUsed(Access.Issued token) {
+        return a.tokens(Optional.empty(), Optional.empty()).tokens().stream().filter(t -> t.id().equals(token.id())).findFirst()
+                .orElseThrow().lastUsedAt();
     }
 
     // --- the audit before the act
