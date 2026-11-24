@@ -35,7 +35,8 @@ class CacheContractSelfTest {
                 "aCallerThatWaitedForALoadThatFailedGetsAnIllegalStateWithTheFailureAsCause",
                 "aRemoveWithAnotherValueKeepsTheKey",
                 "aRemoveWithAValueLeavesALoadUnderWayAlone",
-                "callersThatSawOneValueFailLoadTheNextOnce"), failures.keySet());
+                "callersThatSawOneValueFailLoadTheNextOnce",
+                "aRefusedRemoveWithAValueForgetsNothing"), failures.keySet());
         ContractRun.caughtBy(failures, "callersOfOneKeyShareOneLoad", "the second caller waited for the first one's load");
     }
 }

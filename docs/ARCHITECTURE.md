@@ -761,9 +761,11 @@ script in SAP Integration Suite works with security material.
   a day. Keys are up to 256 characters, values up to 64 KiB. The steps of one type in one package share
   their keys, and no one else sees them; entries stay across a redeploy. `remove(key)` forgets a key, and
   a load under way is not kept. On a 401 a step calls `remove(key, token)` with the token that failed,
-  then `get` again: the cache forgets the key only while it still keeps that token, and leaves a load
-  under way alone. Of K messages that see one token fail at once, the first forgets it and the others
-  find the next token or wait for its load, so one load fetches it for the pool.
+  exactly as `get` returned it, then `get` again, and calls the partner once more, never in a loop: the
+  cache forgets the key only while it still keeps that token, and leaves a load under way alone. Of K
+  messages that see one token fail at once, the first forgets it and the others find the next token or
+  wait for its load, so one load fetches it for the pool, as `get` loads a key once. A `get` right after
+  the remove can, rarely, still return the token that failed.
   - With Valkey, the nodes share the cache, so a partner that limits token requests sees one per
     pool. A key loads on one node at a time while that node holds the key's lock, which it renews
     every 3 s and which lapses 10 s after its node stops. A node that stalls for longer, or a Valkey
