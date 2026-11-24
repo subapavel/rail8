@@ -1,4 +1,5 @@
 import { ApiOutlined, ApartmentOutlined } from '@ant-design/icons';
+import { Page } from '../Page';
 import type { Screen, UnsavedChanges } from '../screens';
 import { EndpointForm } from './EndpointForm';
 import { EndpointList } from './EndpointList';
@@ -20,7 +21,11 @@ export function endpointTab(api: EndpointsApi, path: string, id: string): Screen
     id: `endpoint:${path}`,
     title: id,
     group: 'Design',
-    render: () => <EndpointForm api={api} path={path} guardClose={guardClose} />,
+    render: () => (
+      <Page title={false}>
+        <EndpointForm api={api} path={path} guardClose={guardClose} />
+      </Page>
+    ),
     unsaved: () => guard,
   };
 }
@@ -33,7 +38,11 @@ export function endpointsScreen(api: EndpointsApi): Screen {
     group: 'Design',
     icon: <ApiOutlined aria-hidden />,
     description: 'Inspect and edit connection settings in the working folder.',
-    render: (open) => <EndpointList api={api} onOpen={(path, id) => open(endpointTab(api, path, id))} />,
+    render: (open) => (
+      <Page title={false}>
+        <EndpointList api={api} onOpen={(path, id) => open(endpointTab(api, path, id))} />
+      </Page>
+    ),
   };
 }
 
@@ -87,6 +96,10 @@ export function flowsScreen(flows: FlowsApi, endpoints: EndpointsApi): Screen {
     group: 'Design',
     icon: <ApartmentOutlined aria-hidden />,
     description: 'Inspect flow diagrams and edit their steps.',
-    render: (open) => <FlowList api={flows} onOpen={(path, id) => open(flowTab(flows, endpoints, path, id))} />,
+    render: (open) => (
+      <Page title={false}>
+        <FlowList api={flows} onOpen={(path, id) => open(flowTab(flows, endpoints, path, id))} />
+      </Page>
+    ),
   };
 }

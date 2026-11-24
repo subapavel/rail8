@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { home } from './Home';
+import { Page } from './Page';
 import { screenList, type Screen } from './screens';
 import { Shell } from './Shell';
 
@@ -31,12 +32,9 @@ afterEach(async () => {
 });
 
 const nav = () => page.getByRole('navigation', { name: 'Screens' });
-const expand = () => page.getByRole('button', { name: 'Expand navigation' });
 const menuItem = (name: string) => nav().getByRole('menuitem', { name, exact: true });
-async function navigate(name: string) {
-  await expand().click();
-  await menuItem(name).click();
-}
+const navigate = (name: string) => menuItem(name).click();
+const menuWidth = () => page.getByRole('complementary').element().getBoundingClientRect().width;
 const tab = (name: string) => page.getByRole('tab', { name });
 const tabs = () => page.getByRole('tab');
 const titles = () => tabs().elements().map((element) => element.textContent?.trim());
@@ -101,14 +99,13 @@ describe('Shell', () => {
 
   test('starts with the Home screen of the application open in a tab', async () => {
     render(screens, screens[0]?.id);
-    await expect.element(page.getByRole('banner').getByRole('img', { name: 'Rail8' })).toBeVisible();
+    await expect.element(page.getByRole('banner').getByText('Rail8', { exact: true })).toBeVisible();
     await expect.element(tab('Home')).toHaveAttribute('aria-selected', 'true');
-    await expect.element(page.getByRole('heading', { level: 1, name: 'Rail8' })).toBeVisible();
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible();
   });
 
   test('lists Home, then the screens of the modules in their order', async () => {
     render(screens, screens[0]?.id);
-    await expand().click();
     await expect.element(menuItem('Home')).toBeVisible();
     expect(nav().getByRole('menuitem').elements().map((button) => button.textContent)).toEqual(['Home', 'Messages', 'Packages', 'Endpoints', 'Flows', 'Mappings']);
   });
@@ -164,10 +161,8 @@ describe('Shell', () => {
 
   test('marks the screen of the shown tab in the navigation', async () => {
     render(two, 'first');
-    await expand().click();
     await expect.element(menuItem('First')).toHaveAttribute('aria-current', 'page');
     await menuItem('Second').click();
-    await expand().click();
     await expect.element(menuItem('Second')).toHaveAttribute('aria-current', 'page');
     await expect.element(menuItem('First')).not.toHaveAttribute('aria-current');
   });
@@ -186,9 +181,7 @@ describe('Shell', () => {
     await page.getByRole('button', { name: 'Open child' }).click();
     await expect.element(tab('Child')).toHaveAttribute('aria-selected', 'true');
     await expect.element(page.getByText('Child screen')).toBeVisible();
-    await expand().click();
     expect(menuItem('Child').elements()).toHaveLength(0);
-    await userEvent.keyboard('{Escape}');
 
     await tab('Opener').click();
     await page.getByRole('button', { name: 'Open child' }).click();
@@ -200,28 +193,57 @@ describe('Shell', () => {
     await expect.element(page.getByText('Child screen')).toBeVisible();
   });
 
-  test('keeps the tabs in the toolbar row and overlays the navigation without moving the screen', async () => {
+  test('keeps the menu beside the screens and the tabs in a row of their own under the header', async () => {
     render(two, 'first');
     await expect.element(tab('First')).toBeVisible();
-    const bounds = () => page.getByRole('main').element().getBoundingClientRect();
-    const before = bounds();
     const header = page.getByRole('banner').element().getBoundingClientRect();
+    const menu = page.getByRole('complementary').element().getBoundingClientRect();
     const first = tab('First').element().getBoundingClientRect();
-    expect(first.top).toBeLessThan(header.bottom);
-    expect(first.bottom).toBeGreaterThan(header.top);
-    const trigger = expand().element();
-    const background = getComputedStyle(trigger).backgroundColor;
-    expect(background).not.toBe('rgba(0, 0, 0, 0)');
-    expect(background).toBe(getComputedStyle(trigger.closest('aside')!).backgroundColor);
-    expect(nav().elements()).toHaveLength(0);
-    await expand().click();
-    await expect.element(menuItem('First')).toBeVisible();
-    expect(bounds().toJSON()).toEqual(before.toJSON());
-    await userEvent.keyboard('{Escape}');
-    await expect.element(expand()).toHaveFocus();
-    await expand().click();
-    await page.getByText('First screen').click();
-    await expect.element(expand()).toHaveAttribute('aria-expanded', 'false');
+    const screen = page.getByText('First screen').element().getBoundingClientRect();
+    expect(menu.top).toBeGreaterThanOrEqual(header.bottom);
+    expect(first.top).toBeGreaterThanOrEqual(header.bottom);
+    expect(first.left).toBeGreaterThanOrEqual(menu.right);
+    expect(screen.top).toBeGreaterThanOrEqual(first.bottom);
+    expect(screen.left).toBeGreaterThanOrEqual(menu.right);
+  });
+
+  test('collapses the menu to icons with its button, Enter, or Ctrl+B and ⌘B, each item still named', async () => {
+    render(two, 'first');
+    await expect.element(menuItem('Second')).toBeVisible();
+    const wide = menuWidth();
+    await button('Collapse menu').click();
+    await expect.element(button('Expand menu')).toHaveAttribute('aria-expanded', 'false');
+    await expect.poll(menuWidth).toBeLessThan(wide / 2);
+    await menuItem('Second').hover();
+    await expect.element(page.getByRole('tooltip', { name: 'Second' })).toBeVisible();
+    await menuItem('Second').click();
+    await expect.element(tab('Second')).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.keyboard('{Control>}b{/Control}');
+    await expect.element(button('Collapse menu')).toHaveAttribute('aria-expanded', 'true');
+    await expect.poll(menuWidth).toBe(wide);
+    await userEvent.keyboard('{Meta>}b{/Meta}');
+    await expect.element(button('Expand menu')).toBeVisible();
+    button('Expand menu').element().focus();
+    await userEvent.keyboard('{Enter}');
+    await expect.element(button('Collapse menu')).toHaveFocus();
+  });
+
+  test('the breadcrumb of a screen opened from another starts with the group and opens that screen again', async () => {
+    const child: Screen = { id: 'doc:child', title: 'Child', render: () => <Page title="Child">Child screen</Page> };
+    const opener: Screen = { id: 'opener', title: 'Opener', group: 'Design', render: (open) => <button onClick={() => open(child)}>Open child</button> };
+    render([opener, ...plain('Other')], 'opener');
+    await button('Open child').click();
+    const trail = page.getByRole('navigation', { name: 'Breadcrumb' });
+    await expect.element(trail).toBeVisible();
+    expect(trail.getByRole('listitem').elements().map((crumb) => crumb.textContent)).toEqual(['Design', 'Opener', 'Child']);
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Child' })).toBeVisible();
+
+    await button('Close Opener').click();
+    await expect.poll(titles).toEqual(['Child']);
+    await trail.getByRole('link', { name: 'Opener' }).click();
+    await expect.element(tab('Opener')).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(titles).toEqual(['Child', 'Opener']);
   });
 
   test('quick open finds screens and open documents with the keyboard', async () => {
@@ -265,12 +287,14 @@ describe('Shell', () => {
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
   });
 
-  test('on a narrow window hides the navigation until the Navigation button shows it', async () => {
-    await page.viewport(414, 896);
+  test('below 1280 pixels wide collapses the menu by itself, and opens it again from 1280', async () => {
+    await page.viewport(1279, 800);
     render(two, 'first');
-    await expect.element(expand()).toHaveAttribute('aria-expanded', 'false');
+    await expect.element(button('Expand menu')).toHaveAttribute('aria-expanded', 'false');
     await navigate('Second');
     await expect.element(tab('Second')).toHaveAttribute('aria-selected', 'true');
+    await page.viewport(1280, 800);
+    await expect.element(button('Collapse menu')).toHaveAttribute('aria-expanded', 'true');
   });
 
   test.each([

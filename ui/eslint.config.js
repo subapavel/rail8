@@ -51,7 +51,7 @@ const boundary = [
 ];
 
 export default defineConfig([
-  globalIgnores(['dist', 'e2e/fake/dist', 'src/mapping/generated']),
+  globalIgnores(['dist', 'e2e/fake/dist', 'scripts/pictures/dist', 'src/mapping/generated']),
   js.configs.recommended,
   tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,

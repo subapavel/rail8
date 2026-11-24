@@ -6,3 +6,4 @@ test-results/
 playwright-report/
 .logs/
 e2e/fake/dist/
+scripts/pictures/dist/

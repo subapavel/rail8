@@ -1,13 +1,26 @@
-import { CloseOutlined, EllipsisOutlined, FileTextOutlined, MoonOutlined, PushpinFilled, SearchOutlined, SunOutlined } from '@ant-design/icons';
-import { Breadcrumb, Button, Dropdown, Empty, Flex, Layout, Tabs, type MenuProps } from 'antd';
-import { cloneElement, Suspense, useCallback, useEffect, useState, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react';
+import { AppstoreOutlined, CloseOutlined, EllipsisOutlined, FileTextOutlined, MoonOutlined, PushpinFilled, SearchOutlined, SunOutlined } from '@ant-design/icons';
+import { ProLayout, RouteContext, type ProLayoutProps } from '@ant-design/pro-components';
+import { Button, Dropdown, Empty, Tabs, theme, Tooltip, type BreadcrumbProps, type MenuProps } from 'antd';
+import {
+  cloneElement,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type AriaAttributes,
+  type HTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import { ReadSpinner } from './ReadSpinner';
-import { RegisteredScreens, type Screen } from './screens';
+import { groupedScreens, RegisteredScreens, type Screen } from './screens';
 import { closedBy, closeTab, isPinned, noTabs, openTab, pinTab, unpinTab, type CloseCommand } from './tabs';
 import { Rail8Theme } from './theme';
 import { UnsavedDialog } from './UnsavedDialog';
 import { RegisteredWorkingFiles, workingFileRegistry, WorkingTab } from './workingFiles';
-import { WorkspaceNavigation } from './WorkspaceNavigation';
 import { WorkspaceQuickOpen } from './WorkspaceQuickOpen';
 
 export interface ShellProps {
@@ -26,11 +39,27 @@ const closeItems: readonly { key: CloseCommand; label: string }[] = [
   { key: 'unpinned', label: 'Close all but pinned' },
 ];
 
+/** Windows narrower than this show the menu collapsed to its icons when they open or shrink below it. */
+const narrow = '(max-width: 1279.98px)';
+
+/** An open tab's screen, and the screen it was opened from when another screen opened it. */
+interface Opened {
+  screen: Screen;
+  from?: Screen;
+}
+
 /**
- * The application's shell: a header with the brand, the button that shows or hides the navigation, Quick open and the
- * tabs of the open screens. Choosing a screen in the navigation opens it in a new tab, or shows the tab it already has.
- * A screen may open tabs of its own, such as one for each message it found, through the function its `render` is
- * given. Every open screen stays mounted while another tab shows.
+ * The application's frame, in the Ant Design Pro style: a header across the top with the brand, Quick open and the
+ * theme switch, a side menu that stays in place and lists `screens` in their groups, and the content beside it. The
+ * content starts with a row of tabs, one for each open screen, and shows the screen of the chosen tab under it. Choosing
+ * a screen in the menu opens it in a new tab, or shows the tab it already has. A screen may open tabs of its own, such
+ * as one for each message it found, through the function its `render` is given. Every open screen stays mounted while
+ * another tab shows.
+ *
+ * Each screen draws its page with `Page`, which shows the breadcrumb the shell gives its tab: the group, the screens
+ * that led to it, each of which opens again when chosen, and its own title. A screen that is a canvas, such as an
+ * editor, fills the content without a gutter. The menu collapses to its icons with the button on its edge or with
+ * Ctrl+B or ⌘B, to give a canvas more room; on a window narrower than 1280 pixels it collapses by itself.
  *
  * Each tab closes with its close button. A right click on a tab, or the menu key or Shift+F10 on a focused one, opens
  * its menu: Close, Close other tabs, Close tabs to the left, Close tabs to the right, Close all but pinned, and Pin tab
@@ -41,38 +70,53 @@ const closeItems: readonly { key: CloseCommand; label: string }[] = [
  * with three dots at its end lists the tabs it hides.
  *
  * Quick open, also on Ctrl+K or ⌘K, finds a screen of `screens` or an open tab by name and shows it. `start` names the
- * screen open at first; with no tab open the main area says so. The editors in every tab register the files they
- * hold with the shell's working files, which `useWorkingFiles` answers there.
+ * screen open at first; with no tab open the content says so. The editors in every tab register the files they hold
+ * with the shell's working files, which `useWorkingFiles` answers there.
  */
 export function Shell({ screens, start }: ShellProps) {
   const [quickOpen, setQuickOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => matchMedia(narrow).matches);
   const [tabs, setTabs] = useState(() => (start === undefined ? noTabs : openTab(noTabs, start)));
-  const [opened, setOpened] = useState<ReadonlyMap<string, Screen>>(() => new Map());
+  const [opened, setOpened] = useState<ReadonlyMap<string, Opened>>(() => new Map());
   // the tab whose menu is open, and the tabs with unsaved changes the shell is asking about
   const [menu, setMenu] = useState<string | null>(null);
   const [asking, setAsking] = useState<readonly string[]>([]);
   const [saving, setSaving] = useState(false);
   const [workingFiles] = useState(() => workingFileRegistry((id) => setTabs((current) => openTab(current, id))));
   const byId = new Map(screens.map((screen) => [screen.id, screen]));
-  const screenOf = (id: string) => opened.get(id) ?? byId.get(id);
-  const active = tabs.active ? screenOf(tabs.active) : undefined;
+  const screenOf = (id: string) => opened.get(id)?.screen ?? byId.get(id);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'k') return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (key !== 'k' && key !== 'b') return;
       const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
       if (event.defaultPrevented || Array.from(dialogs).some((dialog) => dialog.checkVisibility())) return;
       event.preventDefault();
-      setQuickOpen(true);
+      if (key === 'k') setQuickOpen(true);
+      else setCollapsed((current) => !current);
     };
     document.addEventListener('keydown', shortcut);
     return () => document.removeEventListener('keydown', shortcut);
   }, []);
 
-  const open = useCallback((screen: Screen) => {
-    setOpened((current) => (current.has(screen.id) ? current : new Map(current).set(screen.id, screen)));
-    setTabs((current) => openTab(current, screen.id));
+  useEffect(() => {
+    const query = matchMedia(narrow);
+    const follow = () => setCollapsed(query.matches);
+    query.addEventListener('change', follow);
+    return () => query.removeEventListener('change', follow);
   }, []);
+
+  /** Opens `screen` in a tab, or shows the tab it has; a tab it opens for the first time remembers `from`. */
+  const openFrom = useCallback(
+    (from?: Screen) => (screen: Screen) => {
+      setOpened((current) => (current.has(screen.id) ? current : new Map(current).set(screen.id, { screen, from })));
+      setTabs((current) => openTab(current, screen.id));
+    },
+    [],
+  );
+  const open = openFrom();
 
   const remove = (ids: readonly string[]) => {
     if (ids.length === 0) return;
@@ -102,6 +146,34 @@ export function Shell({ screens, start }: ShellProps) {
     remove(asking.filter((_, i) => saved[i]));
     const failed = asking.find((_, i) => !saved[i]);
     if (failed !== undefined) setTabs((current) => openTab(current, failed));
+  };
+
+  /**
+   * The breadcrumb of `screen`'s tab: its group, then, for a tab another screen opened, the screens that led to it,
+   * each opening again when chosen, then its own title. A screen of the menu has its place there, so its trail is
+   * its group alone.
+   */
+  const breadcrumbOf = (screen: Screen): BreadcrumbProps['items'] => {
+    const trail: Screen[] = [];
+    const seen = new Set([screen.id]);
+    let from = byId.has(screen.id) ? undefined : opened.get(screen.id)?.from;
+    while (from !== undefined && !seen.has(from.id)) {
+      trail.unshift(from);
+      seen.add(from.id);
+      from = byId.has(from.id) ? undefined : opened.get(from.id)?.from;
+    }
+    return [
+      { title: (trail[0] ?? screen).group ?? 'Workspace' },
+      ...trail.map((step) => ({
+        title: step.title,
+        href: '#',
+        onClick: (event: MouseEvent) => {
+          event.preventDefault();
+          open(step);
+        },
+      })),
+      { title: screen.title },
+    ];
   };
 
   const menuOf = (id: string): MenuProps => {
@@ -137,40 +209,111 @@ export function Shell({ screens, start }: ShellProps) {
     <Rail8Theme>
       {(dark, toggle) => (
         <RegisteredScreens.Provider value={screens}>
-          <Layout className="rail8-layout" hasSider={false}>
-            <WorkspaceNavigation screens={screens} active={tabs.active} open={open} />
-            <Layout.Header className="rail8-header">
-              <Flex align="center" gap="small" className="rail8-location">
-                <img src={`${import.meta.env.BASE_URL}${dark ? 'rail8-mark-dark.svg' : 'rail8.svg'}`} alt="Rail8" />
-                <Breadcrumb
-                  aria-label="Workspace location"
-                  items={[{ title: 'Workspace' }, ...(active?.group ? [{ title: active.group }] : [])]}
-                />
-              </Flex>
-              <Flex align="center" gap={4}>
-                <Button
-                  size="small"
-                  aria-label="Quick open"
-                  aria-keyshortcuts="Control+K Meta+K"
-                  title="Quick open (Ctrl+K or ⌘K)"
-                  icon={<SearchOutlined />}
-                  onClick={() => setQuickOpen(true)}
-                >
-                  Quick open
-                </Button>
-                <Button
-                  size="small"
-                  type="text"
-                  icon={dark ? <SunOutlined /> : <MoonOutlined />}
-                  aria-label={dark ? 'Use light theme' : 'Use dark theme'}
-                  onClick={toggle}
-                />
-              </Flex>
-            </Layout.Header>
+          <Frame
+            className="rail8-frame"
+            layout="mix"
+            fixSiderbar
+            breakpoint={false}
+            disableMobile
+            collapsed={collapsed}
+            onCollapse={setCollapsed}
+            title="Rail8"
+            logo={<img src={`${import.meta.env.BASE_URL}${dark ? 'rail8-mark-dark.svg' : 'rail8.svg'}`} alt="" />}
+            headerTitleRender={(logo) => (
+              <span
+                className="rail8-brand"
+                ref={(brand) => {
+                  // ProLayout puts an empty header before the fixed one to hold its place; it is no landmark.
+                  brand?.closest('header')?.previousElementSibling?.setAttribute('role', 'presentation');
+                }}
+              >
+                {logo}
+                <span>Rail8</span>
+              </span>
+            )}
+            pageTitleRender={false}
+            actionsRender={() => [
+              <Button
+                key="quick-open"
+                size="small"
+                aria-label="Quick open"
+                aria-keyshortcuts="Control+K Meta+K"
+                title="Quick open (Ctrl+K or ⌘K)"
+                icon={<SearchOutlined />}
+                onClick={() => setQuickOpen(true)}
+              >
+                Quick open
+              </Button>,
+              <Button
+                key="theme"
+                size="small"
+                type="text"
+                icon={dark ? <SunOutlined /> : <MoonOutlined />}
+                aria-label={dark ? 'Use light theme' : 'Use dark theme'}
+                onClick={toggle}
+              />,
+            ]}
+            menu={{ type: 'group' }}
+            route={{
+              path: '/',
+              routes: Array.from(groupedScreens(screens), ([group, entries]) => ({
+                key: group,
+                name: group,
+                path: `/${group}`,
+                routes: entries.map((screen) => ({
+                  key: screen.id,
+                  name: screen.title,
+                  path: `/${screen.id}`,
+                  icon: <span aria-hidden>{screen.icon ?? <AppstoreOutlined />}</span>,
+                })),
+              })),
+            }}
+            location={{ pathname: '/' }}
+            menuProps={{
+              selectedKeys: tabs.active ? [tabs.active] : [],
+              onClick: ({ key }) => {
+                const screen = byId.get(key);
+                if (screen) open(screen);
+              },
+            }}
+            menuItemRender={(item, dom, { collapsed: folded }) => (
+              // Each item keeps its screen's name for assistive technology while the collapsed menu hides the text, and the
+              // item of the shown tab's screen is marked for it, as it is marked on screen.
+              <span
+                ref={(span) => {
+                  const entry = span?.closest('li');
+                  if (item.name) entry?.setAttribute('aria-label', item.name);
+                  if (item.key === tabs.active) entry?.setAttribute('aria-current', 'page');
+                  else entry?.removeAttribute('aria-current');
+                }}
+              >
+                <Tooltip title={folded ? item.name : undefined} placement="right">
+                  {dom}
+                </Tooltip>
+              </span>
+            )}
+            menuContentRender={(_, dom) => <nav aria-label="Screens">{dom}</nav>}
+            collapsedButtonRender={(folded, dom) => {
+              const label = folded ? 'Expand menu' : 'Collapse menu';
+              return cloneElement(dom as ReactElement<HTMLAttributes<HTMLElement>>, {
+                role: 'button',
+                tabIndex: 0,
+                'aria-label': label,
+                'aria-expanded': !folded,
+                'aria-keyshortcuts': 'Control+B Meta+B',
+                title: `${label} (Ctrl+B or ⌘B)`,
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  setCollapsed(!folded);
+                },
+              });
+            }}
+          >
             {tabs.active === null ? (
-              <main className="rail8-empty">
-                <Empty description={<><h1>No screen open</h1>Choose a screen in the navigation.</>} />
-              </main>
+              <div className="rail8-empty">
+                <Empty description={<><h1>No screen open</h1>Choose a screen in the menu.</>} />
+              </div>
             ) : (
               <Tabs
                 id="workspace"
@@ -229,19 +372,23 @@ export function Shell({ screens, start }: ShellProps) {
                       }} />
                     ),
                     children: (
-                      <main className="rail8-panel">
-                        <RegisteredWorkingFiles.Provider value={workingFiles}>
-                          <WorkingTab.Provider value={id}>
-                            <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen?.render(open)}</Suspense>
-                          </WorkingTab.Provider>
-                        </RegisteredWorkingFiles.Provider>
-                      </main>
+                      <div className="rail8-panel">
+                        {screen && (
+                          <TabRoute breadcrumb={breadcrumbOf(screen)}>
+                            <RegisteredWorkingFiles.Provider value={workingFiles}>
+                              <WorkingTab.Provider value={id}>
+                                <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen.render(openFrom(screen))}</Suspense>
+                              </WorkingTab.Provider>
+                            </RegisteredWorkingFiles.Provider>
+                          </TabRoute>
+                        )}
+                      </div>
                     ),
                   };
                 })}
               />
             )}
-          </Layout>
+          </Frame>
           {asking.length > 0 && (
             <UnsavedDialog
               titles={asking.map((id) => screenOf(id)?.title ?? id)}
@@ -256,7 +403,10 @@ export function Shell({ screens, start }: ShellProps) {
           )}
           {quickOpen && (
             <WorkspaceQuickOpen
-              screens={[...screens, ...Array.from(opened.values()).filter((screen) => !byId.has(screen.id))]}
+              screens={[
+                ...screens,
+                ...Array.from(opened.values(), ({ screen }) => screen).filter((screen) => !byId.has(screen.id)),
+              ]}
               dismiss={() => setQuickOpen(false)}
               choose={(screen) => {
                 open(screen);
@@ -268,4 +418,32 @@ export function Shell({ screens, start }: ShellProps) {
       )}
     </Rail8Theme>
   );
+}
+
+/**
+ * ProLayout with the sizes of the frame taken from the theme: the header as tall as the extra large size, a page's
+ * sides as wide as the large padding, and its top and bottom from the extra large padding, which PageContainer halves
+ * between a page's header and its body.
+ */
+function Frame(props: ProLayoutProps) {
+  const { token } = theme.useToken();
+  return (
+    <ProLayout
+      {...props}
+      token={{
+        header: { heightLayoutHeader: token.sizeXXL },
+        pageContainer: {
+          paddingBlockPageContainerContent: token.paddingXL,
+          paddingInlinePageContainerContent: token.paddingLG,
+        },
+      }}
+    />
+  );
+}
+
+/** Gives the page of one tab its own breadcrumb, which PageContainer shows above the page's title. */
+function TabRoute({ breadcrumb, children }: { breadcrumb: BreadcrumbProps['items']; children: ReactNode }) {
+  const route = useContext(RouteContext);
+  const trail: BreadcrumbProps & AriaAttributes = { items: breadcrumb, 'aria-label': 'Breadcrumb' };
+  return <RouteContext.Provider value={{ ...route, breadcrumb: trail }}>{children}</RouteContext.Provider>;
 }
