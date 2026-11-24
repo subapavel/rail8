@@ -16,7 +16,10 @@ change touches. Everything in the repository is in English.
   the code, and name each break in the pull request.
 - Comments and docs are for people: what the code does, its inputs, its outputs. Each one stands on
   its own, with no task ids, decision ids or pointers to other files.
-- UI: use Ant Design 6 components and design tokens, ProComponents v3 for enterprise tables, and React Flow for graphical editors. Consult the official Ant Design skill and MCP server.
+- UI: a screen follows `docs/UI-PATTERNS.md` (Ant Design 6 and its tokens, ProComponents v3,
+  React Flow for graphical editors). Look up each component and pattern with the antd tools (skill
+  `antd`, its MCP server) before writing it. A pull request that adds or changes a screen carries
+  its pictures in both themes, and the session has looked at them.
 - Contracts first: a new contract (an adapter, a step, the API for custom code, plugin loading) is
   `class:C` work, designed and agreed before the implementation (skill `design-it-twice`).
 - Unsure? Ask the owner-proxy: open a GitHub issue labelled `owner-question` (agent `owner-proxy`).

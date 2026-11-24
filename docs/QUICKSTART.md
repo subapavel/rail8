@@ -47,6 +47,8 @@ cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
 
 Leave the terminal running and open **http://localhost:5173** in your browser. If that port is occupied,
 add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**.
+The menu at the left lists the screens; each opens in a tab of its own in the row under the header, Ctrl+K (⌘K on a
+Mac) finds a screen or an open tab, and Ctrl+B (⌘B) folds the menu to its icons.
 The UI has **Messages**, the list of the messages the node recorded, **Packages**, each package of `RAIL8_WORKSPACE`
 with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
 artifacts and history, **Endpoints**, the

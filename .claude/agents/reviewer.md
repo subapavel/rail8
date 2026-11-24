@@ -11,7 +11,8 @@ diff (`git diff origin/main...HEAD`) and the files it touches. Change nothing.
 Judge three things, and only these:
 
 1. **Behaviour.** Does the code do what the issue asks? Would each new test fail if the code were
-   wrong? Check the technical rules in `AGENTS.md` that the change touches.
+   wrong? Check the technical rules in `AGENTS.md` that the change touches. For a change to a screen,
+   look at its pictures against `docs/UI-PATTERNS.md`: a breach, or pictures missing in a theme, blocks.
 2. **Needless complexity.** Code, options, layers or abstractions the task does not need.
 3. **Readable comments.** Each comment says what the code does, its inputs and outputs, for a
    person, and stands on its own: no task ids, decision ids or pointers elsewhere.
