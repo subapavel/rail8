@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { cloneCall, CLONE_LIMITS, isOver, watchSize, WATCH_MS } from './clone.ts';
+import { CLONE_MAX_BYTES, CLONE_REFUSALS } from '../rules.ts';
+import { cloneCall, cloneInto, CLONE_LIMITS, isOver, watchSize, WATCH_MS } from './clone.ts';
 import { FakeTimer } from './fakeTimer.ts';
+import type { Call, Ran, Runner } from './runner.ts';
 
 describe('the clone of Get a package', () => {
   let dir: string | undefined;
@@ -103,5 +105,43 @@ describe('the clone of Get a package', () => {
     timer.advance(WATCH_MS * 3);
 
     expect(timer.pending).toBe(0);
+  });
+
+  test('stops git while it runs once the hidden folder grows past the limit, and leaves nothing', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'rail8-clone-watch-'));
+    const timer = new FakeTimer();
+    let asked: Call | undefined;
+    let started = () => {};
+    const running = new Promise<void>((done) => (started = done));
+    // a git that writes a pack over the limit, then runs until its call is stopped
+    const git: Runner = {
+      run: async (call) => {
+        asked = call;
+        const pack = join(call.clone!, 'orders', '.git', 'objects', 'pack');
+        await mkdir(pack, { recursive: true });
+        const file = await open(join(pack, 'incoming.pack'), 'w');
+        await file.truncate(CLONE_MAX_BYTES + 1);
+        await file.close();
+        started();
+        return new Promise<Ran>((_, fail) => call.signal!.addEventListener('abort', () => fail(call.signal!.reason as Error)));
+      },
+      undoable: async (work, undo) => {
+        try {
+          return await work();
+        } catch (failure) {
+          await undo(() => Promise.reject(new Error('no call expected')), failure);
+          throw failure;
+        }
+      },
+      close: () => Promise.resolve(),
+    };
+
+    const cloned = cloneInto(git, timer, (work) => work(), dir, 'https://github.com/acme/orders.git', 'orders');
+    await running;
+    timer.advance(WATCH_MS);
+
+    await expect(cloned).rejects.toMatchObject({ status: 422, message: CLONE_REFUSALS.tooLarge });
+    expect(asked?.signal?.aborted).toBe(true);
+    expect(await readdir(dir)).toEqual([]);
   });
 });

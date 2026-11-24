@@ -103,8 +103,9 @@ describe.each<[string, Build]>([
     expect(world!.hostRequests?.() ?? 0).toBe(0);
   });
 
-  test('an scp-like address of a one-letter host passes over the rule to git, which cannot reach it', async () => {
-    const { api } = await open({});
+  test('an ssh:// address of a one-letter host passes the rule, and git that cannot reach it is a 422', async () => {
+    // an ssh that fails at once, so the test never waits for a host named g
+    const { api } = await open({ author: { config: '[core]\n\tsshCommand = false' } });
 
     expect(await refusalOf(api.clone('ssh://g/team/orders.git'))).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed });
   });

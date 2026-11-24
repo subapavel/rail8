@@ -341,7 +341,7 @@ export function runner(options: RunnerOptions): Runner {
             done();
           });
         });
-        // a clone stopped after this exit sends its KILL all the same, and ends after it
+        // a clone stopped before this exit sends its KILL all the same, and ends after it
         void drained.then(async () => {
           await killSent;
           finish(failure, code);
