@@ -147,7 +147,7 @@ jobs:
           cache: maven
       # The floors of platform/pom.xml (90 % for api and core, 75 % elsewhere) fail this job when missed.
       - name: Verify with the coverage floors
-        run: ./mvnw -B -ntp verify -Pit -Drail8.engines.skipTests
+        run: ./mvnw -B -ntp verify -Pit -Pcoverage -Drail8.engines.skipTests
       # Compares this night's coverage with the committed ci/coverage-baseline.json and reports any fall.
       - name: Coverage compared with the committed baseline
         if: always()

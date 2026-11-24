@@ -29,7 +29,8 @@ change touches. Everything in the repository is in English.
 
 1. One task = one GitHub issue = one fresh session, branched from `main`.
 2. The session writes the test and the code. Before it merges, it runs the build with the tests of the
-   modules it touched and of every module that depends on them (`./mvnw verify -pl <modules> -am -amd`),
+   modules it touched and of every module that depends on them (`./mvnw verify -pl <modules>,:rail8-component-mock,:rail8-sim -am -amd`; the two added modules are
+   needed by `rail8-cli` and `rail8-archtest`, which `-amd` builds but whose own upstream `-am` leaves out),
    and `python3 ci/change_guard.py --base origin/main`.
 3. It opens a pull request. Every commit is signed off (`git commit -s`, checked by DCO).
 4. One review by a different agent (`reviewer`), launched at the effort the class sets: correct behaviour, needless complexity, readable

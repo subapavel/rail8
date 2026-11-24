@@ -391,7 +391,8 @@
             </execution>
             <execution>
               <id>check-floors</id>
-              <phase>verify</phase>
+              <!-- runs only in the `coverage` profile -->
+              <phase>none</phase>
               <goals><goal>check</goal></goals>
               <configuration>
                 <rules>
@@ -466,6 +467,25 @@
   </build>
 
   <profiles>
+    <profile>
+      <!-- The coverage floors: `verify -Pit -Pcoverage` fails when a module's line or branch coverage is below its floor.
+           Without the profile a build reports coverage but does not enforce it. -->
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>check-floors</id>
+                <phase>verify</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <!-- Testcontainers tests: *IT classes; the `build` CI job runs `verify -Pit` so they count towards the floors (D-030) -->
       <id>it</id>
