@@ -587,6 +587,49 @@ export const CLONE_REFUSALS = {
   tooLarge: `the repository is over ${CLONE_MAX_BYTES / (1024 * 1024 * 1024)} GiB or ${CLONE_MAX_ENTRIES.toLocaleString('en-US')} files and folders on disk, so nothing was written: clone it in a terminal`,
 } as const;
 
+/** What New package answers when it is refused, in both halves. */
+export const NEW_PACKAGE_REFUSALS = {
+  body: 'the request is no {repository, name} of two texts',
+  repository: "the repository name must be one segment of at most 100 letters, digits, '.', '_' and '-', starting with neither '.' nor '-'",
+  name: "the package name must be at most 64 lowercase letters, digits and '-', starting with a letter",
+  exists: "the working folder holds an entry of the repository's name already: nothing was written; choose another name, or rename or remove that entry",
+  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was made',
+  noIdentity: 'git gives no author identity: set it in a terminal with git config user.name and git config user.email; nothing was made',
+  gitFailed: 'git could not make the first commit, as git and the hooks say; nothing was made',
+} as const;
+
+/** Whether `name` is a package name, as `package.yaml`'s schema takes it: lowercase letters, digits and `-`, starting with a letter, at most 64 characters. */
+export function isPackageName(name: string): boolean {
+  return /^[a-z][a-z0-9-]{0,63}$/.test(name);
+}
+
+/**
+ * `body` as New package takes it, or its refusal: 400 when it is no `{repository, name}` of two texts, or the
+ * repository name is no name of a package's folder; 422 when `package.yaml`'s schema refuses the package name.
+ */
+export function newPackageBodyOf(body: unknown): { repository: string; name: string } | { status: 400 | 422; error: string } {
+  if (!isRecord(body) || typeof body.repository !== 'string' || typeof body.name !== 'string') return { status: 400, error: NEW_PACKAGE_REFUSALS.body };
+  if (!isRepositoryName(body.repository)) return { status: 400, error: NEW_PACKAGE_REFUSALS.repository };
+  if (!isPackageName(body.name)) return { status: 422, error: NEW_PACKAGE_REFUSALS.name };
+  return { repository: body.repository, name: body.name };
+}
+
+/**
+ * The files of a new package named `name`, by path: `package.yaml` at version 0.1.0 with no dependency, `package.lock`
+ * as `rail8 lock` writes it with no dependency, and `.gitattributes`, which keeps every file's bytes as they are.
+ */
+export function newPackageFiles(name: string): Record<string, string> {
+  return {
+    'package.yaml': `schemaVersion: 1\nkind: package\nname: ${name}\nversion: 0.1.0\ndependencies: []\n`,
+    'package.lock':
+      '# written by rail8 lock: the direct dependencies, sorted by name, each with its content digest, repository and commit\nschemaVersion: 1\nkind: lock\ndependencies: []\n',
+    '.gitattributes': '* -text\n',
+  };
+}
+
+/** The message of a new package's first commit. */
+export const newPackageMessage = (name: string) => `Create package ${name}`;
+
 /** `rail8 lock` runs at most 120 s, and writes at most 1 MiB on each stream. */
 export const LOCK_LIMITS = { ms: 120_000, bytes: 1024 * 1024 } as const;
 

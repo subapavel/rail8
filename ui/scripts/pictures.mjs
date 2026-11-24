@@ -75,6 +75,8 @@ const SCENES = {
   'packages-get': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/invoices.git')],
   'packages-get-refused': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/payroll.git'), press('Get')],
   'packages-got': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/invoices.git'), press('Get')],
+  'packages-new': [menu('Packages'), press('New package'), fill('Repository', 'invoices'), fill('Package name', 'Invoices')],
+  'packages-new-refused': [menu('Packages'), press('New package'), fill('Repository', 'orders'), fill('Package name', 'orders'), press('Create')],
   'menu-collapsed': [menu('Packages'), pkg('orders'), collapse],
   canvas: [menu('Mappings'), studio, tab('Definition')],
   login: [visit('out')],

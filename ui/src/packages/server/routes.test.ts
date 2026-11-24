@@ -12,7 +12,7 @@ import { FakeTimer } from './fakeTimer.ts';
 import { gitPackages, type GitPackagesOptions } from './routes.ts';
 import { runner, type Runner } from './runner.ts';
 import { realTimer } from './timer.ts';
-import { LOCK_REFUSALS } from '../rules.ts';
+import { LOCK_REFUSALS, NEW_PACKAGE_REFUSALS } from '../rules.ts';
 
 const ORIGIN = 'http://localhost:5173';
 const idle: Runner = { run: () => Promise.reject(new Error('no git in this test')), undoable: () => Promise.reject(new Error('no git in this test')), close: async () => {} };
@@ -82,7 +82,7 @@ describe('the routes of the git half', () => {
   test('answer 404 for a path under /git they do not serve, and 405 for another method', async () => {
     const call = await serve();
     expect(await call('/git/nothing')).toMatchObject({ status: 404, body: { error: 'the git half has no route /git/nothing' } });
-    expect(await call('/git/packages', 'POST')).toMatchObject({ status: 405, body: { error: 'GET is the only way to call /git/packages' } });
+    expect(await call('/git/packages', 'PUT')).toMatchObject({ status: 405, body: { error: 'GET and POST are the only ways to call /git/packages' } });
   });
 
   test('take a commit by POST alone, and every other route of a package by GET alone', async () => {
@@ -111,6 +111,15 @@ describe('the routes of the git half', () => {
     await new Promise<void>((done) => server!.close(() => done()));
     server = undefined;
     expect(await (await serve({ writable: false }))('/git/packages/orders/lock', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: LOCK_REFUSALS.readOnly } });
+  });
+
+  test('take a new package by POST, among the writes of the working folder, and refuse it with 403 while the working folder is read-only, before its body is read', async () => {
+    const busy: WorkingFolderWrites = () => undefined;
+    const call = await serve({ writes: busy });
+    expect(await call('/git/packages', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
+    await new Promise<void>((done) => server!.close(() => done()));
+    server = undefined;
+    expect(await (await serve({ writable: false }))('/git/packages', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: NEW_PACKAGE_REFUSALS.readOnly } });
   });
 
   test('refuse a commit with 403 while the working folder is read-only, before its body is read', async () => {

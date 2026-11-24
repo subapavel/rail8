@@ -191,7 +191,7 @@ export interface World {
   waiting(): Promise<void>;
   /** Lets the `held` sources answer. */
   release(): void;
-  /** The hidden folders a clone is made in, left in the working folder. */
+  /** The hidden folders a clone or a new package is made in, left in the working folder. */
   leftovers(): Promise<string[]>;
   close(): Promise<void>;
 }

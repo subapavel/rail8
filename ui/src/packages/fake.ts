@@ -11,6 +11,7 @@ import {
   type Deployed,
   type Dependency,
   type LockAnswer,
+  type NewPackageAnswer,
   type LockedPin,
   type FetchAnswer,
   type FileVersion,
@@ -47,6 +48,10 @@ import {
   LOG_MAX,
   LOG_PAGE,
   manifestOf,
+  NEW_PACKAGE_REFUSALS,
+  newPackageBodyOf,
+  newPackageFiles,
+  newPackageMessage,
   MAX_LISTED,
   MAX_PACKAGES,
   oncePerPath,
@@ -575,6 +580,33 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       } finally {
         cloning = false;
       }
+    },
+    async create(repository, name): Promise<NewPackageAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, NEW_PACKAGE_REFUSALS.readOnly);
+      const asked = newPackageBodyOf(JSON.parse(JSON.stringify({ repository, name })) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      if (!state.workspace) throw refused(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+      return lock(async () => {
+        if (state.folders.some((f) => f.name === repository)) throw refused(409, NEW_PACKAGE_REFUSALS.exists);
+        if (state.identity === null) throw refused(422, NEW_PACKAGE_REFUSALS.noIdentity);
+        const files = newPackageFiles(name);
+        const folder: FakeFolder = {
+          name: repository,
+          git: 'clone',
+          commits: [],
+          head: { branch: 'main', commit: null },
+          upstream: null,
+          index: { ...files },
+          disk: { ...files },
+          operation: null,
+          conflicts: [],
+        };
+        await commitOf(folder, { ...files }, newPackageMessage(name), state.identity.name);
+        state.folders.push(folder);
+        return { repository, package: await stateOf(folder) };
+      });
     },
     async file(repository, rev, path): Promise<FileVersion> {
       const folder = packageOf(repository);

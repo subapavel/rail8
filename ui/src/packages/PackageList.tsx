@@ -1,4 +1,4 @@
-import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CloudDownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
@@ -7,6 +7,7 @@ import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
 import { GetPackageDialog } from './GetPackageDialog';
+import { NewPackageDialog } from './NewPackageDialog';
 import { BranchFact, CommitFact, DeployedFact, UpstreamFact } from './parts';
 import { MAX_PACKAGES } from './rules';
 
@@ -21,8 +22,8 @@ export interface PackageListProps {
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; list: Listed; at: Date };
 
 /**
- * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh and Get
- * a package… in the card's corner; Get a package… is off on a server that takes no writes. Each row holds the repository, which opens the package's tab, the package's name and version, the
+ * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh, New
+ * package and Get a package… in the card's corner; New package and Get a package… are off on a server that takes no writes. Each row holds the repository, which opens the package's tab, the package's name and version, the
  * branch, the last commit, ahead and behind the upstream as of the last fetch, the changed files, and what the node it
  * names runs of it. Above it, a warning while the node finds its git credentials refused. The folders that are no package are
  * listed in a card below, each with the reason. Without a working folder it says how to set one; a refusal, such as git
@@ -33,6 +34,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
   const [asked, setAsked] = useState(0);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const [getting, setGetting] = useState(false);
+  const [making, setMaking] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -48,6 +50,12 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
   const refreshButton = (
     <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
       Refresh
+    </Button>
+  );
+
+  const newButton = (writable: boolean, key = 'new') => (
+    <Button key={key} icon={<PlusOutlined aria-hidden />} disabled={!writable} onClick={() => setMaking(true)}>
+      New package
     </Button>
   );
 
@@ -101,6 +109,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           headerTitle={<h2>Packages of the working folder</h2>}
           toolBarRender={() => [
             refreshButton,
+            newButton(list.writable),
             getButton(list.writable),
           ]}
           locale={{
@@ -109,11 +118,16 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
                 description={
                   <>
                     <Typography.Title level={2}>No packages</Typography.Title>
-                    The working folder holds no clone with <code>package.yaml</code> at its root. Get one from its git host with Get a package….
+                    The working folder holds no clone with <code>package.yaml</code> at its root. Make one with New package, or get one from its git host with Get a package….
                   </>
                 }
               >
-                {list.writable && getButton(true, 'get-empty')}
+                {list.writable && (
+                  <Flex gap="small" justify="center">
+                    {newButton(true, 'new-empty')}
+                    {getButton(true, 'get-empty')}
+                  </Flex>
+                )}
               </Empty>
             ),
           }}
@@ -177,6 +191,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
       }
     >
       {body}
+      {making && <NewPackageDialog api={api} onMade={refresh} onPackage={(repository) => onOpen(repository, true)} onClose={() => setMaking(false)} />}
       {getting && <GetPackageDialog api={api} onCloned={refresh} onPackage={(repository) => onOpen(repository, true)} onClose={() => setGetting(false)} />}
     </Page>
   );
