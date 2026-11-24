@@ -174,8 +174,6 @@ export interface TokensApi {
   revokeMine(id: string): Promise<void>;
   /** Every user's live tokens, or those that expire within `days` days, with the ceiling. */
   list(days?: number): Promise<Tokens>;
-  /** The ceiling alone. */
-  ceiling(): Promise<Ceiling>;
   /** Issues a token of the technical account `user`. */
   issue(user: string, name: string, days: number): Promise<Issued>;
   /** Revokes any user's token. */
@@ -192,11 +190,6 @@ export function httpTokensApi(send: typeof fetch = uiFetch): TokensApi {
     issueMine: (name, days, password) => callNode<Issued>(send, '/admin/me/tokens', { body: { name, days, password } }),
     revokeMine: (id) => callNode<void>(send, `/admin/me/tokens/${token(id)}/revoke`, {}),
     list: (days) => callNode<Tokens>(send, days === undefined ? '/admin/tokens' : `/admin/tokens?expiringWithin=P${days}D`),
-    // the node gives the ceiling with a list of tokens: the shortest it lists is of those that expire within a day
-    ceiling: async () => {
-      const { maxDays, defaultDays } = await callNode<Tokens>(send, '/admin/tokens?expiringWithin=P1D');
-      return { maxDays, defaultDays };
-    },
     issue: (user, name, days) => callNode<Issued>(send, `${userPath(user)}/tokens`, { body: { name, days } }),
     revoke: (id) => callNode<void>(send, `/admin/tokens/${token(id)}/revoke`, {}),
     setCeiling: (maxDays) => callNode<Ceiling>(send, '/admin/tokens/ceiling', { body: { maxDays } }),

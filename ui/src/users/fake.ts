@@ -92,8 +92,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * The tokens of the users of `state`, acted on by `actor` at `now`, whose password is `password`. It keeps the node's
  * rules, each refused with the node's own words: a name of the token's form, 1 day to the ceiling, one live token of a
  * name and 20 per user, a technical account's tokens issued by an administrator and a person's by the person, the
- * password asked again (403), and the ceiling 1 to 365 days, which shortens a live token that would outlive it. A token's id is 16 hex digits, different each time; an id
- * it does not find is 404.
+ * password asked again (403), and the ceiling 1 to 365 days, which shortens a live token that would outlive it. A
+ * token's id is 16 hex digits, different each time; an id it does not find is 404.
  */
 export function fakeTokensApi(state: FakeUsers, actor: string, now: () => Date, password: string): TokensApi {
   let issued = 0;
@@ -147,9 +147,6 @@ export function fakeTokensApi(state: FakeUsers, actor: string, now: () => Date, 
       const tokens = live(state.users);
       const until = days === undefined ? Infinity : now().getTime() + days * DAY_MS;
       return { tokens: tokens.filter((t) => Date.parse(t.expiresAt) <= until), ...ceiling() };
-    },
-    async ceiling() {
-      return ceiling();
     },
     async issue(name, tokenName, days) {
       const user = find(name);
