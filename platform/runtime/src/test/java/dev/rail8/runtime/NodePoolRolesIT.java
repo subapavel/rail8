@@ -52,7 +52,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * CORE-17 (D-130 draft, F-27 I4): a node's Postgres sessions by role, observed in {@code pg_stat_activity}. A node of
  * {@code RAIL8_PG_POOL_SIZE} 4 splits it 2 + 2 (intake, work); every session it opens names its role and the node
- * ({@code rail8-<role>@<nodeId>}: intake, work, membership, listen), and a work pool held by two parks waiting on a lock
+ * ({@code rail8-<role>@<nodeId>}: intake, work, access, membership, listen), and a work pool held by two parks waiting on a lock
  * does not delay an at-least-once save: the ACK path touches the intake pool only.
  *
  * <p>The flow: {@code invoice-async} over the demo package ({@link InvoiceAsyncIT}); a body that is not XML is accepted (202,
@@ -68,6 +68,7 @@ class NodePoolRolesIT {
     static final String NODE = "node-roles";
     static final String INTAKE = "rail8-intake@" + NODE;
     static final String WORK = "rail8-work@" + NODE;
+    static final String ACCESS = "rail8-access@" + NODE;
     static final String MEMBERSHIP = "rail8-membership@" + NODE;
     static final String LISTEN = "rail8-listen@" + NODE;
     static final byte[] NO_XML = "this is no invoice".getBytes(StandardCharsets.UTF_8);
@@ -170,7 +171,10 @@ class NodePoolRolesIT {
         return NodeIT.send(client, "POST", node.httpPort(), "/http/in", NO_XML, "application/xml");
     }
 
-    /** P3: every session of a 2 + 2 node names its role and the node; each pool within its share, one membership and one LISTEN connection. */
+    /**
+     * P3: every session of a 2 + 2 node names its role and the node; each pool within its share, the admin API's access pool
+     * within its 2, one membership and one LISTEN connection.
+     */
     @Test
     void everySessionNamesItsRole() throws Exception {
         try (HttpClient client = NodeIT.http()) {
@@ -180,12 +184,14 @@ class NodePoolRolesIT {
             NodeIT.until(() -> count("select count(*) from dlq") == 1, "fixture: a worker ran it and parked it (the work pool was used)");
 
             Map<String, Long> sessions = sessions();
-            assertTrue(Set.of(INTAKE, WORK, MEMBERSHIP, LISTEN).containsAll(sessions.keySet()),
-                    "every session of the node names one of its four roles at " + NODE + ": " + sessions);
+            assertTrue(Set.of(INTAKE, WORK, ACCESS, MEMBERSHIP, LISTEN).containsAll(sessions.keySet()),
+                    "every session of the node names one of its five roles at " + NODE + ": " + sessions);
             long intake = sessions.getOrDefault(INTAKE, 0L);
             long work = sessions.getOrDefault(WORK, 0L);
             assertTrue(intake >= 1 && intake <= 2, "the intake pool (2 of 4) holds 1 or 2 sessions, the save used it: " + sessions);
             assertTrue(work >= 1 && work <= 2, "the work pool (the other 2) holds 1 or 2 sessions, the park used it: " + sessions);
+            long access = sessions.getOrDefault(ACCESS, 0L);
+            assertTrue(access >= 1 && access <= 2, "the access pool holds 1 or 2 sessions, the deploy's authentication used it: " + sessions);
             assertEquals(1L, sessions.getOrDefault(MEMBERSHIP, 0L), "the node lease's own connection: " + sessions);
             assertEquals(1L, sessions.getOrDefault(LISTEN, 0L), "the work events' LISTEN connection: " + sessions);
         }

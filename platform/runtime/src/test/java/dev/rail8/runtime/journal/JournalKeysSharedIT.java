@@ -6,6 +6,7 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,6 +19,7 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.Security;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -38,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the first use of a tenant on a node that did not see another node make its key takes that key — one key per tenant —, and
  * under another master key it is refused naming the key id; a wrapped key of another length refuses the start naming its
  * id, and so does a row that unwraps under the master key to a key of another length (an AES-128 key): no tenant key is
- * weaker than 256 bits; a master key that is no AES key makes no tenant key and writes no row.
+ * weaker than 256 bits; a master key that is no AES key makes no tenant key and writes no row, whatever providers the JVM holds.
  */
 class JournalKeysSharedIT {
 
@@ -161,6 +163,28 @@ class JournalKeysSharedIT {
         assertInstanceOf(JournalKeyException.class, e, "refused: " + e);
         assertTrue(Pattern.compile("\\b" + id + "\\b").matcher(text(e)).find(), "names the key id " + id + ": " + text(e));
         assertCarriesNoKey(text(e), List.of(), MASTER.getEncoded(), short128);
+    }
+
+    /**
+     * The same refusal while the JVM holds a provider that takes any key's bytes as AES: Bouncy Castle, registered for this case
+     * and removed after it. The journal refuses the master key itself, whatever providers the JVM holds.
+     */
+    @Test
+    void aMasterKeyThatIsNoAesKeyMakesNoTenantKeyWhateverProvidersTheJvmHolds() throws Exception {
+        assertNull(Security.getProvider(BouncyCastleProvider.PROVIDER_NAME), "fixture: no Bouncy Castle provider before the case");
+        SecretKey hmac = new SecretKeySpec(material(113, 32), "HmacSHA256");
+        Security.addProvider(new BouncyCastleProvider());
+        try {
+            Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.ENCRYPT_MODE, hmac, new GCMParameterSpec(128, new byte[12]));   // fixture: a cipher takes it
+            JournalKeys keys = load(hmac);
+
+            Exception e = assertThrows(Exception.class, () -> keyOf(keys, "default"));
+
+            assertInstanceOf(IllegalStateException.class, e, "refused: " + e);
+            assertEquals(List.of(), rows(), "no row is written");
+        } finally {
+            Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
+        }
     }
 
     @Test

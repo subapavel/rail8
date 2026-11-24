@@ -91,6 +91,12 @@ import java.util.function.Function;
  */
 public final class SftpComponent implements Component {
 
+    static {
+        // SSHD registers Bouncy Castle with the JVM when that jar is on the classpath, and then makes its ciphers, keys and
+        // signatures there; it stays on the JDK's providers instead. This runs before any SSHD client of this class exists.
+        SecurityUtils.setAPrioriDisabledProvider(SecurityUtils.BOUNCY_CASTLE, true);
+    }
+
     /** The file's name. */
     public static final Key<String> FILE = new Key<>("sftp.file");
     /** The file's full remote path. */

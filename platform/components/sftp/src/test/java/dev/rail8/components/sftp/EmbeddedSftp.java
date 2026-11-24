@@ -17,6 +17,7 @@ import org.apache.sshd.sftp.server.SftpSubsystemFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.invoke.MethodHandles;
 import java.net.URI;
 import java.nio.file.CopyOption;
 import java.nio.file.Files;
@@ -49,6 +50,16 @@ import java.util.stream.Stream;
  * <p>Public, with what a test of another module needs (the sftp test-jar): runtime's two-node lease test (P2-02L).
  */
 public final class EmbeddedSftp implements AutoCloseable {
+
+    static {
+        // the component's class first, before this server touches SSHD: it keeps SSHD on the JDK's providers when Bouncy
+        // Castle is on the test's classpath
+        try {
+            MethodHandles.lookup().ensureInitialized(SftpComponent.class);
+        } catch (IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     static final String USER = "rail8";
     static final String PASSWORD = "s3cret-for-tests";

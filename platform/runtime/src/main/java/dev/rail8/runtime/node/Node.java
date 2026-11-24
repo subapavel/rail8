@@ -86,9 +86,9 @@ import java.util.function.Supplier;
  * A running node: the Postgres stores, the blob store, the components and the admin API on its caller's
  * Vert.x. {@link #start} and {@link #close} block on Vert.x futures: call them on a virtual thread.
  *
- * <p>{@code start} builds the two pools (the intake pool of {@code RAIL8_PG_POOL_INTAKE} connections for the
+ * <p>{@code start} builds the three pools (the intake pool of {@code RAIL8_PG_POOL_INTAKE} connections for the
  * at-least-once saves and the journal's segment rows, the work pool of the rest of {@code RAIL8_PG_POOL_SIZE} for everything
- * else; no connection yet), the timer, ids and clock, builds the components from them and from the
+ * else, and the access pool of {@value #ACCESS_POOL_SIZE} connections for the admin API's users and sessions; no connection yet), the timer, ids and clock, builds the components from them and from the
  * node's blob store (bound once the journal is open, see below) and its HTTP port ({@code RAIL8_HTTP_HOST}:{@code RAIL8_HTTP_PORT},
  * not listening yet), refuses two components for one scheme and a component whose HTTP prefix is refused
  * ({@link SharedHttpPort#prefixes}) (in every environment) and, in a deployed environment, a mock binding — the scheme {@code mock}, or a component
@@ -116,8 +116,8 @@ import java.util.function.Supplier;
  * what the pool's records name ({@link Deployments#restore}: rows that cannot be read or a data directory that cannot be
  * written fail the start; a package or a flow that cannot be restored is listed FAILED and the node starts), builds the
  * {@link Retention} job over the work pool, the clock and the timer ({@code RAIL8_RETENTION_*}, {@code RAIL8_AUDIT_MAX_AGE}), the
- * users and sessions of the admin API over the pool ({@link PgAccess}; a WARNING when {@code RAIL8_ADMIN_TOKEN} is the emergency
- * key) and only then starts the admin server with the deploy, work and retry routes, the flows' CPU (the sampler's aggregate, read every 5 s on the node's timer and failed once a read failed, or off) and the health checks
+ * users and sessions of the admin API over the access pool ({@link PgAccess}, {@value #ACCESS_POOL_SIZE} connections of its own,
+ * so the admin API's door never waits for the work pool; a WARNING when {@code RAIL8_ADMIN_TOKEN} is the emergency key) and only then starts the admin server with the deploy, work and retry routes, the flows' CPU (the sampler's aggregate, read every 5 s on the node's timer and failed once a read failed, or off) and the health checks
  * {@code postgres}, {@code deployments} (DEGRADED while
  * anything is listed FAILED or RESTARTING, never DOWN, {@link Deployments#health}) and {@code journal} ({@link Journal#health}: DOWN once it failed and
  * stopped, DEGRADED while a segment row is retried), then the
@@ -125,7 +125,7 @@ import java.util.function.Supplier;
  * the start, then the journal's {@link SegmentSweeper} ({@code RAIL8_JOURNAL_SWEEP_*}, its first pass an interval later); when any of this fails, what was opened closes again — the deployments first (the
  * restored flows stop while the pools are open; a stop that fails is added to the start's failure as suppressed), then the HTTP port, then the node lease
  * and its connection, then the sampler, then the work queue's completion batch, then the work events, then the peer link (its reads,
- * then its listener), then the journal, the store, the intake pool, the work pool, the Valkey client — so nothing is left running, listening
+ * then its listener), then the journal, the store, the intake pool, the work pool, the access pool, the Valkey client — so nothing is left running, listening
  * or pooled; {@code /ready}'s lifecycle is UP only once the start returns. {@code close} first marks the node not ready
  * ({@code /ready} 503), then closes the deployments — no deploy is taken any more and every deployed flow stops within {@code RAIL8_STOP_DEADLINE}, its lease
  * released, while the admin port still answers; a request a consumer took on the HTTP port and has not answered by that deadline is
@@ -134,8 +134,8 @@ import java.util.function.Supplier;
  * batch in flight commits or rolls back first), then the sweeper (its pass in flight ends first), then the work queue's completion
  * batch (every completion handed over answered first), then the work events, then the peer link (its reads, then its
  * listener), then closes the journal (its spills and persists in flight first; its {@code LOCK}
- * given up), then flushes and closes the message store, then closes the intake pool, then the work pool, then the Valkey
- * client, each step even when the one before failed; Vert.x stays its caller's.
+ * given up), then flushes and closes the message store, then closes the intake pool, then the work pool, then the access pool,
+ * then the Valkey client, each step even when the one before failed; Vert.x stays its caller's.
  *
  * @since 0.1
  */
@@ -184,6 +184,8 @@ public final class Node implements AutoCloseable {
     private final Pool intake;
     /** The work pool: every other statement of the node. */
     private final Pool pool;
+    /** The access pool: the admin API's users, sessions and login limits, and the audit rows written at its door. */
+    private final Pool access;
     /** Closes the Valkey client of the poller leases; nothing when they are held in memory. */
     private final Runnable closeValkey;
     private final Runnable closeSignals;
@@ -197,7 +199,7 @@ public final class Node implements AutoCloseable {
 
     private Node(Deployments deployments, SharedHttpPort http, NodeLease lease, PgMembership membership, Optional<CpuSampler> sampler, AdminServer admin,
                  int adminPort, Retention retention, SegmentSweeper sweeper, Journal journal, PgMessageStore messages, Pool intake, Pool pool,
-                 Runnable closeValkey, Runnable closeSignals, Runnable closeWork, AtomicBoolean ready, PeerReads peerReads,
+                 Pool access, Runnable closeValkey, Runnable closeSignals, Runnable closeWork, AtomicBoolean ready, PeerReads peerReads,
                  PeerServer peerServer) {
         this.deployments = deployments;
         this.http = http;
@@ -212,6 +214,7 @@ public final class Node implements AutoCloseable {
         this.messages = messages;
         this.intake = intake;
         this.pool = pool;
+        this.access = access;
         this.closeValkey = closeValkey;
         this.closeSignals = closeSignals;
         this.closeWork = closeWork;
@@ -267,6 +270,9 @@ public final class Node implements AutoCloseable {
         PgConnectOptions workConnect = connectOptions(pg, "work", config.nodeId());
         Pool intakePool = PgBuilder.pool().connectingTo(intakeConnect).with(intakeSize).using(vertx).build();   // the ACK path's only pool
         Pool pool = PgBuilder.pool().connectingTo(workConnect).with(workSize).using(vertx).build();
+        // the admin API's door reads here, so a deploy or an undeploy is let in while the work queue holds the work pool
+        Pool accessPool = PgBuilder.pool().connectingTo(connectOptions(pg, "access", config.nodeId()))
+                .with(bounded(new PoolOptions().setMaxSize(ACCESS_POOL_SIZE), pg)).using(vertx).build();
         PgMessageStore messages = null;
         Journal journal = null;   // once open: closed after the deployments, before the store and the pools its rows go through
         Runnable closeValkey = () -> {};   // the Valkey client once built: closed last
@@ -377,7 +383,7 @@ public final class Node implements AutoCloseable {
             restored.restore();   // before the admin port opens: what the pool recorded runs before a deploy can be taken
             restored.startFollowing();   // every node runs what the pool's records name, a deploy on another node included
             Retention retention = new Retention(pool, clock, timer, config.retention());
-            PgAccess access = new PgAccess(pool, clock, new Argon2id(new SecureRandom()), new HashPlaces(), new SecureRandom(), config.admin().token());
+            PgAccess access = new PgAccess(accessPool, clock, new Argon2id(new SecureRandom()), new HashPlaces(), new SecureRandom(), config.admin().token());
             if (access.emergencyKey()) {
                 LOG.log(System.Logger.Level.WARNING, "RAIL8_ADMIN_TOKEN is the emergency key: it acts on users only, and every use is in the audit. "
                         + "Unset it and restart the node once an administrator can log in.");
@@ -397,7 +403,7 @@ public final class Node implements AutoCloseable {
             SegmentSweeper sweeper = new SegmentSweeper(opened, new PgSegmentRows(pool), intake::openSaves, config.journalSweep(), clock, timer);
             sweeper.start();
             Node node = new Node(restored, http, lease, membership, sampler, admin, port, retention, sweeper, opened, messages, intakePool, pool,
-                    closeValkey, closeSignals, closeWork, ready, peerReads, peerServer);
+                    accessPool, closeValkey, closeSignals, closeWork, ready, peerReads, peerServer);
             ready.set(true);   // the start's last act: from here /ready may answer UP
             return node;
         } catch (Throwable failure) {
@@ -428,7 +434,7 @@ public final class Node implements AutoCloseable {
                                 try {
                                     closePeers(peerReads, peerServer);   // before the journal it serves
                                 } finally {
-                                    closeStores(journal, messages, intakePool, pool, closeValkey);
+                                    closeStores(journal, messages, intakePool, pool, accessPool, closeValkey);
                                 }
                             }
                         }
@@ -438,6 +444,12 @@ public final class Node implements AutoCloseable {
             throw failure;
         }
     }
+
+    /**
+     * The connections of the access pool: the admin API's door reads a session, the key or the bridge marker on each request,
+     * and the login and the users' changes run short transactions; no connection is held while a password is hashed.
+     */
+    static final int ACCESS_POOL_SIZE = 2;
 
     /** The longest SQL text a connection caches prepared (characters): above the client's 2048, so the intake's KEEP (2514) is cached too. */
     static final int STATEMENT_CACHE_SQL_LIMIT = 8192;
@@ -480,7 +492,8 @@ public final class Node implements AutoCloseable {
     /**
      * {@link #connectOptions(NodeConfig.Pg)} — the one source of the server, the credentials, the session pins and TLS — with the
      * session named {@code rail8-<role>@<nodeId>} ({@code application_name}), so {@code pg_stat_activity} shows
-     * which pool or connection of which node a session is: {@code intake}, {@code work}, {@code membership} or {@code listen}.
+     * which pool or connection of which node a session is: {@code intake}, {@code work}, {@code access}, {@code membership},
+     * {@code listen} or {@code deploy}.
      */
     public static PgConnectOptions connectOptions(NodeConfig.Pg pg, String role, String nodeId) {
         return connectOptions(pg).addProperty("application_name", "rail8-" + role + "@" + nodeId);
@@ -560,7 +573,7 @@ public final class Node implements AutoCloseable {
      * completion batch (waits until every completion handed over is answered), then the work events
      * (their listening connection; nothing sent from then on), then the peer link (its reads, then its listener), then closes the
      * journal, then flushes and closes the message store, then closes
-     * the intake pool, then the work pool, then the Valkey client — each step even when the one before failed.
+     * the intake pool, then the work pool, then the access pool, then the Valkey client — each step even when the one before failed.
      */
     @Override
     public void close() {
@@ -596,7 +609,7 @@ public final class Node implements AutoCloseable {
                                         try {
                                             closePeers(peerReads, peerServer);   // after the flows that read, before the journal it serves
                                         } finally {
-                                            closeStores(journal, messages, intake, pool, closeValkey);
+                                            closeStores(journal, messages, intake, pool, access, closeValkey);
                                         }
                                     }
                                 }
@@ -611,36 +624,40 @@ public final class Node implements AutoCloseable {
     /**
      * Closes the journal (none yet: nothing to close; a failed close is thrown unchecked once the rest is closed, unless a later
      * close throws too: that one is thrown, as between the others), then
-     * flushes and closes the store (none yet: nothing to flush), then closes the intake pool, then the work pool, then the Valkey
-     * client (none: nothing) — each even when the one before failed.
+     * flushes and closes the store (none yet: nothing to flush), then closes the intake pool, then the work pool, then the access
+     * pool, then the Valkey client (none: nothing) — each even when the one before failed.
      */
-    private static void closeStores(Journal journal, PgMessageStore messages, Pool intake, Pool pool, Runnable closeValkey) {
+    private static void closeStores(Journal journal, PgMessageStore messages, Pool intake, Pool pool, Pool access, Runnable closeValkey) {
         try {
             if (journal != null) journal.close();
         } catch (IOException e) {
             throw new UncheckedIOException("the journal did not close", e);
         } finally {
-            closeStores(messages, intake, pool, closeValkey);
+            closeStores(messages, intake, pool, access, closeValkey);
         }
     }
 
-    private static void closeStores(PgMessageStore messages, Pool intake, Pool pool, Runnable closeValkey) {
+    private static void closeStores(PgMessageStore messages, Pool intake, Pool pool, Pool access, Runnable closeValkey) {
         try {
             if (messages != null) messages.close();
         } finally {
             try {
                 intake.close().await();
             } finally {
-                closePool(pool, closeValkey);
+                closePools(pool, access, closeValkey);
             }
         }
     }
 
-    private static void closePool(Pool pool, Runnable closeValkey) {
+    private static void closePools(Pool pool, Pool access, Runnable closeValkey) {
         try {
             pool.close().await();
         } finally {
-            closeValkey.run();
+            try {
+                access.close().await();
+            } finally {
+                closeValkey.run();
+            }
         }
     }
 
