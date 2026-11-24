@@ -127,10 +127,10 @@ interface Tx {
     void setCeiling(int maxDays);
 
     /**
-     * Every unrevoked token that expires after {@code now}, and later than its issue plus {@code maxDays}, made to expire then:
+     * Every unrevoked token that expires later than its issue plus {@code maxDays} made to expire then, expired already or not:
      * their number.
      */
-    int shortenTokens(int maxDays, Instant now);
+    int shortenTokens(int maxDays);
 
     /**
      * One attempt claimed on the row {@code (name, device)}: its failures with this one, or empty when the row is waiting. The

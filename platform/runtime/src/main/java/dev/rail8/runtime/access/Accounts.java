@@ -373,16 +373,30 @@ abstract class Accounts implements Access {
                 throw refusal(user.name(), Optional.of(user), claimed, "wrong-password", by.remote(), now,
                         AccessRefused.forbidden("wrong-password", "the password is wrong", Set.of()));
             }
-            query(tx -> { tx.forgive(user.name(), NAME_ROW, claimed); return null; });
-            return transaction(tx -> {
-                Tx.UserRow locked = tx.user(userId, Tx.Lock.UPDATE).orElseThrow(Accounts::sessionEnded);
-                if (tx.session(session).isEmpty()) throw sessionEnded();
-                if (locked.generation() != user.generation()) {
-                    throw AccessRefused.of(409, "the account changed while the password was checked: try again");
-                }
-                return issue(tx, by, locked, name, days, now);
+            // forgiven on its own, so a 409 of the issue below does not undo the forgive of a right password
+            transaction(tx -> {
+                unchanged(tx, userId, session, user);
+                tx.forgive(user.name(), NAME_ROW, claimed);
+                return null;
             });
+            return transaction(tx -> issue(tx, by, unchanged(tx, userId, session, user), name, days, now));
         }
+    }
+
+    /**
+     * The user's row taken {@code for update}, while {@code session} is live by the clock read after the lock and the account is
+     * as {@code read} found it before its password was checked.
+     *
+     * @throws AccessRefused 401 {@code session-ended}, 409 for an account changed meanwhile
+     */
+    private Tx.UserRow unchanged(Tx tx, long userId, String session, Tx.UserRow read) {
+        Tx.UserRow locked = tx.user(userId, Tx.Lock.UPDATE).orElseThrow(Accounts::sessionEnded);
+        Instant now = clock.instant();
+        if (tx.session(session).filter(s -> live(s.session(), now)).isEmpty()) throw sessionEnded();
+        if (locked.generation() != read.generation()) {
+            throw AccessRefused.of(409, "the account changed while the password was checked: try again");
+        }
+        return locked;
     }
 
     @Override
@@ -439,15 +453,24 @@ abstract class Accounts implements Access {
     }
 
     @Override
-    public Tokens tokens(Optional<String> user, Optional<Duration> expiringWithin) {
+    public Tokens ownTokens(Caller who) {
+        return listed(OptionalLong.of(who.user().orElseThrow(() -> AccessRefused.of(400, "only a user holds tokens"))), Optional.empty());
+    }
+
+    @Override
+    public Tokens tokens(Optional<Duration> expiringWithin) {
         if (expiringWithin.filter(w -> w.isNegative() || w.isZero() || w.compareTo(Duration.ofDays(TOKEN_MAX_DAYS)) > 0).isPresent()) {
             throw AccessRefused.of(400, "expiringWithin is above zero and at most P365D, not " + expiringWithin.get());
         }
+        return listed(OptionalLong.empty(), expiringWithin);
+    }
+
+    /** The live tokens of {@code owner}, or of everyone, with the ceiling read first: a lowering between the two reads shows under the old one. */
+    private Tokens listed(OptionalLong owner, Optional<Duration> expiringWithin) {
         Instant now = clock.instant();
         return query(tx -> {
-            OptionalLong owner = user.isEmpty() ? OptionalLong.empty()
-                    : OptionalLong.of(tx.user(user.get(), Tx.Lock.NONE).orElseThrow(() -> noSuchUser(user.get())).id());
-            return new Tokens(tx.liveTokens(owner, now, expiringWithin.map(now::plus)), ceiling(tx.ceiling(Tx.Lock.NONE)));
+            Ceiling ceiling = ceiling(tx.ceiling(Tx.Lock.NONE));
+            return new Tokens(tx.liveTokens(owner, now, expiringWithin.map(now::plus)), ceiling);
         });
     }
 
@@ -483,7 +506,7 @@ abstract class Accounts implements Access {
         return transaction(tx -> {
             int from = tx.ceiling(Tx.Lock.UPDATE);
             if (from != maxDays) {
-                int shortened = maxDays < from ? tx.shortenTokens(maxDays, now) : 0;
+                int shortened = maxDays < from ? tx.shortenTokens(maxDays) : 0;
                 tx.setCeiling(maxDays);
                 tx.audit(row(by, now, "token.ceiling", "token-ceiling",
                         new JsonObject().put("from", from).put("to", maxDays).put("shortened", shortened)));
@@ -499,9 +522,10 @@ abstract class Accounts implements Access {
 
     @Override
     public void keyUsed(Caller who, String method, String path, String remote, Optional<Action> action, boolean allowed) {
+        String shown = Credentials.redacted(path);
         LOG.log(System.Logger.Level.WARNING, () -> "the " + (who.via() == Via.EMERGENCY_KEY ? "emergency key" : "shared token, as the emergency key,")
-                + " was used: " + method + " " + path + " from " + remote + (allowed ? "" : ", refused"));
-        JsonObject detail = new JsonObject().put("method", method).put("path", path).put("remote", remote).put("allowed", allowed)
+                + " was used: " + method + " " + shown + " from " + remote + (allowed ? "" : ", refused"));
+        JsonObject detail = new JsonObject().put("method", method).put("path", shown).put("remote", remote).put("allowed", allowed)
                 .put("action", action.map(Action::id).orElse(null));
         Instant now = clock.instant();
         try {

@@ -1165,9 +1165,10 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
   lists a notice naming `RAIL8_ADMIN_TLS_CERT`, its path, the certificate's subject and its
   `notAfter`; it is judged on each request by the node's clock. A new certificate takes a restart.
 - On a bind other than loopback without a certificate, the node starts with a WARNING and answers
-  403 `tls-required` to every login and every session, before the login's body is read; the
-  emergency key and the shared token go on. `RAIL8_ADMIN_TLS=off` states that the network to the
-  port is protected another way: logins and sessions are taken, and the node logs a WARNING of its
+  403 `tls-required` to every login, every session and every named token, before the login's body
+  is read; the emergency key and the shared token go on. `RAIL8_ADMIN_TLS=off` states that the
+  network to the port is protected another way: logins, sessions and named tokens are taken, and
+  the node logs a WARNING of its
   own at the start. `off` with a certificate, or any other value, refuses the start.
 
 - A user is a person or a technical account and holds roles: `administrator`, `developer`,
@@ -1186,10 +1187,14 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 - A named token, `rail8t_…`, is shown once and kept as its fingerprint. A person issues their own in
   a session, the password asked again and counted as a login; an administrator logged in issues a
   technical account's. A user holds at most 20 live, each named, and each expires: 90 days by default,
-  at most the installation's ceiling of 1 to 365 days. Lowering the ceiling shortens the live tokens
-  longer than it; raising it lengthens none. A token carries its user's roles but never does what needs
-  a person logged in (403 `session-required`): it changes no account. A revoke holds on every node at
-  the next request.
+  at most the installation's ceiling of 1 to 365 days. Lowering the ceiling shortens every unrevoked
+  token longer than it, expired by the node's clock or not, so a node whose clock lags refuses it
+  too; raising it lengthens none. Each node judges an expiry by its own clock. A token carries its
+  user's roles but never does what needs a person logged in (403 `session-required`): it changes no
+  account. A revoke holds on every node at the next request. A token answers 401 `token-expired`
+  until retention deletes its row, `RAIL8_AUDIT_MAX_AGE` after its stored expiry, and
+  `unknown-credential` after. A path that the audit or the log records keeps a pasted credential's
+  id but not its secret (`rail8t_<id>_***`).
 - `RAIL8_ADMIN_TOKEN` of the form `rail8k_…` (`rail8 key new`) is the emergency key: it reads and
   makes users, gives and takes the administrator role, blocks, resets passwords, ends sessions, reads
   and revokes tokens, and nothing else. Each use is written to the audit before anything runs, a use refused or of no route

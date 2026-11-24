@@ -156,6 +156,11 @@ abstract class AccessContract {
         return tokens.tokens().stream().map(Access.Token::id).toList();
     }
 
+    /** The ids of the live tokens of {@code user}, as an administrator sees them on A. */
+    List<String> held(String user) {
+        return a.user(user).orElseThrow().tokens().stream().map(Access.Token::id).toList();
+    }
+
     /** The failures the login limit counts for {@code name}, or empty when it has no row. */
     Optional<Integer> failures(String name) {
         return ((Accounts) a).query(tx -> tx.limit(name, NAME_ROW, false)).map(Tx.Limit::failures);
@@ -694,8 +699,29 @@ abstract class AccessContract {
         refused(409, () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
         hash.duringNextMatch(() -> b.endSessions(key(b).acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna"));
         refused(401, "session-ended", () -> a.issueOwnToken(self, other, "laptop", OptionalInt.empty()));
-        assertEquals(List.of(), a.tokens(Optional.of("anna"), Optional.empty()).tokens(), "no token was made");
+        assertEquals(List.of(), a.ownTokens(anna).tokens(), "no token was made");
         assertEquals(List.of(), audit("token.issue"));
+    }
+
+    @Test
+    void aSessionIdlePastItsTimeMakesNoToken() {
+        Caller anna = a.authenticate(bearer(session("anna")), Optional.empty());
+        Actor self = anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        hash.duringNextMatch(() -> clockA.advance(Duration.ofHours(2).plusMillis(1)));   // the session's row is still there
+        refused(401, "session-ended", () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        assertEquals(List.of(), a.ownTokens(anna).tokens(), "no token was made");
+    }
+
+    @Test
+    void aResetBetweenTheHashAndTheForgiveForgivesNothing() {
+        Caller anna = a.authenticate(bearer(session("anna")), Optional.empty());
+        Actor self = anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
+        hash.duringNextMatch(() -> {
+            b.resetPassword(key(b).acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna");   // deletes the name's limit row
+            ((Accounts) b).query(tx -> tx.claim("anna", NAME_ROW, clockB.instant()));   // a wrong first password on the new row
+        });
+        refused(401, "session-ended", () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        assertEquals(Optional.of(1), failures("anna"), "the failure after the reset stays counted");
     }
 
     @Test
@@ -746,7 +772,7 @@ abstract class AccessContract {
         Access.Issued next = issue("ci-deploy", "pipeline", 1);
         refused(401, "token-revoked", () -> a.authenticate(bearer(old.token()), Optional.empty()));
         assertEquals(old.id(), audit("token.issue").getLast().getJsonObject("detail").getString("replaced"));
-        assertEquals(List.of(next.id()), ids(a.tokens(Optional.of("ci-deploy"), Optional.empty())));
+        assertEquals(List.of(next.id()), held("ci-deploy"));
     }
 
     @Test
@@ -761,7 +787,7 @@ abstract class AccessContract {
         refused(409, () -> issue("ci-deploy", "t-21", 90));
         a.revokeToken(admin(Action.TOKEN_REVOKE), held.getFirst().id());
         issue("ci-deploy", "t-21", 90);
-        assertEquals(20, a.tokens(Optional.of("ci-deploy"), Optional.empty()).tokens().size());
+        assertEquals(20, held("ci-deploy").size());
     }
 
     /** Two nodes each issue a token of one account at once while it holds 19: one of the two is refused. */
@@ -778,7 +804,7 @@ abstract class AccessContract {
             start.countDown();
             first.join();
             second.join();
-            assertEquals(20, a.tokens(Optional.of(user), Optional.empty()).tokens().size(), "round " + round);
+            assertEquals(20, held(user).size(), "round " + round);
         }
     }
 
@@ -826,7 +852,7 @@ abstract class AccessContract {
     @Test
     void aLoweredCeilingShortensLiveTokensAndARaisedOneLengthensNone() {
         technical("ci-deploy");
-        assertEquals(new Access.Ceiling(365, 90), a.tokens(Optional.empty(), Optional.empty()).ceiling());
+        assertEquals(new Access.Ceiling(365, 90), a.tokens(Optional.empty()).ceiling());
         Access.Issued year = issue("ci-deploy", "year", 365);
         clockA.advance(Duration.ofDays(10));
         Access.Issued hundred = issue("ci-deploy", "hundred", 100);
@@ -841,7 +867,7 @@ abstract class AccessContract {
         refused(401, "token-expired", () -> b.authenticate(bearer(year.token()), Optional.empty()));
         Caller live = b.authenticate(bearer(hundred.token()), Optional.empty());
         assertEquals(Optional.of(T0.plus(Duration.ofDays(25))), b.expiresAt(live), "its issue plus the ceiling");
-        Access.Tokens listed = b.tokens(Optional.empty(), Optional.empty());
+        Access.Tokens listed = b.tokens(Optional.empty());
         assertEquals(List.of(hundred.id(), week.id()), ids(listed));
         assertEquals(List.of(T0.plus(Duration.ofDays(25)), T0.plus(Duration.ofDays(27))),
                 listed.tokens().stream().map(Access.Token::expiresAt).toList(), "a token shorter than the ceiling keeps its end");
@@ -860,9 +886,24 @@ abstract class AccessContract {
         refused(400, () -> a.changeCeiling(root, 366));
         assertEquals(List.of(new JsonObject().put("from", 365).put("to", 15).put("shortened", 2).put("remote", REMOTE),
                 new JsonObject().put("from", 15).put("to", 365).put("shortened", 0).put("remote", REMOTE)),
-                audit("token.ceiling").stream().map(r -> r.getJsonObject("detail")).toList(), "the expired token was not shortened");
+                audit("token.ceiling").stream().map(r -> r.getJsonObject("detail")).toList(), "a token that lives less than the ceiling keeps its end");
         assertEquals(List.of("keeper", "token-ceiling"), List.of(audit("token.ceiling").getFirst().getString("actor"),
                 audit("token.ceiling").getFirst().getString("subject")));
+    }
+
+    /** Node b is 20 s behind node a: a token that a lowering ends is refused on b too, though b's clock still sees it live. */
+    @Test
+    void aLoweringEndsATokenOnANodeBehindToo() {
+        technical("ci-deploy");
+        Access.Issued month = issue("ci-deploy", "month", 30);
+        clockA.advance(Duration.ofDays(30).plusSeconds(10));
+        clockB.advance(Duration.ofDays(30).plusSeconds(10));
+        refused(401, "token-expired", () -> a.authenticate(bearer(month.token()), Optional.empty()));
+        assertEquals("ci-deploy", b.authenticate(bearer(month.token()), Optional.empty()).name(), "live by node b's clock");
+
+        a.changeCeiling(admin(Action.TOKEN_CEILING), 10);
+        refused(401, "token-expired", () -> b.authenticate(bearer(month.token()), Optional.empty()));
+        assertEquals(1, audit("token.ceiling").getFirst().getJsonObject("detail").getInteger("shortened"), "counted, though expired on a");
     }
 
     @Test
@@ -875,17 +916,17 @@ abstract class AccessContract {
         Access.Issued nightly = issue("ci-deploy", "nightly", 60);
         a.revokeToken(admin(Action.TOKEN_REVOKE), issue("ci-deploy", "gone", 5).id());
 
-        Access.Tokens all = b.tokens(Optional.empty(), Optional.empty());
+        Access.Tokens all = b.tokens(Optional.empty());
         assertEquals(List.of(pipeline.id(), laptop.id(), nightly.id()), ids(all));
         assertEquals(new Access.Ceiling(365, 90), all.ceiling());
-        assertEquals(List.of(pipeline.id(), laptop.id()), ids(a.tokens(Optional.empty(), Optional.of(Duration.ofDays(30)))),
+        assertEquals(List.of(pipeline.id(), laptop.id()), ids(a.tokens(Optional.of(Duration.ofDays(30)))),
                 "within 30 days, its end included");
         assertEquals(List.of(new Access.Token(laptop.id(), "anna", "laptop", T0, "anna", T0.plus(Duration.ofDays(30)), Optional.empty())),
-                b.tokens(Optional.of("anna"), Optional.empty()).tokens());
+                b.ownTokens(anna).tokens());
         assertEquals(List.of(pipeline.id(), nightly.id()), a.user("ci-deploy").orElseThrow().tokens().stream().map(Access.Token::id).toList());
-        refused(400, () -> a.tokens(Optional.empty(), Optional.of(Duration.ZERO)));
-        refused(400, () -> a.tokens(Optional.empty(), Optional.of(Duration.ofDays(365).plusSeconds(1))));
-        refused(404, () -> a.tokens(Optional.of("nobody"), Optional.empty()));
+        refused(400, () -> a.tokens(Optional.of(Duration.ZERO)));
+        refused(400, () -> a.tokens(Optional.of(Duration.ofDays(365).plusSeconds(1))));
+        refused(400, () -> a.ownTokens(key(a)));   // only a user holds tokens
     }
 
     @Test
@@ -909,7 +950,7 @@ abstract class AccessContract {
     }
 
     private Optional<Instant> lastUsed(Access.Issued token) {
-        return a.tokens(Optional.empty(), Optional.empty()).tokens().stream().filter(t -> t.id().equals(token.id())).findFirst()
+        return a.tokens(Optional.empty()).tokens().stream().filter(t -> t.id().equals(token.id())).findFirst()
                 .orElseThrow().lastUsedAt();
     }
 
@@ -935,5 +976,14 @@ abstract class AccessContract {
                 view.getString("subject"), view.getString("via"), view.getString("credential")));
         assertEquals(new JsonObject().put("step", 2).put("remote", REMOTE), view.getJsonObject("detail"));
         assertTrue(view.getValue("user") != null, "the session's user");
+    }
+
+    @Test
+    void aCredentialPastedIntoAPathIsAuditedWithoutItsSecret() {
+        String secret = "s3cr-et_" + "x".repeat(35);
+        a.keyUsed(key(a), "POST", "/admin/tokens/rail8t_0123456789abcdef_" + secret + "/revoke", REMOTE, Optional.of(Action.TOKEN_REVOKE), true);
+        a.keyUsed(key(a), "GET", "/admin/rail8s_00112233445566ff_" + secret + "/rail8k_" + secret, REMOTE, Optional.empty(), false);
+        assertEquals(List.of("/admin/tokens/rail8t_0123456789abcdef_***/revoke", "/admin/rail8s_00112233445566ff_***/rail8k_***"),
+                audit("emergency-key.use").stream().map(r -> r.getJsonObject("detail").getString("path")).toList());
     }
 }
