@@ -15,8 +15,16 @@ const mapping = (target: string, fields: number) =>
   `${JSON.stringify({ formatVersion: 1, target: { root: { element: target } }, targetFieldMappings: Object.fromEntries(Array.from({ length: fields }, (_, n) => [`/${target}/Field${n}`, { boxes: {} }])) }, null, 2)}\n`;
 const lock = (version: string, more = '') =>
   `schemaVersion: 1\nkind: lock\ndependencies:\n  - name: "common"\n    version: "${version}"\n    content: "sha256:${'4'.repeat(64)}"\n    repository: "common"\n    commit: "${'c'.repeat(40)}"\n${more}`;
-/** The pin of the package customers at its commit as the pictures show it. */
-const CUSTOMERS_PIN = `  - name: "customers"\n    version: "1.0.0"\n    content: "sha256:${'5'.repeat(64)}"\n    repository: "customers"\n    commit: "${idFor('customers/Start the customers package')}"\n`;
+/** The commits of the package customers, oldest first: the node runs the second, and the last is its `HEAD`. */
+const CUSTOMER_COMMITS = ['Start the customers package', 'Match customers by their VAT id', "Keep each customer's language"];
+/** The pin of the package customers at its `HEAD` as the pictures show it. */
+const CUSTOMERS_PIN = `  - name: "customers"\n    version: "1.0.0"\n    content: "sha256:${'5'.repeat(64)}"\n    repository: "customers"\n    commit: "${idFor(`customers/${CUSTOMER_COMMITS[2]}`)}"\n`;
+/** A package the node runs from a repository outside the working folder, pinning the commit `pinned` of customers. */
+const consumerOf = (name: string, commit: string, pinned: string) => ({
+  repository: name,
+  commit: commit.repeat(40),
+  dependencies: [{ name: 'customers', repository: 'customers', commit: pinned, content: `sha256:${'5'.repeat(64)}` }],
+});
 
 const ORDERS = flow(
   'orders',
@@ -42,7 +50,9 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
  * commits on `main`, two of them not yet on its upstream, which has one of its own; the node runs the fifth commit;
  * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Of its three
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
- * `customers` is up to date and runs on the node, `common` runs nowhere, and a folder that is no package is listed below them.
+ * `customers` runs on the node one commit behind its `HEAD`, and two packages the node runs from other repositories pin
+ * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, and a folder that is no
+ * package is listed below them.
  * The node's pool has three nodes: `node-b` still runs the commit before the pool's record of `orders`, as it could not
  * fetch the record's commit.
  */
@@ -79,7 +89,15 @@ const SEED: Seed = {
       },
     },
     { folder: 'common', manifest: 'schemaVersion: 1\nkind: package\nname: common\nversion: 1.2.1\n', commits: ['Share the VAT rounding'], commitFiles: { 'Share the VAT rounding': { 'Share the VAT rounding.txt': null, 'flows/vat.xsl': XSL } } },
-    { folder: 'customers', commits: ['Start the customers package'], commitFiles: { 'Start the customers package': { 'Start the customers package.txt': null, 'flows/customers.yaml': flow('customers', 'crm-in', '  - type: to\n    name: erp\n    endpoint: erp-out\n') } } },
+    {
+      folder: 'customers',
+      commits: CUSTOMER_COMMITS,
+      commitFiles: {
+        [CUSTOMER_COMMITS[0]!]: { [`${CUSTOMER_COMMITS[0]}.txt`]: null, 'flows/customers.yaml': flow('customers', 'crm-in', '  - type: to\n    name: erp\n    endpoint: erp-out\n') },
+        [CUSTOMER_COMMITS[1]!]: { [`${CUSTOMER_COMMITS[1]}.txt`]: null, 'flows/customers.xsl': XSL },
+        [CUSTOMER_COMMITS[2]!]: { [`${CUSTOMER_COMMITS[2]}.txt`]: null, 'schemas/customer.xsd': '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>\n' },
+      },
+    },
   ],
   plain: ['notes'],
   sources: [
@@ -88,17 +106,19 @@ const SEED: Seed = {
   ],
   node: [
     { repository: 'orders', commit: 'Test the happy path of an order', dependencies: [{ name: 'common', repository: 'common', commit: 'c'.repeat(40), content: `sha256:${'4'.repeat(64)}` }] },
-    { repository: 'customers', commit: 'Start the customers package' },
+    { repository: 'customers', commit: CUSTOMER_COMMITS[1]! },
+    consumerOf('billing', 'b', CUSTOMER_COMMITS[1]!),
+    consumerOf('shipping', 'e', CUSTOMER_COMMITS[0]!),
   ],
   pool: {
     records: [
-      { repository: 'customers', commit: 'Start the customers package' },
+      { repository: 'customers', commit: CUSTOMER_COMMITS[1]! },
       { repository: 'orders', commit: 'Test the happy path of an order' },
     ],
     nodes: ['node-a', 'node-b', 'node-c'].map((node) => ({
       node,
       packages: [
-        { repository: 'customers', commit: 'Start the customers package' },
+        { repository: 'customers', commit: CUSTOMER_COMMITS[1]! },
         node === 'node-b'
           ? { repository: 'orders', commit: 'Add the invoices flow', behind: ['the commit could not be fetched from the git host: connection timed out'] }
           : { repository: 'orders', commit: 'Test the happy path of an order' },
@@ -141,7 +161,12 @@ export function pictureWorld(): PackagesApi {
     if (folder.head.commit !== null) folder.head.commit = idOf(folder.head.commit);
     if (folder.upstream !== null) folder.upstream.commit = idOf(folder.upstream.commit);
   }
-  if (state.node.answers) for (const running of state.node.running) running.commit = idOf(running.commit);
+  if (state.node.answers) {
+    for (const running of state.node.running) {
+      running.commit = idOf(running.commit);
+      for (const pin of running.dependencies ?? []) pin.commit = idOf(pin.commit);
+    }
+  }
   const pool = state.node.answers && state.node.pool !== undefined && !('error' in state.node.pool) ? state.node.pool : null;
   for (const record of pool?.records ?? []) record.commit = idOf(record.commit);
   for (const runs of pool?.nodes.flatMap((n) => n.packages) ?? []) {

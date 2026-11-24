@@ -91,8 +91,8 @@ describe('the list of packages over real git', () => {
       close: () => real.close(),
     };
     const running: Running[] = [
-      { repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
-      { repository: 'stock', commit: ids.next, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
+      { name: 'orders', version: '1.0.0', repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
+      { name: 'stock', version: '1.0.0', repository: 'stock', commit: ids.next, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
     ];
 
     const listed = await listPackages(recording, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running }), pool: async () => null });
@@ -135,7 +135,7 @@ describe('the list of packages over real git', () => {
     const calls: Call[] = [];
     const recording: Runner = { run: (call) => (calls.push(call), real.run(call)), undoable: (work, undo) => real.undoable(work, undo), close: () => real.close() };
     const runs = (commit: string) => ({ repository: 'orders', commit, state: 'RUNNING' as const, deployedAt: '2026-11-20T10:00:00Z', behind: [] });
-    const running: Running[] = [{ repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] }];
+    const running: Running[] = [{ name: 'orders', version: '1.0.0', repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] }];
 
     const listed = await listPackages(recording, root, {
       host: '127.0.0.1:8081',
@@ -165,6 +165,37 @@ describe('the list of packages over real git', () => {
         { node: 'node-c', relation: 'deployed', follows: true },
       ],
     });
+  });
+
+  test('a pin of the node is read only as a commit of 40 hex digits, after --end-of-options', async () => {
+    const { root, ids, env } = await workspace();
+    const real = runner({ env, timer: realTimer });
+    git = real;
+    const calls: Call[] = [];
+    const recording: Runner = { run: (call) => (calls.push(call), real.run(call)), undoable: (work, undo) => real.undoable(work, undo), close: () => real.close() };
+    const pin = (consumer: string, commit: string): Running => ({
+      name: consumer,
+      version: '1.0.0',
+      repository: consumer,
+      commit: ids.first,
+      state: 'RUNNING',
+      problems: [],
+      deployedAt: '2026-11-20T10:00:00Z',
+      dependencies: [{ name: 'orders', version: '1.0.0', repository: 'orders', commit, content: `sha256:${'0'.repeat(64)}` }],
+    });
+    const running = [pin('billing', '--output=/tmp/x'), pin('stock', ids.first)];
+
+    const listed = await listPackages(recording, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running }), pool: async () => null });
+
+    const orders = calls.filter((c) => c.clone === join(root, 'orders')).map((c) => c.args);
+    expect(orders.flat()).not.toContain('--output=/tmp/x');
+    expect(orders.slice(3)).toEqual([
+      ['cat-file', '-e', '--end-of-options', `${ids.first}^{commit}`],
+      ['log', '-1', '-z', '--format=%H%x00%P%x00%an%x00%aI%x00%s', '--end-of-options', ids.first, '--'],
+      ['merge-base', '--is-ancestor', '--end-of-options', ids.first, ids.second],
+      ['rev-list', '--count', '--end-of-options', `${ids.first}..${ids.second}`, '--'],
+    ]);
+    expect(listed.packages.find((p) => p.repository === 'orders')).not.toHaveProperty('pinnedBehind');
   });
 
   test('a hidden folder and a plain file are passed over, and an upstream whose remote-tracking branch is gone reads as none', async () => {

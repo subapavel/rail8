@@ -13,6 +13,7 @@ import { DeployDialog } from './DeployDialog';
 import { DiscardChangesDialog } from './DiscardChangesDialog';
 import { GROUPS, useHistory, usePackage } from './data';
 import { useRemote } from './remote';
+import { UsedByCard } from './UsedBy';
 import { ArtifactsTable, BUSY, ChangesTable, deployedStatus, factsOf, HistoryTable, PackageAlerts } from './parts';
 
 export interface PackageTabProps {
@@ -109,13 +110,14 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
 /**
  * The tab of one package, as a detail page: its header names the package and its version, holds Refresh, the
  * package's facts as a small description list (repository, branch, last commit, upstream, and the commit the node
- * runs), what the node runs and the count of changed files at its right, and four tabs of its own. Below it, the
+ * runs), what the node runs and the count of changed files at its right, and five tabs of its own. Below it, the
  * chosen tab's sections, each in a titled card: Changes lists every file that differs from the last commit, each with
  * its kind and its readable change and a tick box, and Discard changes… in its corner opens the discard dialog of the
  * ticked files (see {@link DiscardChangesDialog}); Artifacts lists the package's flows, endpoints, mappings and tests and the files
  * they use, each opening in its own screen's tab when a module owns its kind; History lists the commits of the
  * branch, each opening the files it changed, and each with Deploy this commit…, which is how the author goes back;
- * Dependencies lists what `package.yaml` declares, with its pin, its candidate and Lock (see {@link DependenciesCard}).
+ * Dependencies lists what `package.yaml` declares, with its pin, its candidate and Lock (see {@link DependenciesCard});
+ * Used by lists the packages the node runs that pin this one, and how each pin relates to what runs (see {@link UsedByCard}).
  * Each of them keeps its open rows and the commits it read while another is shown. Commit…, the page's main action,
  * opens the commit dialog, and says why when the commit route would refuse it; its Commit and deploy goes on to the
  * deploy dialog of the new commit. Deploy… opens the deploy dialog of `HEAD`. Fetch, Pull and Push share the branch
@@ -193,6 +195,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
         {paneOf('artifacts', <ArtifactCards state={state} open={open} />)}
         {paneOf('history', <HistoryCard api={api} repository={repository} state={state} now={at} onDeploy={setDeploying} />)}
         {paneOf('dependencies', <DependenciesCard api={api} repository={repository} state={state} writable={writable} onState={onState} />)}
+        {paneOf('used-by', <UsedByCard usedBy={state.usedBy} now={at} />)}
       </Flex>
     );
   }
@@ -245,6 +248,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
                 { key: 'artifacts', tab: `Artifacts (${state.artifacts.length})` },
                 { key: 'history', tab: 'History' },
                 { key: 'dependencies', tab: `Dependencies (${state.dependencies.length})` },
+                { key: 'used-by', tab: state.usedBy.node === 'answered' ? `Used by (${state.usedBy.consumers.length})` : 'Used by' },
               ]
         }
         tabActiveKey={pane}

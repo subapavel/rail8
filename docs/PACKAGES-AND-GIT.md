@@ -53,7 +53,8 @@ it shows every node of that node's pool too. Each row shows:
 - the deployed state on that node: Deployed, Deployed with changes since, Behind *n*, Ahead *n*, Other commit, Failed,
   or Not running on *node*;
 - in a pool, below it, how many of the pool's nodes run which commit, and the nodes behind the pool's record
-  ("Every node of the pool").
+  ("Every node of the pool");
+- "Pinned behind by *n*" when *n* packages that node runs pin a commit of it behind the one it runs ("Used by").
 
 **New package** and **Get a package…** sit above the table.
 
@@ -75,7 +76,7 @@ with the nodes of the pool in a pool.
 Its actions are Commit…, Deploy…, Fetch, Pull and Push. Each action is disabled, with the reason, when its route
 would refuse it.
 
-The tab has four tabs of its own:
+The tab has five tabs of its own:
 
 - **Changes.** Every file of the package that differs from the last commit: added, modified, deleted or renamed. Each
   file shows its kind and its readable change ("Readable changes"). Commit… starts here. Each row has a tick box,
@@ -88,6 +89,8 @@ The tab has four tabs of its own:
   - Each commit has **Deploy this commit…**.
   - Choosing a commit shows the files it changed against its first parent, each with its readable change.
 - **Dependencies.** Each dependency's name, version, pin and state ("Dependencies"), with **Lock**.
+- **Used by.** Each package the node runs that pins this one, and how its pin relates to what runs and to `HEAD`
+  ("Used by").
 
 The tab reads its package again when it is shown, when the window gets the focus, and from the answer of every write.
 
@@ -896,6 +899,40 @@ The new `package.lock` then shows among the changes, compared by its pins, and i
 The content digest stays one implementation, the node's, and is never written again in TypeScript. The command line
 needs JDK 25 and the built CLI jar, which the quickstart already requires. When it is missing, Lock says how to build
 it.
+
+## Used by
+
+A dependency's files come from the commit a package's `package.lock` pins, so a change of a shared package reaches a
+package that uses it only once that package is locked and deployed again. The Used by tab shows who still runs an
+older commit.
+
+Its rows come from the same read of `GET /admin/packages` as the deployed state ("The node at RAIL8_ADMIN_URL"): each
+package the node runs lists its direct dependencies as its deploy resolved them, the pins of its `package.lock`, each
+with its name, version, repository, commit and content digest. No other route is read. A pin is this package's when
+its repository is this package's folder. The package state gains `usedBy`, and each row `pinnedBehind`:
+
+```ts
+type UsedBy =
+  | { node: 'unreachable'; host: string; error: string }
+  | { node: 'answered'; host: string; runs: string | null; consumers: Consumer[] };   // runs: the commit the node runs of it
+interface Consumer {
+  name: string; version: string; repository: string;               // the package that pins this one
+  pin: { version: string; commit: string; content: string };
+  commit: { at: string; subject: string } | null;                  // null: the clone lacks the pinned commit
+  runs?: PinRelation;                                              // absent when the node runs no commit of it
+  head?: PinRelation;                                              // absent with no HEAD
+}
+interface PinRelation { relation: 'same' | 'behind' | 'ahead' | 'other'; commits?: number }
+```
+
+- **The rows.** One per package the node runs that pins this one, sorted by name: its name and version, the version
+  and commit it pins, and that commit's subject and age when the clone holds it.
+- **The relations.** The pinned commit is related to the commit the node runs of this package and to `HEAD`, as
+  the deployed state relates a commit, each pinned commit once: "Same as running" or "At HEAD", "Behind *n*", "Ahead
+  *n*", or "Other line" when it is not in that commit's history or the clone lacks either.
+- **The mark.** `pinnedBehind` counts the rows behind what the node runs, and is absent when there are none. The
+  Packages screen shows it as "Pinned behind by *n*".
+- **No answer.** When the node does not answer, the tab says so and lists nothing.
 
 ## Remote
 

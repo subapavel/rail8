@@ -1,6 +1,6 @@
 import { CloudDownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProCard, ProTable } from '@ant-design/pro-components';
-import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
+import { Alert, Badge, Button, Empty, Flex, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { GitCredentialsAlert } from '../GitCredentialsAlert';
 import { Page } from '../Page';
@@ -25,7 +25,7 @@ type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind
  * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh, New
  * package and Get a package… in the card's corner; New package and Get a package… are off on a server that takes no writes. Each row holds the repository, which opens the package's tab, the package's name and version, the
  * branch, the last commit, ahead and behind the upstream as of the last fetch, the changed files, and what the node it
- * names runs of it. Above it, a warning while the node finds its git credentials refused. The folders that are no package are
+ * names runs of it, marked when packages the node runs pin a commit of it behind that one, with their number. Above it, a warning while the node finds its git credentials refused. The folders that are no package are
  * listed in a card below, each with the reason. Without a working folder it says how to set one; a refusal, such as git
  * missing, shows why.
  */
@@ -158,6 +158,11 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
                 <Flex vertical gap="small">
                   <DeployedFact state={row} at={at} />
                   <PoolFact state={row} />
+                  {row.pinnedBehind !== undefined && (
+                    <Tooltip title={`${row.pinnedBehind === 1 ? '1 package the node runs pins' : `${row.pinnedBehind} packages the node runs pin`} a commit of it behind the one it runs: see Used by in its tab.`}>
+                      <Badge status="warning" text={`Pinned behind by ${row.pinnedBehind}`} />
+                    </Tooltip>
+                  )}
                 </Flex>
               ),
             },

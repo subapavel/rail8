@@ -202,13 +202,13 @@ export async function identityOf(git: Runner, clone: string): Promise<PackageSta
 
 /**
  * The package's state, as its tab shows it: its row, git's author identity, its changes against `HEAD`, its artifacts
- * on disk, and its dependencies with the tags of `package.yaml` and `package.lock`.
+ * on disk, its dependencies with the tags of `package.yaml` and `package.lock`, and the packages the node runs that pin it.
  */
 export async function stateOf(git: Runner, clone: string, repository: string, node: NodeState): Promise<PackageState> {
   const status = await statusOf(git, clone);
   const compared = statusCompared(status.entries);
   const head = status.oid;
-  const [row, identity, changes, dependencies] = await Promise.all([
+  const [{ row, usedBy }, identity, changes, dependencies] = await Promise.all([
     rowOf(git, clone, repository, node, status),
     identityOf(git, clone),
     workChanges(git, clone, repository, compared.slice(0, MAX_LISTED), indexFrom(status.entries), (inside) => (head === null ? null : `${head}:${inside}`)),
@@ -221,6 +221,7 @@ export async function stateOf(git: Runner, clone: string, repository: string, no
     changes,
     artifacts: artifacts.artifacts,
     dependencies: dependencies.dependencies,
+    usedBy,
     manifestTag: dependencies.manifestTag,
     lockTag: dependencies.lockTag,
     truncated: compared.length > MAX_LISTED || artifacts.truncated,

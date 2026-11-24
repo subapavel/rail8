@@ -7,13 +7,16 @@ export const NODE_READ = { ms: 10_000, bytes: 8 * 1024 * 1024 };
 
 /** What the node runs of one package repository, as its `GET /admin/packages` lists it. */
 export interface Running {
+  /** The package's name and version, as its deploy read them. */
+  name: string;
+  version: string;
   repository: string;
   commit: string;
   state: 'RUNNING' | 'FAILED';
   problems: string[];
   deployedAt: string;
-  /** The direct dependencies its deploy resolved, by name: the commit and the content digest of each. */
-  dependencies: { name: string; commit: string; content: string }[];
+  /** The direct dependencies its deploy resolved, the pins of its `package.lock`: the name, version, repository, commit and content digest of each. */
+  dependencies: { name: string; version: string; repository: string; commit: string; content: string }[];
 }
 
 /**
@@ -118,16 +121,24 @@ export async function readNode(node: NodeCall, timer: Timer): Promise<NodeRead> 
   if (!isRecord(json) || !Array.isArray(json.items)) return { answered: false, error: said(`the node at ${host} answered no list of packages`) };
   const running: Running[] = [];
   for (const item of json.items as unknown[]) {
-    if (!isRecord(item) || typeof item.repository !== 'string' || typeof item.commit !== 'string') continue;
+    if (!isRecord(item) || typeof item.name !== 'string' || typeof item.version !== 'string' || typeof item.repository !== 'string' || typeof item.commit !== 'string') continue;
     running.push({
+      name: item.name,
+      version: item.version,
       repository: item.repository,
       commit: item.commit,
       state: item.state === 'FAILED' ? 'FAILED' : 'RUNNING',
       problems: Array.isArray(item.problems) ? item.problems.filter((p): p is string => typeof p === 'string').map(said) : [],
       deployedAt: typeof item.deployedAt === 'string' ? item.deployedAt : '',
       dependencies: (Array.isArray(item.dependencies) ? (item.dependencies as unknown[]) : []).flatMap((d) =>
-        isRecord(d) && d.direct === true && typeof d.name === 'string' && typeof d.commit === 'string' && typeof d.content === 'string'
-          ? [{ name: d.name, commit: d.commit, content: d.content }]
+        isRecord(d) &&
+        d.direct === true &&
+        typeof d.name === 'string' &&
+        typeof d.version === 'string' &&
+        typeof d.repository === 'string' &&
+        typeof d.commit === 'string' &&
+        typeof d.content === 'string'
+          ? [{ name: d.name, version: d.version, repository: d.repository, commit: d.commit, content: d.content }]
           : [],
       ),
     });

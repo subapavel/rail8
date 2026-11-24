@@ -139,14 +139,22 @@ export interface CloneSeed {
   intoGit?: Record<string, string>;
 }
 
-/** What the node runs of `repository`: the commit of that clone with the label `commit`, or `commit` itself when it is 40 hex digits. */
+/**
+ * What the node runs of `repository`: the commit of that clone with the label `commit`, or `commit` itself when it is 40
+ * hex digits, as the package `name` (the repository by default) at `version` (1.0.0 by default).
+ */
 export interface RunningSeed {
+  name?: string;
+  version?: string;
   repository: string;
   commit: string;
   state?: 'RUNNING' | 'FAILED';
   problems?: string[];
-  /** The direct dependencies its deploy resolved: each one's name, and the commit with the label `commit` of the clone `repository`, with its content digest. */
-  dependencies?: { name: string; repository: string; commit: string; content: string }[];
+  /**
+   * The direct dependencies its deploy resolved: each one's name and version (1.0.0 by default), and the commit with the
+   * label `commit` of the clone `repository`, with its content digest.
+   */
+  dependencies?: { name: string; version?: string; repository: string; commit: string; content: string }[];
 }
 
 /**
@@ -371,6 +379,8 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
                       },
               }),
           running: (seed.node ?? []).map((r) => ({
+            name: r.name ?? r.repository,
+            version: r.version ?? '1.0.0',
             repository: r.repository,
             commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`)!,
             state: r.state ?? 'RUNNING',
@@ -378,7 +388,15 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
             deployedAt: DEPLOYED_AT,
             ...(r.dependencies === undefined
               ? {}
-              : { dependencies: r.dependencies.map((d) => ({ name: d.name, commit: isId(d.commit) ? d.commit : ids.get(`${d.repository}/${d.commit}`)!, content: d.content })) }),
+              : {
+                  dependencies: r.dependencies.map((d) => ({
+                    name: d.name,
+                    version: d.version ?? '1.0.0',
+                    repository: d.repository,
+                    commit: isId(d.commit) ? d.commit : ids.get(`${d.repository}/${d.commit}`)!,
+                    content: d.content,
+                  })),
+                }),
           })),
         };
   let release = () => {};
@@ -472,7 +490,7 @@ export const fakeWorld: Build = async (seed) => {
     deployedElsewhere(folder, label) {
       if (!state.node.answers) return;
       const commit = ids.get(`${folder}/${label}`)!;
-      state.node.running = [...state.node.running.filter((r) => r.repository !== folder), { repository: folder, commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT }];
+      state.node.running = [...state.node.running.filter((r) => r.repository !== folder), { name: folder, version: '1.0.0', repository: folder, commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT }];
     },
     address: (path) => `https://git.example.com/${path}`,
     waiting: sources.waiting,

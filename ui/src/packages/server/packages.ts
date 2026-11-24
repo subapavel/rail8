@@ -3,7 +3,7 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isSessionRefused } from '../../../server/session.ts';
 import { MAX_FILE_BYTES, Refusal } from '../../../server/workingFolder.ts';
-import type { Busy, Commit, Deployed, PackageList, PackageRow, Pool, PoolNode } from '../api.ts';
+import type { Busy, Commit, Consumer, Deployed, PackageList, PackageRow, PinRelation, Pool, PoolNode, UsedBy } from '../api.ts';
 import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS } from '../rules.ts';
 import { holds, LOG_FORMAT, parseLog, parseStatus, read, type Status } from './git.ts';
 import type { NodeRead, PoolRead } from './node.ts';
@@ -83,20 +83,38 @@ async function packageOf(clone: string): Promise<Pick<PackageRow, 'package' | 'p
 /** How a commit a node runs relates to the clone's `head`: `deployed`, `behind`, `ahead` or `other`, with how many commits apart. */
 type Relation = { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commits?: number };
 
+/** Whether the clone at `clone` holds the commit `commit`, of 40 hex digits; `cat-file -e` exits with 1, or 128 for an object it cannot name, when it does not. */
+const holdsCommit = async (git: Runner, clone: string, commit: string) =>
+  /^[0-9a-f]{40}$/.test(commit) && (await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${commit}^{commit}`], [1, 128]));
+
+/** Whether the clone holds a commit: `HEAD`, which it always holds, without a read, and any other by {@link holdsCommit}, each read once. */
+function holder(git: Runner, clone: string, head: Commit | null): (commit: string) => Promise<boolean> {
+  const held = new Map<string, Promise<boolean>>();
+  return (commit) => {
+    if (commit === head?.id) return Promise.resolve(true);
+    if (!held.has(commit)) held.set(commit, holdsCommit(git, clone, commit));
+    return held.get(commit)!;
+  };
+}
+
 /**
- * How `commit` relates to the clone's `head`, by `cat-file -e`, `merge-base --is-ancestor` in both directions and
- * `rev-list --count`.
+ * How `commit` relates to the commit `base` of the clone, by `merge-base --is-ancestor` in both directions and
+ * `rev-list --count`: `other` when `held` says the clone lacks either.
  */
-async function relationOf(git: Runner, clone: string, head: Commit | null, commit: string): Promise<Relation> {
-  if (head !== null && commit === head.id) return { relation: 'deployed' };
-  if (head === null || !/^[0-9a-f]{40}$/.test(commit)) return { relation: 'other' };
-  // cat-file -e exits with 1, or 128 for an object it cannot name, when the clone lacks the commit
-  if (!(await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${commit}^{commit}`], [1, 128]))) return { relation: 'other' };
+async function compare(git: Runner, clone: string, base: string | null, commit: string, held: (commit: string) => Promise<boolean>): Promise<PinRelation> {
+  if (commit === base) return { relation: 'same' };
+  if (base === null || !(await held(commit)) || !(await held(base))) return { relation: 'other' };
   const isAncestor = (older: string, newer: string) => holds(git, clone, ['merge-base', '--is-ancestor', '--end-of-options', older, newer], [1]);
   const count = async (range: string) => Number((await read(git, clone, ['rev-list', '--count', '--end-of-options', range, '--'])).trim());
-  if (await isAncestor(commit, head.id)) return { relation: 'behind', commits: await count(`${commit}..${head.id}`) };
-  if (await isAncestor(head.id, commit)) return { relation: 'ahead', commits: await count(`${head.id}..${commit}`) };
+  if (await isAncestor(commit, base)) return { relation: 'behind', commits: await count(`${commit}..${base}`) };
+  if (await isAncestor(base, commit)) return { relation: 'ahead', commits: await count(`${base}..${commit}`) };
   return { relation: 'other' };
+}
+
+/** How `commit` relates to the clone's `head`. */
+async function relationOf(git: Runner, clone: string, head: Commit | null, commit: string): Promise<Relation> {
+  const { relation, commits } = await compare(git, clone, head?.id ?? null, commit, holder(git, clone, head));
+  return { relation: relation === 'same' ? 'deployed' : relation, ...(commits === undefined ? {} : { commits }) };
 }
 
 /**
@@ -132,16 +150,66 @@ async function deployedOf(git: Runner, clone: string, repository: string, head: 
   return { node: 'answered', host: node.host, commit, state, problems, deployedAt, ...(await relate(commit)), ...pool };
 }
 
+/**
+ * Every package the node runs that pins `repository`, sorted by name, each pinned commit read from the clone once: its
+ * date and subject when the clone holds it, and how it relates to the commit the node runs of `repository` and to `head`.
+ */
+async function usedByOf(git: Runner, clone: string, repository: string, head: Commit | null, node: NodeState): Promise<UsedBy> {
+  const answer = await node.read();
+  if (!answer.answered) return { node: 'unreachable', host: node.host, error: answer.error };
+  const runs = answer.running.find((r) => r.repository === repository)?.commit ?? null;
+  const held = holder(git, clone, head);
+  const seen = new Map<string, Promise<Pick<Consumer, 'commit' | 'runs' | 'head'>>>();
+  const readOf = (commit: string) => {
+    if (!seen.has(commit)) {
+      seen.set(
+        commit,
+        (async () => {
+          const found = (await held(commit)) ? await commitOf(git, clone, commit) : null;
+          return {
+            commit: found === null ? null : { at: found.at, subject: found.subject },
+            ...(runs === null ? {} : { runs: await compare(git, clone, runs, commit, held) }),
+            ...(head === null ? {} : { head: await compare(git, clone, head.id, commit, held) }),
+          };
+        })(),
+      );
+    }
+    return seen.get(commit)!;
+  };
+  const pins = answer.running.flatMap((r) => r.dependencies.filter((d) => d.repository === repository).map((d) => ({ r, d })));
+  const consumers = await Promise.all(
+    pins.map(async ({ r, d }): Promise<Consumer> => ({
+      name: r.name,
+      version: r.version,
+      repository: r.repository,
+      pin: { version: d.version, commit: d.commit, content: d.content },
+      ...(await readOf(d.commit)),
+    })),
+  );
+  consumers.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.repository < b.repository ? -1 : a.repository > b.repository ? 1 : 0));
+  return { node: 'answered', host: node.host, runs, consumers };
+}
+
 /** What `git status` says of the package's folder, the clone at the real path `clone`, untracked files included. */
 export async function statusOf(git: Runner, clone: string): Promise<Status> {
   return parseStatus(await read(git, clone, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--', ':(literal).']));
 }
 
-/** The row of the package whose clone is at the real path `clone`, whose status is `status`. */
-export async function rowOf(git: Runner, clone: string, repository: string, node: NodeState, status: Status): Promise<PackageRow> {
+/**
+ * The row of the package whose clone is at the real path `clone`, whose status is `status`, and where it is used as a
+ * dependency: the row counts the packages that pin it behind what the node runs of it.
+ */
+export async function rowOf(git: Runner, clone: string, repository: string, node: NodeState, status: Status): Promise<{ row: PackageRow; usedBy: UsedBy }> {
   const head = status.oid === null ? null : await commitOf(git, clone, status.oid);
-  const [manifest, busy, fetchedAt, deployed] = await Promise.all([packageOf(clone), busyOf(clone, status), fetchedAtOf(clone), deployedOf(git, clone, repository, head, node)]);
-  return {
+  const [manifest, busy, fetchedAt, deployed, usedBy] = await Promise.all([
+    packageOf(clone),
+    busyOf(clone, status),
+    fetchedAtOf(clone),
+    deployedOf(git, clone, repository, head, node),
+    usedByOf(git, clone, repository, head, node),
+  ]);
+  const behind = usedBy.node === 'answered' ? usedBy.consumers.filter((c) => c.runs?.relation === 'behind').length : 0;
+  const row: PackageRow = {
     repository,
     ...manifest,
     branch: status.branch,
@@ -150,7 +218,9 @@ export async function rowOf(git: Runner, clone: string, repository: string, node
     busy,
     changed: status.entries.filter((e) => !isSaveTemporary(e.path)).length,
     deployed,
+    ...(behind === 0 ? {} : { pinnedBehind: behind }),
   };
+  return { row, usedBy };
 }
 
 /**
@@ -182,7 +252,7 @@ export async function listPackages(git: Runner, root: string, node: NodeState): 
       folders.slice(i, i + AT_ONCE).map(async (entry): Promise<{ row: PackageRow } | { reason: string }> => {
         try {
           const found = await folderOf(git, root, entry);
-          return 'reason' in found ? found : { row: await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone)) };
+          return 'reason' in found ? found : { row: (await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone))).row };
         } catch (error) {
           if ((error instanceof Refusal && error.status === 503) || isSessionRefused(error)) throw error;
           return { reason: `git could not read it: ${error instanceof Error ? error.message : String(error)}` };
