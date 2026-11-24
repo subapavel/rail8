@@ -16,8 +16,11 @@ export interface AuditListProps {
   save?: (name: string, file: Blob) => void;
 }
 
-/** What the list read last: its rows, the cursor of the next page, and whether that page is being read. */
-type Shown = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; rows: AuditEntry[]; next: string | null; more: boolean };
+/** What the list read last: its rows, the cursor of the next page, and whether that page is being read or could not be. */
+type Shown =
+  | { kind: 'reading' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'read'; rows: AuditEntry[]; next: string | null; more: 'idle' | 'reading' | { failed: string } };
 
 /** Where an export stands: not asked, reading so many rows, too long, or refused. */
 type Export = { kind: 'idle' } | { kind: 'reading'; count: number } | { kind: 'too-many'; max: number } | { kind: 'failed'; message: string };
@@ -100,7 +103,7 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
   useEffect(() => {
     const read = ++latest.current;
     api.read(query).then(
-      (page) => read === latest.current && setShown({ kind: 'read', rows: page.items, next: page.next, more: false }),
+      (page) => read === latest.current && setShown({ kind: 'read', rows: page.items, next: page.next, more: 'idle' }),
       (error: unknown) => read === latest.current && setShown({ kind: 'failed', message: reasonOf(error) }),
     );
   }, [api, query, asked]);
@@ -113,10 +116,10 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
 
   const loadMore = (rows: AuditEntry[], after: string) => {
     const read = ++latest.current;
-    setShown({ kind: 'read', rows, next: after, more: true });
+    setShown({ kind: 'read', rows, next: after, more: 'reading' });
     api.read(query, after).then(
-      (page) => read === latest.current && setShown({ kind: 'read', rows: [...rows, ...page.items], next: page.next, more: false }),
-      (error: unknown) => read === latest.current && setShown({ kind: 'failed', message: reasonOf(error) }),
+      (page) => read === latest.current && setShown({ kind: 'read', rows: [...rows, ...page.items], next: page.next, more: 'idle' }),
+      (error: unknown) => read === latest.current && setShown({ kind: 'read', rows, next: after, more: { failed: reasonOf(error) } }),
     );
   };
 
@@ -160,9 +163,6 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
             description={exported.message}
           />
         )}
-        {shown.kind === 'failed' && (
-          <Alert type="error" showIcon title="The audit could not be read" description={shown.message} action={<Button onClick={() => readAgain(query)}>Try again</Button>} />
-        )}
         <ProTable<AuditEntry, Searched>
           aria-label="Audit"
           rowKey="id"
@@ -174,6 +174,15 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
           search={{ labelWidth: 'auto', defaultCollapsed: false }}
           onSubmit={(searched) => readAgain(queryOf(searched))}
           onReset={() => readAgain({})}
+          tableViewRender={(_, table) =>
+            shown.kind === 'failed' ? (
+              <Alert type="error" showIcon title="The audit could not be read" description={shown.message} action={<Button onClick={() => readAgain(query)}>Try again</Button>} />
+            ) : typeof table === 'function' ? (
+              table()
+            ) : (
+              table
+            )
+          }
           options={false}
           pagination={false}
           locale={{ emptyText: 'No row of the audit matches the filters.' }}
@@ -187,9 +196,12 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
             </Button>,
           ]}
         />
+        {shown.kind === 'read' && typeof shown.more === 'object' && (
+          <Alert type="error" showIcon title="The older rows could not be read" description={shown.more.failed} />
+        )}
         {shown.kind === 'read' && shown.next !== null && (
           <Flex justify="center">
-            <Button loading={shown.more} onClick={() => shown.next !== null && loadMore(shown.rows, shown.next)}>
+            <Button loading={shown.more === 'reading'} onClick={() => shown.next !== null && loadMore(shown.rows, shown.next)}>
               Load more
             </Button>
           </Flex>

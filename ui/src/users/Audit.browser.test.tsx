@@ -179,13 +179,32 @@ describe('Audit', () => {
     await expect.element(page.getByText('The node is stopping.')).toBeVisible();
   });
 
-  test('says when the audit could not be read, and reads it again', async () => {
+  test('says when the audit could not be read, in place of the rows, and reads it again', async () => {
     const api: AuditApi = { read: vi.fn(async () => Promise.reject(new UsersError(403, 'audit.read is not allowed'))) };
     render(api);
     await expect.element(page.getByText('The audit could not be read')).toBeVisible();
     await expect.element(page.getByText('Audit.read is not allowed.')).toBeVisible();
+    await expect.element(table()).not.toBeInTheDocument();
+    await expect.element(page.getByText('No row of the audit matches the filters.')).not.toBeInTheDocument();
     api.read = fakeAuditApi(ROWS).read;
     await page.getByRole('button', { name: 'Try again' }).click();
     await expect.element(rows().nth(7)).toBeInTheDocument();
+  });
+
+  test('keeps the rows it has when the older ones could not be read, and reads them on Load more', async () => {
+    const api = fakeAuditApi(ROWS, 3);
+    const read = api.read;
+    render(api);
+    await expect.element(rows().nth(3)).toBeInTheDocument();
+    api.read = async () => Promise.reject(new UsersError(503, 'the node is stopping'));
+    await page.getByRole('button', { name: 'Load more', exact: false }).click();
+    await expect.element(page.getByText('The older rows could not be read')).toBeVisible();
+    await expect.element(page.getByText('The node is stopping.')).toBeVisible();
+    await expect.element(rows().nth(3)).toHaveTextContent('2026-11-24T09:30:00ZLogged inuser/annaannaSession 0123456789abcdef-');
+
+    api.read = read;
+    await page.getByRole('button', { name: 'Load more', exact: false }).click();
+    await expect.element(rows().nth(6)).toBeInTheDocument();
+    await expect.element(page.getByText('The older rows could not be read')).not.toBeInTheDocument();
   });
 });
