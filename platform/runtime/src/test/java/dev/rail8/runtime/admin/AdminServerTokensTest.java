@@ -8,6 +8,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,7 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The routes of the tokens, on three nodes of one store: a person's own token issued with the password asked again, a technical
  * account's issued by an administrator, the lists with the ceiling, a revoke that every node refuses at once, the ceiling
- * lowered and raised, and {@code /admin/me} and {@code /admin/users/{name}} of a token.
+ * lowered and raised, {@code /admin/me} and {@code /admin/users/{name}} of a token, and a credential pasted into a path that
+ * the log records without its secret.
  */
 class AdminServerTokensTest extends AdminAccessFixture {
 
@@ -145,5 +151,29 @@ class AdminServerTokensTest extends AdminAccessFixture {
         assertEquals(List.of(new JsonObject().put("from", 365).put("to", 30).put("shortened", 1).put("remote", "127.0.0.1"),
                 new JsonObject().put("from", 30).put("to", 365).put("shortened", 0).put("remote", "127.0.0.1")),
                 audit("token.ceiling").stream().map(r -> r.getJsonObject("detail")).toList());
+    }
+
+    @Test
+    void aCredentialPastedIntoAPathIsLoggedWithoutItsSecret() throws Exception {
+        String secret = "s3cr-et_" + "x".repeat(35);
+        List<String> warnings = new CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord r) { if (r.getLevel() == Level.WARNING) warnings.add(r.getMessage()); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        List<Logger> loggers = List.of(Logger.getLogger(AdminServer.class.getName()), Logger.getLogger("dev.rail8.runtime.access.Accounts"));
+        loggers.forEach(l -> l.addHandler(capture));
+        try {
+            revokeFails.set(true);
+            Answer failed = send(key, "POST", "/admin/tokens/rail8t_0123456789abcdef_" + secret + "/revoke", Optional.of(KEY), null);
+            assertEquals(500, failed.status(), failed.body());
+        } finally {
+            loggers.forEach(l -> l.removeHandler(capture));
+        }
+        assertEquals(2, warnings.size(), warnings.toString());
+        assertTrue(warnings.getFirst().startsWith("the emergency key was used: POST /admin/tokens/rail8t_0123456789abcdef_***/revoke from "),
+                warnings.getFirst());
+        assertEquals("admin request /admin/tokens/rail8t_0123456789abcdef_***/revoke failed", warnings.getLast());
     }
 }
