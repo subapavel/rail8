@@ -58,8 +58,6 @@ jobs:
   stack:
     name: ui · stack
     runs-on: ubuntu-24.04
-    env:
-      RAIL8_ADMIN_TOKEN: ui-stack-token
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -87,10 +85,16 @@ jobs:
           </settings>
           EOF
       - name: The node's jar
-        run: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node -am
-      - name: Start the node and wait for /health
+        run: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
+      # A key of this run's own is the node's emergency key, which the users scenario makes its administrator with. The deploy
+      # account's token is what the development servers send and the deploy scenario undeploys with.
+      - name: Start the node with an emergency key of this run and wait for /health
         run: |
           set -euo pipefail
+          key=$(bin/rail8 key new)
+          echo "::add-mask::$key"
+          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
+          export RAIL8_ADMIN_TOKEN=$key
           # the working folder the node deploys from, made by the runner's user before Docker makes it root's
           mkdir -p ~/rail8-workspace
           docker compose up -d --build
@@ -99,6 +103,10 @@ jobs:
             if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; exit 1; fi
             sleep 2
           done
+          bin/rail8 bootstrap --admin ui-admin --deploy-account ui-deploy --token-file "$RUNNER_TEMP/deploy-token" > /dev/null
+          token=$(cat "$RUNNER_TEMP/deploy-token")
+          echo "::add-mask::$token"
+          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
       - name: Playwright
         working-directory: ui
         run: |

@@ -4,7 +4,7 @@ import { uiPort } from './server/uiPort';
 
 // The @stack scenarios: the UI's development server, whose /api requests it answers itself over a working folder and the
 // real node. The node is the quickstart's, started by `docker compose up` from the repository root, with its admin API
-// on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and the token exported in RAIL8_ADMIN_TOKEN. The working folder is a
+// on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and two credentials exported: RAIL8_ADMIN_TOKEN, the node's emergency key, and RAIL8_TOKEN, the token of a developer's account that `rail8 bootstrap` writes. The working folder is a
 // temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares. The deploy scenario has a development server
 // of its own, on the next port, over the quickstart's working folder ~/rail8-workspace, the one the node deploys from.
 // The users scenario has one on the port after that, started without a token, so that a person logs in.

@@ -10,7 +10,7 @@ test.use({ viewport: { width: 1440, height: 900 }, baseURL: `http://localhost:${
 const NAME = 'e2e-deploy';
 const repository = join(deployWorkspace, NAME);
 const admin = process.env.RAIL8_ADMIN_URL ?? 'http://127.0.0.1:8081';
-const token = process.env.RAIL8_ADMIN_TOKEN ?? '';
+const token = process.env.RAIL8_TOKEN ?? '';
 // the node's HTTP port, where the quickstart publishes every inbound HTTP endpoint
 const inbound = 'http://127.0.0.1:8080';
 

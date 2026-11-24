@@ -28,25 +28,38 @@ mkdir -p ~/rail8-workspace && cp -r examples/demo ~/rail8-workspace/demo   # onc
 cp -r mapping/corpus ~/rail8-workspace/mapping-corpus                     # once: the mappings the mapping studio edits
 (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')   # once
 
-export RAIL8_ADMIN_TOKEN=rail8-local               # the admin API's bearer token; any string will do, keep it for later shells
+export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)      # the node's emergency key: it makes the first users and does nothing else
 docker compose up -d --build                       # the node, its Postgres and the partner echo
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
+bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
+export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)   # the token of the account `deploy`, which holds the developer role
 bin/rail8 deploy demo HEAD --expect none          # the demo's last commit, deployed to a node that runs no demo yet
 ```
+
+`owner` is the administrator, with a password of 32 characters that only that one line showed. `deploy` is a technical
+account: it has a token, no password. The token file holds the token alone and only you can read it; the token lasts 90
+days, then an administrator issues `deploy` a new one in **Users** (New token…). Nothing here is a fixed value: the key
+is new each time you start the node, and the password and the token are made by the node. `bootstrap` makes the two
+accounts once: a second run is refused (`the name owner is taken`).
 
 The working folder `~/rail8-workspace` holds the packages as git repositories, each named as its folder: the demo is the
 repository `demo`. The node mounts the folder read-only and deploys a commit of a repository in it, never the files
 beside the commit, so a change is deployed once it is committed. The folder must exist before the first `up`.
 
-Start the UI in the terminal where `RAIL8_ADMIN_TOKEN` is exported. On Windows with the working folder in WSL,
-run Vite in that WSL distribution so opening an editor reads the files on the local Linux filesystem.
+Start the UI without a token, so that it asks you to log in: `env -u` takes the two variables out of its environment.
+(With `RAIL8_TOKEN` set the UI runs without a login as the account `deploy`, which may not read messages.) On Windows
+with the working folder in WSL, run Vite in that WSL distribution so opening an editor reads the files on the local
+Linux filesystem.
 
 ```sh
-cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
+cd ui && env -u RAIL8_TOKEN -u RAIL8_ADMIN_TOKEN RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
 ```
 
 Leave the terminal running and open **http://localhost:5173** in your browser. If that port is occupied,
-add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**.
+add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**. Log in as `owner` with the password
+`bootstrap` printed, and choose your own, 12 to 128 characters, without the name. `owner` is an administrator and holds
+no other role, so, once: open **Users**, choose Roles… on `owner` and give it `developer` and `operator`, so the other
+screens open; and on `deploy` give `operator` and `message-bodies`, so that its token reads the messages below.
 The menu at the left lists the screens; each opens in a tab of its own in the row under the header, Ctrl+K (⌘K on a
 Mac) finds a screen or an open tab, and Ctrl+B (⌘B) folds the menu to its icons.
 The UI has **Messages**, the list of the messages the node recorded, **Packages**, each package of `RAIL8_WORKSPACE`
@@ -54,7 +67,7 @@ with its branch, last commit, changed files and what the node runs of it, each o
 artifacts and history, **Endpoints**, the
 settings form of each endpoint file in `RAIL8_WORKSPACE`, **Flows**, the picture of each flow file in it, and
 **Mappings**, the mapping studio. The UI sends its
-`/admin` requests to the node on `localhost:8081` and adds the token itself, so the browser never sees it.
+`/admin` requests to the node on `localhost:8081` with your session, which the browser never sees.
 
 The studio's mappings are the `*.mapping.json` files in `RAIL8_WORKSPACE`, such as
 `mapping-corpus/mappings/order-id-copy`, and the schemas a mapping reads are the files its bundles name, relative to its
@@ -64,7 +77,7 @@ need it running. With `RAIL8_READ_ONLY=true` the studio saves and creates nothin
 An endpoint's form is drawn from its component's settings description, which the node serves, so it needs the node
 running. It opens read-only; Edit, change a setting, Check, and Save writes the file in the working folder, changing only
 the lines of the settings you changed. Commit the change and deploy it, from the repository root in another terminal
-where `RAIL8_ADMIN_TOKEN` is exported:
+where `RAIL8_TOKEN` is exported:
 
 ```sh
 deployed=$(git -C ~/rail8-workspace/demo rev-parse HEAD)   # the commit deployed before the edit
@@ -129,7 +142,7 @@ such as `demo/flows/audit.yaml` arriving at `http-in` and sending to `partner-do
 over an existing file.
 
 The node migrates its database itself and serves `/health` on `localhost:8081`. Postgres is published on the host's
-loopback port 5432; if that is taken, prefix the `up` with `RAIL8_PG_HOST_PORT=55432`. Without a token the node exits
+loopback port 5432; if that is taken, prefix the `up` with `RAIL8_PG_HOST_PORT=55432`. Without the key the node exits
 with "the admin API on 0.0.0.0 is not loopback-only: it needs a token" (`docker compose logs rail8`). Its log
 starts with a WARNING that `RAIL8_ADMIN_TLS=off` lets the admin API take credentials over plain HTTP: the stack publishes
 that port on the host's loopback only.
@@ -142,14 +155,35 @@ Stop the UI (Ctrl+C) and go back to the repository root (`cd ..`), then:
 git pull
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
 (cd ui && npm ci)
-export RAIL8_ADMIN_TOKEN=<the token of the first run>   # a new shell has none, and the node refuses to start without it
+export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)           # a new key each morning: a new shell has none, and the node refuses to start without one
+export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)         # the deploy account's token, made once by the first run
 docker compose up -d --build --force-recreate           # the node restores the packages deployed before, from its git cache
 ```
+
+Do not run `bootstrap` again: the database keeps the accounts, and the key only has to start the node. Without a
+database from the first run, such as after `docker compose down -v`, start from "First run".
+
+### Moving from the shared token, once
+
+Until now the quickstart exported a fixed string as `RAIL8_ADMIN_TOKEN`, one shared token for everything. A node started with a
+key from `bin/rail8 key new` answers the shared token with 401, so the database of yesterday, its demo deployed, moves
+with these commands, in a terminal at the repository root. Nothing is deployed again and no data is lost:
+
+```sh
+export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)
+docker compose up -d --force-recreate
+until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
+bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
+export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)
+```
+
+Then stop the UI, start it again with the command of the first run, log in as `owner`, choose a password and give the
+roles as in "First run". From the next morning on, the steps above are all there is.
 
 A pull that brings a database migration which clears the deployments, such as `deploy/postgres/V27__deploy_pool.sql`,
 leaves the node with no package deployed: the migration deletes the deployment records and every package is deployed
 again. You see it as `404 no endpoint at /http/invoice/async` from a call that worked before, and the Messages screen
-stays empty. Check the packages with `curl -H "Authorization: Bearer $RAIL8_ADMIN_TOKEN" localhost:8081/admin/flows`,
+stays empty. Check the packages with `curl -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/flows`,
 which lists none. Deploy the demo again:
 
 ```sh
@@ -160,8 +194,8 @@ A working copy of the mapping corpus made by an older checkout, `~/rail8-mapping
 folder once, which keeps its edits: `mv ~/rail8-mapping-workspace ~/rail8-workspace/mapping-corpus`. The studio then
 finds its mappings under `mapping-corpus/`, and nothing else reads the old folder.
 
-Then start the UI again in the same terminal, with the command of the first run:
-`cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev`.
+Then start the UI again with the command of the first run:
+`cd ui && env -u RAIL8_TOKEN -u RAIL8_ADMIN_TOKEN RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev`.
 
 If the node does not start after a pull, the database volume may be from an older checkout. `docker compose down -v`
 removes this stack's database and the node's git cache; start again from `docker compose up`, then deploy the demo again.
@@ -193,7 +227,7 @@ id: its timeline lists the steps `ingress`, `validate`, `extractKey`, `route`, `
 shows the payload it recorded. The same through the admin API:
 
 ```sh
-auth="Authorization: Bearer $RAIL8_ADMIN_TOKEN"
+auth="Authorization: Bearer $RAIL8_TOKEN"   # the account deploy, with the operator and message-bodies roles given in First run
 from=$(date -u -d '1 hour ago' +%FT%TZ 2>/dev/null || date -u -v-1H +%FT%TZ)   # an hour ago, in UTC (GNU date, or macOS date)
 curl -H "$auth" "localhost:8081/admin/messages?from=$from&to=$(date -u +%FT%TZ)"
 # {"items":[{"id":"<id>","flow":"demo/invoice-sync","status":"completed","startedAt":"…","durationNanos":…,"keys":{"invoiceId":"4711"}}],"next":null}
@@ -246,22 +280,17 @@ through the admin API: `curl -H "$auth" 'localhost:8081/admin/messages?flow=demo
 
 ## Users
 
-The UI started above runs in token mode: there is no login, and every call to the node is the token's. To log in as a
-person and manage the users, make the first administrator with the token, then start the UI without one:
+The UI runs in session mode: you log in as a person, and every call to the node is that person's. `bootstrap` made the
+first administrator, `owner`. **Users**, under Administration, lists every user with their kind, roles, status, live
+sessions and tokens; a row opens to show who granted each role and how. New user creates a person, whose first password
+shows once, or a technical account, which has tokens only. Roles… gives and takes roles; Block, Reset password and End
+sessions act on one user. An administrator holds no other role unless it is given, so give yourself the roles the other
+screens need, such as developer and operator. A change the node refuses, such as blocking yourself or taking the
+administrator role from the last administrator, shows the node's reason. Users are never deleted; `docker compose down -v`
+removes them with the database.
 
-```sh
-bin/rail8 user add alice --role administrator   # where RAIL8_ADMIN_TOKEN is exported; prints alice's first password, once
-cd ui && RAIL8_ADMIN_TOKEN= RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev   # no token: session mode, with the login
-```
-
-Open **http://localhost:5173**, log in as `alice` with that password and choose her own, 12 to 128 characters, without
-her name. **Users**, under Administration, lists every user with their kind, roles, status, live sessions and tokens; a
-row opens to show who granted each role and how. New user creates a person, whose first password shows once, or a
-technical account, which has tokens only. Roles… gives and takes roles; Block, Reset password and End sessions act on one
-user. An administrator holds no other role unless it is given, so give yourself the roles the other screens need, such
-as developer and operator. A change the node refuses, such as blocking yourself or taking the administrator role from
-the last administrator, shows the node's reason. Users are never deleted; `docker compose down -v` removes them with the
-database.
+The emergency key you export each morning is for the case that every administrator is locked out: `bin/rail8 user add
+<name> --role administrator` makes a new one with it, and prints that person's first password once.
 
 **My tokens**, under Account, issues a token for the command line: its name, the days it holds and your password again.
 The token shows once; `bin/rail8` sends it from `RAIL8_TOKEN`. Revoke ends one at once. New token… in a technical

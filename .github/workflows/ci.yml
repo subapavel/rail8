@@ -165,8 +165,6 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
-    env:
-      RAIL8_ADMIN_TOKEN: ci-stack-token
     steps:
       # the node reads this checkout as its package repository rail8, and refuses a shallow one
       - uses: actions/checkout@v4
@@ -179,6 +177,13 @@ jobs:
           cache: maven
       - name: Build the jars the node image and the deploy one-shot use, with the engines they need
         run: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
+      # a key of this run's own is the node's emergency key; it is never written to a file of the repository
+      - name: Generate the emergency key
+        run: |
+          set -euo pipefail
+          key=$(bin/rail8 key new)
+          echo "::add-mask::$key"
+          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
       - name: Start the stack and wait for /health (60 s bound)
         working-directory: deploy/compose
         run: |
@@ -190,17 +195,21 @@ jobs:
             sleep 1
           done
           echo "seconds from up to /health green: $(( $(date +%s) - start ))"
-      - name: The deploy one-shot exited 0 and the demo is listed
+      # the administrator and the deploy account, made through the admin API with the key; the administrator's password is not kept
+      - name: Bootstrap the administrator and the deploy account
+        run: |
+          set -euo pipefail
+          password=$(bin/rail8 bootstrap --admin ci-admin --deploy-account ci-deploy --token-file "$RUNNER_TEMP/deploy-token")
+          echo "::add-mask::$password"
+          token=$(cat "$RUNNER_TEMP/deploy-token")
+          echo "::add-mask::$token"
+          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: The deploy one-shot exits 0 and the demo is listed
         working-directory: deploy/compose
         run: |
           set -euo pipefail
-          for _ in $(seq 1 60); do
-            [ "$(docker compose ps -a deploy --format '{{.State}}')" = exited ] && break
-            sleep 1
-          done
-          code=$(docker compose ps -a deploy --format '{{.ExitCode}}')
-          [ "$code" = 0 ] || { echo "::error::deploy exited $code"; docker compose logs deploy; exit 1; }
-          curl -sf -H "Authorization: Bearer $RAIL8_ADMIN_TOKEN" localhost:8081/admin/packages | grep -q '"name":"demo"'
+          docker compose run --rm deploy || { echo "::error::deploy failed"; docker compose logs rail8 | tail -50; exit 1; }
+          curl -sf -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages | grep -q '"name":"demo"'
       - name: An invoice sent to the node's HTTP port, published on 8080, is answered by the partner
         run: |
           set -euo pipefail
@@ -221,7 +230,6 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
-      RAIL8_ADMIN_TOKEN: rail8-local
       # the quickstart commits the demo in its working folder: the runner's git has no identity of its own
       GIT_AUTHOR_NAME: Rail8 CI
       GIT_AUTHOR_EMAIL: ci@rail8.invalid
@@ -251,16 +259,32 @@ jobs:
           mkdir -p ~/rail8-workspace && cp -r examples/demo ~/rail8-workspace/demo
           cp -r mapping/corpus ~/rail8-workspace/mapping-corpus
           (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')
-      - name: Start the node, wait for /health and deploy the demo
+      - name: Start the node with an emergency key of this run, wait for /health, bootstrap and deploy the demo
         run: |
           set -euo pipefail
+          key=$(bin/rail8 key new)
+          echo "::add-mask::$key"
+          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
+          export RAIL8_ADMIN_TOKEN=$key
           docker compose up -d --build
           start=$(date +%s)
           until curl -sf localhost:8081/health > /dev/null; do
             if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; exit 1; fi
             sleep 2
           done
-          bin/rail8 deploy demo HEAD --expect none
+          password=$(bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file "$RUNNER_TEMP/deploy-token")
+          echo "::add-mask::$password"
+          token=$(cat "$RUNNER_TEMP/deploy-token")
+          echo "::add-mask::$token"
+          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
+          RAIL8_TOKEN=$token bin/rail8 deploy demo HEAD --expect none
+          # the UI below runs as the deploy account, as the quickstart's readers do: the administrator gives it the operator role, which
+          # reads the messages
+          session=$(curl -sf -X POST localhost:8081/admin/sessions -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg password "$password" '{name: "owner", password: $password}')" | jq -r .session)
+          echo "::add-mask::$session"
+          curl -sf -X POST localhost:8081/admin/users/deploy/roles -H "Authorization: Bearer $session" -H 'Content-Type: application/json' \
+            -d '{"add":["operator"],"remove":[]}' > /dev/null
       - name: Start the UI as the quickstart does
         run: |
           set -euo pipefail
