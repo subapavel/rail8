@@ -168,8 +168,8 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
         if (info !== null && !info.isDirectory()) meet(p.path, folder);
       }
       if (onDisk[n]?.isDirectory()) {
-        const held = await readdir(join(clone, ...inside.split('/')));
-        if (held.length > 0) meet(p.path, `${inside}/${held.sort(byPath)[0]!}`);
+        const contents = await readdir(join(clone, ...inside.split('/')));
+        if (contents.length > 0) meet(p.path, `${inside}/${contents.sort(byPath)[0]!}`);
       }
     }
     const written = named.filter((inside) => held.has(inside));

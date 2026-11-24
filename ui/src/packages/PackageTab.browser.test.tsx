@@ -751,6 +751,32 @@ describe('discarding changes of a package', () => {
     await expect.element(tick()).not.toBeChecked();
   });
 
+  test('a discard that left files says which and why, and one whose state could not be read names what it discarded, never that files are left', async () => {
+    const answers = [
+      { discarded: [], left: ['orders/notes.txt'], package: null, problem: 'git checkout-index failed, as git says: error: unable to write file notes.txt' },
+      { discarded: ['orders/notes.txt'], left: [], package: null, problem: 'the package could not be read: package.yaml is missing' },
+    ];
+    const scripted = (api: PackagesApi): PackagesApi => ({ ...api, discard: async () => answers.shift()! });
+    for (const title of ['Discarded in part', 'Discarded']) {
+      await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n' }, edits: { 'notes.txt': 'two\n' } }] }, scripted);
+      await pick('notes.txt').click();
+      await button('Discard changes…').click();
+      await tick().click();
+      await discardButton('1 file').click();
+      const shown = page.getByRole('dialog', { name: title, exact: true });
+      if (title === 'Discarded in part') {
+        await expect.element(shown.getByText('No chosen file reads as in the last commit yet.')).toBeVisible();
+        await expect.element(shown.getByRole('alert')).toMatchTextContent(/^Still changed: notes\.txtgit checkout-index failed/);
+      } else {
+        await expect.element(shown.getByText('Discarded the changes of notes.txt.')).toBeVisible();
+        await expect.element(shown.getByText('the package could not be read: package.yaml is missing')).toBeVisible();
+        await expect.element(shown.getByText(/Still changed/)).not.toBeInTheDocument();
+      }
+      root?.unmount();
+      document.body.innerHTML = '';
+    }
+  });
+
   test('Discard changes… is disabled with the reason on a read-only server and on a busy clone', async () => {
     const cases: [Seed, string][] = [
       [{ readOnly: true, clones: [{ folder: 'orders', files: { 'a.txt': 'a\n' }, edits: { 'a.txt': 'b\n' } }] }, 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).'],
