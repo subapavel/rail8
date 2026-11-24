@@ -204,7 +204,8 @@ import java.util.stream.Collectors;
  * header, or a {@code Sec-Fetch-Site} other than {@code none}, is 403 {@code {error, code: "browser"}}: what a browser sends,
  * never the CLI. Then {@code POST /admin/sessions}, the login, takes no credential; on a listener that refuses logins
  * ({@link Config#refusesLogins}: plain HTTP on a bind other than loopback, without {@code RAIL8_ADMIN_TLS=off}) it is 403
- * {@code {error, code: "tls-required"}} before its body is read, and so is any request of a session once authenticated. Every
+ * {@code {error, code: "tls-required"}} before its body is read, and so is any request that presents a session's credential,
+ * known by its form before the store is asked. Every
  * other request is authenticated
  * ({@link Access#authenticate}) from {@code Authorization: Bearer <credential>} before the router looks at its path, so a
  * path no route takes is authenticated too: a session; the emergency key, a {@code RAIL8_ADMIN_TOKEN} of its form; and while
@@ -604,8 +605,8 @@ public final class AdminServer {
             routes.get("/health").handler(offload(context, (c, who) -> health(c)));
             routes.get("/live").handler(offload(context, (c, who) -> Json.of(200, new JsonObject().put("status", Health.Status.UP.name()))));   // reads nothing
             routes.get("/ready").handler(offload(context, (c, who) -> ready(c)));
-            // the three routes of /admin without an action, in this order: the guard, the login, the authentication; on a listener
-            // that refuses logins, the login's refusal comes before the login, so a password sent there is never read
+            // the routes of /admin without an action, in this order: the guard, the login, the authentication; on a listener that
+            // refuses logins, a refusal of the login comes before the login, so a password sent there is never read
             routes.route("/admin/*").putMetadata(UNCHECKED, "browser guard").handler(AdminServer::browserGuard);
             if (config.refusesLogins()) {
                 routes.post("/admin/sessions").putMetadata(UNCHECKED, "plain HTTP").handler(ctx -> refuse(ctx, failed(plainHttp(), ctx)));
@@ -689,14 +690,17 @@ public final class AdminServer {
          */
         private void authenticate(RoutingContext ctx) {
             HttpServerRequest req = ctx.request();
-            req.pause();
             Optional<String> authorization = Optional.ofNullable(req.getHeader(HttpHeaders.AUTHORIZATION));
+            if (config.refusesLogins() && Access.presentsSession(authorization)) {   // by its form: the store is not asked
+                refuse(ctx, failed(plainHttp(), ctx));
+                return;
+            }
+            req.pause();
             Optional<String> declared = Optional.ofNullable(req.getHeader(ACTOR));
             Thread.ofVirtual().name("rail8-admin").start(() -> {
                 Caller who;
                 try {
                     who = access.authenticate(authorization, declared);
-                    if (who.via() == Via.SESSION && config.refusesLogins()) throw plainHttp();
                 } catch (Throwable refused) {   // a refusal, the pool's, or a store that failed: answered, never a hang
                     Reply reply = failed(refused, ctx);
                     context.runOnContext(v -> refuse(ctx, reply));

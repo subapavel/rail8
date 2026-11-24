@@ -28,6 +28,15 @@ public interface Access {
     Caller authenticate(Optional<String> authorization, Optional<String> declaredActor);
 
     /**
+     * Whether {@code authorization} presents a session's credential, {@code Bearer rail8s_<id>_<secret>}, by its form alone:
+     * nothing is read from the store.
+     */
+    static boolean presentsSession(Optional<String> authorization) {
+        return authorization.filter(h -> h.regionMatches(true, 0, "Bearer ", 0, 7))
+                .flatMap(h -> Credentials.sessionId(h.substring(7).strip())).isPresent();
+    }
+
+    /**
      * A login: a new session of {@code name} when {@code password} is theirs, counted on the name's row of the login limit.
      *
      * @param remote the address the login came from, for the audit
