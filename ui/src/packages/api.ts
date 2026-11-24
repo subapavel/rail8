@@ -151,6 +151,45 @@ export interface CommitAnswer {
   problem?: string;
 }
 
+/**
+ * A deploy of a commit of the package to the node at RAIL8_ADMIN_URL, or its check: the commit as 40 hex digits from
+ * the package's state; whether this is the check, which changes nothing on the node; and, for the deploy, the state it
+ * expects the node to replace, the `replaces` its check answered: a commit of 40 hex digits, or `none`.
+ */
+export interface DeployBody {
+  commit: string;
+  check: boolean;
+  expect?: string;
+}
+
+/**
+ * What the node answered for a deploy or its check: the package's name and version at the commit, its repository and
+ * commit, every flow it runs after the deploy, and the flows the deploy starts for the first time (`added`), stops and
+ * starts again on the new version (`swapped`) and stops (`removed`), each by its qualified id `<package>/<flow>`, sorted.
+ */
+export interface NodeDeploy {
+  package: string;
+  version: string;
+  repository: string;
+  commit: string;
+  flows: string[];
+  added: string[];
+  swapped: string[];
+  removed: string[];
+}
+
+/**
+ * What a deploy or its check answers: the node's answer; `replaces`, the commit of the pool's record of the package that
+ * the deploy replaces, or `none`, as the node names it; and the package's state after it (null when it could not be
+ * read, and `problem` says why).
+ */
+export interface DeployAnswer {
+  deploy: NodeDeploy;
+  replaces: string;
+  package: PackageState | null;
+  problem?: string;
+}
+
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
 export interface PackagesApi {
   list(): Promise<PackageList>;
@@ -172,6 +211,11 @@ export interface PackagesApi {
    * working folder's lock that the branch, `HEAD` and each path's tag are still the ones the author reviewed.
    */
   commit(repository: string, body: CommitBody): Promise<CommitAnswer>;
+  /**
+   * Checks or deploys a commit the clone holds on the node at RAIL8_ADMIN_URL, as git's identity in the clone. A deploy
+   * is refused, changing nothing, when the node's state of the package is no longer its `expect`.
+   */
+  deploy(repository: string, body: DeployBody): Promise<DeployAnswer>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
@@ -225,6 +269,9 @@ export function httpPackagesApi(send: typeof fetch = (input, init) => fetch(inpu
   };
   const json = async <T>(url: string) => (await (await call(url)).json()) as T;
 
+  const post = async <T>(url: string, body: unknown) =>
+    (await (await call(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()) as T;
+
   return {
     list: () => json<PackageList>('/git/packages'),
     get: (repository) => json<PackageState>(of(repository)),
@@ -236,7 +283,7 @@ export function httpPackagesApi(send: typeof fetch = (input, init) => fetch(inpu
     changes: (repository, from, to) => json(of(repository, '/changes', { from, to })),
     artifacts: (repository, rev) => json(of(repository, '/artifacts', { rev })),
     log: (repository, page = {}) => json<LogPage>(of(repository, '/log', { before: page.before, limit: page.limit?.toString() })),
-    commit: async (repository, body) =>
-      (await (await call(of(repository, '/commit'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json()) as CommitAnswer,
+    commit: (repository, body) => post<CommitAnswer>(of(repository, '/commit'), body),
+    deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
   };
 }

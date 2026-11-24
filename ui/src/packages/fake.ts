@@ -5,6 +5,7 @@ import {
   type Change,
   type Commit,
   type CommitAnswer,
+  type DeployAnswer,
   type Deployed,
   type FileVersion,
   type PackageList,
@@ -13,8 +14,10 @@ import {
   type PackageState,
 } from './api';
 import {
+  actorOf,
   artifactsOf,
   commitBodyOf,
+  deployBodyOf,
   indexFrom,
   inPackage,
   isCommitId,
@@ -115,9 +118,40 @@ export interface FakeState {
   git: string | null;
   /** The author identity git gives; null when it gives none, and a commit is refused. */
   identity: { name: string; email: string } | null;
-  /** The node at RAIL8_ADMIN_URL: its host, and what it runs, or why it gives no answer. */
-  node: { host: string; answers: true; running: FakeRunning[] } | { host: string; answers: false; error: string };
+  /**
+   * The node at RAIL8_ADMIN_URL: its host, and what it runs, or why it gives no answer (with `refusesToken` when it
+   * refuses RAIL8_ADMIN_TOKEN). A node that answers takes a deploy as it runs, unless `deploys` scripts it: a refusal
+   * of its own of every deploy and check, or `silent`, no answer to a deploy, though it answers its check.
+   */
+  node:
+    | { host: string; answers: true; running: FakeRunning[]; deploys?: FakeNodeRefusal | 'silent' }
+    | { host: string; answers: false; error: string; refusesToken?: true };
+  /** Every deploy and check the node was sent, in order: whether it was the check, its body and its actor. */
+  sent: FakeSent[];
   folders: FakeFolder[];
+}
+
+/** A refusal the fake node gives: its status, its error and its problems. */
+export interface FakeNodeRefusal {
+  status: number;
+  error: string;
+  problems?: string[];
+}
+
+/** What the fake node was sent for a deploy or its check. */
+export interface FakeSent {
+  check: boolean;
+  body: { repository: string; commit: string; expect?: string };
+  actor: string;
+}
+
+/**
+ * The flows of the files `files` of a package, as a node names them by the files under `flows/`: the qualified id
+ * `<package>/<file name without .yaml>` of each, sorted, with the text of its file.
+ */
+export function flowsOf(name: string, files: Record<string, string>): Map<string, string> {
+  const flows = sorted(Object.keys(files).filter((p) => /^flows\/[^/]+\.yaml$/.test(p)));
+  return new Map(flows.map((p) => [`${name}/${p.slice('flows/'.length, -'.yaml'.length)}`, files[p]!]));
 }
 
 /** The commits `id` reaches through its parents, itself included. */
@@ -552,6 +586,59 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         };
         return answer;
       });
+    },
+    async deploy(repository, body): Promise<DeployAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      const asked = deployBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      if (!asked.check && !state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
+      const folder = packageOf(repository);
+      if (!folder.commits.some((c) => c.id === asked.commit)) throw refused(404, `the clone holds no commit ${asked.commit}`);
+      const node = state.node;
+      const nothing = asked.check ? 'the check changes nothing' : 'nothing was deployed';
+      if (!node.answers) throw refused(502, node.refusesToken ? `the node at ${node.host} refuses RAIL8_ADMIN_TOKEN (401); ${nothing}` : `${node.error}; ${nothing}`);
+      state.sent.push({
+        check: asked.check,
+        body: asked.check ? { repository, commit: asked.commit } : { repository, commit: asked.commit, expect: asked.expect! },
+        actor: actorOf(state.identity),
+      });
+      if (typeof node.deploys === 'object') {
+        const { status, error, problems } = node.deploys;
+        throw new PackagesError(status, status === 412 ? `the node's commit changed since the check: ${error}; ${nothing}` : error, problems);
+      }
+      const record = node.running.find((r) => r.repository === repository);
+      const replaces = record?.commit ?? 'none';
+      if (!asked.check && asked.expect !== replaces) {
+        throw new PackagesError(412, `the node's commit changed since the check: the pool records ${replaces}, not ${asked.expect!}; ${nothing}`);
+      }
+      if (!asked.check && node.deploys === 'silent') {
+        throw refused(504, `the node at ${node.host} gave no answer within 5 min, so the outcome of the deploy is unknown: read what it runs before you try again`);
+      }
+      const files = filesOf(folder, asked.commit);
+      const shown = manifestOf(files['package.yaml'] ?? '').package ?? { name: repository, version: '' };
+      const before = record === undefined ? new Map<string, string>() : flowsOf(shown.name, filesOf(folder, record.commit));
+      const after = flowsOf(shown.name, files);
+      if (!asked.check) {
+        node.running = [
+          ...node.running.filter((r) => r.repository !== repository),
+          { repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: new Date().toISOString() },
+        ];
+      }
+      return {
+        deploy: {
+          package: shown.name,
+          version: shown.version,
+          repository,
+          commit: asked.commit,
+          flows: [...after.keys()],
+          added: [...after.keys()].filter((f) => !before.has(f)),
+          swapped: [...after.keys()].filter((f) => before.has(f) && before.get(f) !== after.get(f)),
+          removed: [...before.keys()].filter((f) => !after.has(f)),
+        },
+        replaces,
+        package: await stateOf(folder),
+      };
     },
     async list(): Promise<PackageList> {
       if (state.foreignPage) throw new PackagesError(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");

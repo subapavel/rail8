@@ -34,6 +34,8 @@ const tab = (name) => (page) => shown(page).getByRole('tab', { name: new RegExp(
 /** Expands the row of the table `table` that holds `text`. */
 const expand = (table, text) => (page) =>
   shown(page).getByRole('table', { name: table }).getByRole('row').filter({ hasText: text }).getByRole('button', { name: /expand row/i }).click();
+/** Presses the page's button `name`, in the shown tab or in a dialog. */
+const press = (name) => (page) => page.getByRole('button', { name, exact: true }).click();
 /** Collapses the side menu to its icons. */
 const collapse = (page) => page.getByRole('button', { name: 'Collapse menu' }).click();
 /** Opens the first mapping of the Mappings screen in its studio. */
@@ -46,6 +48,9 @@ const SCENES = {
   'package-changes': [menu('Packages'), pkg('orders'), expand('Changes', 'tests/orders.test.yaml')],
   'package-artifacts': [menu('Packages'), pkg('orders'), tab('Artifacts')],
   'package-history': [menu('Packages'), pkg('orders'), tab('History')],
+  'package-deploy': [menu('Packages'), pkg('orders'), press('Deploy…')],
+  'package-deployed': [menu('Packages'), pkg('orders'), press('Deploy…'), press('Deploy')],
+  'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],
   'menu-collapsed': [menu('Packages'), pkg('orders'), collapse],
   canvas: [menu('Mappings'), studio, tab('Definition')],
 };

@@ -1,13 +1,16 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { admitted, etagOf, Refusal, replaceFile, workingFolderWrites, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import { httpPackagesApi } from '../api';
+import type { FakeSent } from '../fake';
+import { manifestOf } from '../rules';
+import { FakeTimer } from '../server/fakeTimer.ts';
 import { checkGit } from '../server/git.ts';
 import { gitPackages } from '../server/routes.ts';
 import { runner, type Spawn } from '../server/runner.ts';
@@ -161,28 +164,91 @@ export const httpWorld: Build = async (seed) => {
   }
   for (const { folder, to } of seed.links ?? []) await symlink(join(work, to), join(work, folder));
 
-  // the node: it answers /admin/packages with the token, or nothing at all on a port no one listens on
-  const node = createServer((req, res) => {
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
-      res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' }));
+  // the node: what it runs, by repository, as a deploy changes it
+  const running = new Map(
+    (seed.node === 'silent' ? [] : (seed.node ?? [])).map((r) => [
+      r.repository,
+      { commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`)!, state: r.state ?? 'RUNNING', problems: r.problems ?? [], deployedAt: DEPLOYED_AT },
+    ]),
+  );
+  // the flows of a commit of the clone `repository`, as the fake node names them: each file under flows/, with its blob
+  const flowsAt = (repository: string, commit: string, name: string) => {
+    const listed = git(join(work, repository), 'ls-tree', '-z', commit, '--', 'flows/').split('\0').filter((l) => l !== '');
+    return new Map(
+      listed
+        .map((line) => [line.slice(line.indexOf('\t') + 1), line.split(' ')[2]!.split('\t')[0]!] as const)
+        .filter(([path]) => /^flows\/[^/]+\.yaml$/.test(path))
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([path, blob]) => [`${name}/${path.slice('flows/'.length, -'.yaml'.length)}`, blob]),
+    );
+  };
+  const sent: FakeSent[] = [];
+  const held: ServerResponse[] = [];
+  const hearing: (() => void)[] = [];
+  const answer = (res: ServerResponse, status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+  const deploy = (check: boolean, asked: { repository: string; commit: string; expect?: string }, actor: string, res: ServerResponse) => {
+    sent.push({ check, body: asked, actor });
+    if (typeof seed.deploys === 'object') {
+      answer(res, seed.deploys.status, { error: seed.deploys.error, ...(seed.deploys.problems === undefined ? {} : { problems: seed.deploys.problems }) });
       return;
     }
-    const items = (seed.node === 'silent' ? [] : (seed.node ?? [])).map((r) => ({
-      name: r.repository,
+    const record = running.get(asked.repository);
+    const replaces = record?.commit ?? 'none';
+    if (!check && asked.expect !== replaces) {
+      answer(res, 412, { error: `the pool records ${replaces}, not ${asked.expect}`, replaces });
+      return;
+    }
+    if (!check && seed.deploys === 'silent') {
+      held.push(res);
+      for (const done of hearing.splice(0)) done();
+      return;
+    }
+    const shown = manifestOf(git(join(work, asked.repository), 'show', `${asked.commit}:package.yaml`)).package!;
+    const before = record === undefined ? new Map<string, string>() : flowsAt(asked.repository, record.commit, shown.name);
+    const after = flowsAt(asked.repository, asked.commit, shown.name);
+    if (!check) running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: new Date().toISOString() });
+    answer(res, 200, {
+      package: shown.name,
+      version: shown.version,
+      repository: asked.repository,
+      commit: asked.commit,
+      flows: [...after.keys()],
+      added: [...after.keys()].filter((f) => !before.has(f)),
+      swapped: [...after.keys()].filter((f) => before.has(f) && before.get(f) !== after.get(f)),
+      removed: [...before.keys()].filter((f) => !after.has(f)),
+      replaces,
+    });
+  };
+
+  // the node: it answers /admin/packages and /admin/deploy with the token, or nothing at all on a port no one listens on
+  const node = createServer((req, res) => {
+    if (seed.tokenRefused || req.headers.authorization !== `Bearer ${TOKEN}`) {
+      answer(res, 401, { error: 'unauthorized' });
+      return;
+    }
+    const url = new URL(req.url ?? '', 'http://node');
+    if (req.method === 'POST' && url.pathname === '/admin/deploy') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => deploy(url.searchParams.get('check') === 'true', JSON.parse(Buffer.concat(chunks).toString('utf8')) as FakeSent['body'], String(req.headers['x-rail8-actor']), res));
+      return;
+    }
+    const items = [...running].map(([repository, r]) => ({
+      name: repository,
       version: '1.0.0',
-      repository: r.repository,
-      commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`),
-      deployedAt: DEPLOYED_AT,
+      repository,
+      commit: r.commit,
+      deployedAt: r.deployedAt,
       flows: [],
       files: [],
       folders: [],
       artifacts: [],
-      state: r.state ?? 'RUNNING',
-      problems: r.problems ?? [],
+      state: r.state,
+      problems: r.problems,
       content: 'sha256:00',
       dependencies: [],
     }));
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ items }));
+    answer(res, 200, { items });
   });
   const nodePort = await listen(node);
   if (seed.node === 'silent') await shut(node);
@@ -258,6 +324,8 @@ export const httpWorld: Build = async (seed) => {
       ),
     );
 
+  // the clock the git half waits on the node by
+  const clock = new FakeTimer();
   const middleware = gitPackages({
     workspace: seed.workspace === false ? undefined : work,
     writable: !seed.readOnly,
@@ -266,7 +334,7 @@ export const httpWorld: Build = async (seed) => {
     node: { target: `http://127.0.0.1:${nodePort}`, token: TOKEN },
     git: runs,
     ready: checkGit(runs),
-    timer: realTimer,
+    timer: clock,
   });
   const front = createServer((req, res) => middleware(req, res, () => res.writeHead(418).end('next')));
   const port = await listen(front);
@@ -291,6 +359,12 @@ export const httpWorld: Build = async (seed) => {
       }
     },
     held: () => new Promise<void>((done) => holding.push(done)),
+    sent: () => sent,
+    heard: () => (held.length > 0 ? Promise.resolve() : new Promise<void>((done) => hearing.push(done))),
+    elapse: (ms) => clock.advance(ms),
+    deployedElsewhere(folder, label) {
+      running.set(folder, { commit: ids.get(`${folder}/${label}`)!, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
+    },
     terminal: (folder, args) => git(join(work, folder), ...args),
     link: (folder, path, target) => symlink(target, join(work, folder, path)),
     closesAfter(command) {
@@ -298,6 +372,7 @@ export const httpWorld: Build = async (seed) => {
     },
     async close() {
       await shut(front);
+      for (const res of held) res.destroy();
       if (seed.node !== 'silent') await shut(node);
       await runs.close();
       await rm(temp, { recursive: true, force: true });

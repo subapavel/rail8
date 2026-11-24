@@ -1,5 +1,5 @@
 import type { PackagesApi } from '../api';
-import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeState } from '../fake';
+import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeNodeRefusal, type FakeSent, type FakeState } from '../fake';
 import { GIT_MISSING, gitTooOld, inPackage } from '../rules';
 
 /**
@@ -18,6 +18,13 @@ export interface Seed {
   links?: { folder: string; to: string }[];
   /** What the node runs (nothing by default), or `silent`: it gives no answer. */
   node?: 'silent' | RunningSeed[];
+  /**
+   * How the node takes a deploy and its check, which it otherwise takes as it runs, recording the commit deployed: with a
+   * refusal of its own of every one, or `silent`, giving no answer to a deploy though it answers its check.
+   */
+  deploys?: FakeNodeRefusal | 'silent';
+  /** The node refuses the token the git half sends (401) for every call. */
+  tokenRefused?: true;
   readOnly?: boolean;
   /** False: no working folder is set. */
   workspace?: false;
@@ -106,6 +113,14 @@ export interface World {
   save(path: string, text: string, tag: string): Promise<200 | 412>;
   /** Resolves once the next write holds the working folder's lock. */
   held(): Promise<void>;
+  /** Every deploy and check the node was sent, in order. */
+  sent(): FakeSent[];
+  /** Resolves once the node has been sent a deploy, not a check, that it has not answered. */
+  heard(): Promise<void>;
+  /** Moves the clock the git half waits on the node by on by `ms`. */
+  elapse(ms: number): void;
+  /** The node runs the commit with `label` of the clone `folder` from now on, as after a deploy by someone else. */
+  deployedElsewhere(folder: string, label: string): void;
   /** git run with `args` in a terminal in the clone `folder`, as the author would: what it prints. The real git half only. */
   terminal?(folder: string, args: readonly string[]): string;
   /** Makes a symbolic link at `path` of the clone `folder` whose target is the text `target`, as the author would on disk. The real git half only. */
@@ -239,9 +254,12 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
   const node: FakeState['node'] =
     seed.node === 'silent'
       ? { host, answers: false, error: `the node at ${host} does not answer (is it running?)` }
+      : seed.tokenRefused
+        ? { host, answers: false, error: `the node at ${host} refuses RAIL8_ADMIN_TOKEN (401)`, refusesToken: true }
       : {
           host,
           answers: true,
+          ...(seed.deploys === undefined ? {} : { deploys: seed.deploys }),
           running: (seed.node ?? []).map((r) => ({
             repository: r.repository,
             commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`)!,
@@ -257,6 +275,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     git: seed.git === 'missing' ? GIT_MISSING : seed.git === 'old' ? gitTooOld(OLD_GIT) : null,
     identity: seed.identity === null ? null : { ...AUTHOR },
     node,
+    sent: [],
     folders,
   };
   return { state, ids };
@@ -287,6 +306,15 @@ export const fakeWorld: Build = async (seed) => {
         return 200;
       }),
     held: () => new Promise<void>((done) => holding.push(done)),
+    sent: () => state.sent,
+    // the fake node answers at once: a silent one with the git half's 504
+    heard: async () => {},
+    elapse: () => {},
+    deployedElsewhere(folder, label) {
+      if (!state.node.answers) return;
+      const commit = ids.get(`${folder}/${label}`)!;
+      state.node.running = [...state.node.running.filter((r) => r.repository !== folder), { repository: folder, commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT }];
+    },
     close: async () => {},
   };
 };

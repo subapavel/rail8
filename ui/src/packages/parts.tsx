@@ -261,8 +261,16 @@ export function ArtifactsTable({ artifacts, open, label }: { artifacts: Artifact
   );
 }
 
-/** The commits of the branch, dense, each opening the files it changed; the commit the node runs is marked. */
-export function HistoryTable({ api, repository, commits, loading, host, now }: { api: PackagesApi; repository: string; commits: Commit[]; loading: boolean; host: string; now: Date }) {
+/** The commits of the branch, dense, each opening the files it changed, and each with Deploy this commit… when `onDeploy` is given; the commit the node runs is marked. */
+export function HistoryTable({ api, repository, commits, loading, host, now, onDeploy }: {
+  api: PackagesApi;
+  repository: string;
+  commits: Commit[];
+  loading: boolean;
+  host: string;
+  now: Date;
+  onDeploy?: (commit: Commit) => void;
+}) {
   return (
     <ProTable<Commit>
       aria-label="History"
@@ -281,6 +289,20 @@ export function HistoryTable({ api, repository, commits, loading, host, now }: {
         { title: 'Id', key: 'id', width: 96, render: (_, c) => <Typography.Text code>{short(c.id)}</Typography.Text> },
         { title: 'Author', dataIndex: 'author', width: 160, ellipsis: true },
         { title: 'Date', key: 'at', width: 128, render: (_, c) => <Age at={c.at} now={now} /> },
+        ...(onDeploy === undefined
+          ? []
+          : [
+              {
+                title: 'Action',
+                key: 'deploy',
+                width: 176,
+                render: (_: unknown, c: Commit) => (
+                  <Button type="link" size="small" className="rail8-link" onClick={() => onDeploy(c)}>
+                    Deploy this commit…
+                  </Button>
+                ),
+              },
+            ]),
       ]}
     />
   );
