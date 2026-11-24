@@ -23,6 +23,7 @@ import dev.rail8.core.record.Recorder;
 import dev.rail8.core.record.RecordingPolicy;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepLog;
+import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.testkit.InMemoryBlobStore;
 import io.vertx.core.Context;
 import io.vertx.core.Future;
@@ -946,7 +947,7 @@ class AdminServerTest {
         assertEquals(503, down.status(), down.body().toString());
         assertTrue(down.contentType().startsWith("application/json"), down.contentType());
         JsonObject d = down.json();
-        assertEquals(Set.of("status", "checks", "snapshotWriteFailures"), d.fieldNames());
+        assertEquals(Set.of("status", "checks", "snapshotWriteFailures", "git"), d.fieldNames());
         assertEquals("DOWN", d.getString("status"));
         assertEquals(new JsonObject().put("postgres", "DOWN"), d.getJsonObject("checks"));
         assertEquals(3L, d.getLong("snapshotWriteFailures"));
@@ -965,6 +966,46 @@ class AdminServerTest {
         assertEquals("UP", u.getString("status"));
         assertEquals(new JsonObject().put("postgres", "UP"), u.getJsonObject("checks"));
         assertEquals(7L, u.getLong("snapshotWriteFailures"), "UP, and the failed snapshot writes are counted (read per request)");
+    }
+
+    /**
+     * The check of the git credentials: /health shows its state and when it was checked, read on every request, and never the
+     * repository or the reason; GET /admin/git shows those too. Before the first check every field is null. Refused credentials, or
+     * a host not reached, change no check and leave /health 200 UP and /ready 200.
+     */
+    @Test
+    void healthAndTheAdminApiShowTheCheckOfTheGitCredentials() throws Exception {
+        AtomicReference<Optional<CredentialsCheck.Outcome>> git = new AtomicReference<>(Optional.empty());
+        AdminServer server = new AdminServer(new AdminServer.Config("127.0.0.1", 0, Optional.of(TOKEN)), messages, dlq, blobs,
+                new AdminServer.HealthProbe(probe().checks(), writeFailures::get, List.of(), AdminServer.Readiness.ALWAYS, git::get));
+        port = server.start(vertx).await(10, TimeUnit.SECONDS);
+        started.add(server);
+
+        JsonObject none = new JsonObject().putNull("credentials").putNull("checkedAt");
+        assertEquals(none, get("/health", null).json().getJsonObject("git"), "no check yet");
+        assertEquals(new JsonObject().putNull("credentials").putNull("repository").putNull("reason").putNull("checkedAt"),
+                get("/admin/git", "Bearer " + TOKEN).json());
+
+        Instant at = T0.plusSeconds(60);
+        for (CredentialsCheck.State state : CredentialsCheck.State.values()) {
+            String reason = state == CredentialsCheck.State.WORKING ? "" : "orders at refs/heads/release: " + state.name().toLowerCase(java.util.Locale.ROOT);
+            git.set(Optional.of(new CredentialsCheck.Outcome(state, "orders", reason, at)));
+            Answer health = get("/health", null);
+            assertEquals(200, health.status(), state + ": the node stays healthy for traffic: " + health.body());
+            assertEquals("UP", health.json().getString("status"), state + "");
+            assertEquals(new JsonObject().put("postgres", "UP"), health.json().getJsonObject("checks"), state + ": no check changes");
+            assertEquals(new JsonObject().put("credentials", state.name()).put("checkedAt", at.toString()), health.json().getJsonObject("git"),
+                    state + ": /health shows the state and its time only");
+            assertFalse(health.body().toString().contains("orders"), "no repository and no reason in the open /health: " + health.body());
+            assertEquals(200, get("/ready", null).status(), state + ": still ready");
+
+            Answer admin = get("/admin/git", "Bearer " + TOKEN);
+            assertEquals(200, admin.status(), admin.body().toString());
+            assertEquals(new JsonObject().put("credentials", state.name()).put("repository", "orders").put("reason", reason).put("checkedAt", at.toString()),
+                    admin.json(), state + "");
+            at = at.plusSeconds(900);
+        }
+        assertJsonError(401, get("/admin/git", null), "the admin route needs the token");
     }
 
     // --- FIX-144 (D-123): GET /live and GET /ready

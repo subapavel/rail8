@@ -104,6 +104,12 @@ class GitCacheHttpsTest {
         return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, server.clientTls().getSocketFactory()).open();
     }
 
+    private GitCache cache(Optional<GitSettings.Credentials> credentials) {
+        GitSettings settings = new GitSettings(server.base("localhost"), "", Optional.of("refs/heads/main"), credentials, GitSettings.TIMEOUT_DEFAULT,
+                GitSettings.MAX_BYTES_DEFAULT);
+        return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, server.clientTls().getSocketFactory());
+    }
+
     private PackageRepositories open(Optional<GitSettings.Credentials> credentials) {
         return open(server.base("localhost"), credentials, GitSettings.MAX_BYTES_DEFAULT);
     }
@@ -238,6 +244,53 @@ class GitCacheHttpsTest {
         assertEquals(Reason.TIMED_OUT, failure == null ? null : failure.reason());
         GitFailure later = failure(Reason.TIMED_OUT, () -> repositories.recorded("orders", orders));
         assertEquals("orders at " + orders + ": timed out (RAIL8_GIT_TIMEOUT)", later.getMessage(), "a fetch after the abort fails at once");
+    }
+
+    @Test
+    void theCheckOfTheCredentialsListsTheRefsWithTheTokenAndWritesNothing() throws Exception {
+        server.requireCredentials(USER, TOKEN);
+        cache(token(TOKEN)).check("orders");
+        assertTrue(server.requests().stream().anyMatch(r -> r.authorization().isPresent()), "the token was sent");
+        assertFalse(Files.exists(temp.resolve("cache")), "the check writes nothing into the cache");
+        assertEquals(0, timer.pending(), "its deadline is cancelled once it answered");
+        assertNoSecretLoggedOrCached();
+    }
+
+    @Test
+    void theCheckOfTheCredentialsSeesThemRefusedWithTheFormattersTextOnly() throws Exception {
+        server.requireCredentials(USER, TOKEN);
+        GitFailure wrong = failure(Reason.CREDENTIALS_REFUSED, () -> cache(token("glpat-wrong")).check("orders"));
+        assertEquals("orders at refs/heads/main: credentials refused", wrong.getMessage());
+        failure(Reason.NOT_FOUND, () -> cache(token(TOKEN)).check("missing"));
+        assertNoSecretLoggedOrCached();
+    }
+
+    @Test
+    void theCheckOfTheCredentialsSeesAHostItCannotReach() {
+        GitCache cache = cache(token(TOKEN));
+        server.close();
+        failure(Reason.TRANSPORT_FAILED, () -> cache.check("orders"));
+    }
+
+    @Test
+    void theCheckOfTheCredentialsStopsAtItsOwnTimeout() throws Exception {
+        CountDownLatch arrived = server.hold();
+        GitCache cache = cache(Optional.empty());
+        CompletableFuture<GitFailure> result = new CompletableFuture<>();
+        Thread.ofVirtual().start(() -> {
+            try {
+                cache.check("orders");
+                result.complete(null);
+            } catch (GitFailure failure) {
+                result.complete(failure);
+            } catch (Throwable unexpected) {
+                result.completeExceptionally(unexpected);
+            }
+        });
+        arrived.await();
+        clock.advance(GitSettings.CHECK_TIMEOUT_DEFAULT);   // RAIL8_GIT_CHECK_TIMEOUT, well before RAIL8_GIT_TIMEOUT
+        GitFailure failure = result.get();
+        assertEquals(Reason.TIMED_OUT, failure == null ? null : failure.reason());
     }
 
     @Test

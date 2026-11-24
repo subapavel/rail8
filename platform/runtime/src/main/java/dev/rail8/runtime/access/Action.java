@@ -27,6 +27,7 @@ public enum Action {
     PACKAGE_DEPLOY("package.deploy", Who.ROLES, false, false, true, DEVELOPER),
     PACKAGE_UNDEPLOY("package.undeploy", Who.ROLES, false, false, true, DEVELOPER),
     MODULE_CALL("module.call", Who.ROLES, false, false, true, DEVELOPER),
+    GIT_READ("git.read", Who.ROLES, false, false, true, DEVELOPER, OPERATOR, ADMINISTRATOR),
     USER_READ("user.read", Who.ROLES, false, true, false, ADMINISTRATOR),
     USER_CREATE("user.create", Who.ROLES, true, true, false, ADMINISTRATOR),
     ROLES_CHANGE("roles.change", Who.ROLES, true, false, false, ADMINISTRATOR),
@@ -84,7 +85,10 @@ public enum Action {
         return emergencyKey;
     }
 
-    /** Whether it existed before users did: the shared token and the open loopback API keep it while the bridge is open. */
+    /**
+     * Whether the shared token and the open loopback API keep it while the bridge is open: the actions that existed before users
+     * did, and {@code git.read}, a read with no secret that the UI's development server reads with the shared token.
+     */
     public boolean beforeStepOne() {
         return beforeStepOne;
     }

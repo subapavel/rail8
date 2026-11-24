@@ -41,6 +41,7 @@ import dev.rail8.runtime.deploy.DeploymentStore.NodePackage;
 import dev.rail8.runtime.deploy.DeploymentStore.PoolLock;
 import dev.rail8.runtime.deploy.DeploymentStore.Snapshot;
 import dev.rail8.runtime.git.Commit;
+import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.git.GitCache;
 import dev.rail8.runtime.git.GitFailure;
 import dev.rail8.runtime.git.PackageRepositories;
@@ -315,6 +316,8 @@ public final class Deployments {
     private final DeploymentStore records;
     /** The node's git cache over {@code RAIL8_GIT_*}; empty without {@code RAIL8_GIT_BASE}: no deploy from git, every record FAILED. */
     private final Optional<GitCache> git;
+    /** The check of the pool's git credentials over {@link #git}, asking about the first package by name deployed from git. */
+    private final Optional<CredentialsCheck> credentials;
     private final PollerLeases leases;
     private final Targets targets;
     private final Runs runs;   // every run of every flow deployed here, on the node's clock and timer
@@ -537,6 +540,9 @@ public final class Deployments {
         this.records = Objects.requireNonNull(records, "records");
         this.git = config.git().map(settings -> new GitCache(settings, config.dataDir().resolve("git"), config.maxPackageBytes(), config.deployed(),
                 timer, this::named));
+        this.credentials = git.map(cache -> new CredentialsCheck(cache::check,
+                () -> packages().stream().flatMap(p -> p.repository().stream()).findFirst(), config.git().orElseThrow().checkEvery(), clock,
+                timer, task -> Thread.ofVirtual().name("rail8-git-check").start(task)));
         this.leases = Objects.requireNonNull(leases, "leases");
         this.targets = Objects.requireNonNull(targets, "targets");
         this.fence = Objects.requireNonNull(fence, "fence");
@@ -746,6 +752,14 @@ public final class Deployments {
      */
     public int inFlight() {
         return deployed.values().stream().flatMap(d -> d.flows().stream()).filter(Flow::runs).mapToInt(f -> f.delivery().inFlight()).sum();
+    }
+
+    /**
+     * The check of the pool's git credentials, which {@link #close} ends; empty without {@code RAIL8_GIT_BASE}. It asks the git host
+     * about the first package by name this node lists from git, and asks nothing while it lists none.
+     */
+    public Optional<CredentialsCheck> credentials() {
+        return credentials;
     }
 
     /** Every package deployed, sorted by name; during a deploy as before it. */
@@ -1245,6 +1259,7 @@ public final class Deployments {
      */
     public void close() {
         closing = true;
+        credentials.ifPresent(CredentialsCheck::close);
         synchronized (follower) {
             if (nextTick != null) nextTick.cancel();   // a tick in flight ends before the lock is taken below
         }

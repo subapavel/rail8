@@ -23,9 +23,13 @@ import java.util.Optional;
  * @param timeout {@code RAIL8_GIT_TIMEOUT}: the longest the fetches of one deploy, or of one package's restore, may take together,
  *                PT1S to PT10M
  * @param maxBytes {@code RAIL8_GIT_MAX_BYTES}: the largest the node's git cache may grow, 1 MiB to 64 GiB
+ * @param checkEvery {@code RAIL8_GIT_CHECK_EVERY}: the least time between the end of one check of the credentials
+ *                   ({@link CredentialsCheck}) and the start of the next, PT1M to PT24H
+ * @param checkTimeout {@code RAIL8_GIT_CHECK_TIMEOUT}: the longest one check of the credentials may take, PT1S to PT5M
  * @since 0.1
  */
-public record GitSettings(URI base, String path, Optional<String> ref, Optional<Credentials> credentials, Duration timeout, long maxBytes) {
+public record GitSettings(URI base, String path, Optional<String> ref, Optional<Credentials> credentials, Duration timeout, long maxBytes,
+                          Duration checkEvery, Duration checkTimeout) {
 
     /** {@code RAIL8_GIT_TIMEOUT} unset. */
     public static final Duration TIMEOUT_DEFAULT = Duration.ofSeconds(60);
@@ -35,6 +39,14 @@ public record GitSettings(URI base, String path, Optional<String> ref, Optional<
     public static final long MAX_BYTES_DEFAULT = 1L << 30;
     public static final long MAX_BYTES_MIN = 1L << 20;
     public static final long MAX_BYTES_MAX = 64L << 30;
+    /** {@code RAIL8_GIT_CHECK_EVERY} unset. */
+    public static final Duration CHECK_EVERY_DEFAULT = Duration.ofMinutes(15);
+    public static final Duration CHECK_EVERY_MIN = Duration.ofMinutes(1);
+    public static final Duration CHECK_EVERY_MAX = Duration.ofHours(24);
+    /** {@code RAIL8_GIT_CHECK_TIMEOUT} unset. */
+    public static final Duration CHECK_TIMEOUT_DEFAULT = Duration.ofSeconds(10);
+    public static final Duration CHECK_TIMEOUT_MIN = Duration.ofSeconds(1);
+    public static final Duration CHECK_TIMEOUT_MAX = Duration.ofMinutes(5);
 
     public GitSettings {
         Objects.requireNonNull(base, "base");
@@ -42,6 +54,8 @@ public record GitSettings(URI base, String path, Optional<String> ref, Optional<
         Objects.requireNonNull(ref, "ref");
         Objects.requireNonNull(credentials, "credentials");
         Objects.requireNonNull(timeout, "timeout");
+        Objects.requireNonNull(checkEvery, "checkEvery");
+        Objects.requireNonNull(checkTimeout, "checkTimeout");
         base = checked(base);
         if (!path.isEmpty()) {
             for (String segment : path.split("/", -1)) {
@@ -62,6 +76,17 @@ public record GitSettings(URI base, String path, Optional<String> ref, Optional<
         if (maxBytes < MAX_BYTES_MIN || maxBytes > MAX_BYTES_MAX) {
             throw new IllegalArgumentException("RAIL8_GIT_MAX_BYTES " + maxBytes + " must be from " + MAX_BYTES_MIN + " to " + MAX_BYTES_MAX);
         }
+        if (checkEvery.compareTo(CHECK_EVERY_MIN) < 0 || checkEvery.compareTo(CHECK_EVERY_MAX) > 0) {
+            throw new IllegalArgumentException("RAIL8_GIT_CHECK_EVERY " + checkEvery + " must be from " + CHECK_EVERY_MIN + " to " + CHECK_EVERY_MAX);
+        }
+        if (checkTimeout.compareTo(CHECK_TIMEOUT_MIN) < 0 || checkTimeout.compareTo(CHECK_TIMEOUT_MAX) > 0) {
+            throw new IllegalArgumentException("RAIL8_GIT_CHECK_TIMEOUT " + checkTimeout + " must be from " + CHECK_TIMEOUT_MIN + " to " + CHECK_TIMEOUT_MAX);
+        }
+    }
+
+    /** The settings given, with the defaults of the check of the credentials: every PT15M, within PT10S. */
+    public GitSettings(URI base, String path, Optional<String> ref, Optional<Credentials> credentials, Duration timeout, long maxBytes) {
+        this(base, path, ref, credentials, timeout, maxBytes, CHECK_EVERY_DEFAULT, CHECK_TIMEOUT_DEFAULT);
     }
 
     /** {@code base} with the defaults of the other settings: the root of each repository, no ref, no credentials, PT60S, 1 GiB. */

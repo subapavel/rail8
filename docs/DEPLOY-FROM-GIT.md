@@ -51,6 +51,8 @@ same name from another repository is refused until the first is undeployed.
 | `RAIL8_GIT_USER`, `RAIL8_GIT_TOKEN` | The user name and a read-only access token for every repository under an `https://` base; both or neither. |
 | `RAIL8_GIT_TIMEOUT` | The longest the fetches of one deploy, or of one package's restore, may take together; 60 s by default, 1 s to 10 min. It runs on the node's injected timer. |
 | `RAIL8_GIT_MAX_BYTES` | The largest the node's git cache may grow; 1 GiB by default, 1 MiB to 64 GiB. |
+| `RAIL8_GIT_CHECK_EVERY` | The least time between the end of one check of the credentials and the start of the next; 15 min by default, 1 min to 24 h. It runs on the node's injected timer. |
+| `RAIL8_GIT_CHECK_TIMEOUT` | The longest one check of the credentials may take; 10 s by default, 1 s to 5 min. |
 
 The node keeps a bare repository per package repository as its cache, under `<dataDir>/git`, read and
 written with JGit (pure Java, Eclipse Distribution Licence 1.0, a BSD-3-Clause licence); the node image
@@ -81,6 +83,36 @@ its history.
   transport's own message or its causes. Answers, logs, audit rows and the listing of a `FAILED`
   package carry only the formatter's text.
 - Every fetch has the finite timeout, and the cache the finite size, above.
+
+### The check of the credentials
+
+A git host tells nobody when a token expires, and a token that expired was found only when a deploy
+failed, or when a node that restarted with an empty git cache came up without its packages. So a node
+checks its credentials on its own:
+
+- At its start, and then `RAIL8_GIT_CHECK_EVERY` after each check ended, on its injected timer, the node
+  lists the refs of one repository it runs: the first package by name that it lists from git. It
+  sends the pool's credentials, fetches no object, writes nothing into the cache and holds none of its
+  locks, within `RAIL8_GIT_CHECK_TIMEOUT`. Two checks never run at once. A node that runs no package
+  from git asks nothing.
+- The outcome is one of three:
+  - `WORKING`: the host listed the refs, whether or not they hold the pool's ref.
+  - `REFUSED`: the credentials were refused, or the repository was not found, as a host such as
+    GitHub answers for a private repository the token no longer reaches.
+  - `UNREACHABLE`: the check timed out, or the transport failed.
+
+  The reason is the formatter's text, with `RAIL8_GIT_CHECK_TIMEOUT` named for a timeout, so no token
+  and no transport message reaches an answer or a log. A change of state is logged once: a WARNING for
+  `REFUSED` and `UNREACHABLE`, INFO when the credentials work again.
+- `/health` shows `git: {credentials, checkedAt}`, outside its checks, never the repository or the
+  reason. `GET /admin/git` (`git.read`: developer, operator, administrator) answers
+  `{credentials, repository, reason, checkedAt}`, every field null before the first check. Refused
+  credentials make the node no less healthy for traffic: messages keep flowing, and only a deploy and
+  a restore with a cold cache are at risk.
+- The UI shows a warning on Home and on the Packages screen while the credentials are `REFUSED`. It
+  says what stops working: a deploy, and a node that restarts with an empty git cache.
+- One repository is checked. A token scoped per repository that lost another one is seen at a deploy
+  of that one.
 
 ## What a commit holds
 
@@ -440,6 +472,7 @@ public interface Commit {
 | --- | --- |
 | The fetches of one deploy or one package's restore | `RAIL8_GIT_TIMEOUT` together, 60 s by default; `rail8 deploy` waits longer than that |
 | The git cache | `RAIL8_GIT_MAX_BYTES`, 1 GiB by default |
+| The check of the credentials | one at a time, `RAIL8_GIT_CHECK_EVERY` apart (15 min by default), each within `RAIL8_GIT_CHECK_TIMEOUT` (10 s) |
 | One package | `RAIL8_MAX_PACKAGE_BYTES` in all, 10 000 files |
 | One deploy | the package and at most 100 packages in its dependency closure |
 | A repository's name | one segment of at most 100 letters, digits, `.`, `_` and `-`, not `.` or `..` |
@@ -457,6 +490,12 @@ public interface Commit {
   from the cache with the source gone and fetched when the cache lacks it, and the token rules (user
   information refused, the formatter never showing credentials or the transport's message, an
   authentication failure, a redirect to another host refused).
+- The check of the credentials, on a fake clock: the three outcomes with the formatter's text over a fake
+  git host, no two checks closer than the interval, nothing asked while the node runs no package from
+  git, a change of state logged once; over a local HTTPS git host, a token that works writing nothing
+  into the cache, a refused token and a missing repository, a host gone and the check's own timeout;
+  `/health` and `GET /admin/git` showing each outcome; a node whose repository vanished answering
+  `REFUSED` while it stays up and keeps serving messages. A browser test shows the UI's warning.
 - `rail8 lock`: a dependency pinned by repository and commit; a dependency with uncommitted changes
   refused; a dependency not at the root of its working tree refused; a lock without repository or
   commit refused at a deploy. `rail8 validate` and `rail8 test` on a package at the root of its clone.

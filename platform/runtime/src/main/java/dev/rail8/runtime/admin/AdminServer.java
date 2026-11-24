@@ -39,6 +39,7 @@ import dev.rail8.runtime.deploy.DeployedPackage;
 import dev.rail8.runtime.deploy.DeploymentStore;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.UndeployResult;
+import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.pg.PgTx;
 import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.queue.NotAdmittedException;
@@ -360,13 +361,22 @@ public final class AdminServer {
      * @param snapshotWriteFailures read on every request
      * @param notices shown as the answer's {@code notices} array when not empty
      * @param readiness what {@code /ready} reports
+     * @param git the last outcome of the check of the git credentials, read on every request: {@code /health} shows its state and
+     *            when it was checked, {@code GET /admin/git} the repository and the reason too; it changes no check's status
      */
-    public record HealthProbe(Map<String, Supplier<Future<Health>>> checks, LongSupplier snapshotWriteFailures, List<String> notices, Readiness readiness) {
+    public record HealthProbe(Map<String, Supplier<Future<Health>>> checks, LongSupplier snapshotWriteFailures, List<String> notices, Readiness readiness,
+                              Supplier<Optional<CredentialsCheck.Outcome>> git) {
         public HealthProbe {
             checks = Map.copyOf(checks);
             Objects.requireNonNull(snapshotWriteFailures, "snapshotWriteFailures");
             notices = List.copyOf(notices);
             Objects.requireNonNull(readiness, "readiness");
+            Objects.requireNonNull(git, "git");
+        }
+
+        /** No check of the git credentials: {@code credentials} is null. */
+        public HealthProbe(Map<String, Supplier<Future<Health>>> checks, LongSupplier snapshotWriteFailures, List<String> notices, Readiness readiness) {
+            this(checks, snapshotWriteFailures, notices, readiness, Optional::empty);
         }
 
         /** No readiness inputs: {@code /ready} is UP on every check while the server answers ({@link Readiness#ALWAYS}). */
@@ -680,6 +690,7 @@ public final class AdminServer {
                 return NO_CONTENT;
             });
             admin.get("/admin/modules", Action.DEPLOYMENT_READ, (c, who) -> listed(modules));
+            admin.get("/admin/git", Action.GIT_READ, (c, who) -> git());
             admin.get("/admin/messages", Action.MESSAGE_READ, (c, who) -> search(c));
             admin.get("/admin/message-counts", Action.MESSAGE_READ, (c, who) -> counts(c));
             admin.get("/admin/messages/:id", Action.MESSAGE_READ, (c, who) -> timeline(c));
@@ -1036,7 +1047,19 @@ public final class AdminServer {
         List<String> notices = new ArrayList<>(health.notices());
         config.tls().flatMap(c -> c.expiryNotice(modules.clock().instant(), CERTIFICATE_NOTICE)).ifPresent(notices::add);
         if (!notices.isEmpty()) answer.put("notices", new JsonArray(notices));
+        Optional<CredentialsCheck.Outcome> git = health.git().get();
+        answer.put("git", new JsonObject().put("credentials", git.map(o -> o.state().name()).orElse(null))
+                .put("checkedAt", git.map(o -> o.checkedAt().toString()).orElse(null)));
         return Json.of(up ? 200 : 503, answer);
+    }
+
+    /** {@code GET /admin/git}: the last check of the git credentials, every field null before the first. */
+    private Reply git() {
+        Optional<CredentialsCheck.Outcome> git = health.git().get();
+        return Json.of(200, new JsonObject().put("credentials", git.map(o -> o.state().name()).orElse(null))
+                .put("repository", git.map(CredentialsCheck.Outcome::repository).orElse(null))
+                .put("reason", git.map(CredentialsCheck.Outcome::reason).orElse(null))
+                .put("checkedAt", git.map(o -> o.checkedAt().toString()).orElse(null)));
     }
 
     /** {@code /ready}: each input read now, none awaited; 200 when all are UP, else 503, each named. */

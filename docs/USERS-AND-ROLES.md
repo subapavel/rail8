@@ -69,6 +69,7 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 | `package.deploy` | `POST /admin/deploy`, the check (`?check=true`) and the deploy alike | developer |
 | `package.undeploy` | `DELETE /admin/packages/{name}` | developer |
 | `module.call` | `GET`, `POST /admin/modules/{plugin}/{path}` | developer |
+| `git.read` | `GET /admin/git` | developer, operator, administrator |
 | `user.read` | `GET /admin/users`, `GET /admin/users/{name}` | administrator, the key |
 | `user.create` | `POST /admin/users` | administrator logged in, the key |
 | `roles.change` | `POST /admin/users/{name}/roles`, for each role other than administrator | administrator logged in |
@@ -95,7 +96,8 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 
 The actions that exist before step 1 are `message.read`, `message.body`, `message.retry`, `message.cancel`,
 `work.release`, `work.discard`, `deployment.read`, `package.deploy`, `package.undeploy` and `module.call`. The transition
-names them.
+names them. The bridge also keeps `git.read`, which came later: a read that holds no secret, which the UI's development server
+reads with the shared token.
 
 `POST /admin/sessions` (the login) is the only `/admin` route with no caller. `/health`, `/live` and `/ready` stay
 open, as today. There is no `secret.read`: nobody reads a secret's value back.

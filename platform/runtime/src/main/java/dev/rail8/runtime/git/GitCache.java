@@ -35,6 +35,7 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -118,7 +119,7 @@ public final class GitCache {
 
     /** The repositories for one deploy or one package's restore: its fetches take at most {@code RAIL8_GIT_TIMEOUT} together. */
     public PackageRepositories open() {
-        return new Session(null);
+        return new Session(null, settings.timeout());
     }
 
     /**
@@ -126,7 +127,22 @@ public final class GitCache {
      * answered as {@link #open()} answers it, and one it lacks fails at once as {@code reason}, with nothing fetched.
      */
     public PackageRepositories cached(Reason reason) {
-        return new Session(Objects.requireNonNull(reason, "reason"));
+        return new Session(Objects.requireNonNull(reason, "reason"), settings.timeout());
+    }
+
+    /**
+     * Asks the git host for the refs of {@code repository}, with the pool's credentials, within {@code RAIL8_GIT_CHECK_TIMEOUT} on
+     * the node's timer: the {@link CredentialsCheck}'s probe. It fetches no object, writes nothing into the cache and holds no lock
+     * of it, so a deploy never waits for it. A host that lists the refs answers, whether or not they hold the pool's ref.
+     *
+     * @param repository the repository's name under the base
+     * @throws GitFailure as a fetch fails: credentials refused, not found, timed out, or the transport failed
+     */
+    public void check(String repository) throws GitFailure {
+        Requests.repository(repository);
+        try (Session session = new Session(null, settings.checkTimeout())) {
+            session.listRefs(repository);
+        }
     }
 
     private Path repositoryDir(String name) {
@@ -203,11 +219,14 @@ public final class GitCache {
         private final Reason unfetched;
         private volatile boolean expired;
         private volatile Fetch current;
+        /** How long its fetches may take together, from the first one's start. */
+        private final Duration timeout;
         private boolean started;
         private Timer.Cancellable deadline;   // once the first fetch started it
 
-        Session(Reason unfetched) {
+        Session(Reason unfetched, Duration timeout) {
             this.unfetched = unfetched;
+            this.timeout = timeout;
         }
 
         @Override
@@ -334,7 +353,7 @@ public final class GitCache {
             if (unfetched != null) throw new GitFailure(unfetched, repository, target);
             if (!started) {
                 started = true;
-                deadline = timer.schedule(settings.timeout(), this::expire);
+                deadline = timer.schedule(timeout, this::expire);
             }
             if (expired) throw new GitFailure(Reason.TIMED_OUT, repository, target);
             Repository cached;
@@ -387,6 +406,30 @@ public final class GitCache {
                 return refs;
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
+            }
+        }
+
+        /** Lists the refs {@code repository} advertises, with no local repository: nothing is fetched or written. */
+        void listRefs(String repository) throws GitFailure {
+            String target = settings.ref().orElse(Constants.HEAD);
+            deadline = timer.schedule(timeout, this::expire);
+            URIish uri;
+            try {
+                uri = new URIish(settings.repository(repository).toString());
+            } catch (URISyntaxException e) {
+                throw new IllegalStateException("the repository's URI is not one git reads", e);
+            }
+            Fetch fetch = new Fetch(repository);
+            current = fetch;
+            try (Transport transport = Transport.open(uri)) {
+                fetch.configure(transport);
+                try (FetchConnection connection = transport.openFetch()) {
+                    connection.getRefsMap();
+                }
+            } catch (IOException | RuntimeException e) {
+                throw new GitFailure(fetch.reason(e), repository, target);
+            } finally {
+                current = null;
             }
         }
 
