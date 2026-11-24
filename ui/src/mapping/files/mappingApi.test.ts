@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, request, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -614,6 +614,41 @@ describe('creating a mapping', () => {
 
     expectProblem(await call('POST', '/api/mappings', '{"description": "no id"}'), 400, `${STUDIO}invalid-request`);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('a symbolic link of a package into a sibling package', () => {
+  const sibling = () => Promise.all(['target', 'kept'].map((name) => readFile(join(root, 'other/mappings', `${name}.mapping.json`))));
+
+  beforeEach(async () => {
+    await put('demo/package.yaml', 'kind: package\n');
+    await mkdir(join(root, 'demo/mappings'), { recursive: true });
+    await put('other/package.yaml', 'kind: package\n');
+    await put('other/mappings/target.mapping.json', canonical(1));
+    await put('other/mappings/kept.mapping.json', canonical(2));
+    await symlink(join('..', '..', 'other/mappings/target.mapping.json'), join(root, 'demo/mappings/to-file.mapping.json'));
+    await symlink(join('..', 'other/mappings'), join(root, 'demo/to-folder'));
+    handler = (c) => ({ status: c.op === 'create' ? 201 : 200, text: canonical(3) });
+  });
+
+  test('is refused when a mapping is opened, saved or created through it, before the node is asked, and the sibling stays as it was', async () => {
+    const before = await sibling();
+    for (const id of ['demo/mappings/to-file', 'demo/to-folder/target']) {
+      expectProblem(await call('GET', `/api/mappings/${id}`), 400, `${STUDIO}invalid-workspace-path`);
+      expectProblem(await call('PUT', `/api/mappings/${id}`, canonical(3)), 400, `${STUDIO}invalid-workspace-path`);
+    }
+    expectProblem(await call('POST', '/api/mappings', '{"id": "demo/to-folder/fresh"}'), 400, `${STUDIO}invalid-workspace-path`);
+    expect(calls).toEqual([]);
+    expectProblem(await call('POST', '/api/mappings', '{"id": "demo/mappings/to-file"}'), 409, `${STUDIO}mapping-exists`);
+    expect(await sibling()).toEqual(before);
+    expect((await readdir(join(root, 'other/mappings'))).sort()).toEqual(['kept.mapping.json', 'target.mapping.json']);
+  });
+
+  test('leaves a path with no link as it was: it opens, saves and creates', async () => {
+    expect((await call('GET', '/api/mappings/other/mappings/target')).status).toBe(200);
+    expect((await call('PUT', '/api/mappings/other/mappings/target', canonical(3))).status).toBe(200);
+    expect((await call('POST', '/api/mappings', '{"id": "other/mappings/fresh"}')).status).toBe(201);
+    expect(await read('other/mappings/target.mapping.json')).toBe(canonical(3));
   });
 });
 

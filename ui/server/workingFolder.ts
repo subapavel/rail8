@@ -138,7 +138,8 @@ export function etagOf(bytes: Buffer | string): string {
 /**
  * The real path of the file at `path` (relative, with `/`, each segment percent-encoded) under the real folder `root`
  * whose name `takes`. Refused with 400 when the path is malformed or names no such file, 404 when there is none, 403
- * when it leads out of the folder, and 413 when it is over {@link MAX_FILE_BYTES}.
+ * when it passes a symbolic link (its real path is not the path its segments make), and 413 when it is over
+ * {@link MAX_FILE_BYTES}.
  */
 export async function locate(root: string, path: string, takes: (name: string) => boolean, what: string): Promise<string> {
   const segments = segmentsOf(path, takes, what);
@@ -148,7 +149,7 @@ export async function locate(root: string, path: string, takes: (name: string) =
   } catch {
     throw new Refusal(404, `no file ${segments.join('/')} in the working folder`);
   }
-  if (!real.startsWith(root + sep)) throw new Refusal(403, 'the path leaves the working folder');
+  if (real !== join(root, ...segments)) throw new Refusal(403, 'the path leaves the working folder');
   const info = await stat(real);
   if (!info.isFile()) throw new Refusal(404, `no file ${segments.join('/')} in the working folder`);
   if (info.size > MAX_FILE_BYTES) throw new Refusal(413, 'the file is over 1 MiB');
@@ -160,8 +161,8 @@ export async function locate(root: string, path: string, takes: (name: string) =
  * `takes`, holding `text`, and answers its real path. Under the working folder's lock, it looks for its folder, then
  * writes the file whole to a temporary file beside it and links it to its name, so it never replaces a file. Refused
  * with 400 when the path is malformed, names no such file or a place the walk passes over (a hidden or skipped folder
- * or file, or one too deep), 404 when its folder does not exist, 403 when the folder leads out of the working folder,
- * and 412 when a file, or a link, of that name exists.
+ * or file, or one too deep), 404 when its folder does not exist, 403 when the path to the folder passes a symbolic
+ * link, and 412 when a file, or a link, of that name exists.
  */
 export async function createFile(lock: WorkingFolderLock, root: string, path: string, takes: (name: string) => boolean, what: string, text: string): Promise<string> {
   const segments = segmentsOf(path, takes, what);
@@ -174,7 +175,7 @@ export async function createFile(lock: WorkingFolderLock, root: string, path: st
     } catch {
       throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
     }
-    if (folder !== root && !folder.startsWith(root + sep)) throw new Refusal(403, 'the path leaves the working folder');
+    if (folder !== join(root, ...folders)) throw new Refusal(403, 'the path leaves the working folder');
     if (!(await stat(folder)).isDirectory()) throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
     const file = join(folder, segments.at(-1)!);
     if (!(await linkNew(file, text))) throw new Refusal(412, 'the file exists already; nothing was written');

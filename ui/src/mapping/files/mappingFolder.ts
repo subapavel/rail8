@@ -61,17 +61,19 @@ const inside = (path: string, folder: string) => path === folder || path.startsW
 
 /**
  * The real path of the mapping file of `id` under the real working folder `root`. Refused with 400 when `id` is no
- * mapping id or the file's real path leads out of `root`, and 404 when there is no such file.
+ * mapping id or the file's path passes a symbolic link (its real path is not the path `id` makes), and 404 when there
+ * is no such file.
  */
 export async function mappingFile(root: string, id: string): Promise<string> {
   if (!isId(id)) throw pathRefused(id);
+  const path = join(root, id + SUFFIX);
   let real: string;
   try {
-    real = await realpath(join(root, id + SUFFIX));
+    real = await realpath(path);
   } catch {
     throw notFound();
   }
-  if (!inside(real, root)) throw pathRefused(id);
+  if (real !== path) throw pathRefused(id);
   if (!(await stat(real)).isFile()) throw notFound();
   return real;
 }
@@ -82,23 +84,23 @@ export async function mappingFile(root: string, id: string): Promise<string> {
  */
 export async function mappingFolder(root: string, id: string): Promise<string> {
   if (!isId(id)) throw pathRefused(id);
-  return realFolder(root, dirname(join(root, id + SUFFIX)), id);
+  return realFolder(dirname(join(root, id + SUFFIX)), id);
 }
 
 /** The real path of the folder `base` names, `''` being the working folder itself; refused as {@link mappingFolder} is. */
 export async function baseFolder(root: string, base: string): Promise<string> {
   if (base !== '' && !ID.test(base)) throw pathRefused(base);
-  return realFolder(root, join(root, base), base);
+  return realFolder(join(root, base), base);
 }
 
-async function realFolder(root: string, path: string, spelled: string): Promise<string> {
+async function realFolder(path: string, spelled: string): Promise<string> {
   let real: string;
   try {
     real = await realpath(path);
   } catch {
     throw notFound();
   }
-  if (!inside(real, root)) throw pathRefused(spelled);
+  if (real !== path) throw pathRefused(spelled);
   if (!(await stat(real)).isDirectory()) throw notFound();
   return real;
 }
