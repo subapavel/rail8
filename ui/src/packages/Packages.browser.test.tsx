@@ -76,6 +76,24 @@ describe('the Packages screen', () => {
     await expect.element(rowOf('returns').getByText('Not running on 127.0.0.1:8081')).toBeVisible();
   });
 
+  test('marks a package that packages the node runs pin behind the commit it runs, with their number', async () => {
+    const pins = (commit: string) => [{ name: 'orders', repository: 'orders', commit, content: `sha256:${'1'.repeat(64)}` }];
+    open({
+      clones: [{ folder: 'orders', commits: ['first', 'second', 'third'] }, { folder: 'billing' }, { folder: 'shipping' }, { folder: 'stock' }],
+      node: [
+        { repository: 'orders', commit: 'third' },
+        { repository: 'billing', commit: 'first', dependencies: pins('first') },
+        { repository: 'shipping', commit: 'first', dependencies: pins('second') },
+        { repository: 'stock', commit: 'first', dependencies: pins('third') },
+      ],
+    });
+
+    await expect.element(rowOf('orders').getByText('Pinned behind by 2')).toBeVisible();
+    await rowOf('orders').getByText('Pinned behind by 2').hover();
+    await expect.element(page.getByRole('tooltip')).toHaveTextContent('2 packages the node runs pin a commit of it behind the one it runs: see Used by in its tab.');
+    await expect.element(rowOf('billing').getByText(/Pinned behind/)).not.toBeInTheDocument();
+  });
+
   test('names how many nodes of the pool run which commit, and the nodes behind its record', async () => {
     const why = 'the commit could not be fetched: connection refused';
     const state = open({

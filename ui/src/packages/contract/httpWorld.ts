@@ -381,15 +381,26 @@ export const httpWorld: Build = async (seed) => {
 
   // the node: what it runs, by repository, as a deploy changes it
   const commitOf = (repository: string, commit: string) => (isId(commit) ? commit : ids.get(`${repository}/${commit}`)!);
-  const running = new Map<string, { commit: string; state: 'RUNNING' | 'FAILED'; problems: string[]; deployedAt: string; dependencies?: { name: string; commit: string; content: string }[] }>(
+  type Runs = {
+    name: string;
+    version: string;
+    commit: string;
+    state: 'RUNNING' | 'FAILED';
+    problems: string[];
+    deployedAt: string;
+    dependencies?: { name: string; version: string; repository: string; commit: string; content: string }[];
+  };
+  const running = new Map<string, Runs>(
     (seed.node === 'silent' ? [] : (seed.node ?? [])).map((r) => [
       r.repository,
       {
+        name: r.name ?? r.repository,
+        version: r.version ?? '1.0.0',
         commit: commitOf(r.repository, r.commit),
         state: r.state ?? 'RUNNING',
         problems: r.problems ?? [],
         deployedAt: DEPLOYED_AT,
-        dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, commit: commitOf(d.repository, d.commit), content: d.content })),
+        dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, version: d.version ?? '1.0.0', repository: d.repository, commit: commitOf(d.repository, d.commit), content: d.content })),
       },
     ]),
   );
@@ -431,7 +442,7 @@ export const httpWorld: Build = async (seed) => {
     const before = record === undefined ? new Map<string, string>() : flowsAt(asked.repository, record.commit, shown.name);
     const after = flowsAt(asked.repository, asked.commit, shown.name);
     if (!check) {
-      running.set(asked.repository, { commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
+      running.set(asked.repository, { name: shown.name, version: shown.version, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
       // the deploy writes the pool's record; the pool's nodes follow it later
       if (pool !== null) pool.records = [...pool.records.filter((r) => r.repository !== asked.repository), { repository: asked.repository, commit: asked.commit }];
     }
@@ -477,8 +488,8 @@ export const httpWorld: Build = async (seed) => {
       return;
     }
     const items = [...running].map(([repository, r]) => ({
-      name: repository,
-      version: '1.0.0',
+      name: r.name,
+      version: r.version,
       repository,
       commit: r.commit,
       deployedAt: r.deployedAt,
@@ -489,7 +500,7 @@ export const httpWorld: Build = async (seed) => {
       state: r.state,
       problems: r.problems,
       content: 'sha256:00',
-      dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, version: '1.0.0', content: d.content, repository: d.name, commit: d.commit, direct: true })),
+      dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, version: d.version, content: d.content, repository: d.repository, commit: d.commit, direct: true })),
     }));
     answer(res, 200, { items });
   });
@@ -628,7 +639,7 @@ export const httpWorld: Build = async (seed) => {
     heard: () => (held.length > 0 ? Promise.resolve() : new Promise<void>((done) => hearing.push(done))),
     elapse: (ms) => clock.advance(ms),
     deployedElsewhere(folder, label) {
-      running.set(folder, { commit: ids.get(`${folder}/${label}`)!, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
+      running.set(folder, { name: folder, version: '1.0.0', commit: ids.get(`${folder}/${label}`)!, state: 'RUNNING', problems: [], deployedAt: DEPLOYED_AT });
     },
     terminal: (folder, args) => git(join(work, folder), ...args),
     async stage(path) {

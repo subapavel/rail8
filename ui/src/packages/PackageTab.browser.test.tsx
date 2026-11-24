@@ -1049,3 +1049,43 @@ describe('the dependencies of a package', () => {
     expect(folder.disk['package.lock']).toBe(lockText(pinned.pins.filter((p) => p.name === 'inventory')));
   });
 });
+
+describe('where a package is used', () => {
+  const DIGEST = `sha256:${'1'.repeat(64)}`;
+  /** The package `name` that the node runs at its first commit, pinning the commit `pinned` of orders. */
+  const pinning = (name: string, pinned: string) => ({
+    repository: name,
+    commit: 'first',
+    dependencies: [{ name: 'orders', repository: 'orders', commit: pinned, content: DIGEST }],
+  });
+  const table = () => page.getByRole('table', { name: 'Used by', exact: true });
+  const usedRow = (name: string) => table().getByRole('row').filter({ hasText: new RegExp(`^${name}`) });
+
+  test('lists each package the node runs that pins it: one at the commit that runs, one behind it', async () => {
+    const { ids } = await openOrders({
+      clones: [{ folder: 'orders', commits: ['first', 'second', 'third'] }, { folder: 'billing' }, { folder: 'shipping' }],
+      node: [{ repository: 'orders', commit: 'second' }, pinning('billing', 'second'), pinning('shipping', 'first')],
+    });
+    await page.getByRole('tab', { name: 'Used by (2)' }).click();
+
+    await expect.element(page.getByText('Packages the node at 127.0.0.1:8081 runs that pin this one')).toBeVisible();
+    const second = ids.get('orders/second')!.slice(0, 7);
+    const first = ids.get('orders/first')!.slice(0, 7);
+    await expect.element(usedRow('billing')).toMatchTextContent(`billing1.0.01.0.0 ${second}second22 days agoSame as runningBehind 1`);
+    await expect.element(usedRow('shipping')).toMatchTextContent(`shipping1.0.01.0.0 ${first}first22 days agoBehind 1Behind 2`);
+  });
+
+  test('says when the node does not answer, and lists nothing', async () => {
+    await openOrders({ clones: [{ folder: 'orders' }], node: 'silent' });
+    await page.getByRole('tab', { name: 'Used by', exact: true }).click();
+
+    await expect.element(page.getByText('The node at 127.0.0.1:8081 does not answer').last()).toBeVisible();
+    await expect.element(table()).not.toBeInTheDocument();
+  });
+
+  test('says when no package the node runs pins it', async () => {
+    await openOrders({ clones: [{ folder: 'orders' }, { folder: 'billing' }], node: [{ repository: 'billing', commit: 'first' }] });
+    await page.getByRole('tab', { name: 'Used by (0)' }).click();
+    await expect.element(page.getByText('No package the node at 127.0.0.1:8081 runs pins this one.')).toBeVisible();
+  });
+});

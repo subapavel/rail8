@@ -77,6 +77,8 @@ export interface PackageRow {
   /** The paths of the package's folder that differ from `HEAD`, untracked ones included. */
   changed: number;
   deployed: Deployed;
+  /** How many packages the node runs pin this one at a commit behind the one it runs of it; absent when none do. */
+  pinnedBehind?: number;
 }
 
 /** What `GET /git/packages` answers. */
@@ -145,8 +147,8 @@ export interface Pin {
 
 /**
  * One package, as its tab shows it: its row, git's author identity in its clone, every file of its folder that differs
- * from `HEAD`, sorted by path, its artifacts on disk, sorted by path, its dependencies, sorted by name, and the git
- * half's tags of `package.yaml` and `package.lock` on disk. `truncated` says when either list was cut at its limit.
+ * from `HEAD`, sorted by path, its artifacts on disk, sorted by path, its dependencies, sorted by name, the packages
+ * the node runs that pin it, and the git half's tags of `package.yaml` and `package.lock` on disk. `truncated` says when either list was cut at its limit.
  */
 export interface PackageState extends PackageRow {
   /** The author identity git gives in this clone, as `git var GIT_AUTHOR_IDENT` names it; null when it gives none, and a commit is refused. */
@@ -154,12 +156,45 @@ export interface PackageState extends PackageRow {
   changes: Change[];
   artifacts: Artifact[];
   dependencies: Dependency[];
+  usedBy: UsedBy;
   /** The tag of `package.yaml` on disk; null when it is not there. */
   manifestTag: string | null;
   /** The tag of `package.lock` on disk; null when there is none. */
   lockTag: string | null;
   truncated: boolean;
 }
+
+/**
+ * How a pinned commit relates to another commit of the package's clone: the same commit, behind it (`commits` back),
+ * ahead of it (`commits` on), or on another line of history, which is also what a commit the clone lacks is.
+ */
+export interface PinRelation {
+  relation: 'same' | 'behind' | 'ahead' | 'other';
+  commits?: number;
+}
+
+/**
+ * One package the node runs whose `package.lock` pins this one, as its deploy resolved it: its name, version and
+ * repository; the pin, by the version it names, its commit and its content digest; the pinned commit's author date and
+ * subject when the clone holds it (null: it does not); and how the pinned commit relates to the commit the node runs of
+ * this package (absent when it runs none) and to the clone's `HEAD` (absent when there is none).
+ */
+export interface Consumer {
+  name: string;
+  version: string;
+  repository: string;
+  pin: { version: string; commit: string; content: string };
+  commit: { at: string; subject: string } | null;
+  runs?: PinRelation;
+  head?: PinRelation;
+}
+
+/**
+ * Where the package is used as a dependency, as the node at RAIL8_ADMIN_URL runs its packages, named by that node's
+ * host: no answer from the node (`error` says why), or the commit it runs of this package (null: none) and every package
+ * it runs that pins this package's repository, sorted by name.
+ */
+export type UsedBy = { node: 'unreachable'; host: string; error: string } | { node: 'answered'; host: string; runs: string | null; consumers: Consumer[] };
 
 /** One version of one file: its text, or its size when it is binary, and the git half's tag of its bytes. */
 export type FileVersion = ({ text: string } | { binary: true; size: number }) & { etag: string };

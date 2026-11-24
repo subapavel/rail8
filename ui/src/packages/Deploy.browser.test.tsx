@@ -95,7 +95,7 @@ describe('the deploy dialog', () => {
     const { state, id } = await openOrders({ clones: [FLOWS] });
     await button('Deploy…').click();
     await expect.element(dialog().getByText('The check passed. 127.0.0.1:8081 runs nothing of this repository yet.')).toBeVisible();
-    if (state.node.answers) state.node.running.push({ repository: 'orders', commit: id('first'), state: 'RUNNING', problems: [], deployedAt: '2026-11-23T09:00:00Z' });
+    if (state.node.answers) state.node.running.push({ name: 'orders', version: '1.0.0', repository: 'orders', commit: id('first'), state: 'RUNNING', problems: [], deployedAt: '2026-11-23T09:00:00Z' });
 
     await dialog().getByRole('button', { name: 'Deploy', exact: true }).click();
 

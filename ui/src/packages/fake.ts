@@ -5,6 +5,7 @@ import {
   type Change,
   type CloneAnswer,
   type Commit,
+  type Consumer,
   type CommitAnswer,
   type DeployAnswer,
   type DiscardAnswer,
@@ -19,11 +20,13 @@ import {
   type PackageRow,
   type PackagesApi,
   type PackageState,
+  type PinRelation,
   type Pool,
   type PoolNode,
   type PullAnswer,
   type PushAnswer,
   type RemoteBody,
+  type UsedBy,
 } from './api';
 import {
   actorOf,
@@ -139,15 +142,17 @@ export function fakeLock(): FakeLock {
   };
 }
 
-/** What the fake node runs of one repository. */
+/** What the fake node runs of one repository: the package's name and version, and the commit it runs. */
 export interface FakeRunning {
+  name: string;
+  version: string;
   repository: string;
   commit: string;
   state: 'RUNNING' | 'FAILED';
   problems: string[];
   deployedAt: string;
-  /** The direct dependencies its deploy resolved, by name: the commit and the content digest of each. */
-  dependencies?: { name: string; commit: string; content: string }[];
+  /** The direct dependencies its deploy resolved, the pins of its `package.lock`: the name, version, repository, commit and content digest of each. */
+  dependencies?: { name: string; version: string; repository: string; commit: string; content: string }[];
 }
 
 /** What the fake node's pool runs: its record of each package, by repository, and every node whose lease holds, sorted by id. */
@@ -273,14 +278,47 @@ function whyNot(folder: FakeFolder): string | null {
   return null;
 }
 
+/** How `commit` relates to the commit `base` of the folder: `other` when either is a commit the folder lacks. */
+function commitRelation(folder: FakeFolder, base: string | null, commit: string): PinRelation {
+  if (commit === base) return { relation: 'same' };
+  const holds = (id: string) => folder.commits.some((c) => c.id === id);
+  if (base === null || !holds(commit) || !holds(base)) return { relation: 'other' };
+  if (reach(folder, base).has(commit)) return { relation: 'behind', commits: beyond(folder, base, commit) };
+  if (reach(folder, commit).has(base)) return { relation: 'ahead', commits: beyond(folder, commit, base) };
+  return { relation: 'other' };
+}
+
 /** How `commit` relates to the folder's `HEAD`. */
 function relationOf(folder: FakeFolder, commit: string): { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commits?: number } {
+  const { relation, commits } = commitRelation(folder, folder.head.commit, commit);
+  return { relation: relation === 'same' ? 'deployed' : relation, ...(commits === undefined ? {} : { commits }) };
+}
+
+/** Every package the node runs that pins the folder's repository, sorted by name, as the real half reads them. */
+function usedByOf(state: FakeState, folder: FakeFolder): UsedBy {
+  const node = state.node;
+  if (!node.answers) return { node: 'unreachable', host: node.host, error: node.error };
+  const runs = node.running.find((r) => r.repository === folder.name)?.commit ?? null;
   const head = folder.head.commit;
-  if (commit === head) return { relation: 'deployed' };
-  if (head === null || !folder.commits.some((c) => c.id === commit)) return { relation: 'other' };
-  if (reach(folder, head).has(commit)) return { relation: 'behind', commits: beyond(folder, head, commit) };
-  if (reach(folder, commit).has(head)) return { relation: 'ahead', commits: beyond(folder, commit, head) };
-  return { relation: 'other' };
+  const consumers = node.running
+    .flatMap((r) =>
+      (r.dependencies ?? [])
+        .filter((d) => d.repository === folder.name)
+        .map((d): Consumer => {
+          const found = folder.commits.find((c) => c.id === d.commit);
+          return {
+            name: r.name,
+            version: r.version,
+            repository: r.repository,
+            pin: { version: d.version, commit: d.commit, content: d.content },
+            commit: found === undefined ? null : { at: found.at, subject: found.subject },
+            ...(runs === null ? {} : { runs: commitRelation(folder, runs, d.commit) }),
+            ...(head === null ? {} : { head: commitRelation(folder, head, d.commit) }),
+          };
+        }),
+    )
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.repository < b.repository ? -1 : a.repository > b.repository ? 1 : 0));
+  return { node: 'answered', host: node.host, runs, consumers };
 }
 
 /** What every node of `pool` runs of the folder's repository, each with whether it runs the pool's record of it. */
@@ -309,6 +347,8 @@ function rowOf(state: FakeState, folder: FakeFolder): PackageRow {
   const commit = folder.commits.find((c) => c.id === folder.head.commit);
   const changed = statusEntries(folder).filter((e) => !isSaveTemporary(e.path)).length;
   const upstream = folder.head.branch === null || folder.upstream === null || folder.head.commit === null ? null : folder.upstream;
+  const usedBy = usedByOf(state, folder);
+  const behind = usedBy.node === 'answered' ? usedBy.consumers.filter((c) => c.runs?.relation === 'behind').length : 0;
   return {
     repository: folder.name,
     ...manifestOf(folder.disk['package.yaml']!),
@@ -321,6 +361,7 @@ function rowOf(state: FakeState, folder: FakeFolder): PackageRow {
     busy: folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null),
     changed,
     deployed: deployedOf(state, folder),
+    ...(behind === 0 ? {} : { pinnedBehind: behind }),
   };
 }
 
@@ -520,6 +561,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       changes,
       artifacts: artifacts.artifacts,
       dependencies,
+      usedBy: usedByOf(state, folder),
       manifestTag,
       lockTag,
       truncated: compared.length > MAX_LISTED || artifacts.truncated,
@@ -965,7 +1007,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       if (!asked.check) {
         node.running = [
           ...node.running.filter((r) => r.repository !== repository),
-          { repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: folder.commits.find((c) => c.id === asked.commit)!.at },
+          { name: shown.name, version: shown.version, repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: folder.commits.find((c) => c.id === asked.commit)!.at },
         ];
         // the deploy writes the pool's record; the pool's nodes follow it later
         if (node.pool !== undefined && 'records' in node.pool) node.pool.records = [...node.pool.records.filter((r) => r.repository !== repository), { repository, commit: asked.commit }];

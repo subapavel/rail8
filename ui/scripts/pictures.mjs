@@ -66,6 +66,7 @@ const SCENES = {
   'package-artifacts': [menu('Packages'), pkg('orders'), tab('Artifacts')],
   'package-history': [menu('Packages'), pkg('orders'), tab('History')],
   'package-dependencies': [menu('Packages'), pkg('orders'), tab('Dependencies')],
+  'package-used-by': [menu('Packages'), pkg('customers'), tab('Used by')],
   'package-deploy': [menu('Packages'), pkg('orders'), press('Deploy…')],
   'package-deployed': [menu('Packages'), pkg('orders'), press('Deploy…'), press('Deploy')],
   'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],
