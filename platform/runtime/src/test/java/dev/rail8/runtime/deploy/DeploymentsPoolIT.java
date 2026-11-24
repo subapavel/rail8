@@ -849,6 +849,42 @@ class DeploymentsPoolIT {
         assertEquals(3, records.writes.get(), "a tick that changed nothing writes nothing");
     }
 
+    /**
+     * A deploy that comes while a tick holds the node's lock waits for the tick, not for the tick's write of what the node runs: its
+     * record is written while that write has not answered, and once it lands the node's rows name both packages.
+     */
+    @Test
+    void aDeployThatWaitsForATickGoesOnWhileTheTicksWriteHasNotAnswered() throws Exception {
+        Unreadable records = new Unreadable();
+        Peer a = new Peer("node-a", records).restored();
+        Peer b = new Peer("node-b").restored();
+        b.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a")));
+        Promise<Void> hold = Promise.promise();
+        records.holding = hold;
+        Doors.Gate started = a.doors.holdStartOf("shop/a");
+        OnVirtualThread.Call<Void> tick = OnVirtualThread.start(() -> {
+            a.deployments.follow();
+            return null;
+        });
+        reachedWhile(tick, started.reached(), "node a's tick installs shop");
+
+        long before = generation();
+        int pending = rt.timer().pending();
+        OnVirtualThread.Call<DeployResult> deploying = a.deploying("billing", repos.commit(pkg("billing", "1.0.0", "b")));
+        untilWhile(deploying, () -> rt.timer().pending() > pending, "the deploy waits for the tick, bounded on the node's timer");
+        started.release();
+        untilWhile(tick, () -> records.held.get() > 0, "the tick writes what node a runs");
+        untilWhile(deploying, () -> generation() == before + 1, "the deploy's record is written while the tick's write has not answered");
+
+        records.holding = null;
+        hold.complete();
+        assertEquals("1.0.0", OnVirtualThread.join(deploying).pkg().version(), "the deploy answers");
+        OnVirtualThread.join(tick);
+        assertEquals(List.of("record billing@1.0.0", "record shop@1.0.0", "node-a billing@1.0.0 RUNNING", "node-a shop@1.0.0 RUNNING",
+                "node-b shop@1.0.0 RUNNING"), b.answer(), "node a's rows name both packages");
+        assertEquals(List.of(), warned("what this node runs could not be written"));
+    }
+
     /** The work rows of {@code flow} in the pool's work table. */
     static long rows(String flow) {
         return pool.preparedQuery("select count(*) from work where flow = $1").execute(io.vertx.sqlclient.Tuple.of(flow)).await().iterator().next().getLong(0);
