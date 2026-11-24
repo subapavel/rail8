@@ -10,6 +10,7 @@ import type { Commit, PackagesApi, PackageState } from './api';
 import { CommitDialog } from './CommitDialog';
 import { DeployDialog } from './DeployDialog';
 import { GROUPS, useHistory, usePackage } from './data';
+import { useRemote } from './remote';
 import { ArtifactsTable, BUSY, ChangesTable, deployedStatus, factsOf, HistoryTable, PackageAlerts } from './parts';
 
 export interface PackageTabProps {
@@ -88,7 +89,8 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
  * branch, each opening the files it changed, and each with Deploy this commit…, which is how the author goes back. Each
  * of the three keeps its open rows and the commits it read while another is shown. Commit…, the page's main action,
  * opens the commit dialog, and says why when the commit route would refuse it; its Commit and deploy goes on to the
- * deploy dialog of the new commit. Deploy… opens the deploy dialog of `HEAD`. The package is read again when the tab is shown again, when the window gets
+ * deploy dialog of the new commit. Deploy… opens the deploy dialog of `HEAD`. Fetch, Pull and Push share the branch
+ * with its upstream (see {@link useRemote}). The package is read again when the tab is shown again, when the window gets
  * the focus, on Refresh, and when a file changed after its change was listed; a commit's answer redraws it.
  */
 export function PackageTab({ api, repository, now, open, writable }: PackageTabProps) {
@@ -107,6 +109,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
   const refused = commitRefused(writable, state);
   const undeployable = deployRefused(state);
   const onState = (next: PackageState | null) => (next === null ? refresh() : show(next));
+  const remote = useRemote(api, repository, state, writable, onState);
 
   const choose = (key: string) => {
     setPane(key);
@@ -124,6 +127,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
     const { state } = read;
     body = (
       <Flex vertical gap="large">
+        {remote.alert}
         <PackageAlerts state={state} />
         {paneOf(
           'changes',
@@ -164,6 +168,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
             <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
               Refresh
             </Button>
+            {remote.buttons}
             <Button disabled={undeployable !== null} title={undeployable ?? undefined} onClick={() => state?.head && setDeploying(state.head)}>
               Deploy…
             </Button>

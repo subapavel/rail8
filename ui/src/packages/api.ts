@@ -192,6 +192,43 @@ export interface DeployAnswer {
 }
 
 /**
+ * A pull or a push: the branch, `HEAD` and the upstream's name (null: none) as the package's state showed them. It is
+ * refused, changing nothing, when they are no longer what the clone has.
+ */
+export interface RemoteBody {
+  branch: string;
+  head: string;
+  upstream: string | null;
+}
+
+/** What a fetch answers: the package's state after it (null when it could not be read, and `problem` says why). */
+export interface FetchAnswer {
+  package: PackageState | null;
+  problem?: string;
+}
+
+/**
+ * What a pull answers: `HEAD` after it; the files the pull changed, relative to the working folder (null when they could
+ * not be read, and `problem` says why); and the package's state after it (null when it could not be read).
+ */
+export interface PullAnswer {
+  head: string;
+  changed: string[] | null;
+  package: PackageState | null;
+  problem?: string;
+}
+
+/**
+ * What a push answers: the branch of the remote it pushed to, as `refs/heads/<name>`, the commit its upstream named
+ * before and the commit pushed, each of 40 hex digits; and the package's state after it (null when it could not be read).
+ */
+export interface PushAnswer {
+  pushed: { ref: string; from: string; to: string };
+  package: PackageState | null;
+  problem?: string;
+}
+
+/**
  * What Get a package answers: the new folder, named as its repository, and exactly one of its state as a package (a
  * malformed `package.yaml` stays its own `problem`, as the list shows it), why it is no package (the reason the list's
  * `others` gives, such as no `package.yaml` at its root), or why its state could not be read though the clone is in
@@ -234,6 +271,15 @@ export interface PackagesApi {
    * submodules or LFS content. An entry of that name is never written into.
    */
   clone(address: string): Promise<CloneAnswer>;
+  /** Fetches the remote of the package's branch, with the author's own credentials; it changes no file. */
+  fetch(repository: string): Promise<FetchAnswer>;
+  /**
+   * Fetches, then fast-forwards the branch to its upstream under the working folder's lock. Refused when the branch
+   * has diverged from it, or git would overwrite a file on disk.
+   */
+  pull(repository: string, body: RemoteBody): Promise<PullAnswer>;
+  /** Pushes `HEAD`, as the commit the body names, to the upstream's branch of its remote; never forced. */
+  push(repository: string, body: RemoteBody): Promise<PushAnswer>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
@@ -304,5 +350,8 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     commit: (repository, body) => post<CommitAnswer>(of(repository, '/commit'), body),
     deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
     clone: (address) => post<CloneAnswer>('/git/clone', { address }),
+    fetch: (repository) => post<FetchAnswer>(of(repository, '/fetch'), {}),
+    pull: (repository, body) => post<PullAnswer>(of(repository, '/pull'), body),
+    push: (repository, body) => post<PushAnswer>(of(repository, '/push'), body),
   };
 }

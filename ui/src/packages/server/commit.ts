@@ -37,7 +37,8 @@ export interface CommitDone {
   problem?: string;
 }
 
-const BUSY = {
+/** What keeps a busy clone busy, in words. */
+export const BUSY = {
   merge: 'a merge is in progress',
   rebase: 'a rebase is in progress',
   'cherry-pick': 'a cherry-pick is in progress',
@@ -307,7 +308,7 @@ function linkBlob(target: Buffer): string {
 }
 
 /** Whether another git holds the index of the clone at `clone`: its `index.lock` exists. */
-async function indexLocked(clone: string): Promise<boolean> {
+export async function indexLocked(clone: string): Promise<boolean> {
   return access(join(clone, '.git', 'index.lock')).then(
     () => true,
     () => false,

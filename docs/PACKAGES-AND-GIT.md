@@ -142,8 +142,10 @@ Every git process, and `rail8 lock`, is started through one runner:
   An exported `GIT_SSH_COMMAND` or `GIT_SSH` is removed with the rest. The way to set one is `core.sshCommand` in git
   config, which the UI reads like any other setting. The admin token is never passed on.
 - **No terminal prompt.** Each process runs in a session of its own, with no terminal, so a credential, ssh or signing
-  prompt in a terminal fails at once. A graphical prompt, such as a signing helper's window, runs until the deadline,
-  and the answer then says that a helper may have been waiting for input.
+  prompt in a terminal fails at once. Fetch, the fetch of a pull, and push run with `-c core.askPass=` before the
+  command, so git asks neither `core.askPass` nor `SSH_ASKPASS` for a password, and falls to the terminal prompt that
+  `GIT_TERMINAL_PROMPT=0` refuses. A credential helper is not affected. A graphical prompt, such as a signing helper's
+  window, runs until the deadline, and the answer then says that a helper may have been waiting for input.
 - **Machine formats only.** Only these formats are parsed: `status --porcelain=v2 -z`, `log -z --format`,
   `diff-tree -z`, `diff -z --name-status`, `push --porcelain`, `rev-list --count` and `cat-file --batch`.
 - **Finite in time and size.** Each call has a deadline on the injected timer and caps on both of its output streams,
@@ -171,6 +173,7 @@ The git half runs only these commands:
 
 - **Reads:**
   - `status`, `log`, `cat-file`, `ls-files`, `ls-tree`, `rev-parse`, `rev-list`, `merge-base` and `var`;
+  - `for-each-ref` of the branch, for its upstream's remote and the remote's branch;
   - `hash-object`, without `-w`;
   - `diff-tree`;
   - `diff --name-status --no-ext-diff --no-textconv`.
@@ -334,7 +337,7 @@ Every refusal is `{error, problems?, output?}`, with the status:
 | 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
 | 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
 | 413 | A body over its limit. |
-| 422 | No git identity. Nothing to commit. A hook refused the commit (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
+| 422 | No git identity. Nothing to commit. A hook refused the commit (its `output`). A fetch or a push git failed, as when it could not sign in (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
 | node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a failure on the node: of git, of the deploy record's write (or a write whose outcome is unknown), or of a start, which was rolled back. The package's state read after it shows what runs. |
 | 500 | git or `rail8 lock` wrote more than its output limit, and was stopped. |
 | 502 | The node does not answer, or refuses `RAIL8_ADMIN_TOKEN` (its 401). |
@@ -776,15 +779,22 @@ it.
 ## Remote
 
 - **Fetch** is `git fetch -- <the branch's remote>`. Ahead and behind are as of the last fetch, and the screen shows its
-  time.
+  time. The remote and the remote's branch are those of the branch's upstream in the author's config, read with
+  `for-each-ref`. When git fails, as when it cannot sign in, the answer is 422 with git's lines.
+- **What every fetch, pull and push checks first.** It is refused with 409 while the clone is busy, or `HEAD` is
+  detached. A pull or a push is refused with 412 when its `branch`, `head` or `upstream` is no longer what the clone
+  has. Then each is refused with 409 when the branch has no upstream, or its remote-tracking branch is gone.
 - **Pull** takes `{branch, head, upstream}`. It is a fetch, then, under the working folder's lock, a fast-forward to
   what the fetch brought.
   - `branch`, `head` and `upstream` must still be what they were.
   - It resolves `@{upstream}` once, to a commit id, and runs `git merge --ff-only --no-overwrite-ignore
     --end-of-options <id>`.
-  - The server refuses it when the branch has diverged, found with `merge-base --is-ancestor` before the merge. When
-    the merge itself refuses, as when a local change or an ignored file would be overwritten, the answer is 409 with
-    git's lines.
+  - When `HEAD` holds that commit already, nothing is merged and `changed` is empty. The server refuses it when the
+    branch has diverged, found with `merge-base --is-ancestor` before the merge. When the merge itself refuses, as
+    when a local change or an ignored file would be overwritten, the answer is 409 with git's lines.
+  - `changed` lists the paths that differ between the two commits, read with `diff-tree`. When they cannot be read
+    after the merge, `changed` is null with the reason, and the screen reloads every clean tab of the package.
+  - A failed fetch is 422 with git's lines, as for Fetch, and nothing is merged.
   - The screen refuses it while a tab of the package holds unsaved changes.
   - Afterwards, the clean tabs of the files it changed are reloaded ("The shell's part").
 - **Push** takes `{branch, head, upstream}`. It is `git push --porcelain -- <remote> <head>:refs/heads/<upstream
@@ -792,7 +802,8 @@ it.
   - `branch`, `head` and `upstream` must still be what they were.
   - Without an upstream, it is refused, naming `git push -u` for a terminal.
   - When the remote rejects it (a protected branch, a push that is not a fast-forward), the answer is a 409 with git's
-    lines.
+    lines. Any other failure of git, as when it cannot sign in, is 422 with git's lines.
+  - `pushed` names the remote's branch, the commit its remote-tracking branch named before, and the commit pushed.
 - **Credentials** come from what the author's git and ssh give without a terminal: credential helpers, `.netrc`,
   `http.extraHeader`, the ssh agent and keys, and `ssh_config`. No terminal prompt opens. A helper's own window (a
   keychain, a browser) may open, and the git call waits for it up to its deadline. An unknown ssh host key fails ("Host
