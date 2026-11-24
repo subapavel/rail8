@@ -75,7 +75,7 @@ final class AdminApi {
         if (token.isPresent()) {
             if (token.get().startsWith(KEY_PREFIX)) {
                 throw new Cli.Usage(command + ": RAIL8_TOKEN holds a value of the emergency key's form, so nothing is sent: it takes a token"
-                        + " of an account, rail8t_…");
+                        + " of an account");
             }
             return token;
         }
