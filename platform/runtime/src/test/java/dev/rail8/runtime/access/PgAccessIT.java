@@ -1,5 +1,6 @@
 package dev.rail8.runtime.access;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.testkit.SharedPostgres;
 import io.vertx.core.Vertx;
@@ -13,14 +14,21 @@ import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** {@link AccessContract} for {@link PgAccess}: the nodes share one Postgres database, emptied before every case. */
 @Timeout(120)
@@ -73,6 +81,27 @@ class PgAccessIT extends AccessContract {
                     .put("user", r.getLong(5)).put("via", r.getString(6)).put("credential", r.getString(7)));
         }
         return rows;
+    }
+
+    @Test
+    void theListOfUsersTakesAFixedNumberOfRoundTrips() {
+        AtomicInteger trips = new AtomicInteger();
+        Pool counted = (Pool) Proxy.newProxyInstance(Pool.class.getClassLoader(), new Class<?>[] {Pool.class}, (proxy, method, args) -> {
+            if (method.getName().equals("preparedQuery") || method.getName().equals("query")) trips.incrementAndGet();
+            try {
+                return method.invoke(pool, args);
+            } catch (InvocationTargetException failed) {
+                throw failed.getCause();
+            }
+        });
+        Access node = new PgAccess(counted, clockA, hash, new HashPlaces(), new SecureRandom(), Optional.of(KEY));
+        Actor by = key(a).acting(Action.USER_CREATE, PackageRef.ANY, REMOTE);
+        a.createUser(by, "first", Kind.TECHNICAL, Set.of(Role.OPERATOR));
+        node.users();
+        int few = trips.getAndSet(0);
+        for (int i = 0; i < 20; i++) a.createUser(by, "technical-" + i, Kind.TECHNICAL, Set.of(Role.OPERATOR));
+        node.users();
+        assertEquals(few, trips.get(), "as many round trips for 21 users as for 1");
     }
 
     @Override

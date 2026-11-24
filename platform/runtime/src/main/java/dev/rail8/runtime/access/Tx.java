@@ -4,6 +4,7 @@ import io.vertx.core.json.JsonObject;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
@@ -64,6 +65,9 @@ interface Tx {
     /** The roles {@code user} holds, by role. */
     List<Access.Grant> grants(long user);
 
+    /** The roles of every user who holds one, by user id, each user's by role. */
+    Map<Long, List<Access.Grant>> grants();
+
     /** The number of unblocked persons who hold the administrator role. */
     long unblockedAdministrators();
 
@@ -93,6 +97,9 @@ interface Tx {
 
     /** Every session row of {@code user}, ended ones included. */
     List<SessionRow> sessions(long user);
+
+    /** The session rows of every user that expire after {@code now} and were last seen at {@code seenSince} or later. */
+    List<SessionRow> sessions(Instant now, Instant seenSince);
 
     void insertSession(SessionRow row);
 

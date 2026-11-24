@@ -13,6 +13,7 @@ import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -299,7 +300,16 @@ abstract class Accounts implements Access {
     @Override
     public List<User> users() {
         Instant now = clock.instant();
-        return query(tx -> tx.users().stream().map(u -> view(tx, u, now)).toList());
+        return query(tx -> {
+            List<Tx.UserRow> rows = tx.users();
+            Map<Long, List<Grant>> grants = tx.grants();
+            Map<Long, List<Tx.SessionRow>> sessions = tx.sessions(now, now.minus(IDLE)).stream()
+                    .collect(Collectors.groupingBy(Tx.SessionRow::user));
+            Map<String, List<Token>> tokens = tx.liveTokens(OptionalLong.empty(), now, Optional.empty()).stream()
+                    .collect(Collectors.groupingBy(Token::user));
+            return rows.stream().map(u -> view(u, grants.getOrDefault(u.id(), List.of()), sessions.getOrDefault(u.id(), List.of()),
+                    tokens.getOrDefault(u.name(), List.of()), now)).toList();
+        });
     }
 
     @Override
@@ -702,11 +712,15 @@ abstract class Accounts implements Access {
     }
 
     private static User view(Tx tx, Tx.UserRow u, Instant now) {
-        List<LiveSession> sessions = tx.sessions(u.id()).stream().filter(s -> live(s, now))
+        return view(u, tx.grants(u.id()), tx.sessions(u.id()), tx.liveTokens(OptionalLong.of(u.id()), now, Optional.empty()), now);
+    }
+
+    /** The view of {@code u} from its grants, its session rows (the ended ones left out here) and its live tokens. */
+    private static User view(Tx.UserRow u, List<Grant> grants, List<Tx.SessionRow> sessions, List<Token> tokens, Instant now) {
+        List<LiveSession> live = sessions.stream().filter(s -> live(s, now))
                 .sorted(Comparator.comparing(Tx.SessionRow::createdAt))
                 .map(s -> new LiveSession(s.id(), s.createdAt(), s.lastSeenAt(), s.expiresAt())).toList();
-        return new User(u.name(), u.kind(), tx.grants(u.id()), u.blockedAt(), u.firstPassword(), u.createdAt(), u.createdBy(), sessions,
-                tx.liveTokens(OptionalLong.of(u.id()), now, Optional.empty()));
+        return new User(u.name(), u.kind(), grants, u.blockedAt(), u.firstPassword(), u.createdAt(), u.createdBy(), live, tokens);
     }
 
     private static Set<Role> roles(List<Grant> grants) {

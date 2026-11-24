@@ -8,6 +8,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,7 +22,10 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -332,6 +338,81 @@ abstract class AccessContract {
         clockA.advance(Duration.ofDays(7));
         refused(401, "login-refused", () -> a.login("anna", first, Optional.empty(), REMOTE));
         assertEquals("first-password-expired", audit("login.refused").getLast().getJsonObject("detail").getString("reason"));
+    }
+
+    @Test
+    void theListOfUsersShowsEachUsersOwnView() {
+        session("anna", Role.DEVELOPER, Role.OPERATOR);
+        technical("ci-deploy", Role.OPERATOR);
+        Access.Issued pipeline = issue("ci-deploy", "pipeline", 30);
+        issue("ci-deploy", "short", 1);
+        a.revokeToken(admin(Action.TOKEN_REVOKE), issue("ci-deploy", "gone", 30).id());
+        technical("ci-idle");
+        person("bob");
+        session("carol", Role.MESSAGE_BODIES);
+        a.block(admin(Action.USER_BLOCK), "carol");
+        clockA.advance(Duration.ofDays(1));
+        String idle = login(a, "anna", NEW_PASSWORD);
+        clockA.advance(Duration.ofHours(1));
+        String live = login(a, "anna", NEW_PASSWORD);
+        String ended = login(a, "anna", NEW_PASSWORD);
+        clockA.advance(Accounts.IDLE.minusMinutes(30));
+        a.logout(a.authenticate(bearer(ended), Optional.empty()).acting(Action.SELF_LOGOUT, PackageRef.ANY, REMOTE));
+
+        List<Access.User> users = a.users();
+        assertEquals(List.of("anna", "bob", "carol", "ci-deploy", "ci-idle", "keeper"), users.stream().map(Access.User::name).toList());
+        assertEquals(users.stream().map(u -> a.user(u.name()).orElseThrow()).toList(), users, "the list shows each user's own view");
+        Access.User annaView = users.getFirst();
+        assertEquals(List.of(Role.DEVELOPER, Role.OPERATOR), annaView.roles().stream().map(Access.Grant::role).toList());
+        assertEquals(List.of(live.substring(7, 23)), annaView.sessions().stream().map(Access.LiveSession::id).toList(),
+                "the expired, idle and ended sessions are left out: " + idle.substring(7, 23));
+        assertEquals(List.of(pipeline.id()), users.get(3).tokens().stream().map(Access.Token::id).toList(),
+                "the expired and revoked tokens are left out");
+        assertEquals(List.of(), users.get(4).roles());
+        assertEquals(List.of(), users.get(4).tokens());
+    }
+
+    @Test
+    void theListOfUsersReadsAFixedNumberOfStatements() {
+        many(2);
+        int few = statements(Access::users);
+        many(10);
+        assertEquals(few, statements(Access::users), "as many statements for 21 users as for 5");
+    }
+
+    /** {@code count} more persons with a role and a session, and as many technical accounts with a role and a token. */
+    private void many(int count) {
+        int from = a.users().size();
+        for (int i = from; i < from + count; i++) {
+            session("person-" + i, Role.DEVELOPER);
+            technical("technical-" + i, Role.OPERATOR);
+            issue("technical-" + i, "pipeline", 30);
+        }
+    }
+
+    /** The calls of the store's statements that {@code work} makes on A. */
+    private int statements(Consumer<Access> work) {
+        Accounts node = (Accounts) a;
+        AtomicInteger calls = new AtomicInteger();
+        Function<Tx, Tx> counted = tx -> (Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(), new Class<?>[] {Tx.class}, (proxy, method, args) -> {
+            calls.incrementAndGet();
+            try {
+                return method.invoke(tx, args);
+            } catch (InvocationTargetException failed) {
+                throw failed.getCause();
+            }
+        });
+        Accounts counting = new Accounts(clockA, hash, new HashPlaces(), new SecureRandom(), Optional.of(KEY)) {
+            @Override protected <T> T query(Function<Tx, T> w) {
+                return node.query(tx -> w.apply(counted.apply(tx)));
+            }
+
+            @Override protected <T> T transaction(Function<Tx, T> w) {
+                return node.transaction(tx -> w.apply(counted.apply(tx)));
+            }
+        };
+        work.accept(counting);
+        return calls.get();
     }
 
     // --- logins

@@ -16,7 +16,9 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -183,6 +185,16 @@ public final class PgAccess extends Accounts {
             return out;
         }
 
+        @Override public Map<Long, List<Access.Grant>> grants() {
+            Map<Long, List<Access.Grant>> out = new HashMap<>();
+            run("select user_id, role, granted_at, granted_by, granted_via from role_assignments where scope = 'installation'", Tuple.tuple())
+                    .forEach(r -> out.computeIfAbsent(r.getLong("user_id"), u -> new ArrayList<>()).add(new Access.Grant(
+                            Role.byId(r.getString("role")).orElseThrow(), instant(r, "granted_at"), r.getString("granted_by"),
+                            r.getString("granted_via"))));
+            out.values().forEach(grants -> grants.sort(Comparator.comparing(Access.Grant::role)));
+            return out;
+        }
+
         @Override public long unblockedAdministrators() {
             return run("select count(*) from users u join role_assignments r on r.user_id = u.id where r.role = 'administrator'"
                     + " and r.scope = 'installation' and u.kind = 'person' and u.blocked_at is null", Tuple.tuple()).iterator().next().getLong(0);
@@ -244,6 +256,13 @@ public final class PgAccess extends Accounts {
         @Override public List<SessionRow> sessions(long user) {
             List<SessionRow> out = new ArrayList<>();
             run("select " + SESSION_COLUMNS + " from sessions s where s.user_id = $1", Tuple.of(user)).forEach(r -> out.add(session(r)));
+            return out;
+        }
+
+        @Override public List<SessionRow> sessions(Instant now, Instant seenSince) {
+            List<SessionRow> out = new ArrayList<>();
+            run("select " + SESSION_COLUMNS + " from sessions s where s.expires_at > $1 and s.last_seen_at >= $2",
+                    Tuple.of(at(now), at(seenSince))).forEach(r -> out.add(session(r)));
             return out;
         }
 
