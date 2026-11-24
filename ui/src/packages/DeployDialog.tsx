@@ -90,8 +90,8 @@ const replacing = (replaces: string, host: string) =>
  * The deploy dialog of a commit of a package: it checks the commit on the node first, and shows what the deploy would
  * add, swap and remove, and what it replaces, or every problem, which ends it with nothing changed on the node. Deploy
  * then deploys the commit, expecting the node to still run what the check found, and shows the node's answer. When
- * the node's commit changed since the check, it says so and offers to check again. When the node gives no answer in
- * time, the outcome is unknown: the dialog reads what the node runs before it offers to check again. Under
+ * the node's commit changed since the check, it says so and offers to check again. When the outcome is unknown (504,
+ * or no answer from the server at all), the dialog reads what the node runs before it offers to check again. Under
  * RAIL8_READ_ONLY=true only the check runs. Every answer that carries the package's state redraws the tab.
  */
 export function DeployDialog({ api, repository, commit, state, writable, onState, onClose }: DeployDialogProps) {
@@ -135,7 +135,8 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       setShown({ kind: 'deployed', answer });
     } catch (error) {
       const refused = refusedOf(error);
-      if (refused.status !== 504) {
+      // 504, or no answer from the server at all (0): the node may have deployed, so the outcome is unknown
+      if (refused.status !== 504 && refused.status !== 0) {
         redraw(null);
         setShown({ kind: 'deploy-refused', answer: checked, refused });
         return;
@@ -172,7 +173,7 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       footer = [close];
       break;
     case 'check-refused':
-      body = <RefusalAlert title="The check found problems: nothing was deployed" refused={shown.refused} />;
+      body = <RefusalAlert title={shown.refused.problems === undefined ? 'The check was refused: nothing was deployed' : 'The check found problems: nothing was deployed'} refused={shown.refused} />;
       footer = [close];
       break;
     case 'checked':

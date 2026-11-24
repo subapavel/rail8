@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { Shell } from '../Shell';
+import { PackagesError, type PackagesApi } from './api';
 import { fakeStateOf, type CloneSeed, type Seed } from './contract/seed';
 import { fakePackagesApi } from './fake';
 import { packagesScreen } from './screen';
@@ -21,13 +22,16 @@ const FLOWS: CloneSeed = {
 
 let root: Root | undefined;
 
-/** The Packages screen over the fake world of `seed`, and the tab of `orders` opened from its row. */
-async function openOrders(seed: Seed, strict = false) {
+/**
+ * The Packages screen over the fake world of `seed`, its api changed by `wrap`, under StrictMode when `strict`, and the
+ * tab of `orders` opened from its row.
+ */
+async function openOrders(seed: Seed, { strict = false, wrap = (api: PackagesApi) => api } = {}) {
   const { state, ids } = fakeStateOf(seed);
   const host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  const shell = <Shell screens={[packagesScreen(fakePackagesApi(state), () => NOW)]} start="packages" />;
+  const shell = <Shell screens={[packagesScreen(wrap(fakePackagesApi(state)), () => NOW)]} start="packages" />;
   root.render(strict ? <StrictMode>{shell}</StrictMode> : shell);
   await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: 'orders', exact: true }).click();
   await expect.element(page.getByRole('heading', { level: 1, name: 'orders' })).toBeVisible();
@@ -69,7 +73,7 @@ describe('the deploy dialog', () => {
   });
 
   test('under StrictMode, as the development server serves the UI, opening the dialog sends one check, never two at once', async () => {
-    const { state } = await openOrders({ clones: [FLOWS] }, true);
+    const { state } = await openOrders({ clones: [FLOWS] }, { strict: true });
     await button('Deploy…').click();
     await expect.element(dialog().getByText('The check passed. 127.0.0.1:8081 runs nothing of this repository yet.')).toBeVisible();
     expect(state.sent.map((s) => s.check)).toEqual([true]);
@@ -110,6 +114,21 @@ describe('the deploy dialog', () => {
     await expect.element(dialog().getByText('The outcome of the deploy is unknown')).toBeVisible();
     await expect.element(dialog().getByText('127.0.0.1:8081 now reads: Not running on 127.0.0.1:8081.')).toBeVisible();
     await expect.element(dialog().getByRole('button', { name: 'Check again' })).toBeEnabled();
+  });
+
+  test('a deploy the server never answered has an unknown outcome too, and the dialog reads what the node runs', async () => {
+    const lostOnTheWay = (api: PackagesApi): PackagesApi => ({
+      ...api,
+      deploy: (repository, body) => (body.check ? api.deploy(repository, body) : Promise.reject(new PackagesError(0, 'the server does not answer'))),
+    });
+    await openOrders({ clones: [FLOWS] }, { wrap: lostOnTheWay });
+    await button('Deploy…').click();
+
+    await dialog().getByRole('button', { name: 'Deploy', exact: true }).click();
+
+    await expect.element(dialog().getByText('The outcome of the deploy is unknown')).toBeVisible();
+    await expect.element(dialog().getByText('127.0.0.1:8081 now reads: Not running on 127.0.0.1:8081.')).toBeVisible();
+    await expect.element(dialog().getByText('nothing was deployed')).not.toBeInTheDocument();
   });
 
   test('Deploy this commit… in History goes back to an earlier commit, and the package then reads Behind 1', async () => {

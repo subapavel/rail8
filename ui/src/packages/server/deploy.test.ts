@@ -52,9 +52,17 @@ describe('deployCommit', () => {
     await expect(refused).rejects.toMatchObject({ status: 500, message: 'the record write failed for ***', problems: ['a *** b'] });
   });
 
-  test('a 200 that is no deploy, and an answer over 8 MiB, are 502', async () => {
-    await expect(deploy(answering(200, '{"package": "orders"}'))).rejects.toMatchObject({ status: 502, message: expect.stringContaining('no deploy the UI can read') });
-    await expect(deploy(answering(200, `"${'x'.repeat(8 * 1024 * 1024)}"`))).rejects.toMatchObject({ status: 502, message: expect.stringContaining('more than 8 MiB') });
+  test('a deploy answered with a 200 that is no deploy, an answer over 8 MiB or one broken off has an unknown outcome: 504', async () => {
+    const unknown = { status: 504, message: expect.stringMatching(/so the outcome of the deploy is unknown: read what it runs before you try again$/) };
+    await expect(deploy(answering(200, '{"package": "orders"}'))).rejects.toMatchObject(unknown);
+    await expect(deploy(answering(200, `"${'x'.repeat(8 * 1024 * 1024)}"`))).rejects.toMatchObject(unknown);
+    const broken = (async () => new Response(new ReadableStream({ start: (c) => c.error(new Error('reset')) }))) as typeof fetch;
+    await expect(deploy(broken)).rejects.toMatchObject(unknown);
+  });
+
+  test('a check answered so is 502, since a check changes nothing', async () => {
+    await expect(deploy(answering(200, '{"package": "orders"}'), new FakeTimer(), true)).rejects.toMatchObject({ status: 502, message: expect.stringContaining('no deploy the UI can read') });
+    await expect(deploy(answering(200, `"${'x'.repeat(8 * 1024 * 1024)}"`), new FakeTimer(), true)).rejects.toMatchObject({ status: 502, message: expect.stringContaining('more than 8 MiB') });
   });
 
   test('a check the node does not answer within 5 min is 504, and changes nothing', async () => {

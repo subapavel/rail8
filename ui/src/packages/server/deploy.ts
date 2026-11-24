@@ -46,7 +46,9 @@ function answerOf(json: unknown): { deploy: NodeDeploy; replaces: string } | nul
  *
  * - its 412, the pool's record changed since the check: 412, saying so;
  * - its 401: 502, naming RAIL8_ADMIN_TOKEN;
- * - no connection, an answer over 8 MiB, or a 200 that is no deploy: 502;
+ * - no connection: 502;
+ * - an answer broken off, over 8 MiB, or a 200 that is no deploy: 502 for a check, and 504 for a deploy, its outcome
+ *   unknown;
  * - no answer within 5 min on `timer`: 504, the outcome of a deploy unknown.
  *
  * Every text of the node passes through the formatter, its token removed.
@@ -75,6 +77,10 @@ export async function deployCommit(
         ? `the node at ${host} gave no answer to the check within ${DEPLOY_MS / 60_000} min; the check changes nothing`
         : `the node at ${host} gave no answer within ${DEPLOY_MS / 60_000} min, so the outcome of the deploy is unknown: read what it runs before you try again`,
     );
+  // an answer the node began but the UI cannot read: 502 for a check, which changes nothing; for a deploy the node may
+  // have deployed, so its outcome is unknown (504)
+  const unreadable = (why: string) =>
+    body.check ? new Refusal(502, `the node at ${host} ${why}`) : new Refusal(504, `the node at ${host} ${why}, so the outcome of the deploy is unknown: read what it runs before you try again`);
 
   const stop = new AbortController();
   const cancel = timer.after(DEPLOY_MS, () => stop.abort());
@@ -101,9 +107,9 @@ export async function deployCommit(
     try {
       text = await bodyText(answer, NODE_READ.bytes);
     } catch {
-      throw stop.signal.aborted ? lost() : new Refusal(502, `the node at ${host} broke off its answer to ${what}`);
+      throw stop.signal.aborted ? lost() : unreadable(`broke off its answer to ${what}`);
     }
-    if (text === null) throw new Refusal(502, `the node at ${host} answered ${what} with more than 8 MiB`);
+    if (text === null) throw unreadable(`answered ${what} with more than 8 MiB`);
     let json: unknown;
     try {
       json = JSON.parse(text);
@@ -113,7 +119,7 @@ export async function deployCommit(
     if (answer.status === 401) throw new Refusal(502, `the node at ${host} refuses RAIL8_ADMIN_TOKEN (401); ${nothing}`);
     if (answer.ok) {
       const found = answerOf(json);
-      if (found === null) throw new Refusal(502, `the node at ${host} answered ${what} with ${answer.status}, but with no deploy the UI can read: read what it runs`);
+      if (found === null) throw unreadable(`answered ${what} with ${answer.status}, but with no deploy the UI can read`);
       const { deploy } = found;
       return {
         deploy: { ...deploy, flows: deploy.flows.map(said), added: deploy.added.map(said), swapped: deploy.swapped.map(said), removed: deploy.removed.map(said) },
