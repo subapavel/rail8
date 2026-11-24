@@ -9,6 +9,7 @@ import dev.rail8.api.Keys;
 import dev.rail8.api.Props;
 import dev.rail8.core.batch.BatchingWriter;
 import dev.rail8.core.batch.OverloadedException;
+import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepLog;
@@ -114,7 +115,8 @@ class PgMessageStoreIT {
         assertEquals(snap("m-1", 1, "validate", Snapshot.Outcome.FAILED, Optional.of("validation failed: /Invoice/Id"), keys, Optional.empty()), t.get(1), "metadata-only: no body key, hash and size kept; cpu unknown stays unknown");
         assertEquals(snap("m-1", 2, "route", Snapshot.Outcome.OK, Optional.empty(), keys, Optional.of(BlobKey.body("m-1", 0))), t.get(2));
         assertEquals(List.of(), store.timeline("nobody").await());
-        assertEquals(List.of("m-1"), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items(), "once, although two steps carry the key");
+        assertEquals(List.of(new MessageStore.Found("m-1", "invoice-sync")), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items(),
+                "once, although two steps carry the key, with its flow");
         Snapshot odd = new Snapshot("m-odd", "f", 0, "ingress", Snapshot.Outcome.OK, Optional.empty(), Instant.EPOCH, 0, 0, Headers.empty(),
                 Props.empty().with(new Key<Duration>("deadline"), Duration.ofSeconds(3)), Keys.empty(), new Hash("sha256-64", 1), 1, Optional.empty(), Map.of());
         store.record(odd).await();
@@ -155,7 +157,7 @@ class PgMessageStoreIT {
         assertEquals(List.of("1 0 ingress", "1 1 to", "2 1 to-2"), rows(store.timeline("m-7").await()),
                 "a duplicate (id, step, attempt) after the committed row is ignored (ON CONFLICT DO NOTHING); attempt 2's step 1 is kept");
         assertEquals(50, store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items().size());
-        assertEquals(List.of("m-9"), store.findByKey("orderNo", "o-9", Optional.empty(), Page.MAX_LIMIT).await().items());
+        assertEquals(List.of(new MessageStore.Found("m-9", "invoice-sync")), store.findByKey("orderNo", "o-9", Optional.empty(), Page.MAX_LIMIT).await().items());
         long rows = pool.query("select count(*) from messages").execute().await().iterator().next().getLong(0);
         assertEquals(101, rows, "100 first-attempt rows and m-7's attempt-2 row");
         assertEquals(0, store.failed(), "no commit failed");
@@ -198,7 +200,8 @@ class PgMessageStoreIT {
         assertEquals(List.of("1 0 ingress", "1 1 partner", "2 1 partner", "3 1 partner"), rows(t), "by attempt, then step; the duplicates of attempts 1 and 2 ignored");
         assertEquals(List.of(ingress, failed1, failed2, ok3), t, "every field round-trips, each attempt's own outcome, error and body key");
         assertEquals(List.of(1, 1, 2, 3), t.stream().map(Snapshot::attempt).toList());
-        assertEquals(List.of("m-1"), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items(), "still found once by its key");
+        assertEquals(List.of(new MessageStore.Found("m-1", "invoice-sync")), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items(),
+                "still found once by its key");
         assertEquals(4L, count("messages"));
         assertEquals(0, store.failed(), "no commit failed: a rerun's row is no conflict");
     }
@@ -263,8 +266,10 @@ class PgMessageStoreIT {
         return snap(id, step, "s" + step, Snapshot.Outcome.OK, Optional.empty(), Keys.empty().with("invoiceId", value), Optional.empty());
     }
 
+    /** One page of the key search for {@code invoiceId=value}, with the ids of the messages it found. */
     Page<String> page(String value, Optional<String> after, int limit) {
-        return store.findByKey("invoiceId", value, after, limit).await();
+        Page<MessageStore.Found> found = store.findByKey("invoiceId", value, after, limit).await();
+        return new Page<>(found.items().stream().map(MessageStore.Found::id).toList(), found.next());
     }
 
     @Test

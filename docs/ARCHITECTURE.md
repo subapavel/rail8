@@ -1267,10 +1267,11 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | --- | --- |
 | `GET /admin/messages?from=…&to=…` | the list of recent messages, newest first, narrowed by `flow`, `status`, `key` and `step` |
 | `GET /admin/message-counts?from=…&to=…` | how many messages of the list are completed, failed, running and cancelled, of a `flow` when given |
-| `GET /admin/messages?key=…` | find messages by business key |
-| `GET /admin/messages?flow=…&step=…` | find a flow's messages that passed a named step, newest first |
+| `GET /admin/messages?key=…` | find messages by business key, each as `{id, flow}` |
+| `GET /admin/messages?flow=…&step=…` | find a flow's messages that passed a named step, newest first, each as `{id, flow}` |
 | `GET /admin/messages/{id}` | a message's steps with their times and the lines their code logged |
 | `GET /admin/messages/{id}/steps/{n}/body` | the body after step `n` |
+| `GET /admin/messages/{id}/audit` | who retried, cancelled or viewed the body of a message, and how, newest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{id}/retry`, `POST /admin/dlq/{id}/cancel` | failed messages, running one again, ending one |
 | `POST /admin/messages/{id}/cancel` | cancelling a message that has not ended |
 | `GET /admin/work/stopped` | keys of ordered flows stopped behind a failed message |

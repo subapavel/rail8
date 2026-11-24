@@ -1,6 +1,8 @@
 package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
+import dev.rail8.core.record.Page;
+import io.vertx.core.json.JsonObject;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -194,6 +196,15 @@ public interface Access {
      */
     void bodyViewed(Actor by, String message, int step);
 
+    /**
+     * One page of the audit rows of {@code message}: its retries, its cancels and the views of its bodies, newest first (by
+     * instant, then by id, both descending). {@code after} is the previous page's {@link Page#next()} cursor, empty for the
+     * first page. A message with no rows, or one no longer recorded, has an empty page: the audit outlives the messages.
+     *
+     * @throws IllegalArgumentException for a {@code limit} outside 1..{@link Page#MAX_LIMIT} or a cursor not handed out here
+     */
+    Page<Audited> messageAudit(String message, Optional<String> after, int limit);
+
     /** Whether the node holds an emergency key. */
     boolean emergencyKey();
 
@@ -213,6 +224,20 @@ public interface Access {
      *               was of a first password, or found that another login had replaced the device it presented
      */
     record Login(String session, Instant expiresAt, long idleSeconds, Caller caller, Optional<String> device) {}
+
+    /**
+     * An audit row as an operator sees it.
+     *
+     * @param id the row's id, as the answers of a retry and a cancel name it ({@code auditId})
+     * @param at when it was written
+     * @param action what was done, such as {@code message.retry}, {@code message.cancel} or {@code message.body.view}
+     * @param actor who did it: a user's name, {@code emergency-key}, or the name a caller of the bridge declared
+     * @param via how the caller proved who it is: {@code session}, {@code token}, {@code emergency-key}, {@code shared-token},
+     *            {@code local}, or {@code declared} for rows written before users existed
+     * @param credential the id of the session or token, never its secret; empty for the others
+     * @param detail what the row records besides, such as the step of a body viewed and the remote address
+     */
+    record Audited(long id, Instant at, String action, String actor, String via, Optional<String> credential, JsonObject detail) {}
 
     /**
      * A change of roles.

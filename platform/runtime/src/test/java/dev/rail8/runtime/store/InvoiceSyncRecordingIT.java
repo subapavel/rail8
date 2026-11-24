@@ -7,6 +7,7 @@ import dev.rail8.core.batch.BatchingWriter;
 import dev.rail8.core.flow.FlowBuilder;
 import dev.rail8.core.flow.FlowDefinition;
 import dev.rail8.core.flow.Runs;
+import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Meter;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
@@ -122,7 +123,7 @@ class InvoiceSyncRecordingIT {
         assertTrue(!t.get(4).bodyHash().equals(in.body().hash()), "the xslt step wrote a new body");
         assertEquals(Optional.of(dev.rail8.api.BlobKey.body(in.id(), 4)), t.get(4).bodyKey());
         assertEquals(out.body().hash(), t.get(5).bodyHash(), "the partner's reply is step 5's body");
-        assertEquals(List.of(in.id()), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items(), "GATE check 6: found by business key");
+        assertEquals(List.of(in.id()), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items().stream().map(MessageStore.Found::id).toList(), "GATE check 6: found by business key");
         assertEquals(0, store.failed());
     }
 

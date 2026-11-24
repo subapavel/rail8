@@ -8,6 +8,7 @@ import dev.rail8.api.Props;
 import dev.rail8.api.Timer;
 import dev.rail8.core.batch.BatchingWriter;
 import dev.rail8.core.record.MessageStore;
+import dev.rail8.core.record.MessageStore.Found;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepLog;
@@ -64,13 +65,18 @@ public final class PgMessageStore implements MessageStore, AutoCloseable {
             + "on conflict (name, value, message_id) do nothing";
     private static final String TIMELINE = "select id, step, attempt, flow, step_name, outcome, error, started_at, wall_ns, cpu_ns, headers, props, keys, body_hash, hash_algorithm, body_key, body_size, versions, log "
             + "from messages where id = $1 order by attempt, step";
-    private static final String FIND_BY_KEY = "select message_id, seq from message_keys where name = $1 and value = $2 order by seq limit $3";
-    private static final String FIND_BY_KEY_AFTER = "select message_id, seq from message_keys where name = $1 and value = $2 and seq > $3 order by seq limit $4";
+    /** The messages that carried the key, each with the flow of the row that first carried it. */
+    private static final String FIND_BY_KEY = "select k.message_id, k.seq, m.flow from message_keys k"
+            + " join lateral (select flow from messages where id = k.message_id and step = k.step limit 1) m on true"
+            + " where k.name = $1 and k.value = $2 order by k.seq limit $3";
+    private static final String FIND_BY_KEY_AFTER = "select k.message_id, k.seq, m.flow from message_keys k"
+            + " join lateral (select flow from messages where id = k.message_id and step = k.step limit 1) m on true"
+            + " where k.name = $1 and k.value = $2 and k.seq > $3 order by k.seq limit $4";
     /** The flow's messages with a row of the step, each at its row of the latest attempt that has one, newest first: {@code messages_flow_step}, read backwards. */
-    private static final String FIND_BY_STEP = "select m.id, m.started_at from messages m where m.flow = $1 and m.step_name = $2 "
+    private static final String FIND_BY_STEP = "select m.id, m.started_at, m.flow from messages m where m.flow = $1 and m.step_name = $2 "
             + "and not exists (select 1 from messages later where later.id = m.id and later.step_name = m.step_name and later.attempt > m.attempt) "
             + "order by m.started_at desc, m.id desc limit $3";
-    private static final String FIND_BY_STEP_AFTER = "select m.id, m.started_at from messages m where m.flow = $1 and m.step_name = $2 "
+    private static final String FIND_BY_STEP_AFTER = "select m.id, m.started_at, m.flow from messages m where m.flow = $1 and m.step_name = $2 "
             + "and (m.started_at, m.id) < ($3, $4) "
             + "and not exists (select 1 from messages later where later.id = m.id and later.step_name = m.step_name and later.attempt > m.attempt) "
             + "order by m.started_at desc, m.id desc limit $5";
@@ -136,25 +142,25 @@ public final class PgMessageStore implements MessageStore, AutoCloseable {
     }
 
     @Override
-    public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+    public Future<Page<Found>> findByKey(String name, String value, Optional<String> after, int limit) {
         Page.requireLimit(limit);
         Future<RowSet<Row>> rows = after.isPresent()
                 ? pool.preparedQuery(FIND_BY_KEY_AFTER).execute(Tuple.of(name, value, seq(after.get()), limit + 1))
                 : pool.preparedQuery(FIND_BY_KEY).execute(Tuple.of(name, value, limit + 1));
         return rows.map(found -> {
-            List<String> ids = new ArrayList<>();
+            List<Found> carried = new ArrayList<>();
             long last = 0;
             for (Row r : found) {
-                if (ids.size() == limit) return new Page<>(ids, Optional.of(Page.cursor(Long.toString(last))));   // the limit + 1st row: another page exists
-                ids.add(r.getString(0));
+                if (carried.size() == limit) return new Page<>(carried, Optional.of(Page.cursor(Long.toString(last))));   // the limit + 1st row: another page exists
+                carried.add(new Found(r.getString(0), r.getString(2)));
                 last = r.getLong(1);
             }
-            return new Page<>(ids, Optional.<String>empty());
+            return new Page<>(carried, Optional.<String>empty());
         });
     }
 
     @Override
-    public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+    public Future<Page<Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
         Page.requireLimit(limit);
         String position = after.map(Page::position).orElse(null);
         int colon = position == null ? -1 : position.indexOf(':');
@@ -165,14 +171,14 @@ public final class PgMessageStore implements MessageStore, AutoCloseable {
         Future<RowSet<Row>> rows = position == null ? pool.preparedQuery(FIND_BY_STEP).execute(Tuple.of(flow, step, limit + 1))
                 : pool.preparedQuery(FIND_BY_STEP_AFTER).execute(Tuple.of(flow, step, started, position.substring(colon + 1), limit + 1));
         return rows.map(found -> {
-            List<String> ids = new ArrayList<>();
+            List<Found> passed = new ArrayList<>();
             String last = null;
             for (Row r : found) {
-                if (ids.size() == limit) return new Page<>(ids, Optional.of(Page.cursor(last)));   // the limit + 1st row: another page exists
-                ids.add(r.getString(0));
+                if (passed.size() == limit) return new Page<>(passed, Optional.of(Page.cursor(last)));   // the limit + 1st row: another page exists
+                passed.add(new Found(r.getString(0), r.getString(2)));
                 last = micros(r.getOffsetDateTime(1).toInstant()) + ":" + r.getString(0);
             }
-            return new Page<>(ids, Optional.<String>empty());
+            return new Page<>(passed, Optional.<String>empty());
         });
     }
 

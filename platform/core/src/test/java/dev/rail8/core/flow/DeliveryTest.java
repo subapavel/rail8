@@ -1531,10 +1531,10 @@ class DeliveryTest {
 
         @Override public Future<List<Snapshot>> timeline(String messageId) { return rows.timeline(messageId); }
 
-        @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) {
             return rows.findByKey(name, value, after, limit);
         }
-        @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
             return rows.findByStep(flow, step, after, limit);
         }
     }

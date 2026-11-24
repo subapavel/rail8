@@ -321,10 +321,10 @@ class AdminServerBrowserGuardTest {
             timelines.add(messageId);
             return inner.timeline(messageId);
         }
-        @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) {
             return inner.findByKey(name, value, after, limit);
         }
-        @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
             return inner.findByStep(flow, step, after, limit);
         }
     }

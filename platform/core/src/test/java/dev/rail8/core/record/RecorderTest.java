@@ -106,7 +106,7 @@ class RecorderTest {
         assertEquals(Optional.of(out.body().key()), b.bodyKey());
         assertEquals(2, b.bodyKey().orElseThrow().step());
         assertEquals(FakeRuntime.T0.plusMillis(5), b.startedAt());
-        assertEquals(List.of(in.id()), store.findByKey("k-a", "v", Optional.empty(), Page.MAX_LIMIT).await().items());
+        assertEquals(List.of(in.id()), store.findByKey("k-a", "v", Optional.empty(), Page.MAX_LIMIT).await().items().stream().map(MessageStore.Found::id).toList());
     }
 
     @Test
@@ -195,8 +195,8 @@ class RecorderTest {
         MessageStore never = new MessageStore() {
             @Override public Future<Void> record(Snapshot s) { return Promise.<Void>promise().future(); }
             @Override public Future<List<Snapshot>> timeline(String messageId) { return Future.succeededFuture(List.of()); }
-            @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) { return Future.succeededFuture(new Page<>(List.of(), Optional.empty())); }
-            @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) { return Future.succeededFuture(new Page<>(List.of(), Optional.empty())); }
+            @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) { return Future.succeededFuture(new Page<>(List.of(), Optional.empty())); }
+            @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) { return Future.succeededFuture(new Page<>(List.of(), Optional.empty())); }
         };
         Pipeline p = new FlowBuilder(rt.runtime(), factories, List.of(), Map.<String, EndpointConfig>of()).recording(never, meter)
                 .build(FlowDefinition.from(flow(Map.of("level", "all"), List.of(step("mark", "a")))), java.nio.file.Path.of(""));
@@ -368,8 +368,8 @@ class RecorderTest {
             return delegate.record(s);
         }
         @Override public Future<List<Snapshot>> timeline(String messageId) { return delegate.timeline(messageId); }
-        @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) { return delegate.findByKey(name, value, after, limit); }
-        @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) { return delegate.findByStep(flow, step, after, limit); }
+        @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) { return delegate.findByKey(name, value, after, limit); }
+        @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) { return delegate.findByStep(flow, step, after, limit); }
     }
 
     @Test

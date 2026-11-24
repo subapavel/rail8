@@ -666,11 +666,12 @@ qualified id `<package>/<flow>`:
 - a message's timeline;
 - the DLQ;
 - the held, stopped and lost work items;
-- the CPU by step.
+- the CPU by step;
+- the searches by key and by step, `GET /admin/messages?key=…` and `GET /admin/messages?flow=…&step=…`, whose items are
+  `{id, flow}`.
 
 A package's name matches `^[a-z][a-z0-9-]*$`, so the package is the part before the first slash, and `PackageRef.ofFlow`
-takes it. Two answers carry bare ids: `GET /admin/messages?key=…` and `GET /admin/messages?flow=…&step=…`. Step 3 makes
-each item of both `{id, flow}`.
+takes it.
 
 ## The transition
 

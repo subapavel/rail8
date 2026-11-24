@@ -478,6 +478,37 @@ class AdminServerTest {
     }
 
     @Test
+    void theAuditOfAMessageListsTheViewsOfItsBodyNewestFirst() throws Exception {
+        start();
+        recordInvoice();
+        assertEquals(200, admin("/admin/messages/m-1/steps/0/body").status());
+        assertEquals(200, admin("/admin/messages/m-1/steps/2/body").status());
+
+        Answer a = admin("/admin/messages/m-1/audit");
+        assertEquals(200, a.status(), a.body().toString());
+        assertTrue(a.contentType().startsWith("application/json"), a.contentType());
+        JsonObject page = a.json();
+        assertEquals(Set.of("items", "next"), page.fieldNames(), "{items, next|null}");
+        JsonArray items = page.getJsonArray("items");
+        assertEquals(List.of(2, 0), items.stream().map(i -> ((JsonObject) i).getJsonObject("detail").getInteger("step")).toList(), "newest first");
+        JsonObject newest = items.getJsonObject(0);
+        assertEquals(Set.of("id", "at", "action", "actor", "via", "credential", "detail"), newest.fieldNames());
+        assertEquals(List.of("message.body.view", "unknown", "shared-token"), List.of(newest.getString("action"), newest.getString("actor"),
+                newest.getString("via")), "the shared token of the bridge, no name declared");
+        assertNull(newest.getValue("credential"));
+
+        JsonObject first = admin("/admin/messages/m-1/audit?limit=1").json();
+        assertEquals(List.of(newest.getLong("id")), first.getJsonArray("items").stream().map(i -> ((JsonObject) i).getLong("id")).toList());
+        JsonObject second = admin("/admin/messages/m-1/audit?limit=1&after=" + enc(first.getString("next"))).json();
+        assertEquals(List.of(items.getJsonObject(1).getLong("id")), second.getJsonArray("items").stream().map(i -> ((JsonObject) i).getLong("id")).toList());
+        assertNull(second.getValue("next"));
+
+        assertEquals(new JsonArray(), admin("/admin/messages/m-2/audit").json().getJsonArray("items"), "another message: no rows");
+        for (String limit : List.of("0", "501", "abc")) assertJsonError(400, admin("/admin/messages/m-1/audit?limit=" + limit), "limit " + limit);
+        assertJsonError(400, admin("/admin/messages/m-1/audit?after=" + enc("!!!")), "a garbled cursor");
+    }
+
+    @Test
     void aBlobStreamFailingAtTheFirstReadIs500() throws Exception {
         start();
         recordInvoice();
@@ -653,7 +684,8 @@ class AdminServerTest {
         assertTrue(a.contentType().startsWith("application/json"), a.contentType());
         JsonObject page = a.json();
         assertEquals(Set.of("items", "next"), page.fieldNames(), "{items, next|null}");
-        assertEquals(new JsonArray().add("m-1").add("m-3"), page.getJsonArray("items"), "GATE check 6: found by business key, each once");
+        assertEquals(new JsonArray().add(found("m-1", "invoice-sync")).add(found("m-3", "invoice-sync")), page.getJsonArray("items"),
+                "GATE check 6: found by business key, each once, with its flow");
         assertNull(page.getValue("next"), "everything fit: next is null");
     }
 
@@ -671,8 +703,8 @@ class AdminServerTest {
         String next = first.getString("next");
         assertNotNull(next);
         JsonObject second = admin("/admin/messages?key=orderNo:o-1&after=" + enc(next)).json();
-        List<Object> walked = new ArrayList<>(first.getJsonArray("items").getList());
-        walked.addAll(second.getJsonArray("items").getList());
+        List<String> walked = new ArrayList<>(ids(first));
+        walked.addAll(ids(second));
         assertEquals(all, walked, "the second page continues where the first stopped");
         assertNull(second.getValue("next"));
         assertEquals(7, admin("/admin/messages?key=orderNo:o-1&limit=7").json().getJsonArray("items").size());
@@ -694,7 +726,17 @@ class AdminServerTest {
         recordKeyed("m-b", Keys.empty().with("ref:a:b", "c"));
         recordKeyed("m-c", Keys.empty().with("ref:a", "b:c"));
         JsonObject page = admin("/admin/messages?key=" + enc("ref:a:b:c")).json();
-        assertEquals(new JsonArray().add("m-a"), page.getJsonArray("items"), "name ref, value a:b:c — not ref:a:b = c nor ref:a = b:c");
+        assertEquals(List.of("m-a"), ids(page), "name ref, value a:b:c — not ref:a:b = c nor ref:a = b:c");
+    }
+
+    /** A message a search found, as the route answers it. */
+    static JsonObject found(String id, String flow) {
+        return new JsonObject().put("id", id).put("flow", flow);
+    }
+
+    /** The ids of the messages on a page of a search. */
+    static List<String> ids(JsonObject page) {
+        return page.getJsonArray("items").stream().map(item -> ((JsonObject) item).getString("id")).toList();
     }
 
     // --- GET /admin/messages?flow=<flow id>&step=<step name>
@@ -715,10 +757,11 @@ class AdminServerTest {
         assertTrue(a.contentType().startsWith("application/json"), a.contentType());
         JsonObject page = a.json();
         assertEquals(Set.of("items", "next"), page.fieldNames(), "{items, next|null}");
-        assertEquals(new JsonArray().add("m-2").add("m-1"), page.getJsonArray("items"), "m-2 and m-1 started the step at the same time: by id, descending; m-9 is another flow's");
+        assertEquals(new JsonArray().add(found("m-2", "invoice-sync")).add(found("m-1", "invoice-sync")), page.getJsonArray("items"),
+                "m-2 and m-1 started the step at the same time: by id, descending, each with its flow; m-9 is another flow's");
         assertNull(page.getValue("next"));
         assertTrue(calls.stream().anyMatch(c -> c.what().equals("findByStep")), "the route asked the store: " + calls);
-        assertEquals(new JsonArray().add("m-1"), admin("/admin/messages?flow=invoice-sync&step=validate").json().getJsonArray("items"));
+        assertEquals(List.of("m-1"), ids(admin("/admin/messages?flow=invoice-sync&step=validate").json()));
         assertEquals(new JsonArray(), admin("/admin/messages?flow=invoice-sync&step=nothing").json().getJsonArray("items"), "an unknown step: an empty page");
     }
 
@@ -733,12 +776,12 @@ class AdminServerTest {
                     Props.empty(), Keys.empty(), b.hash(), b.size(), Optional.empty(), Map.of())).await();
             newestFirst.addFirst(id);
         }
-        List<Object> walked = new ArrayList<>();
+        List<String> walked = new ArrayList<>();
         String after = null;
         int pages = 0;
         do {
             JsonObject page = admin("/admin/messages?flow=invoice-sync&step=ingress&limit=4" + (after == null ? "" : "&after=" + enc(after))).json();
-            walked.addAll(page.getJsonArray("items").getList());
+            walked.addAll(ids(page));
             after = page.getString("next");
             pages++;
         } while (after != null && pages < 10);
@@ -1322,11 +1365,11 @@ class AdminServerTest {
             return inner.timeline(messageId);
         }
 
-        @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) {
             saw("findByKey");
             return inner.findByKey(name, value, after, limit);
         }
-        @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
             saw("findByStep");
             return inner.findByStep(flow, step, after, limit);
         }

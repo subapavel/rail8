@@ -89,4 +89,13 @@ describe('httpAdminApi', () => {
     expect(calls[0]?.url).toBe('/admin/dlq/m%201/retry');
     expect(calls[0]?.init?.method).toBe('POST');
   });
+
+  it("reads a message's audit a page at a time", async () => {
+    const row = { id: 7, at: '2026-11-19T07:00:00Z', action: 'message.retry', actor: 'anna', via: 'session', credential: '0123456789abcdef', detail: {} };
+    const { send, calls } = fakeFetch(json(200, { items: [row], next: 'c1' }), json(200, { items: [], next: null }));
+    const api = httpAdminApi(send);
+    expect(await api.audit('a/b')).toEqual({ items: [row], next: 'c1' });
+    expect(await api.audit('a/b', 'c+1')).toEqual({ items: [], next: null });
+    expect(calls.map((c) => c.url)).toEqual(['/admin/messages/a%2Fb/audit', '/admin/messages/a%2Fb/audit?after=c%2B1']);
+  });
 });

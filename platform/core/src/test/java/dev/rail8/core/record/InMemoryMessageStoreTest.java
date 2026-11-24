@@ -133,19 +133,28 @@ class InMemoryMessageStoreTest {
     }
 
     @Test
-    void findByKeyReturnsEveryMessageOnceInRecordingOrder() {
+    void findByKeyReturnsEveryMessageOnceInRecordingOrderWithItsFlow() {
         store.record(snap("m-1", 1, "k", Keys.empty().with("invoiceId", "4711"))).await();
         store.record(snap("m-2", 1, "k", Keys.empty().with("invoiceId", "4712"))).await();
-        store.record(snap("m-3", 1, "k", Keys.empty().with("invoiceId", "4711").with("orderNo", "9"))).await();
+        store.record(inFlow(snap("m-3", 1, "k", Keys.empty().with("invoiceId", "4711").with("orderNo", "9")), "billing/invoices")).await();
         store.record(snap("m-1", 2, "k2", Keys.empty().with("invoiceId", "4711"))).await();
-        assertEquals(List.of("m-1", "m-3"), store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items());
-        assertEquals(List.of("m-3"), store.findByKey("orderNo", "9", Optional.empty(), Page.MAX_LIMIT).await().items());
+        assertEquals(List.of(new MessageStore.Found("m-1", "f"), new MessageStore.Found("m-3", "billing/invoices")),
+                store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT).await().items());
+        assertEquals(List.of(new MessageStore.Found("m-3", "billing/invoices")), store.findByKey("orderNo", "9", Optional.empty(), Page.MAX_LIMIT).await().items());
         assertEquals(List.of(), store.findByKey("invoiceId", "0", Optional.empty(), Page.MAX_LIMIT).await().items());
         assertThrows(NullPointerException.class, () -> store.record(null));
     }
 
+    /** {@code s} as a row of {@code flow}. */
+    static Snapshot inFlow(Snapshot s, String flow) {
+        return new Snapshot(s.messageId(), flow, s.step(), s.stepName(), s.outcome(), s.error(), s.startedAt(), s.wallNanos(), s.cpuNanos(), s.headers(),
+                s.props(), s.keys(), s.bodyHash(), s.bodySize(), s.bodyKey(), s.versions());
+    }
+
+    /** One page of the key search for {@code invoiceId=value}, with the ids of the messages it found. */
     static Page<String> page(InMemoryMessageStore store, String value, Optional<String> after, int limit) {
-        return store.findByKey("invoiceId", value, after, limit).await();
+        Page<MessageStore.Found> found = store.findByKey("invoiceId", value, after, limit).await();
+        return new Page<>(found.items().stream().map(MessageStore.Found::id).toList(), found.next());
     }
 
     @Test

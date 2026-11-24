@@ -33,16 +33,24 @@ public interface MessageStore {
     Future<List<Snapshot>> timeline(String messageId);
 
     /**
-     * One page of the ids of the messages that carried the key, each once, in the order their first row with the key was
+     * A message a search found.
+     *
+     * @param id the message's id
+     * @param flow the flow it ran in, as the history names it: the qualified {@code <package>/<flow>}
+     */
+    record Found(String id, String flow) {}
+
+    /**
+     * One page of the messages that carried the key, each once, in the order their first row with the key was
      * inserted. {@code after} is the previous page's {@link Page#next()} cursor, empty for the first page; a cursor stays
      * valid while the store grows, and rows committed behind a cursor appear in a new search. A {@code limit} outside
      * 1..{@link Page#MAX_LIMIT} or a cursor this store did not hand out is an {@link IllegalArgumentException}, thrown or as
      * the failed future's cause.
      */
-    Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit);
+    Future<Page<Found>> findByKey(String name, String value, Optional<String> after, int limit);
 
     /**
-     * One page of the ids of the messages of {@code flow} (a flow id, as the history names it) with a recorded row of the step
+     * One page of the messages of {@code flow} (a flow id, as the history names it) with a recorded row of the step
      * named {@code step} ({@code enrich/map} for a step of a local process, {@code ingress} for the arrival), each once, newest
      * first: by the start of the message's row of that step in its latest attempt that has one, then by id, descending. A
      * step that was not recorded (by the flow's or the step's recording level) leaves nothing to find, and an unknown flow or
@@ -52,5 +60,5 @@ public interface MessageStore {
      * search shows both. A {@code limit} outside 1..{@link Page#MAX_LIMIT} or a cursor this store did not hand out for this search is an
      * {@link IllegalArgumentException}, thrown or as the failed future's cause.
      */
-    Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit);
+    Future<Page<Found>> findByStep(String flow, String step, Optional<String> after, int limit);
 }

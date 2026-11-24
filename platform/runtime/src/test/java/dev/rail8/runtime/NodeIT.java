@@ -790,7 +790,7 @@ class NodeIT {
                 try {
                     HttpResponse<String> search = get(admin, "/admin/messages?key=invoiceId:4711");
                     found.clear();
-                    new JsonObject(search.body()).getJsonArray("items").forEach(id -> found.add((String) id));
+                    new JsonObject(search.body()).getJsonArray("items").forEach(hit -> found.add(((JsonObject) hit).getString("id")));
                     if (found.isEmpty()) return false;
                     JsonObject timeline = new JsonObject(get(admin, "/admin/messages/" + found.get(0)).body());
                     return timeline.getJsonArray("steps").size() == 6;
@@ -1586,7 +1586,7 @@ class NodeIT {
         until(() -> {
             try {
                 found.clear();
-                new JsonObject(get(admin, "/admin/messages?key=invoiceId:4711").body()).getJsonArray("items").forEach(id -> found.add((String) id));
+                new JsonObject(get(admin, "/admin/messages?key=invoiceId:4711").body()).getJsonArray("items").forEach(item -> found.add(((JsonObject) item).getString("id")));
                 return found.size() == 1 && stepsOf(admin, found.get(0)).size() == 6;
             } catch (IOException | InterruptedException e) {
                 throw new AssertionError("the admin API did not answer", e);
@@ -1622,7 +1622,7 @@ class NodeIT {
             until(() -> {
                 found.clear();
                 HttpResponse<String> byKey = authed(client, "GET", admin, "/admin/messages?key=invoiceId:4711", null, token);
-                new JsonObject(byKey.body()).getJsonArray("items").forEach(id -> found.add((String) id));
+                new JsonObject(byKey.body()).getJsonArray("items").forEach(item -> found.add(((JsonObject) item).getString("id")));
                 return found.size() == 1 && timelineSteps(client, admin, found.get(0), token).size() == 6;
             }, "fixture: the invoice is found by its key and its six rows are recorded");
             String id = found.get(0);
@@ -1646,7 +1646,8 @@ class NodeIT {
             assertEquals(1, partnerSaw.size(), "nothing ran: the partner saw the invoice once: " + partnerSaw);
             assertEquals(steps, timelineSteps(client, admin, id, token), "the invoice's timeline is as it was");
             HttpResponse<String> byKey = authed(client, "GET", admin, "/admin/messages?key=invoiceId:4711", null, token);
-            assertEquals(new JsonArray().add(id), new JsonObject(byKey.body()).getJsonArray("items"), "its key still finds one message: no new one");
+            assertEquals(1, new JsonObject(byKey.body()).getJsonArray("items").size(), "its key still finds one message: no new one");
+            assertEquals(id, new JsonObject(byKey.body()).getJsonArray("items").getJsonObject(0).getString("id"));
         } finally {
             partner.close().await();
         }

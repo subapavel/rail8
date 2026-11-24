@@ -111,12 +111,12 @@ final class HoldingMessageStore implements MessageStore {
     }
 
     @Override
-    public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+    public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) {
         Throwable failure = readFailure;
         return failure != null ? Future.failedFuture(failure) : delegate.findByKey(name, value, after, limit);
     }
     @Override
-    public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+    public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
         Throwable failure = readFailure;
         return failure != null ? Future.failedFuture(failure) : delegate.findByStep(flow, step, after, limit);
     }

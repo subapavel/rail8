@@ -1,6 +1,7 @@
 package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
+import dev.rail8.core.record.Page;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
@@ -602,6 +603,26 @@ abstract class Accounts implements Access {
             });
         } catch (RuntimeException failed) {
             throw AccessRefused.unaudited("the view of the body was not written to the audit, so nothing is sent: " + failed.getMessage());
+        }
+    }
+
+    @Override
+    public Page<Audited> messageAudit(String message, Optional<String> after, int limit) {
+        Page.requireLimit(limit);
+        OptionalLong before = after.isEmpty() ? OptionalLong.empty() : OptionalLong.of(auditId(after.get()));
+        List<Tx.AuditedRow> rows = query(tx -> tx.audit("message/" + message, before, limit + 1));
+        List<Audited> page = rows.stream().limit(limit).map(a -> new Audited(a.id(), a.row().at(), a.row().action(), a.row().actor(),
+                a.row().via(), a.row().credential(), a.row().detail())).toList();
+        // the limit + 1st row: another page exists, from the last row of this one
+        return new Page<>(page, rows.size() > limit ? Optional.of(Page.cursor(Long.toString(page.getLast().id()))) : Optional.empty());
+    }
+
+    /** The audit row's id a cursor of {@link #messageAudit} carries; any other text is an IllegalArgumentException. */
+    private static long auditId(String cursor) {
+        try {
+            return Long.parseLong(Page.position(cursor));
+        } catch (NumberFormatException garbled) {
+            throw new IllegalArgumentException("not a cursor of the audit of a message", garbled);
         }
     }
 

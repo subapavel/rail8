@@ -1,6 +1,7 @@
 package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
+import dev.rail8.core.record.Page;
 import dev.rail8.testkit.FakeClock;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -1347,6 +1348,41 @@ abstract class AccessContract {
                 view.getString("subject"), view.getString("via"), view.getString("credential")));
         assertEquals(new JsonObject().put("step", 2).put("remote", REMOTE), view.getJsonObject("detail"));
         assertTrue(view.getValue("user") != null, "the session's user");
+    }
+
+    @Test
+    void theAuditOfAMessageListsItsRowsNewestFirstAPageAtATime() {
+        String session = session("anna", Role.MESSAGE_BODIES);
+        Actor anna = b.authenticate(bearer(session), Optional.empty()).acting(Action.MESSAGE_BODY, PackageRef.ANY, REMOTE);
+        a.bodyViewed(anna, "m-1", 1);
+        clockA.advance(Duration.ofSeconds(1));
+        a.bodyViewed(anna, "m-1", 2);
+        a.bodyViewed(anna, "m-1", 3);   // the same instant as step 2's: the later row first
+        a.bodyViewed(anna, "m-2", 1);
+        b.bodyViewed(anna, "m-1", 9);   // node B's clock is behind: the oldest row
+
+        Page<Access.Audited> all = a.messageAudit("m-1", Optional.empty(), Page.MAX_LIMIT);
+        assertEquals(List.of(3, 2, 1, 9), all.items().stream().map(r -> r.detail().getInteger("step")).toList(), "by instant, then id, newest first");
+        assertEquals(Optional.empty(), all.next());
+        Access.Audited newest = all.items().getFirst();
+        assertEquals(List.of("message.body.view", "anna", "session", Optional.of(session.substring(7, 23)), T0.plusSeconds(1)),
+                List.of(newest.action(), newest.actor(), newest.via(), newest.credential(), newest.at()));
+        assertEquals(new JsonObject().put("step", 3).put("remote", REMOTE), newest.detail());
+        assertEquals(4, all.items().stream().map(Access.Audited::id).distinct().count(), "each row its own id");
+
+        Page<Access.Audited> first = a.messageAudit("m-1", Optional.empty(), 3);
+        assertEquals(List.of(3, 2, 1), first.items().stream().map(r -> r.detail().getInteger("step")).toList());
+        Page<Access.Audited> second = b.messageAudit("m-1", first.next(), 3);
+        assertEquals(List.of(9), second.items().stream().map(r -> r.detail().getInteger("step")).toList(), "the next page goes on from the last row");
+        assertEquals(Optional.empty(), second.next());
+
+        assertEquals(1, a.messageAudit("m-2", Optional.empty(), 10).items().size(), "only the message's own rows");
+        assertEquals(List.of(), a.messageAudit("m-3", Optional.empty(), 10).items(), "a message with no rows: an empty page");
+        for (int limit : List.of(0, Page.MAX_LIMIT + 1)) {
+            assertThrows(IllegalArgumentException.class, () -> a.messageAudit("m-1", Optional.empty(), limit), "limit " + limit);
+        }
+        assertThrows(IllegalArgumentException.class, () -> a.messageAudit("m-1", Optional.of(Page.cursor("x")), 10), "a cursor not handed out");
+        assertThrows(IllegalArgumentException.class, () -> a.messageAudit("m-1", Optional.of("!!!"), 10), "a cursor that is not base64url");
     }
 
     @Test

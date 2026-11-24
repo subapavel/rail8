@@ -54,8 +54,18 @@ public abstract class FindByStepContract {
         for (Snapshot s : rows) store.record(s).await();
     }
 
+    /** One page of the search by step, with the ids of the messages it found. */
     Page<String> find(String flow, String step, Optional<String> after, int limit) {
-        return store.findByStep(flow, step, after, limit).await();
+        Page<MessageStore.Found> found = store.findByStep(flow, step, after, limit).await();
+        return new Page<>(found.items().stream().map(MessageStore.Found::id).toList(), found.next());
+    }
+
+    @Test
+    void eachMessageFoundNamesItsFlow() {
+        record(row("m-1", "sales/orders", 0, 1, "ingress", 0), row("m-1", "sales/orders", 1, 1, "enrich/map", 1),
+                row("m-2", "billing/orders", 1, 1, "enrich/map", 2));
+        assertEquals(List.of(new MessageStore.Found("m-1", "sales/orders")),
+                store.findByStep("sales/orders", "enrich/map", Optional.empty(), 10).await().items());
     }
 
     /** Every id a walk of pages of {@code limit} lists, in order, following each page's cursor to the last page. */

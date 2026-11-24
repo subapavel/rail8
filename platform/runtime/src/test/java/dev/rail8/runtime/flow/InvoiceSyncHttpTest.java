@@ -14,6 +14,7 @@ import dev.rail8.runtime.time.VertxTimer;
 import dev.rail8.core.flow.FlowBuilder;
 import dev.rail8.core.flow.FlowDefinition;
 import dev.rail8.core.record.InMemoryMessageStore;
+import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Meter;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
@@ -238,7 +239,8 @@ class InvoiceSyncHttpTest {
         assertEquals(1, partnerSaw.size());
         assertTrue(partnerSaw.get(0).startsWith("/echo application/xml"), partnerSaw.get(0));
         assertTrue(partnerSaw.get(0).contains("<PartnerInvoice number=\"4711\" currency=\"CZK\">") && partnerSaw.get(0).contains("<Total>550.5</Total>"), "the mapped invoice reached the partner: " + partnerSaw.get(0));
-        List<String> ids = within(store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT), "the key search").items();
+        List<String> ids = within(store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT), "the key search").items().stream()
+                .map(MessageStore.Found::id).toList();
         assertEquals(1, ids.size(), "the message is on record by its business key");
         List<Snapshot> t = within(store.timeline(ids.get(0)), "the timeline read");
         assertEquals(List.of("ingress", "validate", "extractKey", "route", "toPartner", "partner"), t.stream().map(Snapshot::stepName).toList());

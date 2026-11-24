@@ -37,8 +37,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class AdminServerAccessTest extends AdminAccessFixture {
 
-    /** The routes of the table that later steps mount: the audit and a message's audit. */
-    static final Set<String> LATER = Set.of("GET /admin/messages/{id}/audit", "GET /admin/audit");
+    /** The routes of the table that a later step mounts: the Audit screen's. */
+    static final Set<String> LATER = Set.of("GET /admin/audit");
 
     /** What a first password may do, by the decision point's rule: read itself, change the password and log out. */
     static final Set<String> FIRST_PASSWORD = Set.of("self.read", "self.password", "self.logout");

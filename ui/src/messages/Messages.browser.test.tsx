@@ -4,7 +4,7 @@ import { page } from 'vitest/browser';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
 import { Shell } from '../Shell';
-import { AdminError, type AdminApi, type Listed, type ListQuery, type StepRecord, type Timeline } from './admin';
+import { AdminError, type AdminApi, type Audited, type Listed, type ListQuery, type StepRecord, type Timeline } from './admin';
 import { messagesScreen } from './screen';
 
 function step(attempt: number, n: number, name: string, extra: Partial<StepRecord> = {}): StepRecord {
@@ -46,6 +46,13 @@ const waited: Timeline = {
   ],
 };
 
+/** m-1's audit, newest first: a view of a payload by a session, a retry by a token, and on the next page a row from before users. */
+const audited: Audited[] = [
+  { id: 9, at: '2026-11-17T10:05:00Z', action: 'message.body.view', actor: 'anna', via: 'session', credential: '0123456789abcdef', detail: { step: 1, remote: '10.0.0.7' } },
+  { id: 8, at: '2026-11-17T10:02:00Z', action: 'message.retry', actor: 'ci-deploy', via: 'token', credential: 'fedcba9876543210', detail: {} },
+  { id: 3, at: '2026-11-16T09:00:00Z', action: 'message.cancel', actor: 'ops', via: 'declared', credential: null, detail: { reason: 'stale' } },
+];
+
 function row(id: string, extra: Partial<Listed> = {}): Listed {
   return { id, flow: 'demo/orders', status: 'completed', startedAt: '2026-11-19T07:30:00Z', durationNanos: 2_500_000, keys: {}, ...extra };
 }
@@ -67,6 +74,9 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     timeline: vi.fn(async (id: string) => byId.get(id) ?? null),
     payload: vi.fn(async () => ({ contentType: 'application/json', text: '{"order":7}', complete: true })),
     restart: vi.fn(async (id: string) => ({ id, attempt: 3 })),
+    audit: vi.fn(async (id: string, after?: string) =>
+      id !== 'm-1' ? { items: [], next: null } : after === undefined ? { items: audited.slice(0, 2), next: 'older' } : { items: audited.slice(2), next: null },
+    ),
     ...overrides,
   };
 }
@@ -320,6 +330,41 @@ describe('Messages', () => {
     await page.getByRole('button', { name: 'm-2' }).click();
     await expect.element(page.getByRole('heading', { name: 'Attempt 1' })).toBeVisible();
     await expect.element(page.getByRole('button', { name: 'Restart' })).not.toBeInTheDocument();
+  });
+
+  test("lists the message's audit newest first, with who and how, and loads the older rows", async () => {
+    const api = fakeApi();
+    render(api);
+    await page.getByRole('button', { name: 'm-1' }).click();
+
+    const audit = page.getByRole('table', { name: 'Audit of the message' });
+    const rows = audit.getByRole('row');
+    await expect.element(rows.nth(1)).toHaveTextContent('2026-11-17T10:05:00ZViewed the payload after step 1annaSession 0123456789abcdef');
+    await expect.element(rows.nth(2)).toHaveTextContent('2026-11-17T10:02:00ZRetriedci-deployToken fedcba9876543210');
+    expect(api.audit).toHaveBeenCalledWith('m-1');
+
+    await page.getByRole('button', { name: 'Show older' }).click();
+    await expect.element(rows.nth(3)).toHaveTextContent('2026-11-16T09:00:00ZCancelledopsName declared, before users');
+    expect(api.audit).toHaveBeenLastCalledWith('m-1', 'older');
+    await expect.element(page.getByRole('button', { name: 'Show older' })).not.toBeInTheDocument();
+  });
+
+  test('says when no one acted on a message, and shows why its audit could not be read', async () => {
+    render(fakeApi());
+    await page.getByRole('button', { name: 'Load more' }).click();
+    await page.getByRole('button', { name: 'm-2' }).click();
+    await expect.element(page.getByText('No one has retried, cancelled or viewed a payload of this message.')).toBeVisible();
+
+    const api = fakeApi({ audit: vi.fn(async () => Promise.reject(new AdminError(503, 'the node is stopping'))) });
+    root?.unmount();
+    host?.remove();
+    render(api);
+    await page.getByRole('button', { name: 'm-1' }).click();
+    await expect.element(page.getByText('The audit could not be read', { exact: false })).toBeVisible();
+    await expect.element(page.getByText('the node is stopping')).toBeVisible();
+    api.audit = vi.fn(async () => ({ items: audited.slice(1, 2), next: null }));
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect.element(page.getByRole('table', { name: 'Audit of the message' }).getByText('Retried')).toBeVisible();
   });
 
   test('shows the payload after a step in a dialog', async () => {
