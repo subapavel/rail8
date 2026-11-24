@@ -68,5 +68,21 @@ cloud environment over this repository, read-only.
    handled as in step 4.
 
 Give the brief, the drafts, the recommendation and the objections to the `owner-proxy` agent; it
-chooses. Record the chosen contract and the reason
-in the pull request that introduces it, and write the contract before its implementation.
+chooses.
+
+## 4. Hand the design to the build session
+
+The session that designs does not build. Once the owner-proxy has chosen:
+
+1. Post one comment on the issue that starts with the line `Agreed design`. It stands on its own,
+   because the build session reads nothing else of your work: the chosen contract in full (types,
+   methods, parameters, invariants, ordering, error modes), the reason it was chosen, the
+   alternatives turned down, each objection with what was done about it, and what the
+   implementation must not do.
+2. Add the label `design-agreed`, remove `in-progress`, tell `@parent` in one message, and stop.
+
+A session that starts on an issue labelled `design-agreed` skips sections 1 to 3. It reads the
+`Agreed design` comment, writes the contract before its implementation, and records the contract
+and the reason in the pull request that introduces it. When the design turns out wrong while
+building, it says why in the issue, removes `design-agreed` and `in-progress`, and stops; the next
+session designs again.
