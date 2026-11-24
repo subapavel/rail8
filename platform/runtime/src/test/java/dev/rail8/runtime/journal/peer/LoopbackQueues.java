@@ -45,6 +45,25 @@ public final class LoopbackQueues {
         return Optional.empty();
     }
 
+    /**
+     * Whether the established socket {@code localPort} -> {@code remotePort} has bytes in flight: sent and not yet acknowledged
+     * by the other end, its retransmit timer armed ({@code tr} 1 in {@code /proc/net/tcp}). With none, its {@code tx} holds only
+     * bytes not sent yet, none of which is in the other end's receive queue too. False when no such socket is established.
+     */
+    public static boolean inFlight(int localPort, int remotePort) throws IOException {
+        for (String file : List.of("/proc/net/tcp", "/proc/net/tcp6")) {
+            Path p = Path.of(file);
+            if (!Files.exists(p)) continue;
+            for (String line : Files.readAllLines(p)) {
+                String[] f = line.trim().split("\\s+");
+                // ... st tx_queue:rx_queue tr:tm->when ...; tr 1 retransmit (or loss probe), 4 zero-window probe, 2 keepalive, 0 none
+                if (f.length < 6 || !f[1].contains(":") || !f[3].equals("01")) continue;
+                if (port(f[1]) == localPort && port(f[2]) == remotePort) return f[5].startsWith("01:");
+            }
+        }
+        return false;
+    }
+
     private static int port(String hexAddress) {
         return Integer.parseInt(hexAddress.substring(hexAddress.lastIndexOf(':') + 1), 16);
     }
