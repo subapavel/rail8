@@ -16,6 +16,9 @@ export const ROLE_NAMES: Record<Role, string> = {
   'secret-administrator': 'Secret administrator',
 };
 
+/** The users on one page of the list. */
+const PAGE_SIZE = 25;
+
 const VIA: Record<string, string> = {
   session: 'in a session',
   'emergency-key': 'with the emergency key',
@@ -175,7 +178,7 @@ export function UserList({ api }: { api: UsersApi }) {
         dataSource={shown.users}
         search={false}
         options={false}
-        pagination={false}
+        pagination={{ pageSize: PAGE_SIZE, hideOnSinglePage: true, showSizeChanger: false }}
         headerTitle={<h2>Users</h2>}
         toolBarRender={() => [
           <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>

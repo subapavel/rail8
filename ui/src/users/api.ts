@@ -73,12 +73,11 @@ export interface UsersApi {
   endSessions(name: string): Promise<void>;
 }
 
-/** A refusal by the node: its HTTP status, the text it gave, and its code when it has one. */
+/** A refusal by the node: its HTTP status and the text it gave. */
 export class UsersError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly code?: string,
   ) {
     super(message);
     this.name = 'UsersError';
@@ -87,8 +86,8 @@ export class UsersError extends Error {
 
 async function refusal(res: Response): Promise<UsersError> {
   try {
-    const body = (await res.json()) as { error?: unknown; code?: unknown };
-    if (typeof body.error === 'string') return new UsersError(res.status, body.error, typeof body.code === 'string' ? body.code : undefined);
+    const body = (await res.json()) as { error?: unknown };
+    if (typeof body.error === 'string') return new UsersError(res.status, body.error);
   } catch {
     // no JSON
   }

@@ -6,10 +6,11 @@ test.use({ viewport: { width: 1440, height: 900 }, baseURL: `http://localhost:${
 
 const admin = process.env.RAIL8_ADMIN_URL ?? 'http://127.0.0.1:8081';
 const token = process.env.RAIL8_ADMIN_TOKEN ?? '';
-// users are never deleted, so each run has names of its own
-const run = Date.now().toString(36);
-const ADMIN = `e2e-admin-${run}`;
-const USER = `e2e-user-${run}`;
+// Users are never deleted, so each run has names of its own. They sort before those of every earlier run, so that they
+// stay on the list's first page however many runs came before.
+const run = (Number.MAX_SAFE_INTEGER - Date.now()).toString(36);
+const ADMIN = `e2e-${run}-admin`;
+const USER = `e2e-${run}-user`;
 const ADMIN_PASSWORD = 'the administrator chose this one';
 const USER_PASSWORD = 'the operator chose this one';
 
