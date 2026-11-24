@@ -118,9 +118,9 @@ class BuiltinsMathV1Test {
   void aFilterCallsOnlyItsBuiltinAndThePrintersExactFunctions() {
     for (BuiltinsMathV1.Generated g : generated) {
       Set<String> names = names(g.filter());
-      assertThat(names).as("seed %d: %s", g.seed(), g.filter()).contains(g.builtin().name());
+      assertThat(names).as("seed %d: %s", g.seed(), g.filter()).contains(g.builtin().name()).doesNotContainAnyElementsOf(LATER);
       names.remove(g.builtin().name());
-      assertThat(names).as("seed %d: %s", g.seed(), g.filter()).isSubsetOf(WORDS).doesNotContainAnyElementsOf(LATER);
+      assertThat(names).as("seed %d: %s", g.seed(), g.filter()).isSubsetOf(WORDS);
     }
   }
 
