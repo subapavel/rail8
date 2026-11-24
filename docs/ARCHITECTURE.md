@@ -1177,6 +1177,31 @@ than `dev` or `ci` is a deployed environment with stricter rules (a deploy only 
 reachable from `RAIL8_GIT_REF` and never one with no origin, no mock endpoints, and by default a
 synchronous Postgres standby).
 
+### The node's secrets
+
+A node takes the secrets of its own stores and access from its environment. Each can instead be
+given as the absolute path of a file that holds it, the variable's name with `_FILE` added, as an
+orchestrator mounts secrets:
+
+| Variable | File form | Holds |
+| --- | --- | --- |
+| `RAIL8_PG_PASSWORD` | `RAIL8_PG_PASSWORD_FILE` | the Postgres password |
+| `RAIL8_VALKEY_URI` | `RAIL8_VALKEY_URI_FILE` | the Valkey URI, with its user and password |
+| `RAIL8_ADMIN_TOKEN` | `RAIL8_ADMIN_TOKEN_FILE` | the admin API's token |
+| `RAIL8_GIT_TOKEN` | `RAIL8_GIT_TOKEN_FILE` | the token for the package repositories |
+| `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>` |
+| `RAIL8_JOURNAL_KEY` | `RAIL8_JOURNAL_KEY_FILE` | the journal's master key (preferred as a file) |
+
+- A value given both ways, or a file that is missing, unreadable, empty, larger than 64 KiB or not
+  UTF-8 text, refuses the start. The refusal names the variables and the path, never the value.
+- One trailing line end is dropped; nothing else of the content is changed. A variable set to the
+  empty string counts as not set.
+- The files are read once at start: a new value takes a restart.
+- A secret whose variable itself ends in `_FILE`, such as `secret://db-file`, is given as a file only:
+  `RAIL8_SECRET_DB_FILE_FILE`. `RAIL8_SECRET_FILE` alone is the variable of `secret://file`.
+- The node reads no S3 or ClickHouse credentials today; a secret variable added later has the file
+  form too.
+
 ### Running it
 
 `deploy/compose` starts a node with Postgres, Valkey, an SFTP server and a partner

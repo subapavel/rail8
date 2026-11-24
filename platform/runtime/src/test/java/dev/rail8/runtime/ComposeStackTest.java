@@ -445,7 +445,7 @@ class ComposeStackTest {
     }
 
     @Test
-    void theNodeMountsOnlyTheFingerprintAndReadsItIntoItsSecretVariable() throws IOException {
+    void theNodeMountsOnlyTheFingerprintAndReadsItAsItsSecretFile() throws IOException {
         JsonNode node = service("rail8");
         assertFalse(environment(node).containsKey("RAIL8_SECRET_SFTP_HOST_KEY"),
                 "the fingerprint is unknown until the key exists: it is not a fixed value of the compose file");
@@ -460,11 +460,12 @@ class ComposeStackTest {
         assertTrue(new ObjectMapper(new YAMLFactory()).readTree(FILE.toFile()).path("volumes").has("rail8-data"), "rail8-data is a declared volume");
         String wrapper = script(node) + " " + environment(node);
         assertFalse(wrapper.contains("ssh_host"), "nothing the node runs names a host key file, public or private, of any type: " + wrapper);
-        String assigned = script(node);
-        assertTrue(assigned.matches("(?s).*RAIL8_SECRET_SFTP_HOST_KEY=.*"), "the entrypoint wrapper sets the variable: " + assigned);
+        assertTrue(node.path("entrypoint").isMissingNode(), "the node runs the image's own command, no wrapper: " + script(node));
+        String assigned = environment(node).get("RAIL8_SECRET_SFTP_HOST_KEY_FILE");
+        assertTrue(assigned != null, "the node is given the fingerprint as a secret file: " + environment(node));
         String nodeMount = mounted.get(0).target();
         java.util.regex.Matcher read = java.util.regex.Pattern.compile(java.util.regex.Pattern.quote(nodeMount) + "/([^\\s\"';&|)]+)").matcher(assigned);
-        assertTrue(read.find(), "the wrapper reads a file below the fingerprint mount " + nodeMount + ": " + assigned);
+        assertTrue(read.matches(), "the secret file lies below the fingerprint mount " + nodeMount + ": " + assigned);
         String keysMount = mountOf(service("sftp-keys"), "sftp-fingerprint").orElseThrow().target();
         assertTrue(script(service("sftp-keys")).contains(keysMount + "/" + read.group(1)),
                 "the file the node reads (" + read.group(1) + ") is the file the one-shot writes: " + script(service("sftp-keys")));

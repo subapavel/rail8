@@ -26,6 +26,8 @@ public final class Secrets {
     static final String PLACEHOLDER = "https://secret.invalid/";
 
     private static final String VARIABLE = "RAIL8_SECRET_";
+    /** What ends the file form of a variable. */
+    private static final String FILE = "_FILE";
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9._-]*");
     private static final Secrets PLACEHOLDERS = new Secrets(null);
 
@@ -73,6 +75,18 @@ public final class Secrets {
             throw new IllegalArgumentException("'" + reference + "' is not a secret reference: secret://<name>, the name [a-z0-9][a-z0-9._-]*");
         }
         return VARIABLE + name.toUpperCase(Locale.ROOT).replace('.', '_').replace('-', '_');
+    }
+
+    /**
+     * Where a node is given the value of {@code reference}: its variable; for a variable that ends in {@code _FILE} below its
+     * prefix, which a node reads as the file form of another secret, its own file form, the variable with {@code _FILE} once more.
+     *
+     * @throws IllegalArgumentException {@code reference} is not {@code secret://} and a name; the message names the reference
+     */
+    static String where(String reference) {
+        String variable = variable(reference);
+        return variable.endsWith(FILE) && variable.length() > VARIABLE.length() + FILE.length()
+                ? variable + FILE + ", the path of a file that holds it" : variable;
     }
 
     /** Equal when both are the placeholder, or both hold the same variables. */

@@ -96,6 +96,22 @@ class SecretsTest {
         assertEquals(Optional.of("other-value"), Secrets.fromEnv(env).resolve("secret://other"), "fixture: the env is read");
     }
 
+    /**
+     * Where a missing secret is set: its variable; a variable that ends in {@code _FILE} below the prefix is read by a node as
+     * the file form of another secret, so its value is given as a file, the variable with {@code _FILE} once more.
+     */
+    @ParameterizedTest
+    @CsvSource({
+            "secret://partner-token, RAIL8_SECRET_PARTNER_TOKEN",
+            "secret://file, RAIL8_SECRET_FILE",
+            "secret://profile, RAIL8_SECRET_PROFILE",
+            "secret://db-file, 'RAIL8_SECRET_DB_FILE_FILE, the path of a file that holds it'",
+            "secret://x.file, 'RAIL8_SECRET_X_FILE_FILE, the path of a file that holds it'",
+    })
+    void whereAMissingSecretIsSet(String reference, String where) {
+        assertEquals(where, Secrets.where(reference));
+    }
+
     /** What the node holds for its secrets (D-081: the env map NodeConfig is built from) never shows a value in its text. */
     @Test
     void aValueNeverShowsInTheNodeConfigOrTheResolver() {
