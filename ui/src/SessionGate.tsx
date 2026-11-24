@@ -43,6 +43,12 @@ export function useAccess(): (action?: string) => true | string {
   };
 }
 
+/** Who uses the page, or null without a gate or before the session is known. */
+export function useMe(): Me | null {
+  const state = useSessionState();
+  return state?.kind === 'in' || state?.kind === 'asking' ? state.me : null;
+}
+
 /** True when the caller may do `action`, else the words for why not. */
 export function useMay(action: string): true | string {
   return useAccess()(action);

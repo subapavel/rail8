@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { deployPort, deployWorkspace, stackWorkspace } from './e2e/stack-workspace';
+import { deployPort, deployWorkspace, sessionPort, stackWorkspace } from './e2e/stack-workspace';
 import { uiPort } from './server/uiPort';
 
 // The @stack scenarios: the UI's development server, whose /api requests it answers itself over a working folder and the
@@ -7,6 +7,7 @@ import { uiPort } from './server/uiPort';
 // on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and the token exported in RAIL8_ADMIN_TOKEN. The working folder is a
 // temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares. The deploy scenario has a development server
 // of its own, on the next port, over the quickstart's working folder ~/rail8-workspace, the one the node deploys from.
+// The users scenario has one on the port after that, started without a token, so that a person logs in.
 const port = uiPort(process.env.RAIL8_UI_PORT);
 
 export default defineConfig({
@@ -29,6 +30,13 @@ export default defineConfig({
       command: `mkdir -p ${deployWorkspace} && exec npm run dev`,
       url: `http://localhost:${deployPort}/`,
       env: { RAIL8_WORKSPACE: deployWorkspace, RAIL8_UI_PORT: String(deployPort) },
+      reuseExistingServer: false,
+    },
+    {
+      command: 'exec npm run dev',
+      url: `http://localhost:${sessionPort}/`,
+      // blank is unset: without a token the server runs in session mode
+      env: { RAIL8_ADMIN_TOKEN: '', RAIL8_TOKEN: '', RAIL8_UI_PORT: String(sessionPort) },
       reuseExistingServer: false,
     },
   ],

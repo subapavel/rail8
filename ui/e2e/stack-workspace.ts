@@ -16,3 +16,9 @@ export const deployWorkspace = join(homedir(), 'rail8-workspace');
 
 /** The port of the deploy scenario's development server: the one after the port of the other scenarios' server. */
 export const deployPort = uiPort(process.env.RAIL8_UI_PORT) + 1;
+
+/**
+ * The port of the users scenario's development server, two after the port of the other scenarios' server. It starts with
+ * no token, so it runs in session mode: a person logs in, and every call carries their own session.
+ */
+export const sessionPort = uiPort(process.env.RAIL8_UI_PORT) + 2;

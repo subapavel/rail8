@@ -38,10 +38,17 @@ const expand = (table, text) => (page) =>
 const press = (name) => (page) => page.getByRole('button', { name, exact: true }).click();
 /** Collapses the side menu to its icons. */
 const collapse = (page) => page.getByRole('button', { name: 'Collapse menu' }).click();
-/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first, in, none or failed). */
+/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first, in, none, admin or failed). */
 const visit = (scene) => (page) => page.goto(`${page.url().split('?')[0]}?session=${scene}`);
 /** Types `text` into the field labelled `label`. */
 const fill = (label, text) => (page) => page.getByLabel(label, { exact: true }).fill(text);
+/** Presses `action` in the row of the user `name` on the Users screen. */
+const row = (name, action) => (page) =>
+  shown(page).getByRole('table', { name: 'Users' }).getByRole('row').filter({ hasText: name }).first().getByRole('button', { name: action, exact: true }).click();
+/** Presses `action` in the popover that asks about `name`. */
+const confirmIn = (name, action) => (page) => page.getByRole('tooltip').filter({ hasText: `${name}?` }).getByRole('button', { name: action, exact: true }).click();
+/** Ticks the checkbox labelled `label` in the open dialog. */
+const check = (label) => (page) => page.getByRole('dialog').getByLabel(label, { exact: true }).check();
 /** Ends the session of the page, so the login shows over its tabs. */
 const end = (page) => page.evaluate(() => window.endSession());
 /** Opens the message `id` from its row on the Messages screen. */
@@ -71,6 +78,10 @@ const SCENES = {
   'session-no-body': [visit('in'), menu('Messages'), message('m-7f3a')],
   'session-no-deployments': [visit('none'), menu('Packages')],
   'session-no-deployment': [visit('none'), menu('Packages'), pkg('orders')],
+  users: [visit('admin'), menu('Users'), expand('Users', 'anna')],
+  'users-roles': [visit('admin'), menu('Users'), row('alice', 'Roles…'), check('Message bodies')],
+  'users-new': [visit('admin'), menu('Users'), press('New user'), fill('Name', 'dana'), check('Operator'), press('Create')],
+  'users-refused': [visit('admin'), menu('Users'), row('alice', 'Block'), confirmIn('alice', 'Block')],
 };
 
 /** The page of the Ant Design Pro demo that matches each picture taken of it, and whether its menu is collapsed. */
