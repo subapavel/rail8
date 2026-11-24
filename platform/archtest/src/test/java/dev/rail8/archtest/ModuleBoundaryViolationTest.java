@@ -140,6 +140,7 @@ class ModuleBoundaryViolationTest {
                 .importClasses(CliNamesTheMockAndTheHttpComponent.class);
         assertDoesNotThrow(() -> Rules.CLI_NAMES_NO_COMPONENT_OR_STEP.check(allowedOnly), "the mock and the http component");
     }
+    @Test void aRuntimeClassMakingAnActorIsCaught() { assertFails(Rules.ONLY_THE_DECISION_POINT_MAKES_AN_ACTOR, "RuntimeMakesAnActor"); }
     @Test void runtimeDependingOnTheMockIsCaught() { assertFails(Rules.RUNTIME_NEVER_NAMES_THE_MOCK, "RuntimeDependsOnTheMock"); }
     // --- F-35 (CORE-5a): io.vertx.core.net.Net* only in the peer link
     @Test void aRuntimeClassOpeningARawSocketIsCaught() { assertFails(Rules.ONLY_THE_PEER_LINK_OPENS_RAW_TCP, "RuntimeOpensARawSocket"); }

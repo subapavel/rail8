@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -62,7 +63,8 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String MARKED = "select flow from retiring order by flow";
     private static final String TRY_FLOW = "select pg_try_advisory_xact_lock(295, hashtext($1))";
     private static final String END = "delete from retiring where flow = $1 and not exists (select 1 from work where flow = $1)";
-    private static final String AUDIT = "insert into audit (at, actor, action, subject, detail) values (now(), $1, 'deploy', $2, $3)";
+    private static final String AUDIT = "insert into audit (at, actor, action, subject, detail, user_id, via, credential)"
+            + " values (now(), $1, 'deploy', $2, $3, $4, $5, $6)";
 
     private final Pool pool;
     private final Supplier<Future<SqlConnection>> connect;
@@ -105,8 +107,9 @@ public final class PgDeploymentStore implements DeploymentStore {
     }
 
     @Override
-    public Future<Void> audit(String actor, String repository, JsonObject detail) {
-        return pool.preparedQuery(AUDIT).execute(Tuple.of(actor, "repository/" + repository, detail)).mapEmpty();
+    public Future<Void> audit(Actor by, String repository, JsonObject detail) {
+        return pool.preparedQuery(AUDIT).execute(Tuple.of(by.name(), "repository/" + repository, detail, by.userOrNull(), by.via(),
+                by.credential().orElse(null))).mapEmpty();
     }
 
     /** The generation of a {@link #READ} and its records, sorted by name; no row means no {@code deploy_pool} row: a failure. */

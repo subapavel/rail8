@@ -1,5 +1,6 @@
 package dev.rail8.core.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import io.vertx.core.Future;
 

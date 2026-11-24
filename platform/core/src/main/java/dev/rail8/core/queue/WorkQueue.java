@@ -1,5 +1,6 @@
 package dev.rail8.core.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.record.Page;
 import io.vertx.core.Future;
@@ -410,15 +411,15 @@ public interface WorkQueue {
 
     /**
      * Deletes {@code seq} only while it is lost (a keyed row under its key's lock, as a keyed complete takes it) and in
-     * the same transaction writes one audit row: action {@code work.discard}, subject {@code work/<seq>}, the self-declared
-     * {@code actor}, and a detail naming the row's flow, message id, partition key, lost instant and the caller's {@code remote}
-     * address. Empty when {@code seq} is not lost (unknown, queued, leased or held): nothing deleted, nothing audited.
+     * the same transaction writes one audit row: action {@code work.discard}, subject {@code work/<seq>}, the actor {@code by},
+     * and a detail naming the row's flow, message id, partition key, lost instant and the actor's remote address. Empty when
+     * {@code seq} is not lost (unknown, queued, leased or held): nothing deleted, nothing audited.
      *
      * <p>This default discards nothing: a queue that holds no bodies has no lost row.
      *
      * @since 0.1
      */
-    default Future<Optional<Discarded>> discard(long seq, String actor, String remote) {
+    default Future<Optional<Discarded>> discard(long seq, Actor by) {
         return Future.succeededFuture(Optional.empty());
     }
 
@@ -430,14 +431,18 @@ public interface WorkQueue {
     Future<Boolean> release(long seq);
 
     /**
-     * {@link #release} answering what it released: empty when {@code seq} was not held or is stopped (nothing changed), else the row's flow and
-     * body node as far as this queue knows them: what the release must wake, here and on the row's node.
+     * An operator's {@link #release}, answering what it released: empty when {@code seq} was not held or is stopped (nothing
+     * changed), else the row's flow and body node as far as this queue knows them: what the release must wake, here and on the
+     * row's node. A queue in Postgres writes one audit row in the same statement: action {@code work.release}, subject
+     * {@code work/<seq>}, the actor {@code by}, and a detail naming the row's flow, message id, partition key and the actor's
+     * remote address.
      *
-     * <p>This default releases by {@link #release} and cannot tell the row: a release answers {@link Released#UNTOLD}.
+     * <p>This default releases by {@link #release}, writes no audit row and cannot tell the row: a release answers
+     * {@link Released#UNTOLD}.
      *
      * @since 0.1
      */
-    default Future<Optional<Released>> releaseRow(long seq) {
+    default Future<Optional<Released>> releaseRow(long seq, Actor by) {
         return release(seq).map(released -> released ? Optional.of(Released.UNTOLD) : Optional.empty());
     }
 

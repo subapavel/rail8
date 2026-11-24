@@ -9,6 +9,7 @@ import dev.rail8.api.Hasher;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.StepConfig;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -42,6 +43,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.SplittableRandom;
 import java.util.function.Function;
 
@@ -72,7 +74,7 @@ final class SimRun {
     static final Duration OPERATOR_AFTER = Duration.ofSeconds(5);
     /** The most stops the operator reads at once: more than the keys of any config. */
     private static final int STOPS_PAGE = 100;
-    private static final FailedMessages.Actor OPERATOR = new FailedMessages.Actor("sim-operator", "127.0.0.1");
+    private static final Actor OPERATOR = new Actor("sim-operator", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     /** One unit of the driver. */
     @FunctionalInterface

@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.Promise;
@@ -142,8 +143,8 @@ final class Ledger implements DeploymentStore {
     }
 
     @Override
-    public Future<Void> audit(String actor, String repository, JsonObject detail) {
-        return rows.audit(actor, repository, detail);
+    public Future<Void> audit(Actor by, String repository, JsonObject detail) {
+        return rows.audit(by, repository, detail);
     }
 
     @Override

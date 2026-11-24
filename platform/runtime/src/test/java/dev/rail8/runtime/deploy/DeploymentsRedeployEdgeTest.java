@@ -163,7 +163,7 @@ class DeploymentsRedeployEdgeTest {
     DeployResult deploy(String name, String label, Path folder) throws Exception {
         String id = repos.commit(name, folder);
         if (label != null) commits.put(label, id);
-        return OnVirtualThread.call(() -> deployments.deploy(name, id, "test"));
+        return OnVirtualThread.call(() -> deployments.deploy(name, id, TestActors.named("test")));
     }
 
     /** The commit the deploy labelled {@code label} deployed. */
@@ -370,7 +370,7 @@ class DeploymentsRedeployEdgeTest {
         doors.failStart(2, "orders does not start");
         Path folder = shop().folderIn(folders);
 
-        DeployRefusedException refused = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy("shop", repos.commit("shop", folder), "test")));
+        DeployRefusedException refused = assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy("shop", repos.commit("shop", folder), TestActors.named("test"))));
 
         assertEquals(Kind.FAILED, refused.kind(), refused.error());
         assertEquals(1, thrown.get(), "fixture: audit's worker started and its stop threw, in the cleanup");
@@ -434,7 +434,7 @@ class DeploymentsRedeployEdgeTest {
         p.flowDoc("audit").put("steps", new JsonArray().add(new JsonObject().put("type", "unreadable").put("name", "u")).addAll(to("archive")));
         Path folder = p.folderIn(folders);
 
-        IOException failed = assertThrows(IOException.class, () -> OnVirtualThread.call(() -> d.deploy("shop", repos.commit("shop", folder), "test")),
+        IOException failed = assertThrows(IOException.class, () -> OnVirtualThread.call(() -> d.deploy("shop", repos.commit("shop", folder), TestActors.named("test"))),
                 "a file the hash cannot read is the node's failure");
 
         assertTrue(doors.producers().stream().anyMatch(o -> o.endpoint().equals("archive")), "fixture: audit's worker was built: " + doors.producers() + " " + failed);

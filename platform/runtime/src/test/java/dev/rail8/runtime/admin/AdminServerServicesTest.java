@@ -3,7 +3,11 @@ package dev.rail8.runtime.admin;
 import dev.rail8.api.plugin.AdminService;
 import dev.rail8.api.plugin.PluginSettings;
 import dev.rail8.core.dlq.InMemoryDlq;
+import dev.rail8.core.flow.WorkSignals;
+import dev.rail8.core.flow.Workers;
 import dev.rail8.core.record.InMemoryMessageStore;
+import dev.rail8.runtime.access.Access;
+import dev.rail8.runtime.access.MemoryAccess;
 import dev.rail8.runtime.admin.AdminServerDeployTest.Raw;
 import dev.rail8.runtime.sample.AdminSamplePlugin;
 import dev.rail8.testkit.FakeRuntime;
@@ -31,7 +35,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static dev.rail8.runtime.admin.AdminServerDeployTest.chunk;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.read;
@@ -333,6 +339,55 @@ class AdminServerServicesTest {
 
         for (int i = 0; i < 4; i++) hold(SAMPLE);   // four places again
         assertProblem(503, "busy", post("echo", "{}"), "and no fifth");
+    }
+
+    /**
+     * A client that goes away while it is authenticated takes no place: its route finds the connection closed and does nothing,
+     * so four calls still run at once after it.
+     */
+    @Test
+    void aClientGoneWhileItIsAuthenticatedTakesNoPlace() throws Exception {
+        CountDownLatch authenticating = new CountDownLatch(1);
+        CountDownLatch goOn = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+        Access held = AdminAccessFixture.around(Access.class, MemoryAccess.bridge(Optional.of(TOKEN)), m -> {
+            if (!m.getName().equals("authenticate") || !first.compareAndSet(true, false)) return;
+            authenticating.countDown();
+            try {
+                assertTrue(goOn.await(WAIT.toSeconds(), TimeUnit.SECONDS), "the case lets the authentication go on");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        });
+        server.stop().await(10, TimeUnit.SECONDS);
+        List<AdminService> services = new AdminSamplePlugin(holds).services(PluginSettings.of(SAMPLE, Map.of()));
+        server = new AdminServer(new AdminServer.Config("127.0.0.1", 0, Optional.of(TOKEN)), new InMemoryMessageStore(), new InMemoryDlq(), rt.blobs(),
+                new AdminServer.HealthProbe(Map.of(), () -> 0L), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(),
+                new Workers(), WorkSignals.NONE, new AdminServer.Modules(List.of(), Map.of(SAMPLE, services), rt.clock()), held);
+        port = server.start(vertx).await(10, TimeUnit.SECONDS);
+        CountDownLatch closed = new CountDownLatch(1);
+        server.router().route("/admin/*").order(-1).handler(ctx -> {   // first of all: tells the case when the server saw the close
+            ctx.addEndHandler(end -> {
+                if (end.failed()) closed.countDown();
+            });
+            ctx.next();
+        });
+
+        Socket gone = socket();
+        send(gone, "POST", SAMPLE + "/hold", "application/json", utf8("{}"));
+        assertTrue(authenticating.await(WAIT.toSeconds(), TimeUnit.SECONDS), "fixture: the call is being authenticated");
+        gone.close();
+        assertTrue(closed.await(WAIT.toSeconds(), TimeUnit.SECONDS), "fixture: the server saw the client go");
+        goOn.countDown();
+
+        List<Held> four = new ArrayList<>();
+        for (int i = 0; i < 4; i++) four.add(hold(SAMPLE));   // four places, none taken by the client that went
+        assertProblem(503, "busy", post("echo", "{}"), "and no fifth");
+        for (Held h : four) holds.letGo(h.thread());
+        for (Held h : four) {
+            assertReply(200, "application/json", "{\"held\":true}", read(h.socket().getInputStream()), "each of the four ran a call of its own");
+        }
     }
 
     @Test

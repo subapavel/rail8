@@ -51,6 +51,7 @@ import java.util.function.Supplier;
 
 import static dev.rail8.runtime.admin.AdminServerDeployTest.Answer;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertError;
+import static dev.rail8.runtime.admin.AdminServerDeployTest.assertUnauthenticated;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -213,6 +214,6 @@ class AdminServerComponentsTest {
     @Test
     void theRouteNeedsTheToken() throws Exception {
         int port = server.start(vertx).await(10, TimeUnit.SECONDS);
-        assertError(401, get(port, null), "GET /admin/components without the token");
+        assertUnauthenticated(get(port, null), null, "GET /admin/components without the token");
     }
 }

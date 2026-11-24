@@ -3,6 +3,7 @@ package dev.rail8.runtime.admin;
 import dev.rail8.api.plugin.AdminReply;
 import dev.rail8.api.plugin.AdminRequest;
 import dev.rail8.api.plugin.AdminService;
+import dev.rail8.runtime.access.Action;
 import io.vertx.core.Context;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpHeaders;
@@ -12,7 +13,6 @@ import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
-import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 
 import java.nio.ByteBuffer;
@@ -24,7 +24,8 @@ import java.util.concurrent.Semaphore;
 
 /**
  * The routes of the admin services the node's modules bring, {@code <method> /admin/modules/<plugin>/<path>}, one for each
- * service; mounted behind the browser guard and the token.
+ * service; mounted behind the browser guard, the authentication and the door of {@code module.call}, so a caller refused there
+ * never holds a place of a plugin's nor sends its body.
  *
  * <p>On the event loop, before a call, each answered at once: a POST whose {@code Content-Type} is not {@code application/json}
  * is 415, a declared {@code Content-Length} above {@link AdminService#MAX_REQUEST_BYTES} is 413, and a call of a plugin that
@@ -57,15 +58,15 @@ final class ModuleCalls {
         this.context = Objects.requireNonNull(context, "context");
     }
 
-    /** Adds a route for each service to {@code router}; the calls of each plugin share {@link #CALLS} places of their own. */
-    void mount(Router router) {
+    /** Mounts a route for each service on {@code admin}; the calls of each plugin share {@link #CALLS} places of their own. */
+    void mount(AdminServer.Admin admin) {
         modules.services().forEach((plugin, services) -> {
             Semaphore places = new Semaphore(CALLS);
             for (AdminService service : services) {
                 String method = service.method();
                 String route = "/admin/modules/" + plugin + "/" + service.path();
                 boolean post = method.equals("POST");
-                router.route(HttpMethod.valueOf(method), route).handler(ctx -> call(ctx, plugin + " " + method + " " + route, post, service, places));
+                admin.call(HttpMethod.valueOf(method), route, Action.MODULE_CALL, ctx -> call(ctx, plugin + " " + method + " " + route, post, service, places));
             }
         });
     }
@@ -73,6 +74,8 @@ final class ModuleCalls {
     /** On the event loop: the refusals answered at once, else the call takes a place of its plugin's {@code places}. */
     private void call(RoutingContext ctx, String what, boolean post, AdminService service, Semaphore places) {
         HttpServerRequest req = ctx.request();
+        if (ctx.response().closed()) return;   // the client went away while it was authenticated: no one reads an answer, no place is taken
+        if (!post) AdminServer.resume(req);   // paused since the authentication: a GET's body is dropped as it comes
         // Netty refused a Content-Length that is not a non-negative number before routing
         String declared = req.getHeader(HttpHeaders.CONTENT_LENGTH);
         if (post && !json(req.getHeader(HttpHeaders.CONTENT_TYPE))) {

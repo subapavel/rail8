@@ -5,6 +5,7 @@ import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.queue.InMemoryWorkQueue;
@@ -163,8 +164,8 @@ class FlowWorkerRerunWindowTest {
         @Override public Future<Boolean> release(long seq) {
             return dead ? unanswered() : rows.release(seq);
         }
-        @Override public Future<Optional<Released>> releaseRow(long seq) {
-            return dead ? unanswered() : rows.releaseRow(seq);
+        @Override public Future<Optional<Released>> releaseRow(long seq, Actor by) {
+            return dead ? unanswered() : rows.releaseRow(seq, by);
         }
         @Override public Future<Boolean> hasItems(String flow) {
             return dead ? unanswered() : rows.hasItems(flow);

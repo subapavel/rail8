@@ -20,6 +20,9 @@ import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Meter;
 import dev.rail8.core.record.StepCpu;
 import dev.rail8.ingress.SharedHttpPort;
+import dev.rail8.runtime.access.Argon2id;
+import dev.rail8.runtime.access.HashPlaces;
+import dev.rail8.runtime.access.PgAccess;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.blob.TieredBlobStore;
 import dev.rail8.runtime.cache.ValkeyCache;
@@ -64,6 +67,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -111,8 +115,9 @@ import java.util.function.Supplier;
  * moment and 404 for any other ({@link Deployments#serves}) — restores
  * what the pool's records name ({@link Deployments#restore}: rows that cannot be read or a data directory that cannot be
  * written fail the start; a package or a flow that cannot be restored is listed FAILED and the node starts), builds the
- * {@link Retention} job over the work pool, the clock and the timer ({@code RAIL8_RETENTION_*}) and only then starts the admin
- * server with the deploy, work and retry routes, the flows' CPU (the sampler's aggregate, read every 5 s on the node's timer and failed once a read failed, or off) and the health checks
+ * {@link Retention} job over the work pool, the clock and the timer ({@code RAIL8_RETENTION_*}, {@code RAIL8_AUDIT_MAX_AGE}), the
+ * users and sessions of the admin API over the pool ({@link PgAccess}; a WARNING when {@code RAIL8_ADMIN_TOKEN} is the emergency
+ * key) and only then starts the admin server with the deploy, work and retry routes, the flows' CPU (the sampler's aggregate, read every 5 s on the node's timer and failed once a read failed, or off) and the health checks
  * {@code postgres}, {@code deployments} (DEGRADED while
  * anything is listed FAILED or RESTARTING, never DOWN, {@link Deployments#health}) and {@code journal} ({@link Journal#health}: DOWN once it failed and
  * stopped, DEGRADED while a segment row is retried), then the
@@ -372,6 +377,11 @@ public final class Node implements AutoCloseable {
             restored.restore();   // before the admin port opens: what the pool recorded runs before a deploy can be taken
             restored.startFollowing();   // every node runs what the pool's records name, a deploy on another node included
             Retention retention = new Retention(pool, clock, timer, config.retention());
+            PgAccess access = new PgAccess(pool, clock, new Argon2id(new SecureRandom()), new HashPlaces(), new SecureRandom(), config.admin().token());
+            if (access.emergencyKey()) {
+                LOG.log(System.Logger.Level.WARNING, "RAIL8_ADMIN_TOKEN is the emergency key: it acts on users only, and every use is in the audit. "
+                        + "Unset it and restart the node once an administrator can log in.");
+            }
             // /ready's inputs are in-memory reads: the fence, the journal's and the deployments' health — both synchronous
             AdminServer.Readiness readiness = new AdminServer.Readiness(ready::get, lease,
                     () -> opened.health().status() == Health.Status.UP, () -> restored.health().status() != Health.Status.DOWN);
@@ -380,7 +390,7 @@ public final class Node implements AutoCloseable {
                             "deployments", () -> Future.succeededFuture(restored.health()),
                             "journal", () -> Future.succeededFuture(opened.health())), messages::failed, notices, readiness),
                     Optional.of(restored), work, new PgFailedMessages(pool, work), sampler.map(s -> new AdminServer.Sampling(s.period(), s.since(), cpu, s::failed)),
-                    new PgMessageList(pool), workers, signals, new AdminServer.Modules(listed.get(), services, clock));
+                    new PgMessageList(pool), workers, signals, new AdminServer.Modules(listed.get(), services, clock), access);
             int port = admin.start(vertx).await();
             retention.start();   // its first run on a virtual thread of its own: the start does not wait for it
             // the segments no row pins go; its first pass an interval later, on a virtual thread of its own

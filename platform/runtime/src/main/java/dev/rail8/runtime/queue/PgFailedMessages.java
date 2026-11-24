@@ -3,6 +3,7 @@ package dev.rail8.runtime.queue;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobNotFoundException;
 import dev.rail8.api.BodyLostException;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.runtime.pg.PgTx;
@@ -99,10 +100,10 @@ public final class PgFailedMessages implements FailedMessages {
 
     /**
      * The end audited and row $4 marked with it in one statement, a waiting row made due now: actor $2, detail $3, subject
-     * {@code message/<id>}. Answers the audit row's id and instant.
+     * {@code message/<id>}, the actor's user $5, via $6 and credential $7. Answers the audit row's id and instant.
      */
-    private static final String MARK = "with a as (insert into audit(at, actor, action, subject, detail)"
-            + " values (now(), $2, 'message.cancel', 'message/' || $1::text, $3::jsonb) returning id, at),"
+    private static final String MARK = "with a as (insert into audit(at, actor, action, subject, detail, user_id, via, credential)"
+            + " values (now(), $2, 'message.cancel', 'message/' || $1::text, $3::jsonb, $5, $6, $7) returning id, at),"
             + " m as (update work set cancel_audit = (select id from a), available_at = least(available_at, now()) where seq = $4 returning seq)"
             + " select a.id, a.at, (select count(*) from m) from a";
 
@@ -114,10 +115,11 @@ public final class PgFailedMessages implements FailedMessages {
 
     /**
      * Message $1's DLQ row deleted and the act audited in one statement: actor $2, action $3, detail $4, subject
-     * {@code message/<id>}. Answers the audit row's id and instant.
+     * {@code message/<id>}, the actor's user $5, via $6 and credential $7. Answers the audit row's id and instant.
      */
     private static final String SETTLE = "with gone as (delete from dlq where id = $1 returning id)"
-            + " insert into audit(at, actor, action, subject, detail) select now(), $2, $3, 'message/' || g.id, $4::jsonb from gone g returning id, at";
+            + " insert into audit(at, actor, action, subject, detail, user_id, via, credential)"
+            + " select now(), $2, $3, 'message/' || g.id, $4::jsonb, $5, $6, $7 from gone g returning id, at";
 
     private final Pool pool;
     private final PgWorkQueue queue;
@@ -233,7 +235,7 @@ public final class PgFailedMessages implements FailedMessages {
             }
             JsonObject detail = new JsonObject().put("flow", flow).put("step", w.getInteger("step")).put("partitionKey", w.getString("partition_key"))
                     .put("seq", seq).put("reason", reason.orElse(null)).put("remote", by.remote());
-            return tx.preparedQuery(MARK).execute(Tuple.of(messageId, by.name(), detail, seq)).map(marked -> {
+            return tx.preparedQuery(MARK).execute(Tuple.of(messageId, by.name(), detail, seq, by.userOrNull(), by.via(), by.credential().orElse(null))).map(marked -> {
                 Row a = marked.iterator().next();
                 return new Stopping(new Event(a.getLong("id"), a.getOffsetDateTime("at").toInstant(), messageId, flow, by.name(), Kind.CANCEL,
                         OptionalInt.empty(), reason, Optional.empty()), node);
@@ -269,7 +271,7 @@ public final class PgFailedMessages implements FailedMessages {
 
     /** {@link #SETTLE}: the audit row written, the DLQ row the act holds locked deleted. */
     private static Future<Row> settle(SqlConnection tx, String messageId, Actor by, String action, JsonObject detail) {
-        return tx.preparedQuery(SETTLE).execute(Tuple.of(messageId, by.name(), action, detail)).map(rows -> rows.iterator().next());
+        return tx.preparedQuery(SETTLE).execute(Tuple.of(messageId, by.name(), action, detail, by.userOrNull(), by.via(), by.credential().orElse(null))).map(rows -> rows.iterator().next());
     }
 
     /** The key's lock on {@code tx} for a keyed message; nothing for one without a key. */

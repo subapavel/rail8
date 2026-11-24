@@ -6,6 +6,7 @@ import dev.rail8.api.Stage;
 import dev.rail8.api.StepConfig;
 import dev.rail8.api.StepFactory;
 import dev.rail8.api.StepResources;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.queue.InMemoryFailedMessages;
@@ -26,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
@@ -52,7 +54,7 @@ class FlowWorkerOrderingPropertyTest {
 
     static final Duration LEASE = FlowWorkerFastPathTest.LEASE;
     static final Map<String, Object> PROBE = Map.of("type", "keys", "name", "keys");
-    static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "127.0.0.1");
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     /** One message: its key ({@code null}: none) and its outcome. */
     record Msg(String key, String outcome) {}

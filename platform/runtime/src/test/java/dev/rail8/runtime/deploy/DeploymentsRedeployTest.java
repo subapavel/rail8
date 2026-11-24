@@ -258,7 +258,7 @@ class DeploymentsRedeployTest {
     OnVirtualThread.Call<DeployResult> deploying(String name, String label, Path folder) {
         String id = repos.commit(name, folder);
         if (label != null) commits.put(label, id);
-        return OnVirtualThread.start(() -> deployments.deploy(name, id, "test"));
+        return OnVirtualThread.start(() -> deployments.deploy(name, id, TestActors.named("test")));
     }
 
     /**

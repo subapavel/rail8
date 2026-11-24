@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.queue.NotAdmittedException;
 import dev.rail8.runtime.queue.PgWorkQueue;
@@ -26,6 +27,8 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -198,16 +201,23 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         return new FakeTimer(FakeClock.at(Instant.parse("2026-10-27T09:30:00Z")));
     }
 
-    /** An audit row of a deploy: the actor, the action {@code deploy}, the subject {@code repository/<name>} and the detail as given. */
+    /**
+     * An audit row of a deploy: the actor's name, user, via and credential, the action {@code deploy}, the subject
+     * {@code repository/<name>} and the detail as given.
+     */
     @Test
     void anAuditRowIsWritten() {
         pool.query("delete from audit where action = 'deploy'").execute().await();
         JsonObject detail = new JsonObject().put("repository", "shop").put("commit", C_1).put("outcome", "deployed");
-        emptyStore().audit("ops@example", "shop", detail).await();
+        emptyStore().audit(new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7"), "shop", detail)
+                .await();
 
-        Row row = pool.query("select actor, action, subject, detail from audit where action = 'deploy'").execute().await().iterator().next();
-        assertEquals(List.of("ops@example", "deploy", "repository/shop"), List.of(row.getString(0), row.getString(1), row.getString(2)));
+        Row row = pool.query("select actor, action, subject, detail, user_id, via, credential from audit where action = 'deploy'").execute()
+                .await().iterator().next();
+        assertEquals(List.of("alice", "deploy", "repository/shop"), List.of(row.getString(0), row.getString(1), row.getString(2)));
         assertEquals(detail, new JsonObject(row.getValue(3).toString()), "the detail as given");
+        assertEquals(List.of(7L, "session", "0123456789abcdef"), List.of(row.getLong(4), row.getString(5), row.getString(6)),
+                "the user, how they proved who they are, and the session's id");
     }
 
     /**

@@ -299,10 +299,12 @@ class AdminServerWorkTest {
         for (String auth : wrong) {
             Answer list = send(HttpMethod.GET, "/admin/work/held", auth);
             assertJsonError(401, list, "GET held with Authorization " + auth);
-            assertEquals(Set.of("error"), list.json().fieldNames(), "nothing but the error: " + list.body());
+            assertEquals(Set.of("error", "code"), list.json().fieldNames(), "nothing but the error and its code: " + list.body());
+            assertEquals(auth == null ? "no-credential" : "unknown-credential", list.json().getString("code"), list.body().toString());
             Answer release = send(HttpMethod.POST, "/admin/work/" + h1 + "/release", auth);
             assertJsonError(401, release, "POST release with Authorization " + auth);
-            assertEquals(Set.of("error"), release.json().fieldNames(), "nothing but the error: " + release.body());
+            assertEquals(Set.of("error", "code"), release.json().fieldNames(), "nothing but the error and its code: " + release.body());
+            assertEquals(auth == null ? "no-credential" : "unknown-credential", release.json().getString("code"), release.body().toString());
         }
         assertEquals(List.of(), queue.calls, "no request without the token reached the queue");
         assertEquals(List.of("h-1"), heldNow(), "still held");

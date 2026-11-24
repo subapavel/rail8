@@ -19,7 +19,8 @@ import java.util.ServiceConfigurationError;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The {@code rail8} command line: {@code validate}, {@code test}, {@code lock}, {@code deploy}, {@code new-adapter} and {@code help},
+ * The {@code rail8} command line: {@code validate}, {@code test}, {@code lock}, {@code deploy}, {@code user add}, {@code key new},
+ * {@code new-adapter} and {@code help},
  * and {@code rail8 <name>}, the command a module of its class path brings ({@link dev.rail8.api.plugin.Command}).
  * Exit codes: 0 done, 1 the package has problems, a flow test failed, or the node refused or could not be reached, 2 a usage
  * error or refused plugins (nothing done).
@@ -54,6 +55,13 @@ public final class Cli {
                   it reads under its RAIL8_GIT_BASE (a ref such as HEAD or main in dev and ci only); with --check it
                   answers what the deploy would do and changes nothing (url: --admin, else $RAIL8_ADMIN, else
                   http://localhost:8081; bearer token: $RAIL8_ADMIN_TOKEN only)
+              user add <name> [--role <role>] [--admin <url>]
+                  ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
+                  print the first password it answers, once; the person chooses a password of their own at the first login
+                  (url as for deploy; bearer token: $RAIL8_ADMIN_TOKEN only, the emergency key)
+              key new
+                  print a new emergency key, rail8k_ and 43 base64url characters, for the node's RAIL8_ADMIN_TOKEN while the
+                  first administrator is made or administrators are locked out; unset it on the node afterwards
               new-adapter <dir> --scheme <scheme> [--package <java package>]
                   write the skeleton of a new adapter into <dir>, which must not exist or be empty, as a git repository
                   with one commit: its Maven build, the component of <scheme> with its settings description, the plugin,
@@ -91,7 +99,7 @@ public final class Cli {
      * Runs the command {@code args} names, on a virtual thread of its own (the node's deploy code blocks on Vert.x futures), and
      * returns its exit code; never exits the JVM.
      *
-     * @param env     the environment the command reads: deploy {@code RAIL8_ADMIN} and {@code RAIL8_ADMIN_TOKEN}, validate and test
+     * @param env     the environment the command reads: deploy and user {@code RAIL8_ADMIN} and {@code RAIL8_ADMIN_TOKEN}, validate and test
      *                {@code RAIL8_PLUGINS}; a module's command is given all of it
      * @param modules the class loader whose service files name the modules: the CLI's own, which are a node's
      * @param clock   the clock a module's command is given
@@ -110,6 +118,8 @@ public final class Cli {
                     yield withPlugins(modules, options, env, plugins -> Validate.run(options, plugins, out));
                 }
                 case "deploy" -> Deploy.run(Deploy.arguments(args), env, out, err);
+                case "user" -> Users.user(args, env, out, err);
+                case "key" -> Users.key(args, out);
                 case "help" -> help(modules, out, err);
                 case "test" -> {
                     Options options = options("test", args, Set.of("--deps", "--plugins"));

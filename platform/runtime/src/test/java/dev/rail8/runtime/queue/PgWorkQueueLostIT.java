@@ -1,5 +1,6 @@
 package dev.rail8.runtime.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.queue.WorkQueue;
 import dev.rail8.core.record.Page;
 import dev.rail8.testkit.SharedPostgres;
@@ -24,6 +25,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -51,6 +53,7 @@ class PgWorkQueueLostIT {
 
     static final SharedPostgres pg = SharedPostgres.database();
     static final Duration LEASE = Duration.ofSeconds(30);
+    static final Actor ANNA = new Actor("ops-anna", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7");
     static final Instant LOST_AT = Instant.parse("2026-11-04T10:00:00Z");
     static Vertx vertx;
     static Pool pool;
@@ -129,7 +132,7 @@ class PgWorkQueueLostIT {
         assertEquals(List.of("m-L"), claimed(), "fixture: K waits behind its lost head; key L runs (it stays in work, leased)");
 
         java.time.OffsetDateTime before = dbClock();
-        WorkQueue.Discarded d = queue.discard(head, "ops-anna", "10.0.0.7").await().orElseThrow(() -> new AssertionError("a lost row is discarded"));
+        WorkQueue.Discarded d = queue.discard(head, ANNA).await().orElseThrow(() -> new AssertionError("a lost row is discarded"));
         java.time.OffsetDateTime after = dbClock();
 
         assertFalse(exists(head), "the lost row is deleted");
@@ -155,11 +158,24 @@ class PgWorkQueueLostIT {
         long lost = row("m-1", null);
         lose(lost);
         row("m-2", null);
-        WorkQueue.Discarded d = queue.discard(lost, "unknown", "127.0.0.1").await().orElseThrow(() -> new AssertionError("discarded"));
+        WorkQueue.Discarded d = queue.discard(lost, new Actor("unknown", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1")).await().orElseThrow(() -> new AssertionError("discarded"));
         assertFalse(exists(lost), "deleted");
         assertEquals(Optional.empty(), d.nextNode(), "an unkeyed row has no next row of its key");
         Row a = pool.query("select (detail->>'partitionKey') is null, detail->>'messageId', detail->>'flow' from audit").execute().await().iterator().next();
         assertEquals(List.of(true, "m-1", "orders"), List.of(a.getBoolean(0), a.getString(1), a.getString(2)), "the detail names the row, without a key");
+    }
+
+    /** A discard's audit row names the caller's user id, the way it came in and its credential's id. */
+    @Test
+    void aDiscardIsAuditedWithItsCaller() {
+        long lost = row("m-1", null);
+        lose(lost);
+        Actor alice = new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7");
+
+        assertTrue(queue.discard(lost, alice).await().isPresent(), "fixture: discarded");
+
+        Row a = pool.query("select actor, user_id, via, credential from audit").execute().await().iterator().next();
+        assertEquals(List.of("alice", 7L, "session", "0123456789abcdef"), List.of(a.getString(0), a.getLong(1), a.getString(2), a.getString(3)));
     }
 
     @Test
@@ -171,7 +187,7 @@ class PgWorkQueueLostIT {
                 .execute().await();
         pool.query("create trigger fix141_refuse_audit before insert on audit for each row execute function fix141_refuse_audit()").execute().await();
         try {
-            Exception failed = assertThrows(Exception.class, () -> queue.discard(head, "ops-anna", "10.0.0.7").await(), "the refused audit fails the discard");
+            Exception failed = assertThrows(Exception.class, () -> queue.discard(head, ANNA).await(), "the refused audit fails the discard");
             assertTrue(String.valueOf(failed.getMessage()).contains("audit refused (test)"), "the cause is the audit insert: " + failed);
         } finally {
             pool.query("drop trigger fix141_refuse_audit on audit").execute().await();
@@ -181,7 +197,7 @@ class PgWorkQueueLostIT {
         assertEquals(1, count("select count(*) from work where lost_at is not null"), "and still lost");
         assertEquals(0, count("select count(*) from audit"), "nothing audited");
         assertEquals(List.of(), claimed(), "K still waits");
-        assertTrue(queue.discard(head, "ops-anna", "10.0.0.7").await().isPresent(), "witness: without the trigger the same discard succeeds");
+        assertTrue(queue.discard(head, ANNA).await().isPresent(), "witness: without the trigger the same discard succeeds");
     }
 
     @Test
@@ -196,13 +212,13 @@ class PgWorkQueueLostIT {
         long unknown = lost + 1000;
 
         for (long seq : new long[] {leased, held, plain, unknown}) {
-            assertEquals(Optional.empty(), queue.discard(seq, "ops-anna", "10.0.0.7").await(), "seq " + seq + " is not lost: nothing to discard");
+            assertEquals(Optional.empty(), queue.discard(seq, ANNA).await(), "seq " + seq + " is not lost: nothing to discard");
         }
         assertEquals(4, count("select count(*) from work"), "nothing deleted");
         assertEquals(0, count("select count(*) from audit"), "nothing audited");
-        assertTrue(queue.discard(lost, "ops-anna", "10.0.0.7").await().isPresent(), "witness: the lost row of the same table is discarded");
+        assertTrue(queue.discard(lost, ANNA).await().isPresent(), "witness: the lost row of the same table is discarded");
         assertEquals(List.of(leased, held, plain), seqs(), "only the lost row went");
-        assertEquals(Optional.empty(), queue.discard(lost, "ops-anna", "10.0.0.7").await(), "a second discard finds nothing");
+        assertEquals(Optional.empty(), queue.discard(lost, ANNA).await(), "a second discard finds nothing");
         assertEquals(1, count("select count(*) from audit"), "audited once");
     }
 
@@ -223,7 +239,7 @@ class PgWorkQueueLostIT {
         Future<Optional<WorkQueue.Discarded>> discarding;
         try {
             locker.query("select pg_advisory_xact_lock(289, hashtext('orders' || chr(31) || 'K'))").execute().await();
-            discarding = queue.discard(head, "ops-anna", "10.0.0.7");
+            discarding = queue.discard(head, ANNA);
             untilAStatementWaitsOnALock();
             assertFalse(discarding.isComplete(), "the discard waits for the key's lock");
             assertEquals(0, count("select count(*) from audit"), "nothing committed while it waits");

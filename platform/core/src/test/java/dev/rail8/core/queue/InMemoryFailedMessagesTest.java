@@ -1,5 +1,6 @@
 package dev.rail8.core.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.testkit.FakeClock;
@@ -7,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -19,7 +21,7 @@ class InMemoryFailedMessagesTest {
 
     final InMemoryWorkQueue queue = new InMemoryWorkQueue(FakeClock.at(Instant.EPOCH), new InMemoryDlq());
     final FailedMessages failed = new InMemoryFailedMessages(queue);
-    final FailedMessages.Actor by = new FailedMessages.Actor("ops", "127.0.0.1");
+    final Actor by = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     @Test
     void aNullArgumentIsRefusedAtTheCall() {

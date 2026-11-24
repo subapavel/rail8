@@ -7,6 +7,7 @@ import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepFactory;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -31,6 +32,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -57,7 +59,7 @@ class FlowRunStopTest {
     static final Map<String, Object> PROBE = Map.of("type", "probe", "name", "probe");
     static final Map<String, Object> TO = Map.of("type", "to", "name", "partner", "endpoint", "partner");
     static final Map<String, EndpointConfig> ENDPOINTS = Map.of("partner", new EndpointConfig("partner", URI.create("partner://p:1/in"), Map.of()));
-    static final FailedMessages.Actor ALICE = new FailedMessages.Actor("alice", "127.0.0.1");
+    static final Actor ALICE = new Actor("alice", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     final FakeRuntime rt = FakeRuntime.create();
     final DeadlinePartner partner = new DeadlinePartner();
@@ -249,7 +251,7 @@ class FlowRunStopTest {
 
         FailedMessages.Stopping stopping = assertInstanceOf(FailedMessages.Stopping.class, failed.end(in.id(), ALICE, Optional.of("wrong order")).await());
         assertEquals(Optional.empty(), stopping.node(), "no one holds it");
-        FailedMessages.Stopping again = assertInstanceOf(FailedMessages.Stopping.class, failed.end(in.id(), new FailedMessages.Actor("bob", "::1"), Optional.empty()).await());
+        FailedMessages.Stopping again = assertInstanceOf(FailedMessages.Stopping.class, failed.end(in.id(), new Actor("bob", OptionalLong.empty(), "local", Optional.empty(), "::1"), Optional.empty()).await());
         assertEquals(stopping.event(), again.event(), "a second cancel answers the first one's event");
 
         assertEquals(1, worker.poll().await(10, SECONDS), "due at once, not in an hour");

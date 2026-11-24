@@ -6,6 +6,7 @@ import dev.rail8.api.BodyLostException;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Key;
 import dev.rail8.api.Props;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.queue.WorkQueue;
@@ -32,8 +33,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -62,7 +65,8 @@ class PgFailedMessagesIT {
 
     static final String NODE = "node-a";
     static final Duration LEASE = Duration.ofSeconds(30);
-    static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "10.0.0.7");
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7");
+    static final Actor ALICE = new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7");
     static final SharedPostgres pg = SharedPostgres.database();
     static Vertx vertx;
     static Pool pool;
@@ -130,6 +134,31 @@ class PgFailedMessagesIT {
         }
         assertEquals(4, found.size(), "one audit row: " + found);
         return found;
+    }
+
+    /** The user, the way in and the credential of each audit row, oldest first. */
+    List<List<Object>> callers() {
+        List<List<Object>> found = new java.util.ArrayList<>();
+        for (Row r : pool.query("select user_id, via, credential from audit order by id").execute().await()) {
+            found.add(Arrays.asList(r.getLong(0), r.getString(1), r.getString(2)));
+        }
+        return found;
+    }
+
+    /** A retry, a cancel and an end each write the caller's user id, the way it came in and its credential's id; a caller without them writes none. */
+    @Test
+    void eachActNamesItsCallersUserWayInAndCredential() throws Exception {
+        parked("p-1");
+        parked("p-2");
+        rows.enqueue("m-1", "t", 1, null).await();
+        arrived("m-1", "t");
+
+        assertInstanceOf(FailedMessages.Done.class, await(failed.retry("p-1", "t", null, 2, ALICE)), "fixture: p-1 retried");
+        assertInstanceOf(FailedMessages.Done.class, await(failed.cancel("p-2", ALICE, Optional.empty())), "fixture: p-2 cancelled");
+        assertInstanceOf(FailedMessages.Stopping.class, await(failed.end("m-1", BY, Optional.empty())), "fixture: m-1 ended");
+
+        List<Object> alice = Arrays.asList(7L, "session", "0123456789abcdef");
+        assertEquals(List.of(alice, alice, Arrays.asList(null, "local", null)), callers());
     }
 
     @Test

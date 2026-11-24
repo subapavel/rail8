@@ -23,7 +23,7 @@ import java.util.Set;
 
 /**
  * The retention job: deletes what is older than the max age, in keyset batches, in the background. A run fixes its
- * cutoff once — the injected clock minus the max age, never the server's {@code now()} — and runs two phases, each in batches of
+ * cutoffs once — the injected clock minus the max ages, never the server's {@code now()} — and runs five phases, each in batches of
  * at most {@link Config#batch} scanned rows, one transaction per batch whose first statement tries the advisory lock
  * {@link #LOCK_KEY} without waiting:
  * <ol>
@@ -37,6 +37,10 @@ import java.util.Set;
  *       the bodies and their bytes are counted, the refs are not (the journal's bytes go later, with their segment). The
  *       batch holds its rows for update and passes a row a park holds ({@code skip locked}), and its delete re-checks these
  *       under a snapshot taken after the select.</li>
+ *   <li>{@code audit}: a row whose {@code at} is older than the clock minus {@link Config#auditMaxAge}.</li>
+ *   <li>{@code sessions}: a session that expired longer ago than the audit's max age (a session that ended otherwise has no
+ *       row any more).</li>
+ *   <li>{@code login_limits}: a row without a failure for {@link #LIMITS_KEPT}; its longest wait is far shorter.</li>
  * </ol>
  * A phase ends with the batch that scanned fewer rows than the batch size. The lock found taken ends the run {@link Outcome#SKIPPED}
  * with what the committed batches deleted; so does {@link #close} between two batches. A failed batch is rolled back (unless its
@@ -85,22 +89,42 @@ public final class Retention {
     /** The most rows a batch scans: a batch is one transaction holding its row locks. */
     static final int MAX_BATCH = 10_000;
 
+    /** How long a row of the login limit is kept after its last failure. */
+    static final Duration LIMITS_KEPT = Duration.ofHours(24);
+
+    /** How long the audit is kept when the config names no age of its own: a year, or the messages' max age when longer. */
+    static final Duration AUDIT_DEFAULT = Duration.ofDays(365);
+
     /**
-     * What the job is given: how old a row may get, how long after a run ended the next one starts, and how many rows a batch scans.
+     * What the job is given: how old a message's row may get, how old an audit row may get, how long after a run ended the next
+     * one starts, and how many rows a batch scans.
      *
      * @param maxAge more than zero
+     * @param auditMaxAge at least {@code maxAge}: a message's status reads its cancel from the audit
      * @param interval more than zero
      * @param batch 1 to 10000 rows
      * @since 0.1
      */
-    public record Config(Duration maxAge, Duration interval, int batch) {
-        /** Refuses a missing or non-positive duration and a batch outside 1 to 10000 rows: nothing unlimited, nothing absent. */
+    public record Config(Duration maxAge, Duration auditMaxAge, Duration interval, int batch) {
+        /**
+         * Refuses a missing or non-positive duration, an audit kept for less than the messages and a batch outside 1 to 10000
+         * rows: nothing unlimited, nothing absent.
+         */
         public Config {
             Objects.requireNonNull(maxAge, "maxAge");
+            Objects.requireNonNull(auditMaxAge, "auditMaxAge");
             Objects.requireNonNull(interval, "interval");
             if (!maxAge.isPositive()) throw new IllegalArgumentException("the max age must be more than zero, was " + maxAge);
+            if (auditMaxAge.compareTo(maxAge) < 0) {
+                throw new IllegalArgumentException("the audit's max age may not be shorter than the messages', was " + auditMaxAge + " < " + maxAge);
+            }
             if (!interval.isPositive()) throw new IllegalArgumentException("the interval must be more than zero, was " + interval);
             if (batch < 1 || batch > MAX_BATCH) throw new IllegalArgumentException("a batch must be 1 to " + MAX_BATCH + " rows, was " + batch);
+        }
+
+        /** The audit kept for {@link #AUDIT_DEFAULT}, or for {@code maxAge} when that is longer. */
+        public Config(Duration maxAge, Duration interval, int batch) {
+            this(maxAge, maxAge == null || maxAge.compareTo(AUDIT_DEFAULT) < 0 ? AUDIT_DEFAULT : maxAge, interval, batch);
         }
     }
 
@@ -123,11 +147,14 @@ public final class Retention {
      * @param bodies bodies rows deleted
      * @param bodyBytes the bytes of the deleted bodies
      * @param kept messages rows older than the cutoff the run kept (a newer row of the message, a work or a DLQ row)
+     * @param audit audit rows deleted
+     * @param sessions expired sessions deleted
+     * @param limits rows of the login limit deleted
      * @param batches transactions the run began, the last, short one of each phase included
      * @since 0.1
      */
     public record Run(Instant cutoff, Outcome outcome, long messages, long keys, long bodies, long bodyBytes, long kept,
-                      int batches) {}
+                      long audit, long sessions, long limits, int batches) {}
 
     /**
      * The sums over every run that ended since the job was built.
@@ -238,6 +265,42 @@ public final class Retention {
         /** One batch in {@code tx}, the lock already taken: the phase's one statement, its answer row read as a {@link Batch}. */
         Future<Batch> run(SqlConnection tx, Tuple params, int cursorColumns) {
             return tx.preparedQuery(sql).execute(params).map(rows -> Batch.of(rows.iterator().next(), cursorColumns));
+        }
+    }
+
+    /**
+     * A table whose rows go one by one by age: its statement deletes at most {@code $2} rows older than {@code $1} and answers how
+     * many it deleted; the age is checked again on the row it deletes, as another transaction may have changed it since.
+     */
+    private enum Sweep {
+        AUDIT("""
+                with gone as (
+                    delete from audit a using (select id from audit where at < $1 order by at limit $2) x
+                     where a.id = x.id
+                     returning 1)
+                select count(*) from gone"""),
+        SESSIONS("""
+                with gone as (
+                    delete from sessions s using (select id from sessions where expires_at < $1 limit $2) x
+                     where s.id = x.id and s.expires_at < $1
+                     returning 1)
+                select count(*) from gone"""),
+        LIMITS("""
+                with gone as (
+                    delete from login_limits l using (select name, device from login_limits where last_failure_at < $1 limit $2) x
+                     where (l.name, l.device) = (x.name, x.device) and l.last_failure_at < $1
+                     returning 1)
+                select count(*) from gone""");
+
+        final String sql;
+
+        Sweep(String sql) {
+            this.sql = sql;
+        }
+
+        /** The cutoff of this table in a run that started at {@code now}. */
+        Instant cutoff(Instant now, Config config) {
+            return this == LIMITS ? now.minus(LIMITS_KEPT) : now.minus(config.auditMaxAge());
         }
     }
 
@@ -372,11 +435,13 @@ public final class Retention {
 
     /** One run, on the caller's (virtual) thread: its outcome, never a throw for a failed batch. */
     private Run once() {
-        Instant cutoff = clock.instant().minus(config.maxAge());
+        Instant now = clock.instant();
+        Instant cutoff = now.minus(config.maxAge());
         Tally tally = new Tally();
         Outcome outcome;
         try {
             outcome = phases(cutoff, tally);
+            if (outcome == Outcome.DONE) outcome = sweeps(now, tally);
         } catch (Exception failed) {   // a failed batch: the transaction rolled it back, unless its commit is what failed
             LOG.log(System.Logger.Level.WARNING, "a retention batch failed; the run ends FAILED, the next comes on schedule (cutoff "
                     + cutoff + ")", failed);
@@ -387,7 +452,9 @@ public final class Retention {
             totals = totals.plus(run);
         }
         LOG.log(System.Logger.Level.INFO, "retention run " + outcome + " (cutoff " + cutoff + "): deleted " + run.messages() + " messages rows, "
-                + run.keys() + " key rows, " + run.bodies() + " bodies of " + run.bodyBytes() + " bytes; kept " + run.kept() + " messages rows; " + run.batches() + " batches");
+                + run.keys() + " key rows, " + run.bodies() + " bodies of " + run.bodyBytes() + " bytes, " + run.audit() + " audit rows, "
+                + run.sessions() + " expired sessions, " + run.limits() + " login limit rows; kept " + run.kept() + " messages rows; "
+                + run.batches() + " batches");
         return run;
     }
 
@@ -413,6 +480,30 @@ public final class Retention {
         return Outcome.DONE;
     }
 
+    /** The tables that go row by row by age, in order; DONE, or SKIPPED when the lock was taken or the job closed between two batches. */
+    private Outcome sweeps(Instant now, Tally tally) {
+        for (Sweep sweep : Sweep.values()) {
+            Tuple params = Tuple.of(OffsetDateTime.ofInstant(sweep.cutoff(now, config), ZoneOffset.UTC), (long) config.batch());
+            while (true) {
+                if (closed) return Outcome.SKIPPED;
+                tally.batches++;
+                long deleted;
+                try {
+                    deleted = PgTx.inTransaction(pool, (SqlConnection tx) -> tx.preparedQuery(LOCK).execute(Tuple.of(LOCK_KEY))
+                            .compose(lock -> lock.iterator().next().getBoolean(0)
+                                    ? tx.preparedQuery(sweep.sql).execute(params).map(rows -> rows.iterator().next().getLong(0))
+                                    : Future.failedFuture(new Taken())))
+                            .await();
+                } catch (Taken taken) {
+                    return Outcome.SKIPPED;
+                }
+                tally.swept[sweep.ordinal()] += deleted;
+                if (deleted < config.batch()) break;
+            }
+        }
+        return Outcome.DONE;
+    }
+
     /** One batch of {@code phase} after {@code cursor}: one transaction, the lock tried first, rolled back when it is taken. */
     private Batch batch(Phase phase, OffsetDateTime cutoff, List<Object> cursor) {
         Tuple params = Tuple.tuple().addValue(cutoff).addValue((long) config.batch());
@@ -431,6 +522,8 @@ public final class Retention {
         final long[] extra = new long[Phase.values().length];
         /** Scanned rows whose message stayed: messages only. */
         final long[] kept = new long[Phase.values().length];
+        /** Rows deleted by age, per table (by ordinal). */
+        final long[] swept = new long[Sweep.values().length];
         int batches;
 
         void add(Phase phase, Batch b) {
@@ -442,7 +535,8 @@ public final class Retention {
         Run run(Instant cutoff, Outcome outcome) {
             int m = Phase.MESSAGES.ordinal();
             int b = Phase.BODIES.ordinal();
-            return new Run(cutoff, outcome, deleted[m], extra[m], deleted[b], extra[b], kept[m], batches);
+            return new Run(cutoff, outcome, deleted[m], extra[m], deleted[b], extra[b], kept[m], swept[Sweep.AUDIT.ordinal()],
+                    swept[Sweep.SESSIONS.ordinal()], swept[Sweep.LIMITS.ordinal()], batches);
         }
     }
 }

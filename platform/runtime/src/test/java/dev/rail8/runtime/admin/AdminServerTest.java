@@ -844,7 +844,8 @@ class AdminServerTest {
             for (String auth : wrong) {
                 Answer a = get(path, auth);
                 assertJsonError(401, a, path + " with Authorization " + auth);
-                assertEquals(Set.of("error"), a.json().fieldNames(), "nothing but the error: " + a.body());
+                assertEquals(Set.of("error", "code"), a.json().fieldNames(), "nothing but the error and its code: " + a.body());
+                assertEquals(auth == null ? "no-credential" : "unknown-credential", a.json().getString("code"), a.body().toString());
             }
             assertEquals(200, admin(path).status(), path + " with the token");
         }

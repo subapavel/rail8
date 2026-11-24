@@ -5,6 +5,7 @@ import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.db.Migrations;
@@ -155,7 +156,7 @@ class DeploymentsPoolIT {
         }
 
         OnVirtualThread.Call<DeployResult> deploying(String repository, String commit) {
-            return OnVirtualThread.start(() -> deployments.deploy(repository, commit, "test"));
+            return OnVirtualThread.start(() -> deployments.deploy(repository, commit, TestActors.named("test")));
         }
 
         DeployResult deploy(String repository, String commit) throws Exception {
@@ -237,7 +238,7 @@ class DeploymentsPoolIT {
         }
 
         @Override
-        public Future<Void> audit(String actor, String repository, JsonObject detail) {
+        public Future<Void> audit(Actor actor, String repository, JsonObject detail) {
             return records.audit(actor, repository, detail);
         }
 

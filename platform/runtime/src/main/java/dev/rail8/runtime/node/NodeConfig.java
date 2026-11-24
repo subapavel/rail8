@@ -49,7 +49,9 @@ import java.util.regex.Pattern;
  * @param leases the {@code RAIL8_VALKEY_URI} and {@code RAIL8_POLLER_LEASE_*} keys: where and how long a polling consumer's
  *               lease is held
  * @param retention the retention job's keys: {@code RAIL8_RETENTION_MAX_AGE}, ISO-8601, PT1H to P366D (P7D): rows
- *                  older are deleted; {@code RAIL8_RETENTION_INTERVAL}, ISO-8601, PT1M to P1D (PT1H): from the end of a run to
+ *                  older are deleted; {@code RAIL8_AUDIT_MAX_AGE}, ISO-8601, P30D to P3660D (P365D) and not shorter than
+ *                  {@code RAIL8_RETENTION_MAX_AGE}: audit rows older are deleted, and sessions that expired longer ago;
+ *                  {@code RAIL8_RETENTION_INTERVAL}, ISO-8601, PT1M to P1D (PT1H): from the end of a run to
  *                  the start of the next; {@code RAIL8_RETENTION_BATCH}, 1 to 10000 (1000): the rows one batch scans
  * @param cpuSampling {@code RAIL8_CPU_SAMPLING}: {@code off} (the default, empty) or the CPU-time sampling period, an
  *                    ISO-8601 duration in whole milliseconds from PT0.001S to PT0.1S; with a period the node runs a CPU sampler
@@ -958,6 +960,11 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
     /** The {@code RAIL8_RETENTION_*} keys; a refusal names the key and its bounds, never the value. */
     private static Retention.Config retention(Map<String, String> env) {
         Duration maxAge = span(env, "RAIL8_RETENTION_MAX_AGE", RETENTION_DEFAULTS.maxAge(), "PT1H", "P366D");
+        Duration auditMaxAge = span(env, "RAIL8_AUDIT_MAX_AGE", RETENTION_DEFAULTS.auditMaxAge(), "P30D", "P3660D");
+        if (auditMaxAge.compareTo(maxAge) < 0) {
+            throw new IllegalArgumentException("RAIL8_AUDIT_MAX_AGE is shorter than RAIL8_RETENTION_MAX_AGE (the values are not shown): "
+                    + "a message's status reads its cancel from the audit, so the audit outlives the messages");
+        }
         Duration interval = span(env, "RAIL8_RETENTION_INTERVAL", RETENTION_DEFAULTS.interval(), "PT1M", "P1D");
         String raw = env.get("RAIL8_RETENTION_BATCH");
         int batch = RETENTION_DEFAULTS.batch();
@@ -971,7 +978,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
                 throw new IllegalArgumentException("RAIL8_RETENTION_BATCH must be a whole number of rows from 1 to 10000 (the value is not shown)");
             }
         }
-        return new Retention.Config(maxAge, interval, batch);
+        return new Retention.Config(maxAge, auditMaxAge, interval, batch);
     }
 
     /**

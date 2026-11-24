@@ -9,6 +9,7 @@ import dev.rail8.api.Hash;
 import dev.rail8.api.Health;
 import dev.rail8.api.plugin.AdminService;
 import dev.rail8.core.admission.TargetLimit;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.Dlq;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.Parked;
@@ -21,6 +22,15 @@ import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.record.Page;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepCpu;
+import dev.rail8.runtime.access.Access;
+import dev.rail8.runtime.access.AccessRefused;
+import dev.rail8.runtime.access.Action;
+import dev.rail8.runtime.access.Caller;
+import dev.rail8.runtime.access.Kind;
+import dev.rail8.runtime.access.MemoryAccess;
+import dev.rail8.runtime.access.PackageRef;
+import dev.rail8.runtime.access.Role;
+import dev.rail8.runtime.access.Via;
 import dev.rail8.runtime.deploy.DeployRefusedException;
 import dev.rail8.runtime.deploy.DeployResult;
 import dev.rail8.runtime.deploy.DeployedFlow;
@@ -32,6 +42,7 @@ import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.queue.NotAdmittedException;
 import dev.rail8.runtime.store.PgMessageList;
 import dev.rail8.runtime.store.StepLogJson;
+import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
@@ -39,6 +50,7 @@ import io.vertx.core.VerticleBase;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpHeaders;
+import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpServerRequest;
@@ -54,13 +66,12 @@ import io.vertx.ext.web.handler.BodyHandler;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -68,6 +79,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
@@ -93,13 +106,11 @@ import java.util.stream.Collectors;
  *
  * <p>A verticle owns the socket and routes on its event loop; every route body runs on a fresh virtual thread — it awaits
  * the stores, encodes the answer and checks its headers there — and the answer is written back on the verticle's context.
- * {@code /admin/**} needs {@code Authorization: Bearer <token>} when a token is configured (the scheme in any case, the
- * token compared with {@link MessageDigest#isEqual}); without one it is open, which only a loopback bind allows.
  * {@code /health} is open and shows status only, never a check's detail. {@code /live} and {@code /ready} are open too:
  * {@code /live} answers 200 {@code {"status":"UP"}} while the server runs and reads nothing; {@code /ready} reads its
  * {@link Readiness} inputs on the request, awaits nothing, and answers 200 {@code {"status":"UP","checks":{..}}} when every
  * one is UP, else 503 {@code {"status":"DOWN","checks":{..}}}. Every error body is {@code {error}}: 400 for a
- * parameter that does not parse or a limit or cursor a page store refuses, 401 without the token, 404 for what is not
+ * parameter that does not parse or a limit or cursor a page store refuses, 404 for what is not
  * there (a message, a step, a body recorded as metadata only, bytes no longer stored), 405 for a method a route does not
  * take, 503 for a request the node's Postgres pool refused a connection (its wait elapsed, its wait queue full, or the
  * pool closed by a stopping node: retryable), whether a statement on the pool was refused or a transaction's
@@ -162,13 +173,12 @@ import java.util.stream.Collectors;
  * next|null}}, {@code error} the parked failure's text), and {@code /release} does not release one (404). {@code GET /admin/work/lost?limit&after} pages the lost rows — their body given up by an accepted
  * {@code RAIL8_JOURNAL_ACCEPT_LOSS} — the same way ({@code {items:[{seq, messageId, flow, partitionKey, lostAt, blocks}],
  * next|null}}); {@code POST /admin/work/{seq}/discard} deletes a lost row and writes one {@code audit} row in the same transaction,
- * answering 200 {@code {seq, auditId}}, 404 for a seq unknown or not lost, 400 for a seq that is not a long or an
- * {@code X-Rail8-Actor} over 128 characters; the actor is that header ({@code unknown} without one), self-declared under the
- * shared token. A discard wakes the row's flow and announces it to the node of its key's next row, as a release does. Without a
+ * answering 200 {@code {seq, auditId}}, 404 for a seq unknown or not lost, 400 for a seq that is not a long; the audit names
+ * the caller ({@link Caller#acting}). A discard wakes the row's flow and announces it to the node of its key's next row, as a release does. Without a
  * queue these routes do not exist (404).
  *
- * <p>With a {@link FailedMessages}, the operator acts on a parked message, each act audited with the actor as {@code /discard}
- * reads it. With a {@link Deployments} too, {@code POST /admin/dlq/{id}/retry} runs a message its flow's worker parked once more
+ * <p>With a {@link FailedMessages}, the operator acts on a parked message, each act audited with the caller as {@code /discard}
+ * names it. With a {@link Deployments} too, {@code POST /admin/dlq/{id}/retry} runs a message its flow's worker parked once more
  * under its own id (a message keeps one id), as attempt k + 1 of the row's own bound: in place when it stops its key, else at
  * the tail of its key; 202 {@code {id, attempt}}, 404 (no DLQ row), 409 (its flow not deployed here, a work row of the message not
  * settled yet or its body lost, its ingress body no longer kept), 422 saying why (a flow that is not at-least-once, a row its
@@ -187,8 +197,33 @@ import java.util.stream.Collectors;
  * {schemes, steps, languages, services:[{method, path}], command}}]}}, each list of {@code brings} sorted, {@code command} true
  * when it brings a command of the command line, and {@code items} empty without modules.
  *
- * <p>Every {@code /admin/**} request that carries an {@code Origin} header, or a {@code Sec-Fetch-Site} other than {@code none},
- * is 403 {@code {error}} before the token check and the route, token or no token: what a browser sends, never the CLI.
+ * <p>Every {@code /admin/**} request goes in one order. First the browser guard: a request that carries an {@code Origin}
+ * header, or a {@code Sec-Fetch-Site} other than {@code none}, is 403 {@code {error, code: "browser"}}: what a browser sends,
+ * never the CLI. Then {@code POST /admin/sessions}, the login, takes no credential. Every other request is authenticated
+ * ({@link Access#authenticate}) from {@code Authorization: Bearer <credential>} before the router looks at its path, so a
+ * path no route takes is authenticated too: a session; the emergency key, a {@code RAIL8_ADMIN_TOKEN} of its form; and while
+ * the bridge is open, the shared token, a {@code RAIL8_ADMIN_TOKEN} of another form, and on a node without one a request
+ * without a credential. A refusal is 401 {@code {error, code}} with {@code WWW-Authenticate: Bearer}, or 503. Then the
+ * router's 404 and 405, and the door: the caller must be allowed the route's action ({@link Caller#require}, 403
+ * {@code {error, code, needs}}, {@code needs} the roles that grant it), before any body is read. Then the body (400, 413) and
+ * the route, which asks {@link Caller#acting} for the {@link Actor} of its audit row. A request with the emergency key, a
+ * 404 or 405 included, and one with the shared token for an action of the key's other than {@code self.read}, is written to
+ * the audit before anything runs, 503 when it cannot be. A plugin's service answers these refusals as problems of type
+ * {@code urn:rail8:admin:problem:unauthenticated} and {@code forbidden}.
+ *
+ * <p>The users and their sessions ({@link Access}): {@code POST /admin/sessions {name, password, device?}} (at most
+ * {@link #LOGIN_BODY_MAX} bytes; a {@code device} is taken and not read) answers 201 {@code {session, expiresAt, idleSeconds,
+ * me}}, or 401 {@code login-refused}, 429 {@code too-many-attempts} with {@code Retry-After}, 503 {@code busy}.
+ * {@code GET /admin/me} answers {@code {name, kind, roles, actions, via, firstPassword, expiresAt, emergencyKey}};
+ * {@code POST /admin/me/password {current, next}} and {@code POST /admin/me/logout} 204. {@code GET /admin/users} lists every
+ * user ({@code {items}}) and {@code GET /admin/users/{name}} shows one: {@code {name, kind, roles:[{role, grantedAt, grantedBy,
+ * grantedVia}], blockedAt, firstPassword, createdAt, createdBy, sessions:[{id, createdAt, lastSeenAt, expiresAt}]}}.
+ * {@code POST /admin/users {name, kind, roles}} answers 201 {@code {name, firstPassword}} for a person, {@code {name}} for a
+ * technical account; {@code POST /admin/users/{name}/roles {add, remove}} 200 {@code {name, roles, added, removed}}, each role
+ * checked by its own action ({@code administrators.change} for the administrator role, {@code roles.change} for any other);
+ * {@code /block}, {@code /unblock} and {@code /sessions/end} 200 {@code {name}}, {@code /password-reset} 200
+ * {@code {firstPassword}}. Their bodies are at most {@link #USERS_BODY_MAX} bytes. An invariant a change would break is 409.
+ * A view of a body ({@code message.body}) is written to the audit before any byte of it is sent, 503 when it cannot be.
  *
  * @since 0.1
  */
@@ -199,17 +234,30 @@ public final class AdminServer {
 
     private static final System.Logger LOG = System.getLogger(AdminServer.class.getName());
 
-    /** The header an admin request declares its actor in, for the audit row; and its length at most. */
+    /** The header a caller of the bridge declares its name in, for the audit row; and its length at most. */
     static final String ACTOR = "X-Rail8-Actor";
-    static final int ACTOR_MAX = 128;
+    static final int ACTOR_MAX = Access.ACTOR_MAX;
     /** The largest body {@code POST /admin/dlq/{id}/cancel} reads, in bytes: a larger one is 413. */
     static final int CANCEL_BODY_MAX = 8 * 1024;
 
     /** The largest body of {@code POST /admin/deploy}, in bytes. */
     static final int DEPLOY_BODY_MAX = 4 * 1024;
+    /** The largest body of a login, {@code POST /admin/sessions}, in bytes. */
+    static final int LOGIN_BODY_MAX = 1024;
+    /** The largest body of the routes of users and of the caller's own password, in bytes. */
+    static final int USERS_BODY_MAX = 4 * 1024;
+    /**
+     * The metadata of every route of {@code /admin}: {@value #ACTIONS} the list of actions its door lets through, or for the three
+     * routes mounted without one — the browser guard, the login and the authentication — {@value #UNCHECKED} their name.
+     */
+    static final String ACTIONS = "rail8.actions";
+    static final String UNCHECKED = "rail8.unchecked";
+    private static final String CALLER = "rail8.caller";       // where the authentication leaves the request's Caller
+    private static final String BODY_MAX = "rail8.body-max";   // where the door names the limit of its route's body, for the 413
+    private static final String MODULES = "/admin/modules/";
     private static final String JSON = "application/json";
+    private static final String PROBLEM = "application/problem+json";
     private static final String OCTETS = "application/octet-stream";
-    private static final String BEARER = "Bearer ";
     /** What the router answers itself: no route, a method the route does not take, a request it cannot read, a handler that threw. */
     private static final Map<Integer, String> ROUTER_ERRORS = Map.of(400, "bad request", 404, "no such route", 405, "method not allowed",
             500, "internal error");
@@ -345,7 +393,9 @@ public final class AdminServer {
     private final Workers workers;
     private final WorkSignals signals;
     private final Modules modules;
+    private final Access access;
     private volatile Supplier<Future<Void>> undeploy = Future::succeededFuture;
+    private volatile Router router;
 
     /** The read API only: no deploy routes. */
     public AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health) {
@@ -423,7 +473,21 @@ public final class AdminServer {
     public AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health, Optional<Deployments> deployments,
                        WorkQueue work, FailedMessages failed, Optional<Sampling> sampling, PgMessageList list, Workers workers, WorkSignals signals,
                        Modules modules) {
-        this(config, messages, dlq, blobs, health, deployments, Optional.of(work), Optional.of(failed), sampling, Optional.of(list), workers, signals, modules);
+        this(config, messages, dlq, blobs, health, deployments, work, failed, sampling, list, workers, signals, modules,
+                MemoryAccess.bridge(config.token()));
+    }
+
+    /**
+     * The node's server with its users:
+     * {@link #AdminServer(Config, MessageStore, Dlq, BlobStore, HealthProbe, Optional, WorkQueue, FailedMessages, Optional, PgMessageList,
+     * Workers, WorkSignals, Modules)}, every {@code /admin} request authenticated by {@code access}. The other constructors
+     * authenticate with a {@link MemoryAccess#bridge} of the config's token: no user, the bridge open.
+     */
+    public AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health, Optional<Deployments> deployments,
+                       WorkQueue work, FailedMessages failed, Optional<Sampling> sampling, PgMessageList list, Workers workers, WorkSignals signals,
+                       Modules modules, Access access) {
+        this(config, messages, dlq, blobs, health, deployments, Optional.of(work), Optional.of(failed), sampling, Optional.of(list), workers, signals,
+                modules, access);
     }
 
     private AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health, Optional<Deployments> deployments,
@@ -435,6 +499,17 @@ public final class AdminServer {
     private AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health, Optional<Deployments> deployments,
                         Optional<WorkQueue> work, Optional<FailedMessages> failed, Optional<Sampling> sampling, Optional<PgMessageList> list,
                         Workers workers, WorkSignals signals, Modules modules) {
+        this(config, messages, dlq, blobs, health, deployments, work, failed, sampling, list, workers, signals, modules, MemoryAccess.bridge(config.token()));
+    }
+
+    /**
+     * The server with each part optional: the deploy routes with {@code deployments}, the work routes with {@code work}, the acts
+     * on a parked message with {@code failed}, the list by time with {@code list}, every {@code /admin} request authenticated by
+     * {@code access}.
+     */
+    AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health, Optional<Deployments> deployments,
+                Optional<WorkQueue> work, Optional<FailedMessages> failed, Optional<Sampling> sampling, Optional<PgMessageList> list,
+                Workers workers, WorkSignals signals, Modules modules, Access access) {
         this.config = Objects.requireNonNull(config, "config");
         this.messages = Objects.requireNonNull(messages, "messages");
         this.dlq = Objects.requireNonNull(dlq, "dlq");
@@ -448,6 +523,7 @@ public final class AdminServer {
         this.workers = Objects.requireNonNull(workers, "workers");
         this.signals = Objects.requireNonNull(signals, "signals");
         this.modules = Objects.requireNonNull(modules, "modules");
+        this.access = Objects.requireNonNull(access, "access");
     }
 
     /** Deploys the listening verticle; completes with the bound port (the actual one when configured 0). */
@@ -466,6 +542,14 @@ public final class AdminServer {
         return running.get();
     }
 
+    /**
+     * The router once the server started, for a test that walks its routes: each route of {@code /admin} carries its actions, or
+     * its name when it is one of the three without, as the metadata {@link #ACTIONS} and {@link #UNCHECKED}.
+     */
+    Router router() {
+        return Objects.requireNonNull(router, "the server has not started");
+    }
+
     /** The verticle: the socket, the router and the context every answer is written on. */
     private final class Listener extends VerticleBase {
 
@@ -473,46 +557,75 @@ public final class AdminServer {
 
         @Override
         public Future<?> start() {
-            Router router = Router.router(vertx);
-            router.get("/health").handler(offload(AdminServer.this::health));
-            router.get("/live").handler(offload(c -> Json.of(200, new JsonObject().put("status", Health.Status.UP.name()))));   // reads nothing
-            router.get("/ready").handler(offload(AdminServer.this::ready));
-            router.route("/admin/*").handler(AdminServer::browserGuard);   // before the token check
-            config.token().ifPresent(token -> router.route("/admin/*").handler(bearer(token)));
-            new ModuleCalls(modules, context).mount(router);
-            router.get("/admin/modules").handler(offload(c -> listed(modules)));
-            router.get("/admin/messages").handler(offload(AdminServer.this::search));
-            router.get("/admin/message-counts").handler(offload(AdminServer.this::counts));
-            router.get("/admin/messages/:id").handler(offload(AdminServer.this::timeline));
-            router.get("/admin/messages/:id/steps/:n/body").handler(offload(AdminServer.this::body));
-            router.get("/admin/dlq").handler(offload(AdminServer.this::dlq));
+            Router routes = Router.router(vertx);
+            routes.get("/health").handler(offload(context, (c, who) -> health(c)));
+            routes.get("/live").handler(offload(context, (c, who) -> Json.of(200, new JsonObject().put("status", Health.Status.UP.name()))));   // reads nothing
+            routes.get("/ready").handler(offload(context, (c, who) -> ready(c)));
+            // the three routes of /admin without an action, in this order: the guard, the login, the authentication
+            routes.route("/admin/*").putMetadata(UNCHECKED, "browser guard").handler(AdminServer::browserGuard);
+            routes.post("/admin/sessions").putMetadata(UNCHECKED, "login").handler(BodyHandler.create(false).setBodyLimit(LOGIN_BODY_MAX)).handler(offload(context, (c, who) -> login(c)));
+            routes.route("/admin/*").putMetadata(UNCHECKED, "authentication").handler(this::authenticate);
+            Admin admin = new Admin(routes, context);
+            new ModuleCalls(modules, context).mount(admin);
+            admin.get("/admin/me", Action.SELF_READ, (c, who) -> Json.of(200, me(who, access.expiresAt(who))));
+            admin.post("/admin/me/password", Action.SELF_PASSWORD, USERS_BODY_MAX, AdminServer.this::password);
+            admin.post("/admin/me/logout", Action.SELF_LOGOUT, (c, who) -> {
+                access.logout(who.acting(Action.SELF_LOGOUT, PackageRef.ANY, remote(c)));
+                return NO_CONTENT;
+            });
+            admin.get("/admin/users", Action.USER_READ, (c, who) -> users());
+            admin.get("/admin/users/:name", Action.USER_READ, (c, who) -> user(c.pathParam("name")));
+            admin.post("/admin/users", Action.USER_CREATE, USERS_BODY_MAX, AdminServer.this::createUser);
+            admin.post("/admin/users/:name/roles", Action.ROLES_CHANGE, Action.ADMINISTRATORS_CHANGE, USERS_BODY_MAX, AdminServer.this::roles);
+            admin.post("/admin/users/:name/block", Action.USER_BLOCK, (c, who) -> {
+                access.block(who.acting(Action.USER_BLOCK, PackageRef.ANY, remote(c)), c.pathParam("name"));
+                return named(c);
+            });
+            admin.post("/admin/users/:name/unblock", Action.USER_BLOCK, (c, who) -> {
+                access.unblock(who.acting(Action.USER_BLOCK, PackageRef.ANY, remote(c)), c.pathParam("name"));
+                return named(c);
+            });
+            admin.post("/admin/users/:name/password-reset", Action.USER_PASSWORD_RESET, (c, who) -> Json.of(200, new JsonObject()
+                    .put("firstPassword", access.resetPassword(who.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, remote(c)), c.pathParam("name")))));
+            admin.post("/admin/users/:name/sessions/end", Action.SESSION_END, (c, who) -> {
+                access.endSessions(who.acting(Action.SESSION_END, PackageRef.ANY, remote(c)), c.pathParam("name"));
+                return named(c);
+            });
+            admin.get("/admin/modules", Action.DEPLOYMENT_READ, (c, who) -> listed(modules));
+            admin.get("/admin/messages", Action.MESSAGE_READ, (c, who) -> search(c));
+            admin.get("/admin/message-counts", Action.MESSAGE_READ, (c, who) -> counts(c));
+            admin.get("/admin/messages/:id", Action.MESSAGE_READ, (c, who) -> timeline(c));
+            admin.get("/admin/messages/:id/steps/:n/body", Action.MESSAGE_BODY, AdminServer.this::body);
+            admin.get("/admin/dlq", Action.MESSAGE_READ, (c, who) -> dlq(c));
             deployments.ifPresent(d -> {
-                router.post("/admin/deploy").handler(BodyHandler.create(false).setBodyLimit(DEPLOY_BODY_MAX)).handler(offload(c -> AdminServer.deploy(c, d)));
-                router.delete("/admin/packages/:name").handler(offload(c -> undeployed(c, d)));
-                router.get("/admin/flows").handler(offload(c -> flows(d)));
-                router.get("/admin/packages").handler(offload(c -> packages(d)));
-                router.get("/admin/targets").handler(offload(c -> targets(d)));
-                router.get("/admin/components").handler(offload(c -> components(d)));
-                router.get("/admin/steps").handler(offload(c -> steps(d)));
-                router.get("/admin/flows/:flow/cpu").handler(offload(c -> cpu(c, d)));
+                admin.post("/admin/deploy", Action.PACKAGE_DEPLOY, DEPLOY_BODY_MAX, (c, who) -> AdminServer.deploy(c, who, d));
+                admin.delete("/admin/packages/:name", Action.PACKAGE_UNDEPLOY, (c, who) -> undeployed(c, d));
+                admin.get("/admin/flows", Action.DEPLOYMENT_READ, (c, who) -> flows(d));
+                admin.get("/admin/packages", Action.DEPLOYMENT_READ, (c, who) -> packages(d));
+                admin.get("/admin/targets", Action.DEPLOYMENT_READ, (c, who) -> targets(d));
+                admin.get("/admin/components", Action.DEPLOYMENT_READ, (c, who) -> components(d));
+                admin.get("/admin/steps", Action.DEPLOYMENT_READ, (c, who) -> steps(d));
+                admin.get("/admin/flows/:flow/cpu", Action.DEPLOYMENT_READ, (c, who) -> cpu(c, d));
             });
             work.ifPresent(q -> {
-                router.get("/admin/work/held").handler(offload(c -> held(c, q)));
-                router.get("/admin/work/stopped").handler(offload(c -> stopped(c, q)));
-                router.post("/admin/work/:seq/release").handler(offload(c -> release(c, q, workers, signals)));
-                router.get("/admin/work/lost").handler(offload(c -> lost(c, q)));
-                router.post("/admin/work/:seq/discard").handler(offload(c -> discard(c, q, workers, signals)));
+                admin.get("/admin/work/held", Action.MESSAGE_READ, (c, who) -> held(c, q));
+                admin.get("/admin/work/stopped", Action.MESSAGE_READ, (c, who) -> stopped(c, q));
+                admin.post("/admin/work/:seq/release", Action.WORK_RELEASE, (c, who) -> release(c, who, q, workers, signals));
+                admin.get("/admin/work/lost", Action.MESSAGE_READ, (c, who) -> lost(c, q));
+                admin.post("/admin/work/:seq/discard", Action.WORK_DISCARD, (c, who) -> discard(c, who, q, workers, signals));
             });
             failed.ifPresent(f -> {
-                deployments.ifPresent(d -> router.post("/admin/dlq/:id/retry").handler(offload(c -> retry(c, d, f))));
+                deployments.ifPresent(d -> admin.post("/admin/dlq/:id/retry", Action.MESSAGE_RETRY, (c, who) -> retry(c, who, d, f)));
                 // a body read into memory: bounded, nothing written to disk
-                router.post("/admin/dlq/:id/cancel").handler(BodyHandler.create(false).setBodyLimit(CANCEL_BODY_MAX)).handler(offload(c -> cancel(c, f)));
-                router.post("/admin/messages/:id/cancel").handler(BodyHandler.create(false).setBodyLimit(CANCEL_BODY_MAX)).handler(offload(c -> end(c, f)));
+                admin.post("/admin/dlq/:id/cancel", Action.MESSAGE_CANCEL, CANCEL_BODY_MAX, (c, who) -> cancel(c, who, f));
+                admin.post("/admin/messages/:id/cancel", Action.MESSAGE_CANCEL, CANCEL_BODY_MAX, (c, who) -> end(c, who, f));
             });
-            ROUTER_ERRORS.forEach((status, reason) -> router.errorHandler(status, ctx -> answer(ctx.response(), Json.of(status, error(reason)))));
-            router.errorHandler(413, ctx -> answer(ctx.response(), Json.of(413, error("the request body is above "
-                    + (ctx.request().path().equals("/admin/deploy") ? DEPLOY_BODY_MAX : CANCEL_BODY_MAX) + " bytes"))));
-            return vertx.createHttpServer(new HttpServerOptions().setHost(config.host()).setPort(config.port())).requestHandler(router).listen()
+            ROUTER_ERRORS.forEach((status, reason) -> routes.errorHandler(status, ctx -> unrouted(ctx, status, Json.of(status, error(reason)))));
+            // the door names the limit of its route's body; the login is the one route that reads a body without a door
+            routes.errorHandler(413, ctx -> answer(ctx.response(), Json.of(413, error("the request body is above "
+                    + Objects.requireNonNullElse(ctx.<Integer>get(BODY_MAX), LOGIN_BODY_MAX) + " bytes"))));
+            router = routes;
+            return vertx.createHttpServer(new HttpServerOptions().setHost(config.host()).setPort(config.port())).requestHandler(routes).listen()
                     .map(listening -> server = listening);
         }
 
@@ -522,33 +635,238 @@ public final class AdminServer {
         }
 
         /**
-         * The route body on a fresh virtual thread — never on the event loop — where the answer is also encoded and its headers
-         * checked; it is written back on this verticle's context.
+         * Every request of {@code /admin} but the login: its caller from its credential and its {@value #ACTOR} header, on a virtual
+         * thread — the read of the store blocks — left in the context for the door; or its refusal, before any body is read. The
+         * request is paused meanwhile, so its body waits for the route's body handler.
          */
-        private Handler<RoutingContext> offload(Route body) {
-            return ctx -> Thread.ofVirtual().name("rail8-admin").start(() -> {
+        private void authenticate(RoutingContext ctx) {
+            HttpServerRequest req = ctx.request();
+            req.pause();
+            Optional<String> authorization = Optional.ofNullable(req.getHeader(HttpHeaders.AUTHORIZATION));
+            Optional<String> declared = Optional.ofNullable(req.getHeader(ACTOR));
+            Thread.ofVirtual().name("rail8-admin").start(() -> {
+                Caller who;
+                try {
+                    who = access.authenticate(authorization, declared);
+                } catch (Throwable refused) {   // a refusal, the pool's, or a store that failed: answered, never a hang
+                    Reply reply = failed(refused, ctx);
+                    context.runOnContext(v -> refuse(ctx, reply));
+                    return;
+                }
+                context.runOnContext(v -> {
+                    ctx.put(CALLER, who);
+                    ctx.next();
+                });
+            });
+        }
+
+        /**
+         * A 400, 404, 405 or 500 of the router: a request of the emergency key that no route takes (404, 405) is written to the
+         * audit first, as not allowed, as the door writes the others.
+         */
+        private void unrouted(RoutingContext ctx, int status, Reply reply) {
+            Caller who = ctx.get(CALLER);
+            if (who == null || who.via() != Via.EMERGENCY_KEY || status != 404 && status != 405) {
+                refuse(ctx, reply);
+                return;
+            }
+            HttpServerRequest req = ctx.request();
+            String method = req.method().name();
+            String path = req.path();
+            String remote = remote(ctx);
+            Thread.ofVirtual().name("rail8-admin").start(() -> {
+                Reply written = reply;
+                try {
+                    access.keyUsed(who, method, path, remote, Optional.empty(), false);
+                } catch (Throwable unwritten) {
+                    written = failed(unwritten, ctx);
+                }
+                Reply answered = written;
+                context.runOnContext(v -> refuse(ctx, answered));
+            });
+        }
+    }
+
+    /**
+     * Mounts the routes of {@code /admin}, each behind the door of its actions: the only way such a route is mounted. The route's
+     * body takes the {@link Caller} the door let through; each route carries its actions as the metadata {@link #ACTIONS}.
+     */
+    final class Admin {
+
+        private final Router router;
+        private final Context context;
+
+        Admin(Router router, Context context) {
+            this.router = router;
+            this.context = context;
+        }
+
+        /** {@code GET path}, for a caller allowed {@code action}. */
+        void get(String path, Action action, Route body) {
+            mount(HttpMethod.GET, path, List.of(action), 0, body);
+        }
+
+        /** {@code POST path}, for a caller allowed {@code action}; a body is not read. */
+        void post(String path, Action action, Route body) {
+            mount(HttpMethod.POST, path, List.of(action), 0, body);
+        }
+
+        /** {@code POST path}, for a caller allowed {@code action}; its body, at most {@code bodyMax} bytes, is read after the door. */
+        void post(String path, Action action, int bodyMax, Route body) {
+            mount(HttpMethod.POST, path, List.of(action), bodyMax, body);
+        }
+
+        /** {@code POST path}, for a caller allowed {@code either} or {@code or}; its body is read after the door. */
+        void post(String path, Action either, Action or, int bodyMax, Route body) {
+            mount(HttpMethod.POST, path, List.of(either, or), bodyMax, body);
+        }
+
+        /** {@code DELETE path}, for a caller allowed {@code action}. */
+        void delete(String path, Action action, Route body) {
+            mount(HttpMethod.DELETE, path, List.of(action), 0, body);
+        }
+
+        /** {@code method path}, for a caller allowed {@code action}, answered by {@code handler} on the event loop: a module's service. */
+        void call(HttpMethod method, String path, Action action, Handler<RoutingContext> handler) {
+            router.route(method, path).putMetadata(ACTIONS, List.of(action)).handler(door(List.of(action), 0)).handler(handler);
+        }
+
+        /**
+         * The door, then the route. A route that reads a body has the door on a route of its own just before it, as Vert.x runs a
+         * body handler only before the others of its route: the body is read into memory after the door, bounded, nothing
+         * written to disk.
+         */
+        private void mount(HttpMethod method, String path, List<Action> actions, int bodyMax, Route body) {
+            io.vertx.ext.web.Route route = router.route(method, path).putMetadata(ACTIONS, actions).handler(door(actions, bodyMax));
+            if (bodyMax > 0) {
+                route = router.route(method, path).putMetadata(ACTIONS, actions).handler(BodyHandler.create(false).setBodyLimit(bodyMax));
+            }
+            route.handler(offload(context, body));
+        }
+
+        /**
+         * The door, on the event loop: the caller must be allowed one of {@code actions} — the first it may do, else the first is
+         * refused — before any body is read. A use of the emergency key, and of the shared token for an action of the key's other
+         * than {@code self.read}, is written to the audit first, on a virtual thread; a row not written is 503 and nothing runs.
+         * {@code bodyMax} is the largest body the route reads, for the text of its 413; 0 when it reads none.
+         */
+        private Handler<RoutingContext> door(List<Action> actions, int bodyMax) {
+            return ctx -> {
+                if (bodyMax > 0) ctx.put(BODY_MAX, bodyMax);
+                Caller who = ctx.get(CALLER);
+                Action asked = actions.stream().filter(a -> who.may(a, PackageRef.ANY)).findFirst().orElse(actions.getFirst());
+                if (!keyUse(who, asked)) {
+                    pass(ctx, who, asked);
+                    return;
+                }
+                HttpServerRequest req = ctx.request();
+                String method = req.method().name();
+                String path = req.path();
+                String remote = remote(ctx);
+                Thread.ofVirtual().name("rail8-admin").start(() -> {
+                    try {
+                        access.keyUsed(who, method, path, remote, Optional.of(asked), who.may(asked, PackageRef.ANY));
+                    } catch (Throwable unwritten) {
+                        Reply reply = failed(unwritten, ctx);
+                        context.runOnContext(v -> refuse(ctx, reply));
+                        return;
+                    }
+                    context.runOnContext(v -> pass(ctx, who, asked));
+                });
+            };
+        }
+
+        private static void pass(RoutingContext ctx, Caller who, Action asked) {
+            try {
+                who.require(asked, PackageRef.ANY);
+            } catch (AccessRefused refused) {
+                refuse(ctx, failed(refused, ctx));
+                return;
+            }
+            ctx.next();
+        }
+    }
+
+    /**
+     * Whether a request is written to the audit as a use of the emergency key at the door: every one of the key, and one of the
+     * shared token for an action of the key's other than {@code self.read}.
+     */
+    private static boolean keyUse(Caller who, Action asked) {
+        return who.via() == Via.EMERGENCY_KEY || who.via() == Via.SHARED_TOKEN && asked.emergencyKey() && asked != Action.SELF_READ;
+    }
+
+    /**
+     * The route body on a fresh virtual thread — never on the event loop — where the answer is also encoded and its headers
+     * checked; it is written back on {@code context}, the verticle's. The request is resumed first: a body no handler read is
+     * dropped as it comes.
+     */
+    private static Handler<RoutingContext> offload(Context context, Route body) {
+        return ctx -> {
+            resume(ctx.request());
+            Thread.ofVirtual().name("rail8-admin").start(() -> {
                 Reply reply = run(body, ctx);
                 context.runOnContext(v -> answer(ctx.response(), reply));
             });
-        }
+        };
+    }
+
+    /** Answers a request refused before its route, then resumes it: the body it may still send is dropped as it comes, never read. */
+    private static void refuse(RoutingContext ctx, Reply reply) {
+        answer(ctx.response(), reply);
+        resume(ctx.request());
+    }
+
+    /** Resumes a request the authentication paused; one already read to its end has nothing to resume. */
+    static void resume(HttpServerRequest req) {
+        if (!req.isEnded()) req.resume();
     }
 
     /** A route body; it may throw anything — {@link #run} answers it. */
     @FunctionalInterface
     private interface Route {
-        Reply apply(RoutingContext ctx) throws Exception;
+        /** The answer to {@code ctx} for {@code who}, the caller the door let through (null on a route without one). */
+        Reply apply(RoutingContext ctx, Caller who) throws Exception;
     }
 
     private static Reply run(Route body, RoutingContext ctx) {
         try {
-            return body.apply(ctx);
-        } catch (Refused refused) {   // a bad limit, cursor, key or step number: only what the routes map to Refused
-            return Json.of(400, error("bad request: " + refused.getMessage()));
-        } catch (Throwable failed) {   // a store that failed, a header no response may carry, a checked one thrown sneakily by an await: a 500, never a hang
-            if (PgTx.refusedByThePool(failed)) return busy();
-            LOG.log(System.Logger.Level.WARNING, "admin request " + ctx.request().path() + " failed", failed);
-            return Json.of(500, error("internal error"));
+            return body.apply(ctx, ctx.get(CALLER));
+        } catch (Throwable failure) {   // a store that failed, a header no response may carry, a checked one thrown sneakily by an await: answered, never a hang
+            return failed(failure, ctx);
         }
+    }
+
+    /**
+     * A failure as the API answers it: a {@link Refused} 400 — only what the routes map to Refused: a bad limit, cursor, key, step
+     * number or body; an {@link AccessRefused} as {@link #refusal} answers it; the pool's refusal 503; anything else 500, logged.
+     */
+    private static Reply failed(Throwable failure, RoutingContext ctx) {
+        if (failure instanceof Refused refused) return Json.of(400, error("bad request: " + refused.getMessage()));
+        if (failure instanceof AccessRefused refused) return refusal(refused, ctx.request().path().startsWith(MODULES));
+        if (PgTx.refusedByThePool(failure)) return busy();
+        LOG.log(System.Logger.Level.WARNING, "admin request " + ctx.request().path() + " failed", failure);
+        return Json.of(500, error("internal error"));
+    }
+
+    /**
+     * An {@link AccessRefused} as the API answers it: {@code {error}} and its {@code code} when it has one; a 401 with
+     * {@code WWW-Authenticate: Bearer}; a 403 with {@code needs}, the ids of the roles that grant the refused action; a 429 and a
+     * busy 503 with {@code Retry-After}. With {@code problem} — a plugin's service — a 401 or 403 is instead a problem of type
+     * {@code urn:rail8:admin:problem:unauthenticated} or {@code forbidden} with the same members.
+     */
+    private static Reply refusal(AccessRefused refused, boolean problem) {
+        int status = refused.status();
+        Map<String, String> headers = new TreeMap<>();
+        if (status == 401) headers.put("www-authenticate", "Bearer");
+        refused.retryAfter().ifPresent(seconds -> headers.put("retry-after", Long.toString(seconds)));
+        boolean asProblem = problem && (status == 401 || status == 403);
+        JsonObject body = asProblem
+                ? new JsonObject().put("type", "urn:rail8:admin:problem:" + (status == 401 ? "unauthenticated" : "forbidden"))
+                        .put("title", status == 401 ? "Unauthenticated" : "Forbidden").put("status", status).put("detail", refused.getMessage())
+                : error(refused.getMessage());
+        refused.code().ifPresent(code -> body.put("code", code));
+        if (status == 403) body.put("needs", ids(refused.needs()));
+        return new Json(status, asProblem ? PROBLEM : JSON, body.toBuffer(), headers);
     }
 
     /**
@@ -571,25 +889,8 @@ public final class AdminServer {
     }
 
     /**
-     * Lets the request on when it carries {@code Authorization: Bearer <token>} — the scheme in any case (RFC 7235), the token
-     * compared with {@link MessageDigest#isEqual}; 401 otherwise.
-     */
-    private static Handler<RoutingContext> bearer(String token) {
-        byte[] expected = token.getBytes(StandardCharsets.UTF_8);
-        return ctx -> {
-            String presented = Objects.requireNonNullElse(ctx.request().getHeader("Authorization"), "");
-            if (presented.regionMatches(true, 0, BEARER, 0, BEARER.length())
-                    && MessageDigest.isEqual(presented.substring(BEARER.length()).getBytes(StandardCharsets.UTF_8), expected)) {
-                ctx.next();
-            } else {
-                answer(ctx.response().putHeader("www-authenticate", "Bearer"), Json.of(401, error("this route needs Authorization: Bearer <token>")));
-            }
-        };
-    }
-
-    /**
      * Lets the request on unless a browser sent it: an {@code Origin} header, whatever its value, or a {@code Sec-Fetch-Site}
-     * other than {@code none} (a typed URL) is 403 {@code {error}}. The CLI and curl send neither.
+     * other than {@code none} (a typed URL) is 403 {@code {error, code: "browser"}}. The CLI and curl send neither.
      */
     private static void browserGuard(RoutingContext ctx) {
         HttpServerRequest req = ctx.request();
@@ -597,8 +898,14 @@ public final class AdminServer {
         if (req.getHeader(HttpHeaders.ORIGIN) == null && (site == null || site.equals("none"))) {
             ctx.next();
         } else {
-            answer(ctx.response(), Json.of(403, error("the admin API does not answer a browser: a request with Origin or Sec-Fetch-Site other than none is refused")));
+            answer(ctx.response(), refusal(AccessRefused.forbidden("browser",
+                    "the admin API does not answer a browser: a request with Origin or Sec-Fetch-Site other than none is refused", Set.of()), false));
         }
+    }
+
+    /** The address the request came from, for the audit. */
+    private static String remote(RoutingContext ctx) {
+        return ctx.request().remoteAddress().hostAddress();
     }
 
     /** A request the API refuses: a 400 naming the reason. Only a bad parameter becomes one, never a store's other failure. */
@@ -653,7 +960,7 @@ public final class AdminServer {
         return Json.of(200, new JsonObject().put("id", id).put("flow", timeline.getFirst().flow()).put("steps", steps));
     }
 
-    private Reply body(RoutingContext ctx) {
+    private Reply body(RoutingContext ctx, Caller who) {
         String id = ctx.pathParam("id");
         int n = refusable(() -> Integer.parseInt(ctx.pathParam("n")));
         OptionalInt attempt = attempt(ctx);
@@ -679,6 +986,8 @@ public final class AdminServer {
             return Json.of(410, error("the bytes of step " + n + " of message " + id + " are gone for good: " + lost.getMessage()));
         }
         if (!stored) return Json.of(404, error(gone));
+        // the view is in the audit before any byte of it is sent: a row not written is 503, and nothing is opened
+        access.bodyViewed(who.acting(Action.MESSAGE_BODY, PackageRef.ofFlow(at.flow()), remote(ctx)), id, n);
         ReadStream<Buffer> bytes;
         try {
             bytes = blobs.open(key);
@@ -766,12 +1075,12 @@ public final class AdminServer {
     }
 
     /**
-     * 200 {@code {seq}} for a held row, released: its flow woken here (every flow when untold) and announced to its body's node ({@code
-     * *} when untold), the release committed; 404 for any other seq the queue does not release; a seq that is not a long never reaches it.
+     * 200 {@code {seq}} for a held row, released and audited: its flow woken here (every flow when untold) and announced to its body's
+     * node ({@code *} when untold), the release committed; 404 for any other seq the queue does not release; a seq that is not a long never reaches it.
      */
-    private static Reply release(RoutingContext ctx, WorkQueue work, Workers workers, WorkSignals signals) {
+    private static Reply release(RoutingContext ctx, Caller who, WorkQueue work, Workers workers, WorkSignals signals) {
         long seq = refusable(() -> Long.parseLong(ctx.pathParam("seq")));
-        Optional<WorkQueue.Released> released = work.releaseRow(seq).await();
+        Optional<WorkQueue.Released> released = work.releaseRow(seq, who.acting(Action.WORK_RELEASE, PackageRef.ANY, remote(ctx))).await();
         if (released.isEmpty()) return Json.of(404, error("no held work item " + seq));
         WorkQueue.Released row = released.get();
         row.flow().ifPresentOrElse(workers::wake, workers::wakeAll);
@@ -795,12 +1104,11 @@ public final class AdminServer {
     /**
      * 200 {@code {seq, auditId}} for a lost row, discarded and audited: its flow woken here and, when its key has a next row
      * whose node is known, that node announced, after the commit; 404 for any other seq (nothing deleted, nothing audited); a seq
-     * that is not a long or an actor over {@link #ACTOR_MAX} characters is 400 before the queue is asked.
+     * that is not a long is 400 before the queue is asked.
      */
-    private static Reply discard(RoutingContext ctx, WorkQueue work, Workers workers, WorkSignals signals) {
+    private static Reply discard(RoutingContext ctx, Caller who, WorkQueue work, Workers workers, WorkSignals signals) {
         long seq = refusable(() -> Long.parseLong(ctx.pathParam("seq")));
-        String actor = actor(ctx.request());
-        Optional<WorkQueue.Discarded> discarded = work.discard(seq, actor, ctx.request().remoteAddress().hostAddress()).await();
+        Optional<WorkQueue.Discarded> discarded = work.discard(seq, who.acting(Action.WORK_DISCARD, PackageRef.ANY, remote(ctx))).await();
         if (discarded.isEmpty()) return Json.of(404, error("no lost work item " + seq));
         WorkQueue.Discarded d = discarded.get();
         workers.wake(d.flow());
@@ -809,18 +1117,8 @@ public final class AdminServer {
     }
 
     /**
-     * The audit actor: the request's {@value #ACTOR} header, stripped — self-declared under the shared token, never
-     * authenticated — {@code unknown} when absent or blank; over {@link #ACTOR_MAX} characters a 400.
-     */
-    private static String actor(HttpServerRequest req) {
-        String actor = Objects.requireNonNullElse(req.getHeader(ACTOR), "").strip();
-        if (actor.length() > ACTOR_MAX) throw new Refused(ACTOR + " is at most " + ACTOR_MAX + " characters, was " + actor.length());
-        return actor.isEmpty() ? "unknown" : actor;
-    }
-
-    /**
      * {@code POST /admin/dlq/{id}/retry}: the parked message runs once more under its own id, from step 1, as attempt k + 1 of its
-     * own bound. An actor over {@link #ACTOR_MAX} characters is 400; 404 without a DLQ row; 409 when its flow is not deployed
+     * own bound. 404 without a DLQ row; 409 when its flow is not deployed
      * here; 422 when its flow is not at-least-once, when its worker did not park it — a row at a step other than 1, one without an
      * {@code attempt} k of at least 1 — or when its flow is keyed ({@code partitionBy}) and the row kept no key (parked before V17);
      * nothing written for any of them; each 422 says why and names no other route. Then {@link FailedMessages#retry}, audited: a
@@ -830,13 +1128,13 @@ public final class AdminServer {
      * it committed: the flow woken here and announced to the node of the row's body (every node when the act names none). A body
      * sent to it is not read.
      */
-    private Reply retry(RoutingContext ctx, Deployments deployments, FailedMessages failed) {
+    private Reply retry(RoutingContext ctx, Caller who, Deployments deployments, FailedMessages failed) {
         String id = ctx.pathParam("id");
-        FailedMessages.Actor by = by(ctx.request());
         Optional<Parked> found = dlq.get(id).await();
         if (found.isEmpty()) return Json.of(404, error("no DLQ row for message " + id));
         Parked row = found.get();
         String flow = row.flow();
+        Actor by = who.acting(Action.MESSAGE_RETRY, PackageRef.ofFlow(flow), remote(ctx));
         Optional<FlowDefinition> def = deployments.definition(flow);
         if (def.isEmpty()) return Json.of(409, error("flow " + flow + " is not deployed on this node; message " + id + " is not restarted"));
         if (!"at-least-once".equals(def.get().deliveryMode())) {
@@ -877,14 +1175,14 @@ public final class AdminServer {
      * work row too, so the key's next row runs — and one audit row records it, in one transaction ({@link FailedMessages#cancel}).
      * It reads no deployed flow: every parked message can be cancelled. The body is the reason: none, or {@code {"reason": "..."}}
      * of 1 to {@link FailedMessages#REASON_MAX} characters after stripping and nothing else, else 400; above
-     * {@link #CANCEL_BODY_MAX} bytes 413; an actor over {@link #ACTOR_MAX} characters 400 — each before anything is read. 404
+     * {@link #CANCEL_BODY_MAX} bytes 413 — each before anything is read. 404
      * without a DLQ row; 409 while a work row of the message is there and not stopped, naming it; nothing written. 200
      * {@code {id, auditId, cancelledAt}} once it committed: the flow woken here and announced to the node of its key's next row
      * when there is one.
      */
-    private Reply cancel(RoutingContext ctx, FailedMessages failed) {
+    private Reply cancel(RoutingContext ctx, Caller who, FailedMessages failed) {
         String id = ctx.pathParam("id");
-        FailedMessages.Actor by = by(ctx.request());
+        Actor by = who.acting(Action.MESSAGE_CANCEL, PackageRef.ANY, remote(ctx));
         Optional<String> reason = reason(ctx.request(), ctx.body());
         FailedMessages.Act act = failed.cancel(id, by, reason).await();
         return switch (act) {
@@ -908,7 +1206,7 @@ public final class AdminServer {
 
     /**
      * {@code POST /admin/messages/{id}/cancel}: the at-least-once message ends wherever it is ({@link FailedMessages#end}), with the
-     * body, the actor and their 400 and 413 as {@code POST /admin/dlq/{id}/cancel}. A parked message is cancelled as there: 200
+     * body and its 400 and 413 as {@code POST /admin/dlq/{id}/cancel}. A parked message is cancelled as there: 200
      * {@code {id, auditId, cancelledAt, state: "ended"}}. One not parked whose work row is queued, waiting or leased has the row
      * marked: its run stops, the one going on this node at once (with the cancel's actor and reason), one on another node at that
      * node's next lease renewal, one not running at its row's next claim, which a wake here and an announce to every node bring
@@ -916,9 +1214,9 @@ public final class AdminServer {
      * when none holds it; a repeat answers the first cancel. 409 naming the work item when it is held, stopped without a DLQ row,
      * lost, or not settled beside a DLQ row; 404 when the message has neither: sync and at-most-once runs are not cancelled.
      */
-    private Reply end(RoutingContext ctx, FailedMessages failed) {
+    private Reply end(RoutingContext ctx, Caller who, FailedMessages failed) {
         String id = ctx.pathParam("id");
-        FailedMessages.Actor by = by(ctx.request());
+        Actor by = who.acting(Action.MESSAGE_CANCEL, PackageRef.ANY, remote(ctx));
         Optional<String> reason = reason(ctx.request(), ctx.body());
         FailedMessages.Act act = failed.end(id, by, reason).await();
         return switch (act) {
@@ -961,11 +1259,6 @@ public final class AdminServer {
         return refusable(() -> FailedMessages.reason(Optional.of(text)));
     }
 
-    /** The actor of an act: {@link #actor} and the client's address. */
-    private static FailedMessages.Actor by(HttpServerRequest req) {
-        return new FailedMessages.Actor(actor(req), req.remoteAddress().hostAddress());
-    }
-
     /** The {@code attempt} parameter: empty when missing, else an int of at least 1, else (not an int, below 1) a 400. */
     private static OptionalInt attempt(RoutingContext ctx) {
         String raw = ctx.request().getParam("attempt");
@@ -988,6 +1281,143 @@ public final class AdminServer {
     private static int limit(RoutingContext ctx) {
         String limit = ctx.request().getParam("limit");
         return limit == null ? DEFAULT_LIMIT : Integer.parseInt(limit);
+    }
+
+    // --- the login, the caller's own and the users (on the request's virtual thread)
+
+    /**
+     * {@code POST /admin/sessions {name, password, device?}}: a new session, 201 {@code {session, expiresAt, idleSeconds, me}}. A
+     * {@code device} is taken and not read: every login counts on its name's row of the limit.
+     */
+    private Reply login(RoutingContext ctx) {
+        String shape = "the body is {\"name\": \"<name>\", \"password\": \"<password>\"}";
+        JsonObject o = object(ctx, shape, Set.of("name", "password"), Set.of("device"));
+        if (o.containsKey("device") && !(o.getValue("device") instanceof String)) throw new Refused(shape);
+        Access.Login login = access.login(text(o, "name", shape), text(o, "password", shape), remote(ctx));
+        return Json.of(201, new JsonObject().put("session", login.session()).put("expiresAt", login.expiresAt().toString())
+                .put("idleSeconds", login.idleSeconds()).put("me", me(login.caller(), Optional.of(login.expiresAt()))));
+    }
+
+    /**
+     * {@code GET /admin/me}: the caller's name (for a caller without an account the name the audit records), its kind (null
+     * without an account), its roles, every action it may do, how it proved who it is, whether it holds a first password, when
+     * its session ends at the latest (null for any other caller), and whether the node holds an emergency key, which only an
+     * administrator is told.
+     */
+    private JsonObject me(Caller who, Optional<Instant> expiresAt) {
+        JsonArray actions = new JsonArray();
+        who.actions().forEach(a -> actions.add(a.id()));
+        return new JsonObject().put("name", who.name()).put("kind", who.kind() == Kind.NONE ? null : who.kind().id())
+                .put("roles", ids(who.roles())).put("actions", actions).put("via", who.via().id()).put("firstPassword", who.firstPassword())
+                .put("expiresAt", expiresAt.map(Instant::toString).orElse(null))
+                .put("emergencyKey", access.emergencyKey() && who.roles().contains(Role.ADMINISTRATOR));
+    }
+
+    /** {@code POST /admin/me/password {current, next}}: 204 once the caller's own password changed. */
+    private Reply password(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"current\": \"<password>\", \"next\": \"<password>\"}";
+        JsonObject o = object(ctx, shape, Set.of("current", "next"), Set.of());
+        access.changePassword(who.acting(Action.SELF_PASSWORD, PackageRef.ANY, remote(ctx)), text(o, "current", shape), text(o, "next", shape));
+        return NO_CONTENT;
+    }
+
+    /** {@code GET /admin/users}: every user, by name. */
+    private Reply users() {
+        JsonArray items = new JsonArray();
+        access.users().forEach(u -> items.add(user(u)));
+        return Json.of(200, new JsonObject().put("items", items));
+    }
+
+    /** {@code GET /admin/users/{name}}: the user, or 404. */
+    private Reply user(String name) {
+        return access.user(name).map(u -> Json.of(200, user(u))).orElseGet(() -> Json.of(404, error("no user " + name)));
+    }
+
+    /**
+     * {@code POST /admin/users {name, kind, roles}}: each role checked as an {@code add} by the action that grants it, then a new
+     * user; 201 {@code {name, firstPassword}} for a person, {@code {name}} for a technical account.
+     */
+    private Reply createUser(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"name\": \"<name>\", \"kind\": \"person\" or \"technical\", \"roles\": [\"<role>\", …]}";
+        JsonObject o = object(ctx, shape, Set.of("name", "kind"), Set.of("roles"));
+        String name = text(o, "name", shape);
+        String kind = text(o, "kind", shape);
+        Kind account = Kind.ofAccount(kind).orElseThrow(() -> new Refused("kind is person or technical, was '" + kind + "'"));
+        Set<Role> roles = roles(o, "roles", shape);
+        roles.forEach(role -> who.require(grants(role), PackageRef.ANY));
+        Optional<String> first = access.createUser(who.acting(Action.USER_CREATE, PackageRef.ANY, remote(ctx)), name, account, roles);
+        JsonObject answer = new JsonObject().put("name", name);
+        first.ifPresent(password -> answer.put("firstPassword", password));
+        return Json.of(201, answer);
+    }
+
+    /**
+     * {@code POST /admin/users/{name}/roles {add, remove}}: each role checked by the action that grants it, then the change by
+     * difference; 200 {@code {name, roles, added, removed}}. A body that names no role is 400.
+     */
+    private Reply roles(RoutingContext ctx, Caller who) {
+        String shape = "the body is {\"add\": [\"<role>\", …], \"remove\": [\"<role>\", …]}";
+        JsonObject o = object(ctx, shape, Set.of(), Set.of("add", "remove"));
+        Set<Role> add = roles(o, "add", shape);
+        Set<Role> remove = roles(o, "remove", shape);
+        Set<Role> touched = EnumSet.noneOf(Role.class);
+        touched.addAll(add);
+        touched.addAll(remove);
+        if (touched.isEmpty()) throw new Refused("add or remove at least one role");
+        touched.forEach(role -> who.require(grants(role), PackageRef.ANY));
+        Action acting = touched.stream().allMatch(role -> role == Role.ADMINISTRATOR) ? Action.ADMINISTRATORS_CHANGE : Action.ROLES_CHANGE;
+        Access.RolesChanged changed = access.changeRoles(who.acting(acting, PackageRef.ANY, remote(ctx)), ctx.pathParam("name"), add, remove);
+        return Json.of(200, new JsonObject().put("name", changed.name()).put("roles", ids(changed.roles())).put("added", ids(changed.added()))
+                .put("removed", ids(changed.removed())));
+    }
+
+    /** The action that grants or takes {@code role}: {@code administrators.change} for the administrator role, {@code roles.change} for any other. */
+    private static Action grants(Role role) {
+        return role == Role.ADMINISTRATOR ? Action.ADMINISTRATORS_CHANGE : Action.ROLES_CHANGE;
+    }
+
+    /** 200 {@code {name}}, the user of the route's path. */
+    private static Reply named(RoutingContext ctx) {
+        return Json.of(200, new JsonObject().put("name", ctx.pathParam("name")));
+    }
+
+    /**
+     * The request's body as a JSON object holding every member of {@code required} and none but those and {@code optional}; else a
+     * 400 saying {@code shape}: no body, a form, no JSON, or another shape.
+     */
+    private static JsonObject object(RoutingContext ctx, String shape, Set<String> required, Set<String> optional) {
+        String type = ctx.request().getHeader(HttpHeaders.CONTENT_TYPE);
+        if (type != null && type.toLowerCase(Locale.ROOT).startsWith("multipart/form-data")) throw new Refused(shape + ": it is a form");
+        if (ctx.body().isEmpty()) throw new Refused(shape + ": there is none");
+        Object json;
+        try {
+            json = io.vertx.core.json.Json.decodeValue(ctx.body().buffer());
+        } catch (DecodeException notJson) {
+            throw new Refused(shape + ": it is not JSON");
+        }
+        if (!(json instanceof JsonObject o) || !o.fieldNames().containsAll(required)
+                || !o.fieldNames().stream().allMatch(m -> required.contains(m) || optional.contains(m))) {
+            throw new Refused(shape);
+        }
+        return o;
+    }
+
+    /** The string member {@code name} of {@code o}, else a 400 saying {@code shape}. */
+    private static String text(JsonObject o, String name, String shape) {
+        if (o.getValue(name) instanceof String text) return text;
+        throw new Refused(shape);
+    }
+
+    /** The roles listed by their ids in the member {@code name} of {@code o}: none when it is absent, else a 400 for another shape or an unknown role. */
+    private static Set<Role> roles(JsonObject o, String name, String shape) {
+        if (!o.containsKey(name)) return Set.of();
+        if (!(o.getValue(name) instanceof JsonArray ids)) throw new Refused(shape);
+        Set<Role> roles = EnumSet.noneOf(Role.class);
+        for (Object id : ids) {
+            if (!(id instanceof String text)) throw new Refused(shape);
+            roles.add(Role.byId(text).orElseThrow(() -> new Refused("no role '" + text + "'")));
+        }
+        return roles;
     }
 
     // --- JSON
@@ -1093,10 +1523,10 @@ public final class AdminServer {
 
     /**
      * {@code POST /admin/deploy}: the deploy of the body's commit of the body's repository, or with {@code ?check=true} its check;
-     * the body, the {@code check} parameter and the actor are refused (400) before the deploy is asked.
+     * the body and the {@code check} parameter are refused (400) before the deploy is asked.
      */
-    private static Reply deploy(RoutingContext ctx, Deployments deployments) throws IOException {
-        String actor = actor(ctx.request());
+    private static Reply deploy(RoutingContext ctx, Caller who, Deployments deployments) throws IOException {
+        Actor by = who.acting(Action.PACKAGE_DEPLOY, PackageRef.ANY, remote(ctx));
         String check = Objects.requireNonNullElse(ctx.request().getParam("check"), "false");
         if (!check.equals("true") && !check.equals("false")) throw new Refused("check is true or false, was '" + check + "'");
         String shape = "the body is {\"repository\": \"<name>\", \"commit\": \"<commit or ref>\"}";
@@ -1114,7 +1544,7 @@ public final class AdminServer {
             throw new Refused(shape);
         }
         try {
-            DeployResult r = check.equals("true") ? deployments.check(repository, commit) : deployments.deploy(repository, commit, actor);
+            DeployResult r = check.equals("true") ? deployments.check(repository, commit) : deployments.deploy(repository, commit, by);
             DeployedPackage p = r.pkg();
             return Json.of(200, new JsonObject().put("package", p.name()).put("version", p.version()).put("repository", p.repository().orElse(null))
                     .put("commit", p.commit().orElse(null)).put("flows", new JsonArray(p.flows()))
@@ -1285,6 +1715,26 @@ public final class AdminServer {
         return new JsonObject().put("error", message);
     }
 
+    /** The ids of {@code roles}, in the order of {@link Role}. */
+    private static JsonArray ids(Set<Role> roles) {
+        JsonArray ids = new JsonArray();
+        roles.stream().sorted().forEach(role -> ids.add(role.id()));
+        return ids;
+    }
+
+    /** A user as an administrator sees them: never a secret. */
+    private static JsonObject user(Access.User u) {
+        JsonArray roles = new JsonArray();
+        u.roles().forEach(g -> roles.add(new JsonObject().put("role", g.role().id()).put("grantedAt", g.grantedAt().toString())
+                .put("grantedBy", g.grantedBy()).put("grantedVia", g.grantedVia())));
+        JsonArray sessions = new JsonArray();
+        u.sessions().forEach(live -> sessions.add(new JsonObject().put("id", live.id()).put("createdAt", live.createdAt().toString())
+                .put("lastSeenAt", live.lastSeenAt().toString()).put("expiresAt", live.expiresAt().toString())));
+        return new JsonObject().put("name", u.name()).put("kind", u.kind().id()).put("roles", roles)
+                .put("blockedAt", u.blockedAt().map(Instant::toString).orElse(null)).put("firstPassword", u.firstPassword())
+                .put("createdAt", u.createdAt().toString()).put("createdBy", u.createdBy()).put("sessions", sessions);
+    }
+
     // --- answers (on the verticle's context)
 
     private interface Reply {
@@ -1292,17 +1742,25 @@ public final class AdminServer {
         Future<?> send(HttpServerResponse res);
     }
 
-    /** A JSON answer, encoded where it is built (the route's virtual thread); its content-length overrides any set before. */
-    private record Json(int status, Buffer body) implements Reply {
+    /**
+     * A JSON answer of {@code type} with {@code headers}, encoded where it is built (the route's virtual thread); its content-length
+     * overrides any set before.
+     */
+    private record Json(int status, String type, Buffer body, Map<String, String> headers) implements Reply {
         static Json of(int status, JsonObject body) {
-            return new Json(status, body.toBuffer());
+            return new Json(status, JSON, body.toBuffer(), Map.of());
         }
 
         @Override
         public Future<?> send(HttpServerResponse res) {
-            return res.setStatusCode(status).putHeader("content-type", JSON).putHeader("content-length", Integer.toString(body.length())).end(body);
+            res.setStatusCode(status).putHeader("content-type", type);
+            headers.forEach(res::putHeader);
+            return res.putHeader("content-length", Integer.toString(body.length())).end(body);
         }
     }
+
+    /** 204: done, nothing to say. */
+    private static final Reply NO_CONTENT = res -> res.setStatusCode(204).end();
 
     /**
      * The stored bytes, streamed with back-pressure under the head checked on the virtual thread (content-type and length

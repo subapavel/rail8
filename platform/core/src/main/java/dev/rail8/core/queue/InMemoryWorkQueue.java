@@ -1,6 +1,7 @@
 package dev.rail8.core.queue;
 
 import dev.rail8.api.Envelope;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -196,17 +197,22 @@ public final class InMemoryWorkQueue implements WorkQueue {
     }
 
     @Override public synchronized Future<Boolean> release(long seq) {
-        return releaseRow(seq).map(Optional::isPresent);
+        return Future.succeededFuture(releaseHeld(seq).isPresent());
     }
 
-    /** The released row's flow; no body node: this queue holds no bodies. */
-    @Override public synchronized Future<Optional<Released>> releaseRow(long seq) {
+    /** The released row's flow; no body node: this queue holds no bodies, and no audit row: it has no audit. */
+    @Override public synchronized Future<Optional<Released>> releaseRow(long seq, Actor by) {
+        Objects.requireNonNull(by, "by");
+        return Future.succeededFuture(releaseHeld(seq));
+    }
+
+    private Optional<Released> releaseHeld(long seq) {
         Row r = rows.get(seq);
-        if (r == null || r.heldAt == null || r.stoppedAt != null) return Future.succeededFuture(Optional.empty());
+        if (r == null || r.heldAt == null || r.stoppedAt != null) return Optional.empty();
         r.heldAt = null;
         r.lockedBy = null;      // the holder cleared with the lease: the next hand-out is in no doubt
         r.lockedUntil = null;
-        return Future.succeededFuture(Optional.of(new Released(Optional.of(r.item.flow()), Optional.empty())));
+        return Optional.of(new Released(Optional.of(r.item.flow()), Optional.empty()));
     }
 
     @Override public synchronized Future<Boolean> hasItems(String flow) {
@@ -231,7 +237,7 @@ public final class InMemoryWorkQueue implements WorkQueue {
      * {@link FailedMessages#retry} under this queue's monitor: the parked row in the DLQ, the stopped row resumed in place or a
      * new row at the tail of its key (no body is checked: this queue holds none), one event.
      */
-    synchronized FailedMessages.Act retry(String messageId, String flow, String partitionKey, int attempt, FailedMessages.Actor by) {
+    synchronized FailedMessages.Act retry(String messageId, String flow, String partitionKey, int attempt, Actor by) {
         Objects.requireNonNull(messageId, "messageId");
         Objects.requireNonNull(flow, "flow");
         Objects.requireNonNull(by, "by");
@@ -263,7 +269,7 @@ public final class InMemoryWorkQueue implements WorkQueue {
     }
 
     /** {@link FailedMessages#cancel} under this queue's monitor: the parked row out of the DLQ with the stopped row, if any, one event. */
-    synchronized FailedMessages.Act cancel(String messageId, FailedMessages.Actor by, Optional<String> reason) {
+    synchronized FailedMessages.Act cancel(String messageId, Actor by, Optional<String> reason) {
         Objects.requireNonNull(messageId, "messageId");
         Objects.requireNonNull(by, "by");
         Optional<String> given = FailedMessages.reason(reason);
@@ -287,7 +293,7 @@ public final class InMemoryWorkQueue implements WorkQueue {
      * {@link FailedMessages#end} under this queue's monitor: a parked message cancelled as {@link #cancel} does; else the
      * message's oldest work row, when it is not held, marked with one event and due now, answering its holder.
      */
-    synchronized FailedMessages.Act end(String messageId, FailedMessages.Actor by, Optional<String> reason) {
+    synchronized FailedMessages.Act end(String messageId, Actor by, Optional<String> reason) {
         Objects.requireNonNull(messageId, "messageId");
         Objects.requireNonNull(by, "by");
         Optional<String> given = FailedMessages.reason(reason);

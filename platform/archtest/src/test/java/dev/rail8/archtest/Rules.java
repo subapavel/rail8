@@ -2,6 +2,7 @@ package dev.rail8.archtest;
 
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaConstructorCall;
 import com.tngtech.archunit.lang.ArchRule;
 
 import java.util.Set;
@@ -195,6 +196,23 @@ final class Rules {
     static final ArchRule RUNTIME_NEVER_NAMES_THE_MOCK = noClasses().that().resideInAPackage(RUNTIME)
             .should().dependOnClassesThat().resideInAPackage("dev.rail8.components.mock..")
             .because("a deployed node refuses a mock binding (ARCHITECTURE §11); no runtime class, Main included, names one (F-4)");
+
+    /** Who acted, as an audit row records it. */
+    static final String ACTOR = "dev.rail8.core.audit.Actor";
+
+    /** The admin API's decision point; its {@code acting} gives a route the actor of an act it allowed. */
+    static final String CALLER = "dev.rail8.runtime.access.Caller";
+
+    private static final DescribedPredicate<JavaConstructorCall> AN_ACTOR_MADE_OUTSIDE_ACTING = describe(
+            "a constructor of " + ACTOR + " called outside " + CALLER + ".acting",
+            call -> call.getTargetOwner().getName().equals(ACTOR)
+                    && !(call.getOriginOwner().getName().equals(CALLER) && call.getOrigin().getName().equals("acting")));
+
+    static final ArchRule ONLY_THE_DECISION_POINT_MAKES_AN_ACTOR = noClasses().that().resideInAPackage("dev.rail8..")
+            .and().resideOutsideOfPackage(SIM)
+            .should().callConstructorWhere(AN_ACTOR_MADE_OUTSIDE_ACTING)
+            .because("an audit row names who acted only once the permission check allowed the act: Caller.acting is the one way to "
+                    + "an Actor; the simulation, which has no admin API, names its operator itself");
 
     /** The one package that may open a raw TCP socket with Vert.x's {@code io.vertx.core.net.Net*} types (F-35, CORE-5a). */
     static final String PEER_LINK = "dev.rail8.runtime.journal.peer..";

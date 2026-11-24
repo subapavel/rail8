@@ -102,11 +102,11 @@ the list of failed messages, like messages in error status in PO's message monit
 - `POST /admin/dlq/{id}/retry` runs one once more under the same id, as its last attempt.
 - `POST /admin/dlq/{id}/cancel` ends one, with an optional reason (`{"reason": "…"}`, at most 1024
   characters). Its records and bodies stay until retention removes them.
-- Each retry and cancel writes an audit row in the same transaction, naming the actor the caller gives
-  in the `X-Rail8-Actor` header (`unknown` without it), the caller's address and, for a cancel, the
-  reason and the error.
+- Each retry and cancel writes an audit row in the same transaction, naming who acted (part 10, Admin
+  API), the caller's address and, for a cancel, the reason and the error.
 - A message that cannot even be parked is **held**: it stays in `work`, is never claimed again and,
-  for an ordered flow, stops its key. An operator lists held items and releases them.
+  for an ordered flow, stops its key. An operator lists held items and releases them; a release is
+  audited.
 - A row whose body was lost with a node's disk can be discarded by an operator; the act is audited.
 
 ### A run's time limit, and cancelling a running message
@@ -124,7 +124,7 @@ ends at the node's stop deadline. A step that returns before it notices the stop
 - `sync`: the sender gets 503 with `Retry-After`. `at-most-once`: it is logged and dropped.
 
 `POST /admin/messages/{id}/cancel` cancels an at-least-once message that has not ended. It takes the
-same optional reason and `X-Rail8-Actor` as the cancel of a failed message and writes one audit row.
+same optional reason as the cancel of a failed message and writes one audit row.
 
 - A message that is queued, waiting for its retry or running is marked in its work row, in the
   audit's transaction. The answer is 202 `{"id", "auditId", "cancelledAt", "state": "stopping",
@@ -210,7 +210,8 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `body_refs`, `journal_segments`, `journal_keys`, `journal_nodes`, `journal_losses` | where each durable body is, the journal files, their wrapped encryption keys, and losses an operator accepted |
 | `nodes` | node membership and leases |
 | `deployments` | which commit of which repository each package runs, its content digest and the pins of its dependencies |
-| `audit` | operator acts |
+| `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
+| `users`, `role_assignments`, `sessions`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions (by fingerprint), the failed logins of each name, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
 
 Migrations run at node start (Flyway).
@@ -252,6 +253,11 @@ node that holds the body (see part 6).
 Message history, kept bodies and delivery identities are deleted after 7 days
 (`RAIL8_RETENTION_MAX_AGE`), except for messages still in `work` or `dlq`. Parked messages are never
 deleted.
+
+The audit is kept for `RAIL8_AUDIT_MAX_AGE`, from P30D to P3660D, P365D by default; a node whose
+value is shorter than `RAIL8_RETENTION_MAX_AGE` does not start, as a message's status reads its cancel
+from the audit. The same job deletes the sessions that ended longer ago than that and the login
+limit's rows without a failure for 24 hours.
 
 A message can be saved with a body whose key names another message (the caller's body, handed to a
 callee). The save keeps that body in the same transaction, and the message's work row points at the
@@ -427,6 +433,9 @@ the git seam the node will use, and the package itself from its working folder. 
 a dependency by its content among the packages it holds.
 `rail8 deploy <repository> <commit|ref> [--check]` asks a node's admin API to deploy that commit of
 that repository (`POST /admin/deploy`) and prints the node's answer; `--check` deploys nothing.
+`rail8 user add <name> [--role <role>]` makes a person through a node's admin API with
+`RAIL8_ADMIN_TOKEN`, the emergency key, and prints their first password; it makes the first
+administrator. `rail8 key new` prints a new emergency key and sends nothing.
 `rail8 new-adapter` writes the skeleton of a new adapter as a git repository with a first commit
 (part 5). `rail8 <module> [arguments]` runs the command that the module of that name brings, and
 `rail8 help` lists each module's command after the CLI's own (part 5); both load the modules of the
@@ -1129,8 +1138,33 @@ run's records are written in groups, after the bodies they refer to are durable.
 
 ### Admin API
 
-On `127.0.0.1:8081` by default. With `RAIL8_ADMIN_TOKEN` set, every `/admin` route needs it as a
-Bearer token; without one the API may only listen on loopback. There are no users or roles.
+On `127.0.0.1:8081` by default; without `RAIL8_ADMIN_TOKEN` it may only listen on loopback. Every
+`/admin` request but the login carries `Authorization: Bearer <credential>`: a user's session, or the
+emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
+
+- A user is a person or a technical account and holds roles: `administrator`, `developer`,
+  `operator`, `message-bodies` and `secret-administrator`. Every route is mounted with its action,
+  and a caller passes when a role it holds grants it; else 403 `{error, code, needs}`, `needs` the
+  roles that would. Each refusal carries a `code`; a 401 carries `WWW-Authenticate: Bearer`.
+- A login, `POST /admin/sessions {name, password}`, gives a session of 12 hours that ends after 2
+  hours without a request, at its logout, at a block of its user, at a reset of the password, at the
+  user's own password change (the other sessions) and at an administrator's end of the user's
+  sessions. A user has at most 10; the eleventh login ends the oldest. Roles are read with every
+  request, so a change holds at the next one, on every node.
+- The failed logins of a name are free 5 times, then each waits twice as long as the one before, up
+  to 5 minutes: 429 with `Retry-After`. Passwords, 12 characters at least, are hashed with Argon2id,
+  two at once on a node (503 `busy` beyond). A new user and a reset password get a first password the
+  node generates, valid 7 days, which may only read itself, change the password and log out.
+- `RAIL8_ADMIN_TOKEN` of the form `rail8k_…` (`rail8 key new`) is the emergency key: it reads and
+  makes users, gives and takes the administrator role, blocks, resets passwords and ends sessions, and
+  nothing else. Each use is written to the audit before anything runs, a use refused or of no route
+  too, or the answer is 503.
+- During the bridge, until the marker `admin_bridge` closes, a token of another form is the shared
+  token of before: it may do what existed before users and what the key may, the audit naming the
+  actor of the `X-Rail8-Actor` header (`unknown` without it). Without a token, the API on loopback
+  may do what existed before users.
+- A message's body needs the role `message-bodies`, and each view is in the audit before any byte is
+  sent, or the answer is 503.
 
 | Route | Purpose |
 | --- | --- |
@@ -1151,6 +1185,9 @@ Bearer token; without one the API may only listen on loopback. There are no user
 | `GET /admin/steps` | the step types of the node's modules and plugins, each with its `configSchema`, sorted by type |
 | `GET /admin/modules` | the loaded modules and plugins, each with its version, api, SHA-256, where it came from and what it brings (part 5) |
 | `GET`, `POST /admin/modules/{module}/{path}` | the admin services of the node's modules (part 5) |
+| `POST /admin/sessions`; `GET /admin/me`, `POST /admin/me/password`, `POST /admin/me/logout` | the login; who the caller is and every action it may do, its own password change, its logout |
+| `GET /admin/users`, `GET /admin/users/{name}`, `POST /admin/users` | the users with their roles, who granted each, their block and live sessions; a new user |
+| `POST /admin/users/{name}/roles`, `/block`, `/unblock`, `/password-reset`, `/sessions/end` | roles changed by difference, a block, a reset to a first password, the end of every session of a user |
 
 The list of recent messages reads Postgres only. `from` and `to` are ISO-8601 instants at most 31 days
 apart; it lists the messages whose arrival started at `from` or later and before `to`, each with its id,
@@ -1189,6 +1226,7 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Users, five fixed roles and the permission check, named tokens for the command line and for machines, HTTPS on
-  the admin port, and one audit with its view at a message and the Audit screen (`docs/USERS-AND-ROLES.md`). Seeing a
-  message's body is a role of its own, and every view of a body is recorded. No teams.
+- Named tokens for the command line and for machines, HTTPS on the admin port, the UI's login and its
+  Users screen, device credentials for the login, and the audit's view at a message and the Audit screen
+  (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
+  No teams.

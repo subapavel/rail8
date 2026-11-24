@@ -77,7 +77,7 @@ class DeploymentsRestoreGuardTest {
 
     void deploy(Deployments d, PackageDraft p) throws Exception {
         String commit = repos.commit(p);
-        OnVirtualThread.call(() -> d.deploy(p.name(), commit, "test"));
+        OnVirtualThread.call(() -> d.deploy(p.name(), commit, TestActors.named("test")));
     }
 
     static void restore(Deployments d) throws Exception {

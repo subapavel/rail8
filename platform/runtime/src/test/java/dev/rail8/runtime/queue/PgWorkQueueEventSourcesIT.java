@@ -1,13 +1,16 @@
 package dev.rail8.runtime.queue;
 
 import dev.rail8.api.BlobKey;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.queue.WorkQueue;
 import dev.rail8.testkit.SharedPostgres;
 import io.vertx.core.Vertx;
+import io.vertx.core.json.JsonObject;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
+import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.Timeout;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,6 +39,7 @@ class PgWorkQueueEventSourcesIT {
 
     static final SharedPostgres pg = SharedPostgres.database();
     static final Duration LEASE = Duration.ofSeconds(30);
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7");
     static Vertx vertx;
     static Pool pool;
     static PgWorkQueue onA;
@@ -54,7 +59,7 @@ class PgWorkQueueEventSourcesIT {
     static void stop() { pool.close().await(); vertx.close().await(); pg.stop(); }
 
     @BeforeEach
-    void clean() { pool.query("truncate work, body_refs, journal_segments").execute().await(); }
+    void clean() { pool.query("truncate work, body_refs, journal_segments, audit").execute().await(); }
 
     /** A plain row of flow {@code orders}, key {@code key}, its body on {@code bodyNode} (null: a pre-V12 row); answers its seq. */
     long row(String id, String key, String bodyNode) {
@@ -237,12 +242,37 @@ class PgWorkQueueEventSourcesIT {
         pool.preparedQuery("update work set held_at = now(), locked_by = 'node-b', attempts = 2 where seq = any($1)")
                 .execute(Tuple.of(new Long[] {onB, preV12})).await();
 
-        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("orders"), Optional.of("node-b"))), onA.releaseRow(onB).await());
-        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("orders"), Optional.empty())), onA.releaseRow(preV12).await(),
+        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("orders"), Optional.of("node-b"))), onA.releaseRow(onB, BY).await());
+        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("orders"), Optional.empty())), onA.releaseRow(preV12, BY).await(),
                 "a pre-V12 row names no body node");
-        assertEquals(Optional.empty(), onA.releaseRow(queued).await(), "a row not held is not released");
-        assertEquals(Optional.empty(), onA.releaseRow(onB).await(), "nor one released already");
+        assertEquals(Optional.empty(), onA.releaseRow(queued, BY).await(), "a row not held is not released");
+        assertEquals(Optional.empty(), onA.releaseRow(onB, BY).await(), "nor one released already");
         assertFalse(onA.release(queued).await(), "release answers the same as a boolean");
+    }
+
+    /**
+     * A release writes one audit row: who acted (its name, user id, way in and credential's id), the action {@code work.release},
+     * the subject {@code work/<seq>}, and the detail with the flow, the message id, the key and the remote. A release of a row not
+     * held writes none.
+     */
+    @Test
+    void aReleaseIsAuditedWithItsCaller() {
+        long held = row("m-1", "K", "node-b");
+        long queued = row("m-2", null, "node-b");
+        pool.preparedQuery("update work set held_at = now(), locked_by = 'node-b', attempts = 2 where seq = $1").execute(Tuple.of(held)).await();
+        Actor alice = new Actor("alice", OptionalLong.of(7), "session", Optional.of("0123456789abcdef"), "10.0.0.7");
+
+        assertTrue(onA.releaseRow(held, alice).await().isPresent(), "fixture: the held row is released");
+        assertEquals(Optional.empty(), onA.releaseRow(queued, alice).await(), "fixture: a row not held is not released");
+
+        List<List<Object>> audit = new java.util.ArrayList<>();
+        for (Row r : pool.query("select actor, action, subject, detail, user_id, via, credential from audit").execute().await()) {
+            audit.add(List.of(r.getString(0), r.getString(1), r.getString(2), new JsonObject(r.getValue(3).toString()), r.getLong(4), r.getString(5),
+                    r.getString(6)));
+        }
+        assertEquals(List.of(List.of("alice", "work.release", "work/" + held,
+                new JsonObject().put("flow", "orders").put("messageId", "m-1").put("partitionKey", "K").put("remote", "10.0.0.7"),
+                7L, "session", "0123456789abcdef")), audit, "one row, of the release of the held row");
     }
 
     /** A kept ref of {@code id}'s step-0 body in {@code node}'s journal, with its segment row. */

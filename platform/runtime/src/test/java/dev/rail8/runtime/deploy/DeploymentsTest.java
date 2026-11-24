@@ -170,7 +170,7 @@ class DeploymentsTest {
     /** Commits {@code p} to {@code repository}; the deploy of that commit on {@code d}, started. */
     OnVirtualThread.Call<DeployResult> deploying(Deployments d, String repository, PackageDraft p) {
         String commit = repos.commit(repository, p);
-        return OnVirtualThread.start(() -> d.deploy(repository, commit, "test"));
+        return OnVirtualThread.start(() -> d.deploy(repository, commit, TestActors.named("test")));
     }
 
     /** The package a deploy of {@code p}, committed to the repository of its name, answers. */
@@ -188,7 +188,7 @@ class DeploymentsTest {
 
     /** The refusal of a deploy of {@code commitOrRef} of {@code repository} on {@code d}. */
     static DeployRefusedException refused(Deployments d, String repository, String commitOrRef) {
-        return assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy(repository, commitOrRef, "test")),
+        return assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> d.deploy(repository, commitOrRef, TestActors.named("test"))),
                 "the deploy of " + repository + " at " + commitOrRef + " is refused");
     }
 

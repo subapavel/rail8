@@ -115,7 +115,7 @@ class DeploymentsTargetsTest {
         /** Commits {@code p} to the repository of its name and deploys that commit. */
         DeployResult deploy(PackageDraft p) throws Exception {
             String commit = repos.commit(p);
-            return OnVirtualThread.call(() -> deployments.deploy(p.name(), commit, "test"));
+            return OnVirtualThread.call(() -> deployments.deploy(p.name(), commit, TestActors.named("test")));
         }
 
         /** The next send to the partner is held until the case ends or counts the latch down. */

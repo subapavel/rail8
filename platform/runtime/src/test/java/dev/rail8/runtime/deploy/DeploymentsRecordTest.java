@@ -116,7 +116,7 @@ class DeploymentsRecordTest {
     /** The deploy of {@code p}, committed to the repository {@code shop}, by the actor {@code ops}; started, not awaited. */
     OnVirtualThread.Call<DeployResult> deploying(PackageDraft p) {
         String commit = repos.commit(p);
-        return OnVirtualThread.start(() -> deployments.deploy("shop", commit, "ops"));
+        return OnVirtualThread.start(() -> deployments.deploy("shop", commit, TestActors.named("ops")));
     }
 
     DeployResult deploy(PackageDraft p) throws Exception {
@@ -195,7 +195,7 @@ class DeploymentsRecordTest {
         assertEquals("3.0.0", OnVirtualThread.call(() -> deployments.check("shop", next)).pkg().version(), "fixture: the check passes");
         assertEquals(List.of("shop 1.0.0"), records.saves().stream().map(r -> r.name() + " " + r.version()).toList(), "a check writes no record");
         assertEquals(2, audited().size(), "a check writes no audit row");
-        assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy("shop", "no-such-branch", "ops")));
+        assertThrows(DeployRefusedException.class, () -> OnVirtualThread.call(() -> deployments.deploy("shop", "no-such-branch", TestActors.named("ops"))));
         assertEquals("ops repository/shop {\"repository\":\"shop\",\"commit\":\"no-such-branch\",\"outcome\":\"refused\",\"error\":\""
                 + "shop at no-such-branch: not found\"}", audited().get(2), "a ref that was never read is audited as asked");
     }
