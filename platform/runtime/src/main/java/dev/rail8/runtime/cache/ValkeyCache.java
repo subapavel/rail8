@@ -12,7 +12,9 @@ import io.vertx.redis.client.Request;
 import io.vertx.redis.client.Response;
 
 import javax.crypto.Cipher;
+import javax.crypto.Mac;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -42,8 +44,8 @@ import java.util.regex.Pattern;
  * <p><b>On Valkey.</b> The keys of a scope start with {@code rail8:cache:{<tenant>/<package>}:}, one hash tag for a package,
  * then:
  * <ul>
- *   <li>{@code v:<step type>:<key>}, a hash: {@code x}, the value's expiry in epoch milliseconds on the writer's clock, and
- *       {@code c}, the sealed value; its PX is the value's ttl, so Valkey drops it on its own;</li>
+ *   <li>{@code v:<step type>:<key>}, a hash: {@code x}, the value's expiry in epoch milliseconds on the writer's clock,
+ *       {@code c}, the sealed value, and {@code d}, its digest; its PX is the value's ttl, so Valkey drops it on its own;</li>
  *   <li>{@code l:<step type>:<key>}, the key's lock: {@code run <owner>} while a node loads it, {@code failed <owner>} for one
  *       lease after that load failed; its PX is the lease;</li>
  *   <li>{@code z}, the package's entries by their expiry on Valkey's clock, and {@code n}, each entry's bytes and their total
@@ -64,15 +66,21 @@ import java.util.regex.Pattern;
  * kept. A node whose clock runs ahead of the writer's treats a value as expired early and loads it again; Valkey drops it
  * after its ttl in any case.
  *
+ * <p><b>A remove.</b> {@link Cache#remove(String)} deletes the value and the lock, so a load under way on any node keeps
+ * nothing. {@link Cache#remove(String, String)} deletes the value only while its digest is that of the value given, and leaves
+ * the lock and every load alone. When it did delete the value, a later caller on this node no longer joins the node's load
+ * under way, which may be a read of Valkey that ran before the remove: it reads Valkey again.
+ *
  * <p><b>The share.</b> A package keeps at most {@link #SHARE_ENTRIES} entries and {@link #SHARE_BYTES} bytes (each entry's
- * value key, expiry and sealed value, and its name in the package's entries and bytes). A write first forgets up to 64
+ * value key, expiry, sealed value and digest, and its name in the package's entries and bytes). A write first forgets up to 64
  * entries that Valkey's clock says have expired; then, while the package is over its share, the entry nearest its expiry,
  * other than the one written, goes.
  *
  * <p><b>Sealing.</b> A value is AES-256-GCM under a key {@link ChunkedAead#derive derived} from the master key, which the
  * nodes of a pool share, with a fresh salt per value. Its AAD is the value key's name, after its length, and its expiry in
  * 8 bytes, so a value moved to another key, or given a later expiry, does not open; such a value is logged once and loaded
- * again.
+ * again. Its digest is HMAC-SHA256, under a second key derived from the master key, of the value key's name, after its length,
+ * and the value: it shows whether one key held the same value twice, never the value.
  *
  * <p><b>Valkey down.</b> Every call waits at most {@link #CALL} on the injected timer; a full Valkey, which refuses every
  * script, counts as down. A read that fails runs the load on this node, under the lock that read may still have taken, and
@@ -109,6 +117,9 @@ public final class ValkeyCache implements Caches {
     /** A tenant or a package: the characters of a package name, so the hash tag is never ambiguous. */
     private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9-]{0,63}");
     private static final String INFO = "rail8 cache v1";
+    private static final String DIGEST_INFO = "rail8 cache digest v1";
+    /** The salt of the digest's key: none, which HKDF takes as a block of zeros. */
+    private static final byte[] DIGEST_SALT = new byte[32];
     private static final int SALT_BYTES = ChunkedAead.SALT_BYTES;
     /** Stripes of the count of removes: a load whose stripe saw a remove since it began keeps nothing. */
     private static final int STRIPES = 256;
@@ -155,7 +166,8 @@ public final class ValkeyCache implements Caches {
     /**
      * KEYS[1] the value, KEYS[2] the lock, KEYS[3] the package's entries by expiry, KEYS[4] their bytes; ARGV[1] the owner,
      * ARGV[2] x, ARGV[3] c, ARGV[4] the ttl (ms), ARGV[5] the entry, ARGV[6] the prefix of the package's value keys, ARGV[7]
-     * the most entries, ARGV[8] the most bytes, ARGV[9] the bookkeeping's ttl (ms): 1 kept, 0 the lock is not the owner's.
+     * the most entries, ARGV[8] the most bytes, ARGV[9] the bookkeeping's ttl (ms), ARGV[10] d: 1 kept, 0 the lock is not the
+     * owner's.
      */
     private static final String WRITE = """
             #!lua
@@ -173,8 +185,8 @@ public final class ValkeyCache implements Caches {
             local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
             for _, m in ipairs(redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', now, 'LIMIT', 0, 64)) do forget(m) end
             forget(ARGV[5])
-            local size = #KEYS[1] + #ARGV[2] + #ARGV[3] + 2 * #ARGV[5]
-            redis.call('HSET', KEYS[1], 'x', ARGV[2], 'c', ARGV[3])
+            local size = #KEYS[1] + #ARGV[2] + #ARGV[3] + #ARGV[10] + 2 * #ARGV[5]
+            redis.call('HSET', KEYS[1], 'x', ARGV[2], 'c', ARGV[3], 'd', ARGV[10])
             redis.call('PEXPIRE', KEYS[1], ARGV[4])
             redis.call('ZADD', KEYS[3], now + tonumber(ARGV[4]), ARGV[5])
             redis.call('HSET', KEYS[4], ARGV[5], size)
@@ -192,10 +204,19 @@ public final class ValkeyCache implements Caches {
             redis.call('PEXPIRE', KEYS[4], ARGV[9])
             return 1""";
 
-    /** KEYS[1] the value, KEYS[2] the lock, KEYS[3] the package's entries, KEYS[4] their bytes; ARGV[1] the entry. */
+    /**
+     * KEYS[1] the value, KEYS[2] the lock, KEYS[3] the package's entries, KEYS[4] their bytes; ARGV[1] the entry, ARGV[2] ''
+     * to delete the value and the lock, or a digest to delete the value only while its d is that digest: 1 deleted, 0 not.
+     */
     private static final String REMOVE = """
             #!lua
-            redis.call('DEL', KEYS[1], KEYS[2])
+            if ARGV[2] == '' then
+              redis.call('DEL', KEYS[1], KEYS[2])
+            elseif redis.call('HGET', KEYS[1], 'd') == ARGV[2] then
+              redis.call('DEL', KEYS[1])
+            else
+              return 0
+            end
             local size = redis.call('HGET', KEYS[4], ARGV[1])
             if size then
               redis.call('HDEL', KEYS[4], ARGV[1])
@@ -206,6 +227,7 @@ public final class ValkeyCache implements Caches {
 
     private final Redis redis;
     private final SecretKey master;
+    private final SecretKey digestKey;
     private final String nodeId;
     private final Clock clock;
     private final Timer timer;
@@ -234,6 +256,11 @@ public final class ValkeyCache implements Caches {
             ChunkedAead.material(master, "the master key");
         } catch (InvalidKeyException refused) {
             throw new IllegalArgumentException(refused.getMessage(), refused);
+        }
+        try {
+            this.digestKey = new SecretKeySpec(ChunkedAead.derive(master, DIGEST_SALT, DIGEST_INFO, "the master key").getEncoded(), "HmacSHA256");
+        } catch (GeneralSecurityException impossible) {   // HMAC-SHA256 is in every JDK, and the key was checked
+            throw new IllegalStateException("the cache could not derive the key of its digests", impossible);
         }
         this.nodeId = Objects.requireNonNull(nodeId, "nodeId");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -297,12 +324,29 @@ public final class ValkeyCache implements Caches {
             removals.incrementAndGet(stripe(scope, key));
             Keys k = scope.keys(key);
             try {
-                call(eval(REMOVE, k.value(), k.lock(), k.entries(), k.bytes()).arg(k.entry()));
+                call(eval(REMOVE, k.value(), k.lock(), k.entries(), k.bytes()).arg(k.entry()).arg(""));
             } catch (Unreachable unreachable) {
-                down(unreachable.getCause());
-                LOG.log(System.Logger.Level.WARNING, "cache key '" + key + "' of " + scope.packageName() + ", " + scope.stepType()
-                        + " was not removed on Valkey: it ages out on its ttl");
+                notRemoved(key, unreachable);
             }
+        }
+
+        @Override
+        public void remove(String key, String value) {
+            local.remove(key, value);   // checks the key, the thread and the value; forgets what an outage kept, if it is the value
+            Keys k = scope.keys(key);
+            try {
+                if (call(eval(REMOVE, k.value(), k.lock(), k.entries(), k.bytes()).arg(k.entry()).arg(digest(k, value))).toLong() == 1) {
+                    local.remove(key);   // later callers on the node read Valkey again, instead of joining a read that ran before
+                }
+            } catch (Unreachable unreachable) {
+                notRemoved(key, unreachable);
+            }
+        }
+
+        private void notRemoved(String key, Unreachable unreachable) {
+            down(unreachable.getCause());
+            LOG.log(System.Logger.Level.WARNING, "cache key '" + key + "' of " + scope.packageName() + ", " + scope.stepType()
+                    + " was not removed on Valkey: it ages out on its ttl");
         }
 
         /** The scope's package and step type, never a key or a value. */
@@ -383,7 +427,8 @@ public final class ValkeyCache implements Caches {
         Response kept;
         try {
             kept = call(eval(WRITE, k.value(), k.lock(), k.entries(), k.bytes()).arg(owner).arg(until).arg(seal(k, until, entry.value()))
-                    .arg(px).arg(k.entry()).arg(k.values()).arg(SHARE_ENTRIES).arg(SHARE_BYTES).arg(BOOKKEEPING.toMillis()));
+                    .arg(px).arg(k.entry()).arg(k.values()).arg(SHARE_ENTRIES).arg(SHARE_BYTES).arg(BOOKKEEPING.toMillis())
+                    .arg(digest(k, entry.value())));
         } catch (Unreachable unreachable) {
             down(unreachable.getCause());
             return new Cache.Entry(entry.value(), shorter(entry.ttl()));
@@ -420,6 +465,20 @@ public final class ValkeyCache implements Caches {
             return out;
         } catch (GeneralSecurityException impossible) {   // AES-256-GCM is in every JDK, and the key was checked
             throw new IllegalStateException("the cache could not seal a value", impossible);
+        }
+    }
+
+    /** HMAC-SHA256 under the digest's key of the value key's name, after its length, and {@code value}. */
+    private byte[] digest(Keys k, String value) {
+        byte[] name = k.value().getBytes(StandardCharsets.UTF_8);
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(digestKey);
+            mac.update(ByteBuffer.allocate(Integer.BYTES).putInt(name.length).array());
+            mac.update(name);
+            return mac.doFinal(value.getBytes(StandardCharsets.UTF_8));
+        } catch (GeneralSecurityException impossible) {   // HMAC-SHA256 is in every JDK
+            throw new IllegalStateException("the cache could not digest a value", impossible);
         }
     }
 

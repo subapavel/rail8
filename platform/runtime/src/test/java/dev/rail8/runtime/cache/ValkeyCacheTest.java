@@ -17,12 +17,19 @@ import javax.crypto.spec.SecretKeySpec;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -60,6 +67,37 @@ class ValkeyCacheTest {
         assertEquals("short", onVirtualThread(() -> c.get("s", () -> new Cache.Entry("short", Duration.ofSeconds(10)))));
         clock.advance(Duration.ofSeconds(10));
         assertEquals("again", onVirtualThread(() -> c.get("s", () -> new Cache.Entry("again", Duration.ofSeconds(10)))), "a shorter ttl is kept");
+    }
+
+    @Test
+    void withValkeyOutOfReachARemoveWithAValueForgetsWhatTheNodeKeptOnlyWhenItIsThatValue() throws Exception {
+        Cache c = cache("redis://127.0.0.1:" + Ports.free());
+        AtomicInteger loads = new AtomicInteger();
+        Cache.Loader hourly = () -> new Cache.Entry("t" + loads.incrementAndGet(), Duration.ofHours(1));
+        assertEquals("t1", onVirtualThread(() -> c.get("k", hourly)));
+        Logger logger = Logger.getLogger(ValkeyCache.class.getName());
+        List<LogRecord> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override public void publish(LogRecord r) { logged.add(r); }
+            @Override public void flush() { }
+            @Override public void close() { }
+        };
+        logger.addHandler(handler);
+        try {
+            onVirtualThread(() -> { c.remove("k", "t0"); return null; });
+            assertEquals("t1", onVirtualThread(() -> c.get("k", hourly)), "another value keeps what the node kept");
+            onVirtualThread(() -> { c.remove("k", "t1"); return null; });
+            assertEquals("t2", onVirtualThread(() -> c.get("k", hourly)), "the value forgets it");
+        } finally {
+            logger.removeHandler(handler);
+        }
+        List<String> warnings = logged.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage)
+                .filter(m -> m.contains("not removed")).toList();
+        assertEquals(2, warnings.size(), warnings.toString());
+        for (String warning : warnings) {
+            assertTrue(warning.contains("'k'"), warning);
+            assertFalse(warning.contains("t0") || warning.contains("t1"), warning);
+        }
     }
 
     @Test

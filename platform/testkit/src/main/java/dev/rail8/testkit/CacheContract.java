@@ -101,6 +101,58 @@ public abstract class CacheContract {
     }
 
     @Test
+    public void aRemoveWithTheKeptValueForgetsTheKey() throws Exception {
+        Cache c = cache();
+        call(() -> c.get("k", value("first", Duration.ofMinutes(5))));
+        call(() -> { c.remove("k", "first"); return null; });
+        assertEquals("second", call(() -> c.get("k", value("second", Duration.ofMinutes(5)))));
+    }
+
+    @Test
+    public void aRemoveWithAnotherValueKeepsTheKey() throws Exception {
+        Cache c = cache();
+        call(() -> c.get("k", value("second", Duration.ofMinutes(5))));
+        call(() -> { c.remove("k", "first"); return null; });
+        call(() -> { c.remove("never-kept", "first"); return null; });
+        assertEquals("second", call(() -> c.get("k", value("third", Duration.ofMinutes(5)))), "a newer value stays");
+    }
+
+    @Test
+    public void aRemoveWithAValueLeavesALoadUnderWayAlone() throws Exception {
+        Cache c = cache();
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Caller loading = start(() -> c.get("k", () -> { started.countDown(); release.await(); return new Cache.Entry("fresh", Duration.ofMinutes(5)); }));
+        await(started);
+        try {
+            call(() -> { c.remove("k", "stale"); return null; });
+            call(() -> { c.remove("k", "fresh"); return null; });
+        } finally {
+            release.countDown();
+        }
+        assertEquals("fresh", loading.result());
+        assertEquals("fresh", call(() -> c.get("k", value("other", Duration.ofMinutes(5)))), "the load was kept");
+    }
+
+    @Test
+    public void callersThatSawOneValueFailLoadTheNextOnce() throws Exception {
+        Cache c = cache();
+        AtomicInteger loads = new AtomicInteger();
+        Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+        assertEquals("token-1", call(() -> c.get("k", loader)));
+        for (int caller = 0; caller < 3; caller++) {
+            assertEquals("token-2", call(() -> { c.remove("k", "token-1"); return c.get("k", loader); }));
+        }
+        assertEquals(2, loads.get(), "the token that failed and the next one, each loaded once");
+    }
+
+    @Test
+    public void aRemoveWithANullValueIsRefused() {
+        Cache c = cache();
+        assertThrows(NullPointerException.class, () -> call(() -> { c.remove("k", null); return null; }));
+    }
+
+    @Test
     public void aKeyThatBreaksTheRulesIsRefusedNamingIt() throws Exception {
         Cache c = cache();
         String longest = "k".repeat((int) Cache.MAX_KEY_CHARS);
@@ -109,15 +161,20 @@ public abstract class CacheContract {
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> call(() -> c.get(bad, value("v", Duration.ofMinutes(1)))), bad);
             assertTrue(e.getMessage().contains("'" + bad + "'"), e.getMessage());
             assertThrows(IllegalArgumentException.class, () -> call(() -> { c.remove(bad); return null; }), bad);
+            IllegalArgumentException withValue = assertThrows(IllegalArgumentException.class,
+                    () -> call(() -> { c.remove(bad, "token-that-must-not-show"); return null; }), bad);
+            assertTrue(withValue.getMessage().contains("'" + bad + "'"), withValue.getMessage());
+            assertFalse(withValue.getMessage().contains("token-that-must-not-show"), withValue.getMessage());
         }
     }
 
     @Test
-    public void offAVirtualThreadBothMethodsAreRefused() {
+    public void offAVirtualThreadEveryMethodIsRefused() {
         Cache c = cache();
         assertFalse(Thread.currentThread().isVirtual(), "the case runs on JUnit's platform thread");
         assertThrows(IllegalStateException.class, () -> c.get("k", value("v", Duration.ofMinutes(1))));
         assertThrows(IllegalStateException.class, () -> c.remove("k"));
+        assertThrows(IllegalStateException.class, () -> c.remove("k", "v"));
     }
 
     @Test
