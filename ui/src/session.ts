@@ -11,8 +11,8 @@
  * - A 401 means the session ended. The page asks for the login again over its open tabs, and holds the call. From the
  *   first 401 on nothing new is sent; every new call is held too.
  * - A 409 `session-changed` means the browser holds another session than the page names, after a login in another tab.
- *   The page reads `GET /session`: for the same user it takes the new id and sends the call again once, and a second
- *   409 reloads the page; for another user it reloads; when no session is left it holds the call as after a 401.
+ *   The page reads `GET /session`: for the same user it takes the new id and roles and sends the call again once, and a
+ *   second 409 reloads the page; for another user it reloads; when no session is left it holds the call as after a 401.
  * - A held call keeps its method, its headers and its body; only `Rail8-Session` changes. At most 100 calls and 32 MiB of
  *   their bodies are held; beyond that a call gets its 401. A call whose signal aborts is no longer held and rejects
  *   with the signal's reason.
@@ -20,6 +20,9 @@
  *   a late answer of the ended session cannot clear the cookie of the new one. The same user logged in again sends
  *   each held call once more; a first password asks for the change first; another user reloads the page, and no held
  *   call is settled.
+ *
+ * After a change of the caller's own roles the page reads `GET /session` again, the same way, so that what it allows
+ * follows the new roles at once.
  *
  * The session's own calls, `GET /session`, the login, the password change and the logout, go straight out and are
  * never held.
@@ -77,6 +80,11 @@ export interface SessionClient {
   changePassword(current: string, next: string): Promise<void>;
   /** Ends the session and reloads the page. */
   logout(): Promise<void>;
+  /**
+   * Reads `GET /session` again while logged in, after a change of the caller's own roles: the same user's answer gives
+   * the new roles and actions, another user reloads the page, a 401 asks for the login, and no answer keeps the state.
+   */
+  refresh(): Promise<void>;
   /** True when the caller may do `action`, else why not. */
   may(action: string): true | Refusal;
 }
@@ -234,6 +242,7 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
           return 'other' as const;
         }
         adopt(me);
+        if (current.kind === 'in') set({ kind: 'in', me });
         return 'same' as const;
       } catch {
         return 'unknown' as const;
@@ -390,6 +399,10 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
       }
       held.splice(0).forEach((call) => call.refuse());
       reload();
+    },
+
+    async refresh() {
+      if (current.kind === 'in') await recheck();
     },
 
     may(action) {

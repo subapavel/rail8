@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
+import type { Screen } from '../screens';
 import { Shell } from '../Shell';
 import type { TokensApi, User, UsersApi } from './api';
 import { fakeTokensApi, fakeUsersApi, type FakeUsers } from './fake';
@@ -23,6 +24,16 @@ const ALICE: Me = {
   expiresAt: '2026-11-24T22:00:00Z',
   emergencyKey: false,
   session: '0123456789abcdef',
+};
+
+/** A screen that needs the operator role, to see the menu follow the caller's roles. */
+const MESSAGES: Screen = { id: 'messages', title: 'Messages', group: 'Monitor', action: 'message.read', render: () => 'Messages' };
+
+/** The session the node gives alice over `state`: the roles she holds there now, and their actions. */
+const aliceIn = (state: FakeUsers) => (): Me => {
+  const roles = state.users.find((u) => u.name === 'alice')!.roles.map((g) => g.role);
+  const actions = ['self.read', ...(roles.includes('administrator') ? ADMIN_ACTIONS : []), ...(roles.includes('operator') ? ['message.read'] : [])];
+  return { ...ALICE, roles, actions: [...new Set(actions)] };
 };
 
 const user = (name: string, rest: Partial<User> = {}): User => ({
@@ -70,15 +81,19 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-/** The Users screen of a Shell behind the session's gate, as `me`, over the users and tokens of `state`, which `me` acts on. */
+/**
+ * The Users screen of a Shell behind the session's gate, as `me`, over the users and tokens of `state`, which `me` acts
+ * on. `me` may be a function, which gives the session each time the page reads it.
+ */
 function render(
   state: FakeUsers = seed(),
-  me: Me = ALICE,
-  api: UsersApi = fakeUsersApi(state, me.name, () => NOW),
-  tokens: TokensApi = fakeTokensApi(state, me.name, () => NOW, 'alice password'),
+  me: Me | (() => Me) = ALICE,
+  api: UsersApi = fakeUsersApi(state, (typeof me === 'function' ? me() : me).name, () => NOW),
+  tokens: TokensApi = fakeTokensApi(state, (typeof me === 'function' ? me() : me).name, () => NOW, 'alice password'),
 ) {
+  const session = typeof me === 'function' ? me : () => me;
   const client = sessionClient({
-    send: (async () => new Response(JSON.stringify(me), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
+    send: (async () => new Response(JSON.stringify(session()), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
     reload: () => undefined,
     timer: () => new Promise(() => undefined),
   });
@@ -87,7 +102,7 @@ function render(
   root = createRoot(host);
   root.render(
     <SessionGate client={client}>
-      <Shell screens={[usersScreen(api, tokens)]} start="users" />
+      <Shell screens={[usersScreen(api, tokens), MESSAGES]} start="users" />
     </SessionGate>,
   );
   return state;
@@ -97,6 +112,7 @@ const table = () => page.getByRole('table', { name: 'Users' });
 const rowOf = (name: string) => table().getByRole('row').filter({ has: page.getByText(name, { exact: true }) }).first();
 const button = (name: string) => page.getByRole('button', { name, exact: true });
 const dialog = () => page.getByRole('dialog');
+const menuItem = (name: string) => page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name, exact: true });
 /** Issue in the open dialog; once it has been loading, antd keeps its hidden loading icon in the name. */
 const issue = () => dialog().getByRole('button', { name: /Issue$/ });
 /** Runs `action` on the user `row`, confirming in that user's popover: another may still be fading out. */
@@ -219,6 +235,51 @@ describe('the Users screen', () => {
     await rowOf('anna').getByRole('button', { name: 'Roles…' }).click();
     await dialog().getByLabelText('Message bodies').click();
     expect(page.getByText('You give yourself the message bodies role').query()).toBeNull();
+  });
+
+  test('shows a role the caller gives themselves at once, without a reload', async () => {
+    const state = seed();
+    render(state, aliceIn(state));
+    await expect.element(menuItem('Messages')).toHaveAttribute('aria-disabled', 'true');
+    await rowOf('alice').getByRole('button', { name: 'Roles…' }).click();
+    await dialog().getByLabelText('Operator').click();
+    await button('Save').click();
+    await expect.element(page.getByText('alice gets Operator')).toBeVisible();
+    await expect.element(menuItem('Messages')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test('takes away at once what a role the caller takes from themselves allowed', async () => {
+    const state = seed();
+    state.users = state.users.map((u) =>
+      u.name === 'alice' ? { ...u, roles: [...u.roles, { role: 'operator', grantedAt: '2026-11-21T10:00:00Z', grantedBy: 'alice', grantedVia: 'session' }] } : u,
+    );
+    render(state, aliceIn(state));
+    await expect.element(menuItem('Messages')).not.toHaveAttribute('aria-disabled', 'true');
+    await rowOf('alice').getByRole('button', { name: 'Roles…' }).click();
+    await dialog().getByLabelText('Operator').click();
+    await button('Save').click();
+    await expect.element(page.getByText('alice loses Operator')).toBeVisible();
+    await expect.element(menuItem('Messages')).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  test("keeps the actions of a blocked user's row on one line", async () => {
+    for (const [width, height] of [
+      [1440, 900],
+      [1920, 1080],
+    ] as const) {
+      await page.viewport(width, height);
+      render();
+      await expect.element(rowOf('bert').getByRole('button', { name: 'End sessions' })).toBeVisible();
+      const tops = rowOf('bert')
+        .getByRole('button')
+        .elements()
+        .filter((b) => !b.getAttribute('aria-label')?.match(/expand row/i))
+        .map((b) => b.getBoundingClientRect().top);
+      expect(tops.length, `${width}`).toBe(4);
+      expect(new Set(tops).size, `the actions at ${width} px`).toBe(1);
+      root?.unmount();
+      host?.remove();
+    }
   });
 
   test('shows the invariants the node keeps as plain messages', async () => {

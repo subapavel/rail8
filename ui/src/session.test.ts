@@ -93,7 +93,9 @@ describe('the start', () => {
     expect(w.client.state()).toEqual({ kind: 'failed', error: 'the node is busy', retryAfter: '1' });
 
     start = w.client.start();
-    w.open('/session')[0]!.fail(new TypeError('offline'));
+    const lost = w.open('/session')[0]!;
+    (lost as { done?: true }).done = true;
+    lost.fail(new TypeError('offline'));
     await start;
     expect(w.client.state()).toMatchObject({ kind: 'failed' });
 
@@ -395,6 +397,47 @@ describe('the session\'s own calls', () => {
     await w.answer('/session', json(401, { error: 'x', code: 'login-refused' }));
     await login;
     expect(w.client.state()).toEqual({ kind: 'out', refusal: { code: 'login-refused' } });
+  });
+
+  it('reads the session again after a change of its own roles: new roles for the same user, a reload for another', async () => {
+    const w = world();
+    await w.started();
+    const changed: Me = { ...ME, roles: ['operator', 'developer'], actions: ['message.read', 'package.deploy'], refused: {} };
+    const refresh = w.client.refresh();
+    await w.answer('/session', json(200, changed));
+    await refresh;
+    expect(w.client.state()).toEqual({ kind: 'in', me: changed });
+    expect(w.client.may('package.deploy')).toBe(true);
+
+    const other = world();
+    await other.started();
+    const read = other.client.refresh();
+    await other.answer('/session', json(200, { ...ME, name: 'bob' }));
+    await read;
+    expect(other.reloads()).toBe(1);
+  });
+
+  it('keeps the state when the session read again gives no answer, and asks for the login on its 401', async () => {
+    const w = world();
+    await w.started();
+    const refresh = w.client.refresh();
+    await w.settle();
+    const lost = w.open('/session')[0]!;
+    (lost as { done?: true }).done = true;
+    lost.fail(new TypeError('offline'));
+    await refresh;
+    expect(w.client.state()).toEqual({ kind: 'in', me: ME });
+
+    const ended = w.client.refresh();
+    await w.answer('/session', json(401, { code: 'session-ended' }));
+    await ended;
+    expect(w.client.state()).toEqual({ kind: 'asking', me: ME });
+  });
+
+  it('reads nothing again before the session is known', async () => {
+    const w = world();
+    await w.client.refresh();
+    expect(w.calls).toHaveLength(0);
   });
 
   it('logs out naming the session and reloads, whatever the answer', async () => {
