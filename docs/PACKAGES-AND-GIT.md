@@ -255,7 +255,7 @@ success with `package: null` and the reason.
 | `GET /git/packages/{repository}/log?before=&limit=` | `{items: Commit[], next}`: the first-parent history of `HEAD`, or of `before`, 50 to a page by default and at most 100 |
 | `POST /git/packages` `{repository, name}` | 201 `PackageState`: a new package ("New package") |
 | `POST /git/packages/{repository}/commit` `{message, branch, head, paths}` | `{commit, output, package}` ("Commit") |
-| `POST /git/packages/{repository}/deploy` `{commit, check, running}` | `{deploy, running, package}` ("Deploy") |
+| `POST /git/packages/{repository}/deploy` `{commit, check, expect}` | `{deploy, replaces, package}` ("Deploy") |
 | `POST /git/packages/{repository}/lock` `{manifestTag, lockTag, dependencies}` | `{pins, package}` ("Dependencies") |
 | `POST /git/packages/{repository}/fetch` `{}` | `{package}` ("Remote") |
 | `POST /git/packages/{repository}/pull` `{branch, head, upstream}` | `{head, changed, package}` ("Remote") |
@@ -576,9 +576,9 @@ on the node. That change is a step of its own, designed first, and the owner see
 - Each node writes, in Postgres, a row per package it runs: the repository, the commit, its state, and why it is
   behind. It writes the row when it installs or undeploys a package, and when a tick fails to install one.
 - `GET /admin/pool/packages` answers those rows for every node whose lease holds.
-- A deploy names the state it expects, and the node refuses it, changing nothing, when the pool holds another. Two
-  authors, or an author and CI, then never replace each other's deploy unseen. The design settles what names that
-  state: the commit the package runs, or the pool's generation.
+- Every deploy names the state it expects, and the node refuses it, changing nothing, when the pool holds another. Two
+  authors, or an author and CI, then never replace each other's deploy unseen. That state is the commit of the pool's
+  record of the package, or `none` ("The expected state of a deploy" in [DEPLOY-FROM-GIT](DEPLOY-FROM-GIT.md)).
 
 The deployed state then gains one entry per node, with the same relations. Until then, it shows the node at
 `RAIL8_ADMIN_URL`, and names it.
@@ -590,24 +590,22 @@ always checks first:
 
 1. **Check.** `POST …/deploy {commit, check: true}`, with `commit` as 40 hex digits from the package's state.
    - The git half checks that the clone holds it, with `rev-parse --verify --end-of-options <commit>^{commit}`.
-   - It reads `/admin/packages`, and answers as `running` the commit the node runs for this repository, or `null`.
    - It sends `POST /admin/deploy?check=true` with `{repository, commit}`, the token, and `X-Rail8-Actor` set to the
      identity, `Name <email>`, or `ui` when git has none.
+   - It answers as `replaces` what the node's answer names: the commit of the pool's record of the package, or `none`.
    - A header carries no character outside printable ASCII, so each such character becomes `?`, as in `Ji?? Nov?k
      <jiri@example.com>`. The actor is then cut to 128 characters.
 2. **The answer.** The dialog shows the added, swapped and removed flows, or every problem. Problems end the dialog,
    and nothing has changed on the node.
-3. **Deploy.** The author confirms. The browser sends `{commit, check: false, running}`, with the commit and `running`
-   the check answered.
-   - Just before it applies, the git half reads `/admin/packages` again. When the node no longer runs `running`, the
-     answer is 412 and nothing is sent.
-   - Otherwise it sends the same request without `check`, and the dialog shows the node's answer: what was actually
-     added, swapped and removed.
+3. **Deploy.** The author confirms. The browser sends `{commit, check: false, expect}`, with the commit and, as
+   `expect`, the `replaces` the check answered.
+   - The git half sends `POST /admin/deploy` with `{repository, commit, expect}`. When the pool no longer holds what
+     `expect` names, the node refuses it, changing nothing, and the answer is 412, "the node's commit changed since the
+     check".
+   - Otherwise the dialog shows the node's answer: what was actually added, swapped and removed.
 
 The check first is the screen's rule. The node's own order is the guarantee: every problem of a deploy is answered
-before anything stops. A pool runs one deploy at a time, so the window between the second read and the deploy is the
-only one left. It closes once the node takes the expected state with a deploy ("Every node of the pool"): the git half
-then sends that state with the deploy, and the node compares it as it applies.
+before anything stops, and a deploy is refused when the pool no longer holds the state it expects.
 
 In a deployed environment, the node takes only a commit reachable from its `RAIL8_GIT_REF` on the git host. The check
 fetches the commit, proves that, and refuses it before anything changes.

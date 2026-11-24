@@ -125,19 +125,20 @@ them is refused, naming `rail8 lock`.
 
 ## A deploy
 
-`POST /admin/deploy` with the body `{"repository": "<name>", "commit": "<40 hex>"}`, and optionally
-`"expect"`, the state the deploy expects to replace ("The expected state of a deploy"). In `dev` and `ci`
+`POST /admin/deploy` with the body `{"repository": "<name>", "commit": "<40 hex>", "expect": "<40 hex>" | "none" | "any"}`:
+`expect` is the state the deploy expects to replace ("The expected state of a deploy"). In `dev` and `ci`
 the commit may also be a ref (`HEAD`, `main`, `refs/tags/v1`), resolved in the repository at the fetch.
 With `?check=true` the node answers what the deploy would do and every problem; nothing that runs
 changes and no record is written, though the fetch fills the cache and the folders it wrote are deleted.
 The actor is the request's `X-Rail8-Actor` header, as for every audited act.
 
-`rail8 deploy <repository> <commit|ref> [--check] [--expect <commit|none>]` sends it and prints the answer.
+`rail8 deploy <repository> <commit|ref> --expect <commit|none|any>` sends it and prints the answer;
+`rail8 deploy <repository> <commit|ref> --check` checks.
 
 The order:
 
-1. **Refusals before any fetch.** A bad body, repository name or commit id, a ref in a deployed
-   environment, or an `expect` with a ref (400); a closing node (503); another deploy or undeploy running
+1. **Refusals before any fetch.** A bad body, a deploy without `expect`, a bad repository name or commit
+   id, or a ref in a deployed environment (400); a closing node (503); another deploy or undeploy running
    on any node of the pool (409, "Several nodes" below).
 2. **Fetch.** The commit is fetched within the timeout and the cache's size. When `RAIL8_GIT_REF` is
    set, the ref is fetched too, its tip resolved once, and the commit proved an ancestor of that tip
@@ -146,7 +147,7 @@ The order:
    is checked against the package-name pattern before it names a directory; then the folder moves to
    `<dataDir>/packages/<name>/<content hex>/`, unless that directory is one the node keeps and its
    files are intact. A package of the same name recorded from another repository is refused (409). Then
-   a deploy that names `expect` is compared with that package's record, and refused (412) when the
+   the deploy's `expect` is compared with that package's record, and the deploy refused (412) when the
    pool holds another state ("The expected state of a deploy").
 4. **Dependencies.** Every pin of the closure is resolved, fetched and written as "Dependencies" says.
 5. **Check.** The package is checked whole with today's checks: schemas, components, endpoints,
@@ -154,7 +155,8 @@ The order:
 6. **Apply.** Today's swap: the changed and removed flows stop, the added and changed ones start, the
    record is written (the commit point), and a failed start rolls back.
 7. **Audit.** One audit row: the actor, `deploy`, the repository, the commit, the commit's author as
-   git holds it (`Name <email>`), and the outcome. A deploy that writes its record writes the row in
+   git holds it (`Name <email>`), the `expect` the deploy sent, `any` included, and the outcome; an applied deploy adds
+   `replaces`, what it replaced. A deploy that writes its record writes the row in
    the record's transaction: when the row cannot be written, neither is the record, and the deploy
    rolls back as after any other failed save. A refused deploy writes its row after the refusal.
 
@@ -291,15 +293,16 @@ at all, its records unreadable for one, is a fact about the node, and its `/heal
 
 ## The expected state of a deploy
 
-A deploy may name the state it expects to replace, so that one author's deploy never replaces another's, or CI's, unseen.
+Every deploy names the state it expects to replace, from the UI, the command line and CI alike, so that one author's deploy
+never replaces another's, or CI's, unseen. The node refuses a deploy, changing nothing, when the pool holds another state.
 
-- **The body.** `POST /admin/deploy` takes an optional third key, `expect`:
+- **The body.** `POST /admin/deploy` takes `expect`, a key every deploy must give:
   - the commit the pool's record of the package names, as 40 lower-case hex digits;
-  - or `none`, when the pool records no such package.
+  - `none`, when the pool records no such package: the first deploy of a package, to an empty installation or not;
+  - `any`, the blind overwrite: the deploy replaces whatever the pool holds, and its audit row records `any`.
 
-  A deploy without `expect` behaves as before. A deploy with `expect` must name its commit as 40 hex digits: a ref could move
-  between the check and the deploy. Any other value of `expect`, `null` included, any other key, and an `expect` with a ref
-  are 400, before anything is fetched.
+  A deploy without `expect` is 400, and so is any other value, `null` and upper case included, and any other key, before
+  anything is fetched. A check (`?check=true`) may leave `expect` out, and then compares nothing.
 - **What names it.** The commit of the package's record, not the pool's generation:
   - The generation moves with every deploy and undeploy of any package. An unrelated deploy between an author's check and
     their confirmation would refuse it, and the refusal could not say what changed.
@@ -307,8 +310,11 @@ A deploy may name the state it expects to replace, so that one author's deploy n
   - A pool that went from a commit to another and back holds what the author confirmed a change against, and the deploy goes
     ahead.
   - Whatever else the check found, from listeners to calls between flows, the deploy checks again under the pool's lock.
-- **`none`, not `null`.** A missing key keeps meaning "as before". A client that drops nulls, or confuses a null with a
-  missing key, cannot turn "expects no record" into "expects nothing".
+- **`none` and `any`, not `null` and a missing key.** A client that drops nulls, or confuses a null with a missing key,
+  cannot turn "expects no record" into "expects nothing", and nothing overwrites blind unless its caller wrote `any`.
+- **The commit, or a ref.** The deploy's commit may still be a ref in `dev` and `ci`, as before. A client that must deploy
+  exactly the commit it checked sends the 40 hex digits the check answered, as the UI does; a ref resolved again at the
+  deploy could have moved since.
 - **Where it is compared.** In step 3 of the order: once the commit's `package.yaml` has named the package, and after the
   refusal of a package recorded from another repository. It is compared with that package's record, as the pool's lock read
   it. Only a holder of the lock writes records, so that is still the pool's record at the commit point. The package is the
@@ -328,9 +334,21 @@ A deploy may name the state it expects to replace, so that one author's deploy n
   - A client sends the check's `replaces` back unchanged as `expect`.
   - A check that names `expect` compares it with that read, and answers the same 412. Only the deploy's comparison is the
     guarantee.
-- **The command line.** `rail8 deploy <repository> <commit> --expect <commit|none>` sends it. `--check` prints
-  `replaces`, so an author at a terminal gets the same guarantee in the same two steps. CI sends none and keeps working. A
-  412 exits 1, as any answer that is not 2xx.
+- **The command line.** `rail8 deploy <repository> <commit|ref> --expect <commit|none|any>` sends what its caller wrote.
+  Without `--expect` a deploy is a usage error: it exits 2 and sends nothing. The command line fills in no default, and
+  never reads the state for its caller. `--check` needs no `--expect`, and its printed answer names `replaces`, so an
+  author at a terminal checks, then deploys with `--expect` set to that `replaces`. A 412 exits 1, as any answer that is
+  not 2xx.
+- **CI and other pipelines.** A pipeline reads the state first and sends it with the deploy:
+
+  ```sh
+  replaces=$(rail8 deploy orders "$commit" --check | jq -r .replaces)
+  rail8 deploy orders "$commit" --expect "$replaces"
+  ```
+
+  A deploy that lands between the two is refused, and the pipeline fails. A pipeline that starts its own fresh installation
+  expects `none`, as this repository's CI and `bin/run-adapter` do. The stack of `deploy/compose` keeps its database
+  between starts, so its one-shot deploy reads the state first.
 - **Undeploy** takes no expected state yet. Nothing undeploys for an author: the command line has no undeploy, and the UI
   leaves it out. The expected state comes with the first client that does.
 
@@ -349,7 +367,8 @@ overlays and `secret://` names, read from each node's own environment.
 ## The local run and the quickstart
 
 - The working folder holds a clone of each package repository, named as the repository. The UI saves
-  files into it; the developer commits, then runs `rail8 deploy <repository> HEAD`.
+  files into it; the developer commits, then runs `rail8 deploy <repository> HEAD --expect <commit>`, the commit
+  deployed before, or `none` for the first deploy.
 - The quickstart makes its working folder hold the demo as a git repository, `demo`, with the
   `.gitattributes` above, and commits it. Its node mounts the working folder read-only and reads it as
   the base `file:///workspace/`; the cache is in the node's data volume. Its steps commit before every
@@ -466,11 +485,11 @@ public interface Commit {
   - two deploys that expect the same commit: the first applied, the second 412, with nothing changed;
   - `none` applied on a first deploy, then 412;
   - an undeploy between a check and its deploy, then 412;
-  - a deploy with no `expect` as before;
-  - `null`, upper case, another key, and an `expect` with a ref, each 400 before any fetch;
-  - the check answering `replaces`, and 412 with a stale `expect`;
+  - `any` applied over another commit, its audit row recording `any`;
+  - a deploy without `expect`, and `null`, upper case and another key, each 400 before any fetch;
+  - the check answering `replaces` with no `expect`, and 412 with a stale `expect`;
   - a retried deploy whose first try landed, 412 saying so;
-  - `rail8 deploy --expect`.
+  - `rail8 deploy --expect`, and a deploy without it a usage error that sends nothing.
 
 ## The owner's choices
 
@@ -484,8 +503,9 @@ The owner chose:
 - A command that names the commit; a node that follows its ref by itself may come later as a timer
   calling the same deploy.
 - The token in the node's environment now; the secret store planned for step 2 takes it later.
-- A deploy that can name the state it expects, refused when the pool holds another: on a shared server one author's deploy
-  must never replace another's, or CI's, unseen.
+- Every deploy names the state it expects, from the UI, the command line and CI alike, and is refused when the pool holds
+  another: on a shared server one author's deploy must never replace another's, or CI's, unseen. Overwriting blind takes a
+  switch the caller writes out, and the audit row records it. A pipeline reads the state first and sends it.
 
 These were decided on the owner's behalf, and stand until the owner says otherwise:
 
@@ -499,7 +519,9 @@ These were decided on the owner's behalf, and stand until the owner says otherwi
   a package and its release branch is the git host's to decide.
 - The expected state of a deploy is the commit of the package's record, not the pool's generation, and `none` names no
   record.
-- `rail8 deploy` takes `--expect`; an undeploy takes no expected state until a client undeploys for an author.
+- The blind switch is `any`, the value of `expect` in the body and of `--expect` on the command line; the first deploy of
+  a package expects `none`.
+- An undeploy takes no expected state until a client undeploys for an author.
 
 ## What each stage builds
 
@@ -528,5 +550,6 @@ These were decided on the owner's behalf, and stand until the owner says otherwi
    plan, the generation, following and retiring; a deployed environment then takes deploys of commits
    reachable from its ref, and undeploys. ARCHITECTURE parts 4 and 6 describe it.
 7. **What each node runs, and the expected state.** `node_packages` and its write, `GET /admin/pool/packages`, `expect`
-   and `replaces` on the deploy and its check, and `rail8 deploy --expect`. ARCHITECTURE parts 3 and 10 describe them, and
-   the UI's Deploy in `docs/PACKAGES-AND-GIT.md` sends the check's `replaces` as `expect`.
+   on every deploy and `replaces` on the deploy and its check, and `rail8 deploy --expect`. Every caller in the repository
+   moves in the same change: CI, both compose files, `bin/run-adapter`, the quickstart and the bench. ARCHITECTURE parts 3
+   and 10 describe them, and the UI's Deploy in `docs/PACKAGES-AND-GIT.md` sends the check's `replaces` as `expect`.
