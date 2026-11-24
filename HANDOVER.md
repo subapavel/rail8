@@ -14,11 +14,14 @@ measure a virtual thread" since the owner answered ISSUE-3 with option 2 (2026-1
 
 ```sh
 cd deploy/compose
-export RAIL8_ADMIN_TOKEN=$(openssl rand -hex 16)    # required
+export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency key, required
 docker compose up -d --build                           # returns once the node is healthy
-docker compose ps -a                                    # every service healthy, deploy and sftp-keys exited (0)
+../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
+export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token
+docker compose run --rm deploy                         # exits 0 after the demo is deployed
+docker compose ps -a                                    # every service healthy, sftp-keys exited (0)
 curl localhost:8081/health
-curl -H "Authorization: Bearer $RAIL8_ADMIN_TOKEN" localhost:8081/admin/packages      # demo 0.1.0
+curl -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages      # demo 0.1.0
 docker compose --profile history up -d clickhouse      # optional, nothing feeds it yet
 docker compose --profile history --profile kafka down -v   # stop, remove every volume
 ```
@@ -32,7 +35,7 @@ Services: `rail8` (the node), `postgres`, `valkey`, `sftp` + `sftp-keys`,
 ## 2. Run the flows by hand
 
 ```sh
-A="Authorization: Bearer $RAIL8_ADMIN_TOKEN"
+A="Authorization: Bearer $RAIL8_TOKEN"
 INV=../../examples/demo/fixtures/sample-invoice.xml
 
 # Flow A sync (invoice-sync): 200 with the partner's reply

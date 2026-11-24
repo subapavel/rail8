@@ -57,7 +57,7 @@ cd ui && env -u RAIL8_TOKEN -u RAIL8_ADMIN_TOKEN RAIL8_WORKSPACE=$HOME/rail8-wor
 
 Leave the terminal running and open **http://localhost:5173** in your browser. If that port is occupied,
 add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**. Log in as `owner` with the password
-`bootstrap` printed, and choose your own, 12 to 128 characters, without the name. `owner` is an administrator and holds
+`bootstrap` printed. `owner` is an administrator and holds
 no other role, so, once: open **Users**, choose Roles… on `owner` and give it `developer` and `operator`, so the other
 screens open; and on `deploy` give `operator` and `message-bodies`, so that its token reads the messages below.
 The menu at the left lists the screens; each opens in a tab of its own in the row under the header, Ctrl+K (⌘K on a
@@ -177,7 +177,7 @@ bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-
 export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)
 ```
 
-Then stop the UI, start it again with the command of the first run, log in as `owner`, choose a password and give the
+Then stop the UI, start it again with the command of the first run, log in as `owner` and give the
 roles as in "First run". From the next morning on, the steps above are all there is.
 
 A pull that brings a database migration which clears the deployments, such as `deploy/postgres/V27__deploy_pool.sql`,
