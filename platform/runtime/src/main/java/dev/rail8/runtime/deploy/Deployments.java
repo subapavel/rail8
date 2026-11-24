@@ -611,7 +611,8 @@ public final class Deployments {
 
     /**
      * The repository and the commit a package's folder was written from; for a deploy, who deploys it and the commit's author,
-     * which its record's audit row names. Both null for a check, a restore and a tick, which write no record.
+     * which its record's audit row names. {@code by} is null for a check, both are null for a restore and a tick: they write no
+     * record.
      */
     private record Origin(String repository, String commit, Actor by, String author) {}
 
