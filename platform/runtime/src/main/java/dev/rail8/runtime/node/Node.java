@@ -29,6 +29,7 @@ import dev.rail8.runtime.cache.ValkeyCache;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.PgDeploymentStore;
+import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.journal.Journal;
 import dev.rail8.runtime.journal.JournalFiles;
 import dev.rail8.runtime.journal.JournalKeys;
@@ -114,7 +115,9 @@ import java.util.function.Supplier;
  * 503 for every path no mount takes, after that 503 for the path of a flow deployed here whose consumer has not mounted it at the
  * moment and 404 for any other ({@link Deployments#serves}) — restores
  * what the pool's records name ({@link Deployments#restore}: rows that cannot be read or a data directory that cannot be
- * written fail the start; a package or a flow that cannot be restored is listed FAILED and the node starts), builds the
+ * written fail the start; a package or a flow that cannot be restored is listed FAILED and the node starts), starts the check of
+ * the git credentials when the node deploys from git (its first check at once on a virtual thread of its own, then every
+ * {@code RAIL8_GIT_CHECK_EVERY}; its outcome in {@code /health}'s {@code git} and {@code GET /admin/git}, never in a check), builds the
  * {@link Retention} job over the work pool, the clock and the timer ({@code RAIL8_RETENTION_*}, {@code RAIL8_AUDIT_MAX_AGE}), the
  * users and sessions of the admin API over the access pool ({@link PgAccess}, {@value #ACCESS_POOL_SIZE} connections of its own,
  * so the admin API's door never waits for the work pool; a WARNING when {@code RAIL8_ADMIN_TOKEN} is the emergency key) and only then starts the admin server with the deploy, work and retry routes, the flows' CPU (the sampler's aggregate, read every 5 s on the node's timer and failed once a read failed, or off) and the health checks
@@ -383,6 +386,7 @@ public final class Node implements AutoCloseable {
             http.listen(prefixes, path -> !ready.get() || restored.serves(path)).await();
             restored.restore();   // before the admin port opens: what the pool recorded runs before a deploy can be taken
             restored.startFollowing();   // every node runs what the pool's records name, a deploy on another node included
+            restored.credentials().ifPresent(CredentialsCheck::start);   // its first check now, on a virtual thread of its own
             Retention retention = new Retention(pool, clock, timer, config.retention());
             PgAccess access = new PgAccess(accessPool, clock, new Argon2id(new SecureRandom()), new HashPlaces(), new SecureRandom(), config.admin().token());
             if (access.emergencyKey()) {
@@ -395,7 +399,8 @@ public final class Node implements AutoCloseable {
             AdminServer admin = new AdminServer(config.admin(), messages, dlq, blobs,
                     new AdminServer.HealthProbe(Map.of("postgres", () -> pool.query("select 1").execute().map(Health.up()),
                             "deployments", () -> Future.succeededFuture(restored.health()),
-                            "journal", () -> Future.succeededFuture(opened.health())), messages::failed, notices, readiness),
+                            "journal", () -> Future.succeededFuture(opened.health())), messages::failed, notices, readiness,
+                            () -> restored.credentials().flatMap(CredentialsCheck::last)),
                     Optional.of(restored), work, new PgFailedMessages(pool, work), sampler.map(s -> new AdminServer.Sampling(s.period(), s.since(), cpu, s::failed)),
                     new PgMessageList(pool), workers, signals, new AdminServer.Modules(listed.get(), services, clock), access);
             int port = admin.start(vertx).await();

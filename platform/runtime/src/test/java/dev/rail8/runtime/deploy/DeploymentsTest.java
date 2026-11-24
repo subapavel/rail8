@@ -3,6 +3,7 @@ package dev.rail8.runtime.deploy;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
+import dev.rail8.api.Health;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.StepFactory;
@@ -11,6 +12,8 @@ import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
+import dev.rail8.runtime.git.CredentialsCheck;
+import dev.rail8.runtime.git.GitSettings;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.schemas.Schemas;
@@ -1008,5 +1011,42 @@ class DeploymentsTest {
         assertEquals(expected, files(listed), "packages() carries the same files");
         assertEquals(at, listed.deployedAt());
         assertEquals(p.content(), listed.content());
+    }
+
+    // --- the check of the git credentials
+
+    /** Waits until the check scheduled its next run on the node's timer. */
+    void nextCheckScheduled() {
+        until(() -> timer.live().stream().anyMatch(t -> t.owner().equals("CredentialsCheck")), "the next check of the git credentials is scheduled");
+    }
+
+    /**
+     * The node's check of the git credentials asks about a repository it runs. Once the git host no longer shows that repository,
+     * as a host answers for a repository a token no longer reaches, the next check finds the credentials REFUSED, and the node
+     * serves messages all the same: its flows run, its health names nothing.
+     */
+    @Test
+    void refusedCredentialsLeaveTheNodeServingMessages() throws Exception {
+        deploy(shop("shop"));
+        CredentialsCheck check = deployments.credentials().orElseThrow();
+        try {
+            check.start();
+            nextCheckScheduled();
+            assertEquals(CredentialsCheck.State.WORKING, check.last().orElseThrow().state(), "the first check, at the start: " + check.last());
+
+            Files.move(tmp.resolve("repos"), tmp.resolve("repos-gone"));   // the host no longer shows the repository
+            rt.clock().advance(GitSettings.CHECK_EVERY_DEFAULT);
+            until(() -> check.last().orElseThrow().state() == CredentialsCheck.State.REFUSED, "the next check finds the credentials refused");
+            assertEquals("shop at HEAD: not found", check.last().orElseThrow().reason());
+
+            assertEquals(Health.up(), deployments.health(), "the node is healthy for traffic");
+            Sent sync = send("shop/orders");
+            assertInstanceOf(Ack.Reply.class, within(sync.answer(), "the sync answer"), "a sync flow answers with its reply");
+            Sent alo = send("shop/audit");
+            assertEquals(new Ack.Accepted(alo.id()), within(alo.answer(), "the at-least-once answer"));
+            doors.partner().awaitSent(2);
+        } finally {
+            check.close();
+        }
     }
 }

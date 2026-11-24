@@ -767,7 +767,10 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
         Optional<GitSettings.Credentials> credentials = user == null ? Optional.empty() : Optional.of(new GitSettings.Credentials(user, token));
         return Optional.of(new GitSettings(base, env.getOrDefault("RAIL8_GIT_PATH", ""), Optional.ofNullable(env.get("RAIL8_GIT_REF")), credentials,
                 span(env, "RAIL8_GIT_TIMEOUT", GitSettings.TIMEOUT_DEFAULT, GitSettings.TIMEOUT_MIN.toString(), GitSettings.TIMEOUT_MAX.toString()),
-                number(env, "RAIL8_GIT_MAX_BYTES", GitSettings.MAX_BYTES_DEFAULT, GitSettings.MAX_BYTES_MIN, GitSettings.MAX_BYTES_MAX)));
+                number(env, "RAIL8_GIT_MAX_BYTES", GitSettings.MAX_BYTES_DEFAULT, GitSettings.MAX_BYTES_MIN, GitSettings.MAX_BYTES_MAX),
+                span(env, "RAIL8_GIT_CHECK_EVERY", GitSettings.CHECK_EVERY_DEFAULT, GitSettings.CHECK_EVERY_MIN.toString(), GitSettings.CHECK_EVERY_MAX.toString()),
+                span(env, "RAIL8_GIT_CHECK_TIMEOUT", GitSettings.CHECK_TIMEOUT_DEFAULT, GitSettings.CHECK_TIMEOUT_MIN.toString(),
+                        GitSettings.CHECK_TIMEOUT_MAX.toString())));
     }
 
     /** The {@code RAIL8_PEER_*} keys: each range-checked naming its key. */

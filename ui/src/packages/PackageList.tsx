@@ -2,6 +2,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { GitCredentialsAlert } from '../GitCredentialsAlert';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
@@ -22,8 +23,9 @@ type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind
  * The packages of the working folder, as a list page: a card with a table of one row per package, with Refresh in the
  * card's corner. Each row holds the repository, which opens the package's tab, the package's name and version, the
  * branch, the last commit, ahead and behind the upstream as of the last fetch, the changed files, and what the node it
- * names runs of it. The folders that are no package are listed in a card below, each with the reason. Without a
- * working folder it says how to set one; a refusal, such as git missing, shows why.
+ * names runs of it. Above it, a warning while the node finds its git credentials refused. The folders that are no package are
+ * listed in a card below, each with the reason. Without a working folder it says how to set one; a refusal, such as git
+ * missing, shows why.
  */
 export function PackageList({ api, now, onOpen }: PackageListProps) {
   const [result, setResult] = useState<Result>({ kind: 'reading' });
@@ -79,6 +81,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           />
         )}
         {silent !== undefined && <Alert type="warning" showIcon title={`The node at ${list.node} does not answer`} description={silent.error} />}
+        <GitCredentialsAlert />
         <ProTable<PackageRow>
           aria-label="Packages"
           rowKey="repository"

@@ -49,6 +49,8 @@ class NodeConfigGitTest {
         assertEquals(new GitSettings(URI.create("https://gitlab.example.com/integration/")), git, "a base is given its /");
         assertEquals(Duration.ofSeconds(60), git.timeout());
         assertEquals(1L << 30, git.maxBytes());
+        assertEquals(Duration.ofMinutes(15), git.checkEvery());
+        assertEquals(Duration.ofSeconds(10), git.checkTimeout());
 
         Map<String, String> env = with(deployed(), "RAIL8_GIT_BASE", "https://gitlab.example.com/integration/");
         with(env, "RAIL8_GIT_PATH", "examples/demo");
@@ -56,12 +58,26 @@ class NodeConfigGitTest {
         with(env, "RAIL8_GIT_TOKEN", TOKEN);
         with(env, "RAIL8_GIT_TIMEOUT", "PT2M");
         with(env, "RAIL8_GIT_MAX_BYTES", String.valueOf(2L << 30));
+        with(env, "RAIL8_GIT_CHECK_EVERY", "PT1H");
+        with(env, "RAIL8_GIT_CHECK_TIMEOUT", "PT30S");
         git = NodeConfig.from(env).git().orElseThrow();
         assertEquals("examples/demo", git.path());
         assertEquals(Optional.of("refs/heads/release"), git.ref());
         assertEquals(Optional.of(new GitSettings.Credentials("rail8-reader", TOKEN)), git.credentials());
         assertEquals(Duration.ofMinutes(2), git.timeout());
         assertEquals(2L << 30, git.maxBytes());
+        assertEquals(Duration.ofHours(1), git.checkEvery());
+        assertEquals(Duration.ofSeconds(30), git.checkTimeout());
+    }
+
+    @ParameterizedTest(name = "{0}={1}")
+    @CsvSource({
+            "RAIL8_GIT_CHECK_EVERY, PT59S", "RAIL8_GIT_CHECK_EVERY, PT24H1S", "RAIL8_GIT_CHECK_EVERY, often",
+            "RAIL8_GIT_CHECK_TIMEOUT, PT0.5S", "RAIL8_GIT_CHECK_TIMEOUT, PT5M1S",
+    })
+    void theCheckOfTheCredentialsHasAFiniteIntervalAndTimeout(String key, String value) {
+        IllegalArgumentException refused = refused(with(with(minimal(), "RAIL8_GIT_BASE", "https://gitlab.example.com/"), key, value));
+        assertTrue(refused.getMessage().startsWith(key + " must be an ISO-8601 duration from "), refused.getMessage());
     }
 
     @Test

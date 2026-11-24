@@ -495,6 +495,16 @@ read from its git cache, or fetched, and the content checked against the record.
 cannot be read, or whose content differs, is listed `FAILED` with the reason and the others run; once
 the git host cannot be reached, the restore fetches nothing more.
 
+A node checks its git credentials on its own, so a token that stopped working is seen before a deploy
+or a restart with an empty git cache fails on it. At its start, and then `RAIL8_GIT_CHECK_EVERY` (15
+min by default) after each check ended, it lists the refs of one repository it runs, the first
+package by name from git, with the pool's credentials, within `RAIL8_GIT_CHECK_TIMEOUT` (10 s). It
+fetches nothing and holds no lock of the cache. The outcome is `WORKING`, `REFUSED` (the credentials
+refused, or the repository not found, as a host answers for a repository the token no longer reaches)
+or `UNREACHABLE` (timed out, or the transport failed). It is logged once per change, with the git
+formatter's text only. `/health` shows the state and when it was checked, `GET /admin/git` the
+repository and the reason too. Refused credentials change no check: messages keep flowing.
+
 The nodes of a pool deploy as one. One deploy or undeploy runs at a time per pool: it holds a
 Postgres advisory lock, taken without waiting on a connection of its own, and a second one on any
 node is 409. Each write of a record raises the pool's generation in the same transaction, compared
@@ -1031,7 +1041,9 @@ itself below 1280 px wide), and the workspace tabs in a row of their own under t
 PageContainer, with a breadcrumb back to the screen that opened it; the flow editor and the mapping studio fill the
 content area. `docs/UI-PATTERNS.md` describes the pages. Quick open (Ctrl+K or Cmd+K) finds screens and open tabs.
 Opening a screen again selects its existing tab. A screen can open additional tabs and ask for confirmation when a user
-closes a dirty editor. Reloading starts again with Home.
+closes a dirty editor. Reloading starts again with Home. While the node finds its git credentials
+refused (part 4), Home and the Packages screen show a warning: a deploy fails, and a node that
+restarts with an empty git cache comes up without its packages.
 
 Each folder of `ui/src/` is a module of the UI. Its `module.tsx` names its screens and its place in the
 navigation, after Home, and `main.tsx` finds every module as the build runs; the application refuses to start,
@@ -1190,6 +1202,9 @@ run's records are written in groups, after the bodies they refer to are durable.
   deployments check is DEGRADED while a package or a flow is listed `FAILED` or a flow is
   `RESTARTING`, and never DOWN: `/health` answers 200 and the node stays ready. A package that cannot
   be restored at start is listed `FAILED` with its reason until a deploy of it replaces it.
+- `/health` also carries `git`: `{"credentials": "WORKING" | "REFUSED" | "UNREACHABLE" | null,
+  "checkedAt"}`, the node's last check of its git credentials (part 4), null before the first. It is
+  outside `checks`: refused credentials never change the status, a 503 or `/ready`.
 
 ### Admin API
 
@@ -1267,6 +1282,7 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `GET /admin/steps` | the step types of the node's modules and plugins, each with its `configSchema`, sorted by type |
 | `GET /admin/modules` | the loaded modules and plugins, each with its version, api, SHA-256, where it came from and what it brings (part 5) |
 | `GET`, `POST /admin/modules/{module}/{path}` | the admin services of the node's modules (part 5) |
+| `GET /admin/git` | the node's last check of its git credentials: `credentials`, `repository`, `reason` (the formatter's text) and `checkedAt`, each null before the first (part 4) |
 | `POST /admin/sessions`; `GET /admin/me`, `POST /admin/me/password`, `POST /admin/me/logout` | the login; who the caller is and every action it may do, its own password change, its logout |
 | `GET /admin/users`, `GET /admin/users/{name}`, `POST /admin/users` | the users with their roles, who granted each, their block, live sessions and tokens; a new user |
 | `POST /admin/users/{name}/roles`, `/block`, `/unblock`, `/password-reset`, `/sessions/end` | roles changed by difference, a block, a reset to a first password, the end of every session of a user |

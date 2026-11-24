@@ -90,6 +90,16 @@ const SCENES = {
   'my-tokens-wrong-password': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'not it'), press('Issue')],
   tokens: [visit('admin'), menu('Tokens')],
   'tokens-ceiling': [visit('admin'), menu('Tokens'), press('Change…'), fill('Longest life of a token', '30')],
+  'git-refused-home': [],
+  'git-refused-packages': [menu('Packages')],
+};
+
+/** What the node answers for its check of the git credentials in the scenes whose name starts with `git-refused`. */
+const REFUSED = {
+  credentials: 'REFUSED',
+  repository: 'orders',
+  reason: 'orders at refs/heads/release: credentials refused',
+  checkedAt: '2026-11-24T08:15:00Z',
 };
 
 /** The page of the Ant Design Pro demo that matches each picture taken of it, and whether its menu is collapsed. */
@@ -118,6 +128,7 @@ async function application(browser, base, scenes, out) {
     for (const size of SIZES) {
       for (const theme of THEMES) {
         const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, colorScheme: theme });
+        if (scene.startsWith('git-refused')) await context.route('**/admin/git', (route) => route.fulfill({ json: REFUSED }));
         const page = await context.newPage();
         await page.goto(`${base}scripts/pictures/index.html`);
         await settled(page);
