@@ -42,8 +42,8 @@ services:
   sftp-keys:
     # one-shot: generates the SFTP server's RSA host key (3072 bits) into the sftp-hostkeys volume, only when it is not there yet (a
     # second `up` keeps the key the server already presented), and writes the SHA256 fingerprint of its public half, which is public,
-    # to host-key.fingerprint in the separate volume sftp-fingerprint: the node mounts only that one, read-only, and reads the file into
-    # RAIL8_SECRET_SFTP_HOST_KEY; no path holding a host key reaches it. It exits non-zero when the fingerprint file is empty. RSA
+    # to host-key.fingerprint in the separate volume sftp-fingerprint: the node mounts only that one, read-only, and reads the file as
+    # RAIL8_SECRET_SFTP_HOST_KEY_FILE; no path holding a host key reaches it. It exits non-zero when the fingerprint file is empty. RSA
     # because the node's SFTP client (Apache MINA SSHD 2.20 as shipped) does not offer ssh-ed25519 (observed, P2-06). Same pinned
     # image as `sftp` (it ships ssh-keygen).
     image: atmoz/sftp:alpine@sha256:43dd1c023cf1bae487127d4b54660b0aee6e94c188a6599be36fb89ba115f961
@@ -131,17 +131,14 @@ services:
       RAIL8_HTTP_ORIGIN: http://localhost:8080
       RAIL8_ADMIN_HOST: 0.0.0.0
       RAIL8_ADMIN_TOKEN: "${RAIL8_ADMIN_TOKEN:?set RAIL8_ADMIN_TOKEN: the admin API on 0.0.0.0 needs a token}"
-      # the demo's sftp-inbox names both as secret:// references (D-086); the host key's fingerprint is read below
+      # the demo's sftp-inbox names both as secret:// references; the host key's fingerprint is a secret given as a file:
+      # the node reads the file `sftp-keys` wrote (public, unknown until the key exists) at its start
       RAIL8_SECRET_SFTP_PASSWORD: "${RAIL8_SFTP_PASSWORD:-demo}"
+      RAIL8_SECRET_SFTP_HOST_KEY_FILE: /sftp-fingerprint/host-key.fingerprint
       # the package repositories: this Rail8 checkout, mounted below as the repository `rail8`, whose package is examples/demo;
       # a deploy reads its commits, so the checkout needs its full history (no shallow clone, no worktree)
       RAIL8_GIT_BASE: file:///repos/
       RAIL8_GIT_PATH: examples/demo
-    # the image's own command, behind a wrapper that reads the fingerprint `sftp-keys` wrote (public, unknown until the key exists)
-    entrypoint:
-      - sh
-      - -c
-      - 'RAIL8_SECRET_SFTP_HOST_KEY=$$(cat /sftp-fingerprint/host-key.fingerprint) && export RAIL8_SECRET_SFTP_HOST_KEY && exec java -jar /opt/rail8/rail8-node.jar'
     volumes:
       - sftp-fingerprint:/sftp-fingerprint:ro
       # the node's data directory (the body journal with its NODE, segments and generated MASTER, the git cache and the packages'

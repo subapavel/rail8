@@ -2429,7 +2429,7 @@ public final class Deployments {
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
         try {
             Optional<String> secret = config.secrets().resolve(reference);
-            if (secret.isEmpty()) problems.add("endpoint '" + id + "': secret '" + reference + "' is not set (" + Secrets.variable(reference) + ")");
+            if (secret.isEmpty()) problems.add("endpoint '" + id + "': secret '" + reference + "' is not set (" + Secrets.where(reference) + ")");
             return secret.orElse(null);
         } catch (IllegalArgumentException malformed) {
             problems.add("endpoint '" + id + "': " + malformed.getMessage());
@@ -2490,7 +2490,7 @@ public final class Deployments {
      */
     private String secret(String reference) {
         return config.secrets().resolve(reference)
-                .orElseThrow(() -> new IllegalArgumentException("secret '" + reference + "' is not set (" + Secrets.variable(reference) + ")"));
+                .orElseThrow(() -> new IllegalArgumentException("secret '" + reference + "' is not set (" + Secrets.where(reference) + ")"));
     }
 
     /**

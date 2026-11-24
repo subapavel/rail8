@@ -695,11 +695,14 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
     private static final int COPIES_MAX = 2;
 
     /**
-     * Reads {@code env} only (never {@link System#getenv()}): the node's configuration, or the refusal naming the key; its
+     * Reads {@code variables} only (never {@link System#getenv()}): the node's configuration, or the refusal naming the key; its
      * {@code RAIL8_SECRET_*} variables are the node's secrets ({@link Secrets#fromEnv}), its {@code RAIL8_JOURNAL_KEY*}
-     * variables its master key source ({@link MasterKeySource#fromEnv}).
+     * variables its master key source ({@link MasterKeySource#fromEnv}). First each secret given as a file
+     * ({@code RAIL8_PG_PASSWORD_FILE}, {@code RAIL8_ADMIN_TOKEN_FILE}, {@code RAIL8_GIT_TOKEN_FILE}, {@code RAIL8_VALKEY_URI_FILE},
+     * {@code RAIL8_SECRET_<NAME>_FILE}) is read in place of its variable ({@link SecretFiles#resolve}).
      */
-    public static NodeConfig from(Map<String, String> env) {
+    public static NodeConfig from(Map<String, String> variables) {
+        Map<String, String> env = SecretFiles.resolve(variables);
         String name = env.get("RAIL8_ENV");
         if (name == null || name.isBlank()) throw new IllegalArgumentException("RAIL8_ENV must name the environment (dev, ci, test, prod, ...)");
         String nodeId = env.getOrDefault("RAIL8_NODE_ID", env.get("HOSTNAME"));

@@ -36,11 +36,20 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
   needs its full history and its own `.git` folder: a shallow clone or a `git worktree` of Rail8 cannot be deployed from.
 - Admin API and `/health`: `localhost:8081`. The node's HTTP port, shared by every inbound HTTP endpoint: `localhost:8080`; the demo's http-in at `/http/in`, its async door `http-in-async` at `/http/invoice/async` (answers 202).
 - Postgres password: `RAIL8_PG_PASSWORD` (default `rail8`).
+- A secret mounted as a file: each of the node's secrets can be given as the path of a file that holds it, the variable's
+  name with `_FILE` added (`docs/ARCHITECTURE.md`, part 10). The stack gives the SFTP host key's fingerprint this way:
+
+  ```yaml
+  environment:
+    RAIL8_SECRET_SFTP_HOST_KEY_FILE: /sftp-fingerprint/host-key.fingerprint   # read once at start, one line end dropped
+  volumes:
+    - sftp-fingerprint:/sftp-fingerprint:ro
+  ```
 - SFTP: user `demo`, password `RAIL8_SFTP_PASSWORD` (default `demo`), directory `inbox` (the demo's `sftp-inbox` polls `/inbox` every
   10 s and deletes a file once the flow `sftp-invoice` has saved it). The one-shot `sftp-keys` generates an RSA host key (3072 bits; the node's SFTP client does not offer ed25519) into the
   `sftp-hostkeys` volume on the first start (never replaced) and writes its public fingerprint to `host-key.fingerprint` in the separate volume
   `sftp-fingerprint`, the only one the node mounts (read-only, no host key reaches it); the
-  node's entrypoint reads that file into `RAIL8_SECRET_SFTP_HOST_KEY`, the password reaches it as `RAIL8_SECRET_SFTP_PASSWORD`.
+  node reads that file as `RAIL8_SECRET_SFTP_HOST_KEY_FILE`, the password reaches it as `RAIL8_SECRET_SFTP_PASSWORD`.
   Nothing secret or generated is in the repo. The fingerprint:
 
   ```sh
