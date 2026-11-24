@@ -315,9 +315,9 @@ public final class PgAccess extends Accounts {
                     Tuple.of(maxDays));
         }
 
-        @Override public int shortenTokens(int maxDays, Instant now) {
-            return run("update tokens set expires_at = created_at + make_interval(hours => $1) where revoked_at is null and expires_at > $2"
-                    + " and expires_at > created_at + make_interval(hours => $1)", Tuple.of(maxDays * 24, at(now))).rowCount();
+        @Override public int shortenTokens(int maxDays) {
+            return run("update tokens set expires_at = created_at + make_interval(hours => $1)"
+                    + " where revoked_at is null and expires_at > created_at + make_interval(hours => $1)", Tuple.of(maxDays * 24)).rowCount();
         }
 
         @Override public OptionalInt claim(String name, String device, Instant at) {

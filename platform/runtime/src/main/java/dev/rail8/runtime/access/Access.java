@@ -23,7 +23,9 @@ public interface Access {
      * The caller of one admin request, from its {@code Authorization} header, read from the store with nothing cached: a session,
      * the emergency key, or while the bridge is open the shared token and, on a node without a token, a request without a
      * credential. {@code declaredActor} is the {@code X-Rail8-Actor} header, which only the bridge's callers are named by. A
-     * token's {@code last_used_at} is written when it is empty or an hour old.
+     * token's {@code last_used_at} is written when it is empty or an hour old. Each node judges an expiry by its own clock, so a
+     * node behind takes a token for as long as its clock lags. A token answers {@code token-expired} until retention deletes
+     * its row, {@code RAIL8_AUDIT_MAX_AGE} after its stored expiry, and {@code unknown-credential} after.
      *
      * @throws AccessRefused 401 {@code no-credential}, {@code unknown-credential}, {@code session-ended}, {@code token-revoked},
      *                       {@code token-expired} or {@code blocked}; 400
@@ -37,6 +39,19 @@ public interface Access {
      */
     static boolean presentsSession(Optional<String> authorization) {
         return authorization.flatMap(Credentials::presented).flatMap(Credentials::sessionId).isPresent();
+    }
+
+    /** Whether {@code authorization} presents a named token, {@code Bearer rail8t_<id>_<secret>}, by its form alone. */
+    static boolean presentsToken(Optional<String> authorization) {
+        return authorization.flatMap(Credentials::presented).flatMap(Credentials::tokenId).isPresent();
+    }
+
+    /**
+     * {@code path} with the secret of every credential of Rail8's forms in it replaced by {@code ***}, a session's and a
+     * token's id kept: a path is logged and audited as it came, and a credential pasted into it must not be.
+     */
+    static String redacted(String path) {
+        return Credentials.redacted(path);
     }
 
     /**
@@ -123,13 +138,16 @@ public interface Access {
      */
     Issued issueToken(Actor by, String user, String name, OptionalInt days);
 
+    /** The live tokens of {@code who}, a user, soonest expiry first, and the ceiling. */
+    Tokens ownTokens(Caller who);
+
     /**
-     * The live tokens, soonest expiry first, and the ceiling: of {@code user}, or of every user when empty; with
-     * {@code expiringWithin}, only those that expire within it.
+     * The live tokens of every user, soonest expiry first, and the ceiling; with {@code expiringWithin}, only those that expire
+     * within it. The ceiling is read before the tokens, so no token listed lies past the ceiling shown.
      *
-     * @throws AccessRefused 400 for an {@code expiringWithin} not above zero or above 365 days, 404 for no such user
+     * @throws AccessRefused 400 for an {@code expiringWithin} not above zero or above 365 days
      */
-    Tokens tokens(Optional<String> user, Optional<Duration> expiringWithin);
+    Tokens tokens(Optional<Duration> expiringWithin);
 
     /**
      * {@code by}'s own token {@code id} revoked; one already revoked stays as it is.
@@ -146,8 +164,9 @@ public interface Access {
     void revokeToken(Actor by, String id);
 
     /**
-     * The installation's ceiling set to {@code maxDays}. Lowering it shortens every live token longer than it to its issue plus
-     * {@code maxDays}; raising it lengthens none.
+     * The installation's ceiling set to {@code maxDays}. Lowering it rewrites every unrevoked token whose expiry lies past its
+     * issue plus {@code maxDays} to that, whether or not this node's clock already sees it expired, so a node behind refuses it
+     * too; its audit row counts the tokens rewritten. Raising it lengthens none.
      *
      * @throws AccessRefused 400 for {@code maxDays} outside 1 to 365
      */

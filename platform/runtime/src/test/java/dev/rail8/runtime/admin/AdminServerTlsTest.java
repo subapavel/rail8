@@ -40,8 +40,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The admin listener with a certificate serves HTTPS only. On a bind other than loopback without a certificate it starts with a
- * WARNING and refuses logins and sessions with 403 {@code tls-required} before the login reads its body, while the emergency key
- * and the shared token go on as during the bridge; {@code RAIL8_ADMIN_TLS=off} takes logins and sessions there and starts with a
+ * WARNING and refuses logins, sessions and named tokens with 403 {@code tls-required} before the login reads its body, while the
+ * emergency key and the shared token go on as during the bridge; {@code RAIL8_ADMIN_TLS=off} takes them there and starts with a
  * WARNING of its own. A loopback bind and a bind with a certificate start without either. {@code /health} names the certificate
  * in its notices from 14 days before its expiry by the node's clock on.
  */
@@ -118,8 +118,8 @@ class AdminServerTlsTest extends AdminAccessFixture {
         assertEquals(201, send(key, "POST", "/admin/sessions", Optional.empty(), loginBody("root")).status(), "the same login on loopback");
         assertEquals(200, send(key, "GET", "/admin/me", Optional.of(root), null).status(), "the same session on loopback");
 
-        assertEquals(List.of("the admin API on 0.0.0.0:" + plain + " serves plain HTTP to other hosts: it refuses logins and sessions until it has"
-                + " a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY), or until RAIL8_ADMIN_TLS=off states that the network to it is"
+        assertEquals(List.of("the admin API on 0.0.0.0:" + plain + " serves plain HTTP to other hosts: it refuses logins, sessions and named"
+                + " tokens until it has a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY), or until RAIL8_ADMIN_TLS=off states that the network to it is"
                 + " protected another way; the emergency key, the shared token and the first passwords given to them still cross it in clear"),
                 warnings());
     }
@@ -140,6 +140,23 @@ class AdminServerTlsTest extends AdminAccessFixture {
         assertEquals("tls-required", lowerCase.code());
         assertEquals(403, noRoute.status(), "before the router's 404: a path no route takes is refused too");
         assertEquals("tls-required", noRoute.code());
+    }
+
+    @Test
+    void aNamedTokenIsRefusedByItsFormBeforeTheStoreIsAsked() throws Exception {
+        String ci = technical(root(), "ci-deploy", "operator");
+        String unknown = "rail8t_0123456789abcdef_" + "x".repeat(43);
+        int plain = start(new AdminServer.Config("0.0.0.0", 0, Optional.of(KEY)));
+
+        Answer issued = send(plain, "GET", "/admin/me", Optional.of(ci), null);
+        Answer neverIssued = send(plain, "GET", "/admin/me", Optional.of(unknown), null);
+
+        assertEquals(403, issued.status(), issued.body());
+        assertEquals("tls-required", issued.code());
+        assertEquals(403, neverIssued.status(), "not 401 unknown-credential: the store is never asked");
+        assertEquals("tls-required", neverIssued.code());
+        assertEquals(200, send(key, "GET", "/admin/me", Optional.of(ci), null).status(), "the same token on loopback");
+        assertEquals(200, send(plain, "GET", "/admin/me", Optional.of(KEY), null).status(), "the emergency key goes on");
     }
 
     @Test

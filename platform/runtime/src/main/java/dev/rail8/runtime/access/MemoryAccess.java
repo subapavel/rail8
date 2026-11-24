@@ -317,11 +317,11 @@ public final class MemoryAccess extends Accounts {
             ceiling = maxDays;
         }
 
-        @Override public int shortenTokens(int maxDays, Instant now) {
+        @Override public int shortenTokens(int maxDays) {
             int shortened = 0;
             for (TokenRow t : List.copyOf(tokens.values())) {
                 Instant end = t.createdAt().plus(Duration.ofDays(maxDays));
-                if (t.revokedAt().isPresent() || !t.expiresAt().isAfter(now) || !t.expiresAt().isAfter(end)) continue;
+                if (t.revokedAt().isPresent() || !t.expiresAt().isAfter(end)) continue;
                 tokens.put(t.id(), new TokenRow(t.id(), t.user(), t.name(), t.fingerprint(), t.createdAt(), t.createdBy(), end, t.lastUsedAt(),
                         t.revokedAt()));
                 shortened++;

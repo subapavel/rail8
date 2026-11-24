@@ -235,8 +235,8 @@ A slow hash is not needed: a fingerprint of 256 random bits gives nobody anythin
 **The account's generation.** Each user has a `generation`. A block, a password change, a password reset and the end of
 the user's sessions each raise it. A credential is made only while the generation is unchanged and the user is not
 blocked: a session, a personal token, a device. This is checked in the transaction that inserts the credential, under
-the user's row taken `for share`. A login on one node therefore cannot recreate access that a reset on another node
-has just ended.
+the user's row taken `for share`, and `for update` for a personal token, whose user may hold at most 20. A login on one
+node therefore cannot recreate access that a reset on another node has just ended.
 
 ## Passwords
 
@@ -488,7 +488,8 @@ refused deploy changes nothing, and its row is written after the fact, as today.
 
 **New entries:** `login`, `login.refused`, `logout`, `password.change`, `user.create`, `user.block`, `user.unblock`,
 `user.password-reset`, `user.roles`, `session.end`, `token.issue`, `token.revoke`, `emergency-key.use` and
-`message.body.view`, and `token.ceiling` with `{from, to}`.
+`message.body.view`, and `token.ceiling` with `{from, to, shortened}`, `shortened` the unrevoked tokens whose expiry it
+moved earlier, expired by the node's clock or not.
 - `user.roles` carries `{added, removed, self}`, so assigning oneself the message bodies role is marked.
 - A release of a held item (`work.release`) and an undeploy (`undeploy`) are audited too. They join the deploy, the
   discard, the retry and the cancel, which already are.
@@ -519,7 +520,8 @@ outlives the messages. The node's retention job deletes, in its batches:
 - The command line and the UI server refuse to send a password or a credential to an `http://` address other than
   loopback, unless `RAIL8_ADMIN_TLS=off`. They trust the system's certificates, or the one in `RAIL8_ADMIN_CA`.
 - On a bind other than loopback without a certificate:
-  - during the bridge, the node starts with a WARNING and refuses logins and sessions there, unless `RAIL8_ADMIN_TLS=off`;
+  - during the bridge, the node starts with a WARNING and refuses logins, sessions and named tokens there, unless
+    `RAIL8_ADMIN_TLS=off`;
   - after the cut, the node does not start, unless `RAIL8_ADMIN_TLS=off`.
 - `RAIL8_ADMIN_TLS=off` states that the network between the UI server, the command line and the nodes is protected
   another way, and the node logs a WARNING at its start.
@@ -593,7 +595,7 @@ create table tokens (
   name text not null check (name ~ '^[a-z0-9][a-z0-9-]{0,63}$'),
   fingerprint bytea not null check (octet_length(fingerprint) = 32),
   created_at timestamptz not null, created_by text not null,
-  expires_at timestamptz not null check (expires_at > created_at and expires_at <= created_at + interval '365 days'),
+  expires_at timestamptz not null check (expires_at > created_at and expires_at <= created_at + interval '8760 hours'),
   last_used_at timestamptz, revoked_at timestamptz, revoked_by text);
 create unique index tokens_live_name on tokens (user_id, name) where revoked_at is null;
 create index tokens_expiring on tokens (expires_at) where revoked_at is null;
