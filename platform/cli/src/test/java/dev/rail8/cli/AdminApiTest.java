@@ -45,6 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AdminApiTest {
 
     static final String TOKEN = "rail8k_" + "T".repeat(43);
+    /** What deploy sends: an account's token, never the key. */
+    static final String DEPLOY_TOKEN = "rail8t_0123456789abcdef_" + "T".repeat(43);
     static final String COMMIT = "0123456789abcdef0123456789abcdef01234567";
 
     @TempDir
@@ -148,15 +150,15 @@ class AdminApiTest {
         StubAdmin admin = stub(new StubAdmin());
         String elsewhere = "http://0.0.0.0:" + admin.port();
 
-        Ran refused = run(env("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "demo", COMMIT, "--expect", "none", "--admin", elsewhere);
+        Ran refused = run(env("RAIL8_TOKEN", DEPLOY_TOKEN), "deploy", "demo", COMMIT, "--expect", "none", "--admin", elsewhere);
         assertEquals(2, refused.exit(), refused.toString());
         assertTrue(refused.err().contains("is plain HTTP to a host other than loopback"), refused.toString());
-        assertFalse(refused.err().contains(TOKEN), "the token is never printed: " + refused);
+        assertFalse(refused.err().contains(DEPLOY_TOKEN), "the token is never printed: " + refused);
         assertEquals(List.of(), admin.requests(), "nothing sent");
 
-        Ran off = run(env("RAIL8_ADMIN_TOKEN", TOKEN, "RAIL8_ADMIN_TLS", "off"), "deploy", "demo", COMMIT, "--expect", "none", "--admin", elsewhere);
+        Ran off = run(env("RAIL8_TOKEN", DEPLOY_TOKEN, "RAIL8_ADMIN_TLS", "off"), "deploy", "demo", COMMIT, "--expect", "none", "--admin", elsewhere);
         assertEquals(0, off.exit(), off.toString());
-        assertEquals(List.of("Bearer " + TOKEN), admin.only().header("authorization"), "with off it goes, the token with it");
+        assertEquals(List.of("Bearer " + DEPLOY_TOKEN), admin.only().header("authorization"), "with off it goes, the token with it");
     }
 
     @Test
@@ -176,17 +178,17 @@ class AdminApiTest {
     void httpsTrustsTheCaOfRail8AdminCa() throws Exception {
         StubAdmin admin = stub(new StubAdmin(localhost));
 
-        Ran ran = run(env("RAIL8_ADMIN_TOKEN", TOKEN, "RAIL8_ADMIN_CA", caPem.toString()), "deploy", "demo", COMMIT, "--expect", "none", "--admin", admin.url());
+        Ran ran = run(env("RAIL8_TOKEN", DEPLOY_TOKEN, "RAIL8_ADMIN_CA", caPem.toString()), "deploy", "demo", COMMIT, "--expect", "none", "--admin", admin.url());
 
         assertEquals(0, ran.exit(), ran.toString());
-        assertEquals(List.of("Bearer " + TOKEN), admin.only().header("authorization"));
+        assertEquals(List.of("Bearer " + DEPLOY_TOKEN), admin.only().header("authorization"));
     }
 
     @Test
     void aCertificateTheClientDoesNotTrustIsRefusedEvenWithOff() throws Exception {
         StubAdmin admin = stub(new StubAdmin(localhost));
 
-        Ran untrusted = run(env("RAIL8_ADMIN_TOKEN", TOKEN, "RAIL8_ADMIN_TLS", "off"), "deploy", "demo", COMMIT, "--expect", "none", "--admin", admin.url());
+        Ran untrusted = run(env("RAIL8_TOKEN", DEPLOY_TOKEN, "RAIL8_ADMIN_TLS", "off"), "deploy", "demo", COMMIT, "--expect", "none", "--admin", admin.url());
 
         assertEquals(1, untrusted.exit(), untrusted.toString());
         assertTrue(untrusted.err().contains("no answer from " + admin.url()), untrusted.toString());
@@ -198,7 +200,7 @@ class AdminApiTest {
         StubAdmin admin = stub(new StubAdmin(localhost));
         String byAddress = "https://127.0.0.1:" + admin.port();   // the certificate names localhost only
 
-        Ran ran = run(env("RAIL8_ADMIN_TOKEN", TOKEN, "RAIL8_ADMIN_CA", caPem.toString(), "RAIL8_ADMIN_TLS", "off"),
+        Ran ran = run(env("RAIL8_TOKEN", DEPLOY_TOKEN, "RAIL8_ADMIN_CA", caPem.toString(), "RAIL8_ADMIN_TLS", "off"),
                 "deploy", "demo", COMMIT, "--expect", "none", "--admin", byAddress);
 
         assertEquals(1, ran.exit(), ran.toString());
