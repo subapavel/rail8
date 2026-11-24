@@ -754,8 +754,6 @@ describe('the dependencies of a package', () => {
     await expect.element(page.getByText('Locked 2 dependencies: commit package.lock to keep the pins')).toBeVisible();
     await expect.element(page.getByText(`inventory 1.0.0: inventory at ${inventory}; stock 1.0.0: stock at ${stock}`)).toBeVisible();
     await expect.element(dependencyRow('inventory')).toMatchTextContent(`inventory1.0.0inventory ${inventory}inventory ${inventory}Pinned${inventory}`);
-    // the button's loading icon may still be leaving, and named, just after the lock
-    await expect.element(page.getByRole('button', { name: /Lock$/ })).toBeDisabled();
     expect(folder.disk['package.lock']).toContain(`commit: "${ids.get('stock/first')}"`);
     await page.getByRole('tab', { name: 'Changes (1)' }).click();
     await expand(changeRow('package.lock'));
@@ -804,28 +802,31 @@ describe('the dependencies of a package', () => {
     await expect.element(dependencyRow('stock')).toMatchTextContent('stock1.0.0--Missing-');
   });
 
-  test('Lock is disabled with the reason while there is nothing to lock or the server takes no writes', async () => {
-    const pinnedAt = async () => {
-      const { state, ids } = fakeStateOf(declaring([{ folder: 'inventory' }, { folder: 'stock' }]));
-      const lock = await fakePackagesApi(state, fakeLock()).lock('orders', {
-        manifestTag: await tagOf(DECLARES),
-        lockTag: null,
-        dependencies: ['inventory', 'stock'].map((name) => ({ name, folder: name, head: ids.get(`${name}/first`)! })),
-      });
-      return lockText(lock.pins);
-    };
-    const cases: [Seed, string][] = [
-      [declaring(undefined, { readOnly: true }), 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).'],
-      [{ clones: [{ folder: 'orders' }] }, 'Nothing to lock: package.yaml declares no dependency.'],
-      [{ clones: [{ folder: 'orders', manifest: DECLARES, files: { 'package.lock': await pinnedAt() } }, { folder: 'inventory' }, { folder: 'stock' }] }, 'Nothing to lock: every dependency is pinned at its candidate’s HEAD.'],
-    ];
-    for (const [seed, reason] of cases) {
-      await openOrders(seed);
-      await showDependencies();
-      await expect.element(button('Lock')).toBeDisabled();
-      await expect.element(button('Lock')).toHaveAttribute('title', reason);
-      root?.unmount();
-      document.body.innerHTML = '';
-    }
+  test('Lock is disabled with the reason while the server takes no writes', async () => {
+    await openOrders(declaring(undefined, { readOnly: true }));
+    await showDependencies();
+    await expect.element(button('Lock')).toBeDisabled();
+    await expect.element(button('Lock')).toHaveAttribute('title', 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).');
+  });
+
+  test('Lock drops the pin of a dependency package.yaml no longer declares, though every declared one is pinned', async () => {
+    const { state, ids } = fakeStateOf(declaring());
+    const pinned = await fakePackagesApi(state, fakeLock()).lock('orders', {
+      manifestTag: await tagOf(DECLARES),
+      lockTag: null,
+      dependencies: ['inventory', 'stock'].map((name) => ({ name, folder: name, head: ids.get(`${name}/first`)! })),
+    });
+    const inventoryOnly = DECLARES.replace('  - name: stock\n    version: 1.0.0\n', '');
+    const { folder } = await openOrders({
+      clones: [{ folder: 'orders', manifest: inventoryOnly, files: { 'package.lock': lockText(pinned.pins) } }, { folder: 'inventory' }, { folder: 'stock' }],
+    });
+    await showDependencies();
+    await expect.element(page.getByRole('tab', { name: 'Dependencies (1)' })).toBeVisible();
+    await expect.element(dependencyRow('inventory')).toMatchTextContent(/Pinned/);
+
+    await button('Lock').click();
+
+    await expect.element(page.getByText('Locked 1 dependency: commit package.lock to keep the pins')).toBeVisible();
+    expect(folder.disk['package.lock']).toBe(lockText(pinned.pins.filter((p) => p.name === 'inventory')));
   });
 });

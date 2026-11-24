@@ -82,13 +82,13 @@ async function candidateHeadOf(git: Runner, folder: string): Promise<{ head: str
  * The dependencies of the package `repository`, whose clone is at the real path `clone` directly in the real working
  * folder, sorted by name, with the tags of its `package.yaml` and `package.lock` on disk; each with its candidate
  * among the folders of the working folder, never looked up by its pin, and what the node runs for it when it runs the
- * package. Each folder of the working folder is read only when the package declares a dependency.
+ * package, unless `node` is null. Each folder of the working folder is read only when the package declares a dependency.
  */
 export async function dependenciesOf(
   git: Runner,
   clone: string,
   repository: string,
-  node: NodeState,
+  node: NodeState | null,
 ): Promise<{ dependencies: Dependency[]; manifestTag: string | null; lockTag: string | null; several: Map<string, string[]> }> {
   const [manifest, lock] = await Promise.all([bytesOf(join(clone, 'package.yaml')), bytesOf(join(clone, 'package.lock'))]);
   const declared = manifest === null ? [] : declaredOf(manifest.toString('utf8'));
@@ -98,8 +98,8 @@ export async function dependenciesOf(
   if (declared.length === 0) return { dependencies: [], ...tags, several };
   const root = dirname(clone);
   const folders = await foldersIn(root, clone);
-  const answer = await node.read();
-  const runs = answer.answered ? answer.running.find((r) => r.repository === repository) : undefined;
+  const answer = node === null ? null : await node.read();
+  const runs = answer?.answered ? answer.running.find((r) => r.repository === repository) : undefined;
   const dependencies = await Promise.all(
     declared.map(async (d) => {
       const found = candidateOf(d.name, d.version, folders);
@@ -121,9 +121,10 @@ export async function dependenciesOf(
  * line that is missing or cannot start its jar is a 503 that says how to build it; any other end is a 500 with what it
  * said.
  */
-export function lockPackage(git: Runner, lock: WorkingFolderLock, cli: string, clone: string, repository: string, body: LockBody, node: NodeState): Promise<LockedPin[]> {
+export function lockPackage(git: Runner, lock: WorkingFolderLock, cli: string, clone: string, repository: string, body: LockBody): Promise<LockedPin[]> {
   return lock(async () => {
-    const now = await dependenciesOf(git, clone, repository, node);
+    // what the node runs is no part of the check, so the node is not read while the lock is held
+    const now = await dependenciesOf(git, clone, repository, null);
     if (!lockStillHolds(body, now)) throw new Refusal(412, LOCK_REFUSALS.stale);
     for (const d of now.dependencies) {
       const several = now.several.get(d.name);
@@ -144,8 +145,9 @@ export function lockPackage(git: Runner, lock: WorkingFolderLock, cli: string, c
     }
     const problems = stdout.split('\n').flatMap((line) => (line.startsWith('problem: ') ? [formatted(line.slice('problem: '.length))] : []));
     if (ran.code === 1 && problems.length > 0) throw new LockRefused(422, LOCK_REFUSALS.problems, problems);
-    // bin/rail8 exits with 2 when it finds no jar, and the shell with 126 or 127 when java cannot be started
-    if (ran.code === 2 || ran.code === 126 || ran.code === 127) throw new LockRefused(503, LOCK_REFUSALS.missing(cli), undefined, said);
+    // bin/rail8 exits with 2 and says so when it finds no jar, and the shell with 126 or 127 when java cannot be started
+    const noJar = ran.code === 2 && ran.stderr.toString('utf8').includes('no cli jar');
+    if (noJar || ran.code === 126 || ran.code === 127) throw new LockRefused(503, LOCK_REFUSALS.missing(cli), undefined, said);
     throw new LockRefused(500, LOCK_REFUSALS.failed(ran.code), undefined, said);
   });
 }
