@@ -104,7 +104,7 @@ public abstract class CacheContract {
     public void aRemoveWithTheKeptValueForgetsTheKey() throws Exception {
         Cache c = cache();
         call(() -> c.get("k", value("first", Duration.ofMinutes(5))));
-        call(() -> { c.remove("k", "first"); return null; });
+        call(() -> { c.remove("k", copy("first")); return null; });
         assertEquals("second", call(() -> c.get("k", value("second", Duration.ofMinutes(5)))));
     }
 
@@ -150,6 +150,15 @@ public abstract class CacheContract {
     public void aRemoveWithANullValueIsRefused() {
         Cache c = cache();
         assertThrows(NullPointerException.class, () -> call(() -> { c.remove("k", null); return null; }));
+    }
+
+    @Test
+    public void aRefusedRemoveWithAValueForgetsNothing() throws Exception {
+        Cache c = cache();
+        call(() -> c.get("k", value("first", Duration.ofMinutes(5))));
+        assertThrows(NullPointerException.class, () -> call(() -> { c.remove("k", null); return null; }));
+        assertThrows(IllegalStateException.class, () -> c.remove("k", copy("first")));
+        assertEquals("first", call(() -> c.get("k", value("second", Duration.ofMinutes(5)))));
     }
 
     @Test
@@ -286,6 +295,11 @@ public abstract class CacheContract {
         if (failure instanceof Exception x) throw x;
         if (failure instanceof Error x) throw x;
         throw new AssertionError(failure);
+    }
+
+    /** A string equal to {@code value} that is not the same object, so a cache that compares with {@code ==} tells them apart. */
+    private static String copy(String value) {
+        return String.valueOf(value.toCharArray());
     }
 
     /** Returns once a loader has counted {@code started} down. */

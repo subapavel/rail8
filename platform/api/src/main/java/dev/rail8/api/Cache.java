@@ -62,8 +62,9 @@ public interface Cache {
      * Forgets {@code key} only while the cache keeps {@code value} under it: a value another caller kept since stays, and a load
      * under way is left alone and keeps its value. It is for a value seen to fail, such as a token a partner refused: pass it
      * as {@link #get} returned it, then call {@code get} again. When many callers saw one value fail, the first forgets it and
-     * the others find the newer value or its load, so the key is loaded once. The value is compared whole; one too long to be
-     * kept matches nothing. Best effort, as {@link #remove(String)}.
+     * the others find the newer value or its load, so the key is loaded once, as {@code get} loads a key once. A {@code get}
+     * right after the remove can, rarely, still return that value, so a step calls the partner once more, never in a loop.
+     * The value is compared whole; one too long to be kept matches nothing. Best effort, as {@link #remove(String)}.
      *
      * <pre>{@code
      * String token = cache.get(key, this::fetchToken);

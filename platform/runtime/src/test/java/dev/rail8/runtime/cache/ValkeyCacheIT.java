@@ -1,16 +1,20 @@
 package dev.rail8.runtime.cache;
 
 import dev.rail8.api.Cache;
+import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.scope.MessageContext;
 import dev.rail8.testkit.CacheContract;
 import dev.rail8.testkit.FakeClock;
 import dev.rail8.testkit.FakeIds;
 import dev.rail8.testkit.FakeRuntime;
 import dev.rail8.testkit.FakeTimer;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.redis.client.Command;
 import io.vertx.redis.client.Redis;
 import io.vertx.redis.client.RedisAPI;
+import io.vertx.redis.client.RedisConnection;
 import io.vertx.redis.client.RedisOptions;
 import io.vertx.redis.client.Request;
 import io.vertx.redis.client.Response;
@@ -34,6 +38,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -50,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * another node's load is seen when its only pending timer task is a pause of a poll, and the pause is ended by moving that
  * node's clock; a lock is made to lapse with {@code PEXPIRE}, and a value with a short ttl left to lapse, each waited for by
  * polling {@code EXISTS}, never slept. {@code CLIENT PAUSE} holds a node's call back, and {@code maxmemory} fills Valkey; each
- * test that changes them changes them back.
+ * test that changes them changes them back. A node's own client can also hold back an answer Valkey has given, or refuse
+ * every call.
  */
 class ValkeyCacheIT extends CacheContract {
 
@@ -299,24 +305,117 @@ class ValkeyCacheIT extends CacheContract {
     }
 
     @Test
-    void aRemoveThatForgotTheValueKeepsLaterCallersOnTheNodeFromJoiningItsLoadUnderWay() throws Exception {
-        try (Node a = new Node("node-a")) {
+    void aRemoveWithAValueLeavesTheNodesOwnRefreshAndItsWaitersAlone() throws Exception {
+        try (Node a = new Node("node-a"); Node b = new Node("node-b")) {
             String pkg = freshPackage();
             call(() -> a.scope(pkg).get("k", value("t1", Duration.ofMinutes(5))));
             a.clock.advance(Duration.ofMinutes(5));   // t1 has expired on A's clock, and Valkey still holds it
             Parked loading = park(a.scope(pkg), "k", "fresh", Duration.ofMinutes(5));
             call(() -> { a.scope(pkg).remove("k", "t1"); return null; });
+            assertEquals(0, api.exists(List.of(valueKey(pkg, "k"))).await().toInteger(), "Valkey forgot t1");
+            assertEquals(1, api.exists(List.of(lockKey(pkg, "k"))).await().toInteger(), "and kept the lock of A's load");
             AtomicInteger loadsLater = new AtomicInteger();
-            CompletableFuture<String> later = async(() -> a.scope(pkg).get("k", () -> {
+            Waiter later = waiter(() -> a.scope(pkg).get("k", () -> {
                 loadsLater.incrementAndGet();
                 return new Cache.Entry("other", Duration.ofMinutes(5));
             }));
-            until(() -> a.pausedBeside(1), "the later caller reads Valkey and polls for the load's lock");
+            until(later::waitsForTheNodesLoad, "the later caller waits for A's load on the node");
             loading.release.countDown();
-            assertEquals("fresh", result(loading.call), "the load went on");
-            a.endPause();
-            assertEquals("fresh", result(later), "and the later caller got its value from Valkey");
+            assertEquals("fresh", result(loading.call));
+            assertEquals("fresh", result(later.call()), "the later caller got the load's value");
             assertEquals(0, loadsLater.get());
+            assertEquals("fresh", call(() -> b.scope(pkg).get("k", value("other", Duration.ofMinutes(5)))), "and Valkey kept it");
+        }
+    }
+
+    @Test
+    void aReadThatFoundTheValueBeforeARemoveOfItIsSentAgain() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            assertEquals("token-1", call(() -> b.scope(pkg).get("k", loader)));
+            Held read = heldA.holdNext();
+            CompletableFuture<String> first = async(() -> a.scope(pkg).get("k", loader));
+            read.awaitHeld();   // Valkey ran A's read, which found token-1; its answer waits
+            call(() -> { b.scope(pkg).remove("k", "token-1"); return null; });   // B forgets token-1 first
+            call(() -> { a.scope(pkg).remove("k", "token-1"); return null; });   // and A's remove finds it gone
+            Waiter later = waiter(() -> a.scope(pkg).get("k", loader));
+            until(later::waitsForTheNodesLoad, "the later caller on A waits for A's read");
+            read.release();
+            assertEquals("token-2", result(first), "A read again and loaded the next token");
+            assertEquals("token-2", result(later.call()), "the later caller got it, not the token it saw fail");
+            assertEquals(2, loads.get(), "the next token was loaded once");
+        }
+    }
+
+    @Test
+    void aRemoveOfTheValueDuringAReadSentAgainHasItSentOnceMore() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            assertEquals("token-1", call(() -> b.scope(pkg).get("k", loader)));
+            Held firstRead = heldA.holdNext();
+            CompletableFuture<String> first = async(() -> a.scope(pkg).get("k", loader));
+            firstRead.awaitHeld();
+            call(() -> { a.scope(pkg).remove("k", "token-0"); return null; });   // another value: token-1 stays, and A reads again
+            Held secondRead = heldA.holdNext();
+            firstRead.release();
+            secondRead.awaitHeld();   // the read sent again found token-1 too
+            call(() -> { b.scope(pkg).remove("k", "token-1"); return null; });
+            call(() -> { a.scope(pkg).remove("k", "token-1"); return null; });
+            Waiter later = waiter(() -> a.scope(pkg).get("k", loader));
+            until(later::waitsForTheNodesLoad, "the later caller on A waits for A's read");
+            secondRead.release();
+            assertEquals("token-2", result(first));
+            assertEquals("token-2", result(later.call()), "the later caller got the next token, not the one it saw fail");
+            assertEquals(2, loads.get(), "the next token was loaded once");
+        }
+    }
+
+    @Test
+    void aReadSentWhileARemoveOfItsValueIsOnItsWayToValkeyIsSentAgain() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            assertEquals("token-1", call(() -> b.scope(pkg).get("k", loader)));
+            Held script = heldA.delayNext();
+            CompletableFuture<String> removing = async(() -> { a.scope(pkg).remove("k", "token-1"); return null; });
+            script.awaitHeld();   // A's remove is on its way to Valkey
+            Held read = heldA.holdNext();
+            CompletableFuture<String> first = async(() -> a.scope(pkg).get("k", loader));
+            read.awaitHeld();   // Valkey ran A's read before the remove, and the read found token-1
+            script.release();
+            assertNull(result(removing), "the remove returned once Valkey had run it");
+            Waiter later = waiter(() -> a.scope(pkg).get("k", loader));
+            until(later::waitsForTheNodesLoad, "the later caller on A waits for A's read");
+            read.release();
+            assertEquals("token-2", result(first), "A read again and loaded the next token");
+            assertEquals("token-2", result(later.call()), "the later caller got it, not the token it saw fail");
+            assertEquals(2, loads.get(), "the next token was loaded once");
+        }
+    }
+
+    @Test
+    void aRemoveThatForgetsTheValueOnValkeyKeepsTheNodesOutageCopyOfAnother() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            assertEquals("token-1", call(() -> b.scope(pkg).get("k", loader)));
+            heldA.cut = true;
+            assertEquals("token-2", call(() -> a.scope(pkg).get("k", loader)), "A loads on its own and keeps the value for a minute");
+            heldA.cut = false;
+            call(() -> { a.scope(pkg).remove("k", "token-1"); return null; });
+            assertEquals(0, api.exists(List.of(valueKey(pkg, "k"))).await().toInteger(), "Valkey forgot token-1");
+            assertEquals("token-2", call(() -> a.scope(pkg).get("k", loader)), "A kept its copy of token-2");
+            assertEquals(2, loads.get());
         }
     }
 
@@ -535,6 +634,10 @@ class ValkeyCacheIT extends CacheContract {
             this(id, master, Redis.createClient(vertx, uri()));
         }
 
+        Node(String id, Redis client) {
+            this(id, MASTER, client);
+        }
+
         /** A node whose client has {@code connections} connections. */
         Node(String id, int connections) {
             this(id, MASTER, Redis.createClient(vertx, new RedisOptions().setConnectionString(uri()).setMaxPoolSize(connections)));
@@ -562,15 +665,6 @@ class ValkeyCacheIT extends CacheContract {
         boolean calling() {
             try {
                 return timer.pending() == 1 && timer.nextDelay().equals(ValkeyCache.CALL);
-            } catch (IllegalStateException cancelledMeanwhile) {
-                return false;
-            }
-        }
-
-        /** Whether a caller pauses before it polls again, beside {@code others} other pending tasks, such as a lock's renewal. */
-        boolean pausedBeside(int others) {
-            try {
-                return timer.pending() == others + 1 && timer.nextDelay().compareTo(ValkeyCache.LAST_POLL) <= 0;
             } catch (IllegalStateException cancelledMeanwhile) {
                 return false;
             }
@@ -607,15 +701,103 @@ class ValkeyCacheIT extends CacheContract {
     }
 
     private static CompletableFuture<String> async(Callable<String> task) {
+        return waiter(task).call();
+    }
+
+    /** A caller on a virtual thread of its own, which the test can see waiting for a load its node runs. */
+    private record Waiter(Thread thread, CompletableFuture<String> call) {
+        boolean waitsForTheNodesLoad() {
+            return Arrays.stream(thread.getStackTrace())
+                    .anyMatch(frame -> frame.getClassName().equals(InMemoryCache.class.getName()) && frame.getMethodName().equals("await"));
+        }
+    }
+
+    private static Waiter waiter(Callable<String> task) {
         CompletableFuture<String> done = new CompletableFuture<>();
-        Thread.ofVirtual().start(() -> {
+        Thread thread = Thread.ofVirtual().start(() -> {
             try {
                 done.complete(task.call());
             } catch (Throwable t) {
                 done.completeExceptionally(t);
             }
         });
-        return done;
+        return new Waiter(thread, done);
+    }
+
+    /**
+     * A node's client that can hold its next call back before it reaches Valkey, or hold back the answer to its next call
+     * once Valkey has run it, and can refuse every call.
+     */
+    private static final class HeldClient implements Redis {
+        private final Redis client = Redis.createClient(vertx, uri());
+        private final AtomicReference<Held> before = new AtomicReference<>();
+        private final AtomicReference<Held> after = new AtomicReference<>();
+        volatile boolean cut;
+
+        /** Holds the next call back before it reaches Valkey. */
+        Held delayNext() {
+            Held held = new Held();
+            before.set(held);
+            return held;
+        }
+
+        /** Holds back the answer to the next call once Valkey has run it. */
+        Held holdNext() {
+            Held held = new Held();
+            after.set(held);
+            return held;
+        }
+
+        @Override
+        public Future<Response> send(Request request) {
+            if (cut) return Future.failedFuture(new IOException("the test cut the node off Valkey"));
+            Promise<Response> answer = Promise.promise();
+            Held delayed = before.getAndSet(null);
+            if (delayed != null) {
+                delayed.holding.countDown();
+                delayed.release.thenRun(() -> client.send(request).onComplete(answer::handle));
+                return answer.future();
+            }
+            Held held = after.getAndSet(null);
+            Future<Response> sent = client.send(request);
+            if (held == null) return sent;
+            sent.onComplete(done -> {
+                held.holding.countDown();
+                held.release.thenRun(() -> answer.handle(done));
+            });
+            return answer.future();
+        }
+
+        @Override
+        public Future<RedisConnection> connect() {
+            return client.connect();
+        }
+
+        @Override
+        public Future<List<Response>> batch(List<Request> requests) {
+            return client.batch(requests);
+        }
+
+        @Override
+        public Future<Void> close() {
+            return client.close();
+        }
+    }
+
+    /** One call held back until {@link #release()}: before it reaches Valkey, or its answer once Valkey has run it. */
+    private static final class Held {
+        private final CountDownLatch holding = new CountDownLatch(1);
+        private final CompletableFuture<Void> release = new CompletableFuture<>();
+
+        /** Returns once the call is held: it has reached the client, or Valkey has run it. */
+        void awaitHeld() throws InterruptedException {
+            assertTrue(holding.await(10, TimeUnit.SECONDS), "the call was not held within 10 s");
+        }
+
+        /** Sends the call on, or hands its answer to the caller. */
+        void release() {
+            release.complete(null);
+        }
     }
 
     private static String result(CompletableFuture<String> call) throws Exception {

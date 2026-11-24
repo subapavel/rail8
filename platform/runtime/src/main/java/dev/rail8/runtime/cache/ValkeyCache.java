@@ -68,8 +68,9 @@ import java.util.regex.Pattern;
  *
  * <p><b>A remove.</b> {@link Cache#remove(String)} deletes the value and the lock, so a load under way on any node keeps
  * nothing. {@link Cache#remove(String, String)} deletes the value only while its digest is that of the value given, and leaves
- * the lock and every load alone. When it did delete the value, a later caller on this node no longer joins the node's load
- * under way, which may be a read of Valkey that ran before the remove: it reads Valkey again.
+ * the lock and every load alone. A read that finds a value while this node runs such a remove of a key of the same stripe
+ * may have run on Valkey before that remove, and the callers waiting for it may have seen the value fail: it is sent again,
+ * until a read finds a value with no such remove meanwhile, or the bound of a wait has passed.
  *
  * <p><b>The share.</b> A package keeps at most {@link #SHARE_ENTRIES} entries and {@link #SHARE_BYTES} bytes (each entry's
  * value key, expiry, sealed value and digest, and its name in the package's entries and bytes). A write first forgets up to 64
@@ -80,7 +81,8 @@ import java.util.regex.Pattern;
  * nodes of a pool share, with a fresh salt per value. Its AAD is the value key's name, after its length, and its expiry in
  * 8 bytes, so a value moved to another key, or given a later expiry, does not open; such a value is logged once and loaded
  * again. Its digest is HMAC-SHA256, under a second key derived from the master key, of the value key's name, after its length,
- * and the value: it shows whether one key held the same value twice, never the value.
+ * and the value: it shows whether one key held the same value twice, never the value. A value is kept as its UTF-8, in which
+ * an unpaired surrogate becomes {@code ?}: a get returns it so, and a remove with a value compares that form.
  *
  * <p><b>Valkey down.</b> Every call waits at most {@link #CALL} on the injected timer; a full Valkey, which refuses every
  * script, counts as down. A read that fails runs the load on this node, under the lock that read may still have taken, and
@@ -121,7 +123,10 @@ public final class ValkeyCache implements Caches {
     /** The salt of the digest's key: none, which HKDF takes as a block of zeros. */
     private static final byte[] DIGEST_SALT = new byte[32];
     private static final int SALT_BYTES = ChunkedAead.SALT_BYTES;
-    /** Stripes of the count of removes: a load whose stripe saw a remove since it began keeps nothing. */
+    /**
+     * Stripes of the counts of removes: a load whose stripe saw a remove since it began keeps nothing, and a read that found
+     * a value while its stripe saw a remove with a value is sent again.
+     */
     private static final int STRIPES = 256;
     /** How long the package's bookkeeping outlives its last write: every entry has gone by then. */
     private static final Duration BOOKKEEPING = Cache.MAX_TTL.plus(LEASE);
@@ -234,6 +239,7 @@ public final class ValkeyCache implements Caches {
     private final IdGenerator ids;
     private final InMemoryCache front;
     private final AtomicLongArray removals = new AtomicLongArray(STRIPES);
+    private final AtomicLongArray forgets = new AtomicLongArray(STRIPES);
     private final AtomicBoolean down = new AtomicBoolean();
     private final AtomicBoolean unopened = new AtomicBoolean();
     private final SecureRandom random = new SecureRandom();
@@ -335,11 +341,11 @@ public final class ValkeyCache implements Caches {
             local.remove(key, value);   // checks the key, the thread and the value; forgets what an outage kept, if it is the value
             Keys k = scope.keys(key);
             try {
-                if (call(eval(REMOVE, k.value(), k.lock(), k.entries(), k.bytes()).arg(k.entry()).arg(digest(k, value))).toLong() == 1) {
-                    local.remove(key);   // later callers on the node read Valkey again, instead of joining a read that ran before
-                }
+                call(eval(REMOVE, k.value(), k.lock(), k.entries(), k.bytes()).arg(k.entry()).arg(digest(k, value)));
             } catch (Unreachable unreachable) {
                 notRemoved(key, unreachable);
+            } finally {
+                forgets.incrementAndGet(stripe(scope, key));   // after the script: a read under way that found a value reads again
             }
         }
 
@@ -368,6 +374,7 @@ public final class ValkeyCache implements Caches {
         String waited = "";
         boolean passOver = false;
         while (true) {
+            long forgot = forgets.get(stripe);   // before the read: a remove with a value whose script ran before it is counted
             Response read;
             try {
                 read = call(eval(READ, k.value(), k.lock()).arg(clock.millis()).arg(owner).arg(LEASE.toMillis()).arg(waited)
@@ -379,8 +386,11 @@ public final class ValkeyCache implements Caches {
             switch (read.get(0).toString()) {
                 case "hit" -> {
                     Optional<String> value = open(k, read.get(1).toLong(), read.get(2).toBytes());
-                    if (value.isPresent()) return new Cache.Entry(value.get(), Duration.ZERO);
-                    passOver = true;
+                    if (value.isEmpty()) {
+                        passOver = true;
+                    } else if (forgets.get(stripe) == forgot || !clock.instant().isBefore(giveUp)) {
+                        return new Cache.Entry(value.get(), Duration.ZERO);
+                    }   // else a remove with a value ran meanwhile, and Valkey may have run this read before it: read again
                 }
                 case "failed" -> throw new IllegalStateException("the load of cache key '" + key + "' on another node, which this call waited for, failed");
                 case "wait" -> {
