@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { ArtifactKinds, type ArtifactKind, type Side } from '../artifacts';
 import { sessionClient, type Me } from '../session';
 import { SessionGate } from '../SessionGate';
@@ -590,6 +590,179 @@ describe('the tab of a package', () => {
 
     await expect.element(page.getByRole('button', { name: 'Show older commits' })).toBeEnabled();
     await expect.element(rows()).toHaveLength(50);
+  });
+});
+
+describe('discarding changes of a package', () => {
+  const discardDialog = () => page.getByRole('dialog', { name: 'Discard changes' });
+  const files = () => discardDialog().getByRole('table', { name: 'Files to discard' });
+  const listed = (file: string) => files().getByRole('row').filter({ hasText: file });
+  const pick = (file: string) => changes().getByRole('checkbox', { name: `Choose ${file}`, exact: true });
+  const tick = () => discardDialog().getByRole('checkbox', { name: 'Discard this change. It cannot be brought back.' });
+  const discardButton = (n: string) => discardDialog().getByRole('button', { name: new RegExp(`^Discard ${n}$`) });
+
+  test('discards the one changed file chosen of two, confirmed with a tick box, and the other stays changed', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'other.txt': 'other\n' }, edits: { 'notes.txt': 'two\n', 'other.txt': 'other, edited\n' } }] });
+    await expect.element(button('Discard changes…')).toBeDisabled();
+    await expect.element(button('Discard changes…')).toHaveAccessibleDescription('Tick the files to discard first.');
+
+    await pick('notes.txt').click();
+    await button('Discard changes…').click();
+
+    await expect.element(discardDialog().getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await expect.element(listed('notes.txt')).toMatchTextContent('gets the last commit’s version');
+    await expect.element(listed('other.txt')).not.toBeInTheDocument();
+    await expect.element(discardButton('1 file')).toBeDisabled();
+    await tick().click();
+    await discardButton('1 file').click();
+
+    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await expect.element(page.getByText('Discarded the changes of notes.txt')).toBeVisible();
+    await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
+    await expect.element(changeRow('other.txt')).toBeVisible();
+    await expect.element(changeRow('notes.txt')).not.toBeInTheDocument();
+    await expect.element(pick('other.txt')).not.toBeChecked();
+  });
+
+  test('several files are confirmed by typing their count, each listed with what happens to it, a rename as one file on two lines; Enter sends nothing', async () => {
+    const { folder } = await openOrders({
+      clones: [
+        {
+          folder: 'orders',
+          files: { 'notes.txt': 'one\n', 'gone.txt': 'gone\n', 'old.txt': 'moved\n', 'staged.txt': 'staged\n', 'big.txt': 'small\n' },
+          staged: { 'staged.txt': 'staged, edited\n' },
+          moves: { 'old.txt': 'moved/new.txt' },
+          edits: { 'notes.txt': 'two\n', 'gone.txt': null, 'new.txt': 'new\n', 'big.txt': 'x'.repeat(1024 * 1024 + 1) },
+        },
+      ],
+    });
+    for (const file of ['notes.txt', 'gone.txt', 'new.txt', 'moved/new.txt', 'staged.txt', 'big.txt']) await pick(file).click();
+    await button('Discard changes…').click();
+
+    await expect.element(listed('notes.txt')).toMatchTextContent('gets the last commit’s version');
+    await expect.element(listed('gone.txt')).toMatchTextContent('comes back from the last commit');
+    await expect.element(files().getByRole('row').filter({ hasText: /^new\.txt/ })).toMatchTextContent('is deleted: the last commit lacks it');
+    await expect.element(listed('moved/new.txt')).toMatchTextContent(/moved\/new\.txtfrom old\.txt.*is deleted: the last commit lacks it, and unstagedold\.txt comes back from the last commit/);
+    await expect.element(listed('staged.txt')).toMatchTextContent('gets the last commit’s version, and unstaged');
+    await expect.element(listed('big.txt')).toMatchTextContent('too large to compare: you have not seen its change');
+    const count = discardDialog().getByLabelText('Type 6 to discard 6 files. They cannot be brought back.');
+    await count.fill('5');
+    await expect.element(discardButton('6 files')).toBeDisabled();
+    await count.fill('6');
+    await expect.element(discardButton('6 files')).toBeEnabled();
+
+    await count.click();
+    await userEvent.keyboard('{Enter}');
+    await expect.element(discardDialog()).toBeVisible();
+    expect(folder.disk['notes.txt']).toBe('two\n');
+
+    await discardButton('6 files').click();
+    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
+    expect(folder.disk).toMatchObject({ 'notes.txt': 'one\n', 'gone.txt': 'gone\n', 'old.txt': 'moved\n', 'staged.txt': 'staged\n', 'big.txt': 'small\n' });
+    expect(Object.keys(folder.disk)).not.toContain('new.txt');
+  });
+
+  test('the typed count and the tick box are dropped when the package read again changes a listed file', async () => {
+    const { folder } = await openOrders({ clones: [{ folder: 'orders', files: { 'a.txt': 'a\n', 'b.txt': 'b\n' }, edits: { 'a.txt': 'a, edited\n', 'b.txt': 'b, edited\n' } }] });
+    await pick('a.txt').click();
+    await pick('b.txt').click();
+    await button('Discard changes…').click();
+    const count = discardDialog().getByLabelText('Type 2 to discard 2 files. They cannot be brought back.');
+    await count.fill('2');
+    await expect.element(discardButton('2 files')).toBeEnabled();
+
+    folder.disk['a.txt'] = 'a, edited again\n';
+    window.dispatchEvent(new Event('focus'));
+    await expect.element(count).toHaveValue('');
+    await expect.element(discardButton('2 files')).toBeDisabled();
+    await discardDialog().getByRole('button', { name: 'Cancel' }).click();
+
+    await pick('b.txt').click();
+    await button('Discard changes…').click();
+    await tick().click();
+    await expect.element(discardButton('1 file')).toBeEnabled();
+    folder.disk['a.txt'] = 'a, edited once more\n';
+    window.dispatchEvent(new Event('focus'));
+    await expect.element(tick()).not.toBeChecked();
+    await expect.element(discardButton('1 file')).toBeDisabled();
+  });
+
+  test('a file unsaved in an open tab is named first with Show tab; its tab keeps its edits, and the clean tab of a discarded file reads it again', async () => {
+    await openOrders({ clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW, 'notes.txt': 'one\n' }, edits: { 'flows/orders.yaml': FLOW.replace('in }', 'out }'), 'notes.txt': 'two\n' } }] });
+    await openFlow(true);
+    await pick('flows/orders.yaml').click();
+    await button('Discard changes…').click();
+
+    const unsaved = discardDialog().getByRole('alert').filter({ hasText: 'flows/orders.yaml is unsaved in an open tab' });
+    await expect.element(unsaved).toMatchTextContent('The tab keeps its unsaved edits. When it saves them after the discard, the editor finds the file changed on disk, unless the discard left its bytes as they were.');
+    await tick().click();
+    await discardButton('1 file').click();
+    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 0 times')).toBeVisible();
+    root?.unmount();
+    document.body.innerHTML = '';
+
+    await openOrders({ clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW }, edits: { 'flows/orders.yaml': FLOW.replace('in }', 'out }') } }] });
+    await openFlow(false);
+    await pick('flows/orders.yaml').click();
+    await button('Discard changes…').click();
+    await expect.element(discardDialog().getByRole('alert')).not.toBeInTheDocument();
+    await tick().click();
+    await discardButton('1 file').click();
+    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await page.getByRole('tab', { name: /^Flow / }).click();
+    await expect.element(page.getByText('Read again 1 times')).toBeVisible();
+  });
+
+  test('a file that gets unsaved edits in an open tab while the dialog is open is named when Discard is pressed, the confirmation is dropped, and nothing is sent', async () => {
+    const { folder } = await openOrders({ clones: [{ folder: 'orders', files: { 'flows/orders.yaml': FLOW }, edits: { 'flows/orders.yaml': FLOW.replace('in }', 'out }') } }] });
+    await openFlow(false);
+    await pick('flows/orders.yaml').click();
+    await button('Discard changes…').click();
+    await tick().click();
+
+    editFlow!();
+    await discardButton('1 file').click();
+
+    await expect.element(discardDialog().getByText('flows/orders.yaml got unsaved edits in an open tab meanwhile: nothing was discarded. Confirm again to discard the version on disk.')).toBeVisible();
+    await expect.element(discardDialog().getByRole('alert').filter({ hasText: 'flows/orders.yaml is unsaved in an open tab' })).toBeVisible();
+    await expect.element(tick()).not.toBeChecked();
+    expect(folder.disk['flows/orders.yaml']).toBe(FLOW.replace('in }', 'out }'));
+
+    await discardDialog().getByRole('alert').filter({ hasText: 'is unsaved in an open tab' }).getByRole('button', { name: 'Show tab' }).click();
+    await expect.element(discardDialog()).not.toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: /^Flow /, selected: true })).toBeVisible();
+  });
+
+  test('a refused discard says why and the tab reads the package again; a row staged with other content cannot be ticked', async () => {
+    const { folder } = await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n', 'mixed.txt': 'mixed\n' }, staged: { 'mixed.txt': 'staged\n' }, edits: { 'notes.txt': 'two\n', 'mixed.txt': 'disk\n' } }] });
+    await expect.element(pick('mixed.txt')).toBeDisabled();
+    await pick('notes.txt').click();
+    await button('Discard changes…').click();
+    folder.disk['notes.txt'] = 'three\n';
+    await tick().click();
+    await discardButton('1 file').click();
+
+    await expect.element(discardDialog().getByRole('alert').filter({ hasText: 'The discard was refused' })).toMatchTextContent(/notes\.txt/);
+    expect(folder.disk['notes.txt']).toBe('three\n');
+    await expect.element(listed('notes.txt')).toBeVisible();
+    await expect.element(tick()).not.toBeChecked();
+  });
+
+  test('Discard changes… is disabled with the reason on a read-only server and on a busy clone', async () => {
+    const cases: [Seed, string][] = [
+      [{ readOnly: true, clones: [{ folder: 'orders', files: { 'a.txt': 'a\n' }, edits: { 'a.txt': 'b\n' } }] }, 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).'],
+      [{ clones: [{ folder: 'orders', conflict: true }] }, 'The clone is busy (Merge in progress): finish it in a terminal.'],
+    ];
+    for (const [seed, reason] of cases) {
+      await openOrders(seed);
+      await expect.element(button('Discard changes…')).toBeDisabled();
+      await expect.element(button('Discard changes…')).toHaveAccessibleDescription(reason);
+      root?.unmount();
+      document.body.innerHTML = '';
+    }
   });
 });
 
