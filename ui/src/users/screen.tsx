@@ -1,6 +1,7 @@
-import { KeyOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons';
+import { AuditOutlined, KeyOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons';
 import type { Screen } from '../screens';
-import type { TokensApi, UsersApi } from './api';
+import type { AuditApi, TokensApi, UsersApi } from './api';
+import { AuditList } from './AuditList';
 import { MyTokens } from './MyTokens';
 import { TokenAdmin } from './TokenAdmin';
 import { UserList } from './UserList';
@@ -31,6 +32,19 @@ export function tokensScreen(tokens: TokensApi): Screen {
     description: "Set the ceiling of a token's life, and see the tokens that expire within 14 days.",
     action: 'token.read',
     render: () => <TokenAdmin api={tokens} />,
+  };
+}
+
+/** The Audit screen over `api`: the whole audit, filtered by user, action and time, and its export as a CSV file. */
+export function auditScreen(api: AuditApi): Screen {
+  return {
+    id: 'audit',
+    title: 'Audit',
+    group: 'Administration',
+    icon: <AuditOutlined />,
+    description: 'Read who did what, filtered by user, action and time, and export it as a CSV file.',
+    action: 'audit.read',
+    render: () => <AuditList api={api} />,
   };
 }
 

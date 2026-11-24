@@ -618,21 +618,32 @@ abstract class Accounts implements Access {
 
     @Override
     public Page<Audited> messageAudit(String message, Optional<String> after, int limit) {
+        return auditPage(new Tx.AuditFilter(Optional.of("message/" + message), Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.empty()), after, limit);
+    }
+
+    @Override
+    public Page<Audited> audit(AuditFilter filter, Optional<String> after, int limit) {
+        return auditPage(new Tx.AuditFilter(Optional.empty(), filter.user(), filter.action(), filter.from(), filter.to()), after, limit);
+    }
+
+    /** One page of the audit rows {@code filter} keeps, newest first, from the row the cursor {@code after} names. */
+    private Page<Audited> auditPage(Tx.AuditFilter filter, Optional<String> after, int limit) {
         Page.requireLimit(limit);
         OptionalLong before = after.isEmpty() ? OptionalLong.empty() : OptionalLong.of(auditId(after.get()));
-        List<Tx.AuditedRow> rows = query(tx -> tx.audit("message/" + message, before, limit + 1));
-        List<Audited> page = rows.stream().limit(limit).map(a -> new Audited(a.id(), a.row().at(), a.row().action(), a.row().actor(),
-                a.row().via(), a.row().credential(), a.row().detail())).toList();
+        List<Tx.AuditedRow> rows = query(tx -> tx.audit(filter, before, limit + 1));
+        List<Audited> page = rows.stream().limit(limit).map(a -> new Audited(a.id(), a.row().at(), a.row().action(), a.row().subject(),
+                a.row().actor(), a.row().via(), a.row().credential(), a.row().detail())).toList();
         // the limit + 1st row: another page exists, from the last row of this one
         return new Page<>(page, rows.size() > limit ? Optional.of(Page.cursor(Long.toString(page.getLast().id()))) : Optional.empty());
     }
 
-    /** The audit row's id a cursor of {@link #messageAudit} carries; any other text is an IllegalArgumentException. */
+    /** The audit row's id a cursor of the audit carries; any other text is an IllegalArgumentException. */
     private static long auditId(String cursor) {
         try {
             return Long.parseLong(Page.position(cursor));
         } catch (NumberFormatException garbled) {
-            throw new IllegalArgumentException("not a cursor of the audit of a message", garbled);
+            throw new IllegalArgumentException("not a cursor of the audit", garbled);
         }
     }
 

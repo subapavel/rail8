@@ -1,3 +1,4 @@
+import type { AuditRow } from '../audit';
 import { uiFetch } from '../session';
 
 /** The five roles, in the order the screen lists them. */
@@ -193,5 +194,48 @@ export function httpTokensApi(send: typeof fetch = uiFetch): TokensApi {
     issue: (user, name, days) => callNode<Issued>(send, `${userPath(user)}/tokens`, { body: { name, days } }),
     revoke: (id) => callNode<void>(send, `/admin/tokens/${token(id)}/revoke`, {}),
     setCeiling: (maxDays) => callNode<Ceiling>(send, '/admin/tokens/ceiling', { body: { maxDays } }),
+  };
+}
+
+/** A row of the whole audit: an audit row with what it was done to. */
+export interface AuditEntry extends AuditRow {
+  /** What was done to, such as `message/<id>` or `user/<name>`. */
+  subject: string;
+}
+
+/** What a read of the audit keeps; an absent part keeps every row. `from` and `to` are ISO-8601 instants, `to` left out. */
+export interface AuditQuery {
+  user?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+}
+
+/** One page of the audit, and the cursor of the next, null on the last. */
+export interface AuditPage {
+  items: AuditEntry[];
+  next: string | null;
+}
+
+/** The largest page the node hands out. */
+export const AUDIT_PAGE_MAX = 500;
+
+/** What the Audit screen asks of the node. Every call rejects with a {@link UsersError} when the node refuses it. */
+export interface AuditApi {
+  /** The rows `query` keeps, newest first, a page of `limit` (the node's 50 by default) from the cursor `after`. */
+  read(query: AuditQuery, after?: string, limit?: number): Promise<AuditPage>;
+}
+
+/** The audit of the node's admin API, through `send`, the page's `fetch` by default. */
+export function httpAuditApi(send: typeof fetch = uiFetch): AuditApi {
+  return {
+    read(query, after, limit) {
+      const params = new URLSearchParams();
+      for (const [name, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(name, value);
+      if (after !== undefined) params.set('after', after);
+      if (limit !== undefined) params.set('limit', String(limit));
+      const search = params.toString();
+      return callNode<AuditPage>(send, search === '' ? '/admin/audit' : `/admin/audit?${search}`);
+    },
   };
 }

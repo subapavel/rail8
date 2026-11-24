@@ -102,6 +102,8 @@ const SCENES = {
   'my-tokens-issued': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'alice password'), press('Issue')],
   'my-tokens-wrong-password': [visit('admin'), menu('My tokens'), press('New token'), fill('Name', 'build-server'), fill('Your password', 'not it'), press('Issue')],
   tokens: [visit('admin'), menu('Tokens')],
+  audit: [visit('admin'), menu('Audit')],
+  'audit-filtered': [visit('admin'), menu('Audit'), fill('User', 'anna'), press('Query')],
   'tokens-ceiling': [visit('admin'), menu('Tokens'), press('Change…'), fill('Longest life of a token', '30')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],

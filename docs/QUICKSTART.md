@@ -296,6 +296,8 @@ The emergency key you export each morning is for the case that every administrat
 The token shows once; `bin/rail8` sends it from `RAIL8_TOKEN`. Revoke ends one at once. New token… in a technical
 account's row of Users issues that account's tokens. **Tokens**, under Administration, shows the longest life a token may
 have, which Change… sets for the whole installation, and every user's tokens that expire within 14 days.
+**Audit**, under Administration, lists who did what, newest first, narrowed by user, action and time; Export CSV saves
+the rows the filters keep as a file.
 
 ## Stop
 

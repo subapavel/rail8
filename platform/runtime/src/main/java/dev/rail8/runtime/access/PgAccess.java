@@ -54,8 +54,8 @@ public final class PgAccess extends Accounts {
             + " values ('*', '*', 1, $1) on conflict (name, device) do update"
             + " set failures = case when l.last_failure_at < $1 then 1 else least(l.failures + 1, 1000000) end,"
             + " last_failure_at = greatest(l.last_failure_at, $1) returning failures";
-    /** The audit rows of subject $1, on the index {@code audit_subject_at}; the caller adds the order and the limit. */
-    private static final String AUDIT_OF = "select id, at, actor, action, subject, detail, user_id, via, credential from audit where subject = $1";
+    /** The audit rows; the caller adds what it keeps, the order and the limit. */
+    private static final String AUDIT_OF = "select id, at, actor, action, subject, detail, user_id, via, credential from audit where true";
 
     private final Pool pool;
 
@@ -409,11 +409,21 @@ public final class PgAccess extends Accounts {
                             row.user().isPresent() ? row.user().getAsLong() : null, row.via(), row.credential().orElse(null)));
         }
 
-        @Override public List<AuditedRow> audit(String subject, OptionalLong before, int limit) {
-            RowSet<Row> rows = before.isPresent()
-                    ? run(AUDIT_OF + " and (at, id) < (select at, id from audit where id = $2) order by at desc, id desc limit $3",
-                            Tuple.of(subject, before.getAsLong(), limit))
-                    : run(AUDIT_OF + " order by at desc, id desc limit $2", Tuple.of(subject, limit));
+        /**
+         * The rows {@code filter} keeps, each part one condition: a subject on the index {@code audit_subject_at}, a user on
+         * {@code audit_user_at}, and otherwise the time on {@code audit_at}.
+         */
+        @Override public List<AuditedRow> audit(AuditFilter filter, OptionalLong before, int limit) {
+            StringBuilder sql = new StringBuilder(AUDIT_OF);
+            List<Object> args = new ArrayList<>();
+            filter.subject().ifPresent(subject -> keep(sql, args, " and subject = $", subject));
+            filter.user().ifPresent(name -> keep(sql, args, " and user_id = (select id from users where name = $", name).append(')'));
+            filter.action().ifPresent(action -> keep(sql, args, " and action = $", action));
+            filter.from().ifPresent(from -> keep(sql, args, " and at >= $", at(from)));
+            filter.to().ifPresent(to -> keep(sql, args, " and at < $", at(to)));
+            if (before.isPresent()) keep(sql, args, " and (at, id) < (select at, id from audit where id = $", before.getAsLong()).append(')');
+            keep(sql, args, " order by at desc, id desc limit $", limit);
+            RowSet<Row> rows = run(sql.toString(), Tuple.from(args));
             List<AuditedRow> out = new ArrayList<>();
             for (Row r : rows) {
                 Long user = r.getLong("user_id");
@@ -422,6 +432,12 @@ public final class PgAccess extends Accounts {
                         r.getString("via"), Optional.ofNullable(r.getString("credential")))));
             }
             return out;
+        }
+
+        /** Appends {@code condition} with the number of {@code value}, which it adds to {@code args}. */
+        private static StringBuilder keep(StringBuilder sql, List<Object> args, String condition, Object value) {
+            args.add(value);
+            return sql.append(condition).append(args.size());
         }
     }
 }

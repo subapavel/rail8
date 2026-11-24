@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { httpTokensApi, httpUsersApi, UsersError, type User } from './api';
+import { httpAuditApi, httpTokensApi, httpUsersApi, UsersError, type User } from './api';
 
 /** A fetch that records every call and answers each with the next of `answers`. */
 function fakeFetch(...answers: Response[]) {
@@ -130,5 +130,24 @@ describe('httpTokensApi', () => {
     const api = httpTokensApi(send);
     await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'the password is wrong'));
     await expect(api.revoke('abc')).rejects.toEqual(new UsersError(404, 'no token abc'));
+  });
+});
+
+describe('httpAuditApi', () => {
+  it('reads the audit a page at a time, with the filters it is given', async () => {
+    const row = { id: 7, at: '2026-11-24T10:00:00Z', action: 'login', subject: 'user/anna', actor: 'anna', via: 'session', credential: '0123456789abcdef', detail: {} };
+    const { send, calls } = fakeFetch(json(200, { items: [row], next: 'c1' }), json(200, { items: [], next: null }), json(403, { error: 'not allowed' }));
+    const api = httpAuditApi(send);
+    expect(await api.read({})).toEqual({ items: [row], next: 'c1' });
+    expect(await api.read({ user: 'anna', action: 'message.body.view', from: '2026-11-24T00:00:00Z', to: '2026-11-25T00:00:00Z' }, 'c+1', 500)).toEqual({
+      items: [],
+      next: null,
+    });
+    await expect(api.read({ action: '' })).rejects.toEqual(new UsersError(403, 'not allowed'));
+    expect(calls.map((c) => c.url)).toEqual([
+      '/admin/audit',
+      '/admin/audit?user=anna&action=message.body.view&from=2026-11-24T00%3A00%3A00Z&to=2026-11-25T00%3A00%3A00Z&after=c%2B1&limit=500',
+      '/admin/audit',
+    ]);
   });
 });
