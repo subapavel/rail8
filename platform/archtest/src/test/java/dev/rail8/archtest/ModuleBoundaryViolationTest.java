@@ -133,6 +133,7 @@ class ModuleBoundaryViolationTest {
     @Test void runtimeDependingOnAComponentIsCaught() { assertFails(Rules.RUNTIME_NAMES_NO_COMPONENT_OR_STEP, "RuntimeDependsOnAComponent"); }
     @Test void runtimeDependingOnAStepIsCaught() { assertFails(Rules.RUNTIME_NAMES_NO_COMPONENT_OR_STEP, "RuntimeDependsOnAStep"); }
     @Test void theCliNamingAComponentOtherThanTheHttpComponentIsCaught() { assertFails(Rules.CLI_NAMES_NO_COMPONENT_OR_STEP, "CliNamesAComponent"); }
+    @Test void aCliClassMakingItsOwnHttpClientIsCaught() { assertFails(Rules.ONLY_THE_ADMIN_API_MAKES_AN_HTTP_CLIENT, "CliMakesAnHttpClient"); }
     @Test void theCliNamingAStepIsCaught() { assertFails(Rules.CLI_NAMES_NO_COMPONENT_OR_STEP, "CliNamesAStep"); }
     @Test void theCliMayNameTheMockAndTheHttpComponent() {
         JavaClasses allowedOnly = new ClassFileImporter()

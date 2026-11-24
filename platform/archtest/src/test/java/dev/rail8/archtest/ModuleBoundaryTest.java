@@ -69,6 +69,10 @@ class ModuleBoundaryTest {
     @Test void rail8PackagesAreFreeOfCycles() { Rules.NO_CYCLES.check(tree); }
     @Test void noRuntimeClassNamesAComponentOrStep() { Rules.RUNTIME_NAMES_NO_COMPONENT_OR_STEP.check(tree); }
     @Test void theCliNamesNoComponentOrStepButTheMockAndTheHttpComponent() { Rules.CLI_NAMES_NO_COMPONENT_OR_STEP.check(tree); }
+    @Test void onlyTheAdminApiOfTheCliMakesAnHttpClient() {
+        assertTrue(tree.contain(Rules.ADMIN_API), "the rule checks the CLI, not an empty set");
+        Rules.ONLY_THE_ADMIN_API_MAKES_AN_HTTP_CLIENT.check(tree);
+    }
     @Test void noRuntimeClassNamesTheMock() { Rules.RUNTIME_NEVER_NAMES_THE_MOCK.check(tree); }
     @Test void onlyThePeerLinkUsesVertxNetTypes() { Rules.ONLY_THE_PEER_LINK_OPENS_RAW_TCP.check(tree); }
     @Test void onlyCallerActingMakesAnActor() {

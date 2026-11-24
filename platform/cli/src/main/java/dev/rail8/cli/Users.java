@@ -5,9 +5,6 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 import java.io.PrintStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -17,7 +14,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 
 /**
  * The commands that make the first users of the admin API:
@@ -25,7 +21,8 @@ import java.util.concurrent.CompletionException;
  *   <li>{@code rail8 user add <name> [--role <role>] [--admin <url>]}: {@code POST <admin>/admin/users} with the body
  *       {@code {"name": "<name>", "kind": "person", "roles": ["<role>"]}} (no role without {@code --role}),
  *       {@code Content-Type: application/json} and {@code Authorization: Bearer $RAIL8_ADMIN_TOKEN}: the emergency key, or during
- *       the bridge the shared token. The admin URL is {@code --admin}, else RAIL8_ADMIN, else {@code http://localhost:8081}.
+ *       the bridge the shared token. The admin URL is {@code --admin}, else RAIL8_ADMIN, else {@code http://localhost:8081}, reached
+ *       through {@link AdminApi}: plain HTTP only to loopback unless RAIL8_ADMIN_TLS=off.
  *       Prints the first password the node answers, alone on its line; exit 0 on a 2xx, 1 on any other status (the node's
  *       answer printed) or a node that cannot be reached, 2 on a usage error or without RAIL8_ADMIN_TOKEN (nothing sent).</li>
  *   <li>{@code rail8 key new}: prints a new emergency key, {@code rail8k_} and 43 base64url characters of 256 random bits, to
@@ -34,7 +31,6 @@ import java.util.concurrent.CompletionException;
  */
 final class Users {
 
-    private static final Duration CONNECT = Duration.ofSeconds(10);
     private static final Duration ANSWER = Duration.ofSeconds(30);
     private static final int KEY_BYTES = 32;
 
@@ -93,25 +89,18 @@ final class Users {
     }
 
     static int add(Add add, Map<String, String> env, PrintStream out, PrintStream err) {
-        String token = Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")).filter(t -> !t.isBlank())
-                .orElseThrow(() -> new Cli.Usage("user add: RAIL8_ADMIN_TOKEN is not set: it holds the emergency key"));
-        String admin = add.admin().orElse(env.getOrDefault("RAIL8_ADMIN", Deploy.DEFAULT_ADMIN));
+        if (Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")).filter(t -> !t.isBlank()).isEmpty()) {
+            throw new Cli.Usage("user add: RAIL8_ADMIN_TOKEN is not set: it holds the emergency key");
+        }
+        AdminApi admin = AdminApi.of("user add", add.admin(), env);
         JsonArray roles = new JsonArray();
         add.role().ifPresent(roles::add);
         byte[] body = new JsonObject().put("name", add.name()).put("kind", "person").put("roles", roles).encode().getBytes(StandardCharsets.UTF_8);
-        HttpRequest request;
-        try {
-            request = HttpRequest.newBuilder(URI.create(admin.replaceAll("/+$", "") + "/admin/users")).timeout(ANSWER)
-                    .header("Content-Type", "application/json").header("Authorization", "Bearer " + token)
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
-        } catch (IllegalArgumentException wrong) {
-            throw new Cli.Usage("user add: the admin URL '" + admin + "' is not an http or https URL: " + wrong.getMessage());
-        }
         HttpResponse<String> answer;
-        try (HttpClient client = HttpClient.newBuilder().connectTimeout(CONNECT).build()) {
-            answer = client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).join();
-        } catch (CompletionException unreachable) {
-            err.println("rail8 user add: no answer from " + admin + ": " + Cli.oneLine(String.valueOf(unreachable.getCause())));
+        try {
+            answer = admin.post("/admin/users", body, ANSWER);
+        } catch (AdminApi.NoAnswer unreachable) {
+            err.println("rail8 user add: " + unreachable.getMessage());
             return 1;
         }
         if (answer.statusCode() / 100 != 2) {

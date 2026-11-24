@@ -3,9 +3,6 @@ package dev.rail8.cli;
 import io.vertx.core.json.JsonObject;
 
 import java.io.PrintStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -13,21 +10,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 
 /**
  * {@code rail8 deploy <repository> <commit|ref> [--check] [--admin URL]}: {@code POST <admin>/admin/deploy}, with
  * {@code ?check=true} for {@code --check}, the body {@code {"repository": "<repository>", "commit": "<commit|ref>"}},
- * {@code Content-Type: application/json} and, when RAIL8_ADMIN_TOKEN is set and not blank, {@code Authorization: Bearer <token>} —
- * the token is taken from the environment only. The node judges the repository and the commit: a ref ({@code HEAD},
- * {@code main}) only in dev and ci. The admin URL is {@code --admin}, else RAIL8_ADMIN, else {@code http://localhost:8081}.
- * Prints the node's answer body; exit 0 on a 2xx, 1 on any other status (a redirect is not followed) or a node that cannot be
- * reached, 2 on a usage error (nothing sent).
+ * through {@link AdminApi}: the admin URL is {@code --admin}, else RAIL8_ADMIN, else {@code http://localhost:8081}; plain HTTP
+ * only to loopback unless RAIL8_ADMIN_TLS=off; the token is RAIL8_ADMIN_TOKEN, taken from the environment only. The node judges
+ * the repository and the commit: a ref ({@code HEAD}, {@code main}) only in dev and ci. Prints the node's answer body; exit 0 on
+ * a 2xx, 1 on any other status (a redirect is not followed) or a node that cannot be reached, 2 on a usage error (nothing
+ * sent).
  */
 final class Deploy {
 
-    static final String DEFAULT_ADMIN = "http://localhost:8081";
-    private static final Duration CONNECT = Duration.ofSeconds(10);
     /** A deploy answers once its flows started or it was refused; the node bounds that by its stop deadline, this bounds the wait. */
     private static final Duration ANSWER = Duration.ofMinutes(5);
 
@@ -71,29 +65,16 @@ final class Deploy {
     }
 
     static int run(Arguments arguments, Map<String, String> env, PrintStream out, PrintStream err) {
-        String admin = arguments.admin().orElse(env.getOrDefault("RAIL8_ADMIN", DEFAULT_ADMIN));
+        AdminApi admin = AdminApi.of("deploy", arguments.admin(), env);
         byte[] body = new JsonObject().put("repository", arguments.repository()).put("commit", arguments.commit()).encode().getBytes(StandardCharsets.UTF_8);
-        HttpRequest.Builder request = request(admin, arguments.check());
-        request.header("Content-Type", "application/json").timeout(ANSWER).POST(HttpRequest.BodyPublishers.ofByteArray(body));
-        Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")).filter(token -> !token.isBlank()).ifPresent(token -> request.header("Authorization", "Bearer " + token));
         HttpResponse<String> answer;
-        try (HttpClient client = HttpClient.newBuilder().connectTimeout(CONNECT).build()) {
-            answer = client.sendAsync(request.build(), HttpResponse.BodyHandlers.ofString()).join();
-        } catch (CompletionException unreachable) {
-            err.println("rail8 deploy: no answer from " + admin + ": " + Cli.oneLine(String.valueOf(unreachable.getCause())));
+        try {
+            answer = admin.post("/admin/deploy" + (arguments.check() ? "?check=true" : ""), body, ANSWER);
+        } catch (AdminApi.NoAnswer unreachable) {
+            err.println("rail8 deploy: " + unreachable.getMessage());
             return 1;
         }
         out.println(answer.body());
         return answer.statusCode() / 100 == 2 ? 0 : 1;
-    }
-
-    /** The POST's builder for {@code <admin>/admin/deploy[?check=true]}; a {@link Cli.Usage} when {@code admin} is no http(s) URL. */
-    private static HttpRequest.Builder request(String admin, boolean check) {
-        String uri = admin.replaceAll("/+$", "") + "/admin/deploy" + (check ? "?check=true" : "");
-        try {
-            return HttpRequest.newBuilder(URI.create(uri));
-        } catch (IllegalArgumentException wrong) {
-            throw new Cli.Usage("deploy: the admin URL '" + admin + "' is not an http or https URL: " + wrong.getMessage());
-        }
     }
 }

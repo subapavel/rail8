@@ -2,6 +2,10 @@ package dev.rail8.cli;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
+
+import javax.net.ssl.SSLContext;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,7 +23,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * A node's admin API as {@code rail8 deploy} sees it (P2-03a test fixture): the JDK's HTTP server on 127.0.0.1 and an ephemeral
  * port that records every request whole — method, path, raw query, headers (names lower-cased), body — before it answers the
  * status and body the case set (200 {@code {}} by default). A request is recorded before its answer leaves, so once the CLI
- * returned, what it sent is here; {@link #requests()} empty after a run is the witness that nothing was sent.
+ * returned, what it sent is here; {@link #requests()} empty after a run is the witness that nothing was sent. Built with an
+ * {@link SSLContext}, it serves HTTPS instead: a request is recorded only once the handshake completed.
  */
 final class StubAdmin implements AutoCloseable {
 
@@ -32,14 +37,31 @@ final class StubAdmin implements AutoCloseable {
     }
 
     private final HttpServer server;
+    private final String scheme;
     private final List<Request> requests = new CopyOnWriteArrayList<>();
     private volatile int status = 200;
     private volatile String answer = "{}";
 
     StubAdmin() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(InetAddress.ofLiteral("127.0.0.1"), 0), 0);
+        this(HttpServer.create(new InetSocketAddress(InetAddress.ofLiteral("127.0.0.1"), 0), 0), "http://127.0.0.1:");
+    }
+
+    /** The same over HTTPS with the certificate of {@code tls}, at {@code https://localhost:<port>}. */
+    StubAdmin(SSLContext tls) throws IOException {
+        this(https(tls), "https://localhost:");
+    }
+
+    private StubAdmin(HttpServer server, String scheme) {
+        this.server = server;
+        this.scheme = scheme;
         server.createContext("/", this::handle);
         server.start();
+    }
+
+    private static HttpsServer https(SSLContext tls) throws IOException {
+        HttpsServer secured = HttpsServer.create(new InetSocketAddress(InetAddress.ofLiteral("127.0.0.1"), 0), 0);
+        secured.setHttpsConfigurator(new HttpsConfigurator(tls));
+        return secured;
     }
 
     /** From now on every request is answered {@code status} with {@code body}. */
@@ -49,9 +71,13 @@ final class StubAdmin implements AutoCloseable {
         return this;
     }
 
-    /** {@code http://127.0.0.1:<port>}, no trailing slash. */
+    /** {@code http://127.0.0.1:<port>}, or {@code https://localhost:<port>} over HTTPS; no trailing slash. */
     String url() {
-        return "http://127.0.0.1:" + server.getAddress().getPort();
+        return scheme + port();
+    }
+
+    int port() {
+        return server.getAddress().getPort();
     }
 
     List<Request> requests() {
