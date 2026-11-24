@@ -47,6 +47,11 @@ export interface Call {
   limits?: Limits;
   /** Its abort stops the call as its deadline does, and the call rejects with the signal's reason. */
   signal?: AbortSignal;
+  /**
+   * Another program to run instead of git, such as the Rail8 command line: its file, the name the call's refusals give
+   * it, and what a refusal says when the file cannot be found. Its arguments are `args` alone, with no `--no-pager` or `-C`.
+   */
+  program?: { file: string; name: string; missing: string };
 }
 
 /** How a call's process ended: its exit code (null when a signal ended it) and what it wrote, each stream at most its limit. */
@@ -223,10 +228,11 @@ export function runner(options: RunnerOptions): Runner {
   const start = (call: Call, undo: boolean): Promise<Ran> =>
     new Promise<Ran>((resolve, reject) => {
       const limits = undo ? UNDO_LIMITS : (call.limits ?? READ_LIMITS);
-      const argv = ['--no-pager', ...(call.clone === undefined ? [] : ['-C', call.clone]), ...call.args];
+      const name = call.program?.name ?? 'git';
+      const argv = call.program !== undefined ? [...call.args] : ['--no-pager', ...(call.clone === undefined ? [] : ['-C', call.clone]), ...call.args];
       let child: Child;
       try {
-        child = spawn('git', argv, {
+        child = spawn(call.program?.file ?? 'git', argv, {
           env: environmentOf(options.env, call.mode),
           detached: true,
           shell: false,
@@ -234,7 +240,7 @@ export function runner(options: RunnerOptions): Runner {
           stdio: [call.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         });
       } catch (error) {
-        reject(new Refusal(500, `git could not be started: ${String(error)}`));
+        reject(new Refusal(500, `${name} could not be started: ${String(error)}`));
         return;
       }
 
@@ -279,7 +285,7 @@ export function runner(options: RunnerOptions): Runner {
 
       const cancelDeadline = timer.after(limits.ms, () => {
         if (exited) endDrain?.();
-        else entry.stop(new Refusal(504, `git took longer than ${limits.ms / 1000} s and was stopped`));
+        else entry.stop(new Refusal(504, `${name} took longer than ${limits.ms / 1000} s and was stopped`));
       });
       const aborted = () => entry.stop(call.signal!.reason);
       call.signal?.addEventListener('abort', aborted);
@@ -299,15 +305,14 @@ export function runner(options: RunnerOptions): Runner {
         else resolve({ code, stdout: Buffer.concat(output.stdout), stderr: Buffer.concat(output.stderr) });
       };
 
-      for (const name of ['stdout', 'stderr'] as const) {
-        const stream = child[name];
-        stream?.on('data', (chunk: Buffer) => {
-          const room = limits.bytes - sizes[name];
-          if (room > 0) output[name].push(chunk.subarray(0, room));
-          sizes[name] += chunk.length;
-          if (sizes[name] > limits.bytes) entry.stop(new Refusal(500, `git wrote more than ${mib(limits.bytes)} on its ${name} and was stopped`));
+      for (const stream of ['stdout', 'stderr'] as const) {
+        child[stream]?.on('data', (chunk: Buffer) => {
+          const room = limits.bytes - sizes[stream];
+          if (room > 0) output[stream].push(chunk.subarray(0, room));
+          sizes[stream] += chunk.length;
+          if (sizes[stream] > limits.bytes) entry.stop(new Refusal(500, `${name} wrote more than ${mib(limits.bytes)} on its ${stream} and was stopped`));
         });
-        stream?.on('error', () => {});
+        child[stream]?.on('error', () => {});
       }
       if (child.stdin !== null) {
         child.stdin.on('error', () => {});
@@ -318,7 +323,9 @@ export function runner(options: RunnerOptions): Runner {
         if (exited) return;
         exited = true;
         finish(
-          error.code === 'ENOENT' ? new Refusal(503, 'git is not installed or not on the PATH of the development server') : new Refusal(500, `git could not be started: ${error.message}`),
+          error.code === 'ENOENT'
+            ? new Refusal(503, call.program?.missing ?? 'git is not installed or not on the PATH of the development server')
+            : new Refusal(500, `${name} could not be started: ${error.message}`),
           null,
         );
       });

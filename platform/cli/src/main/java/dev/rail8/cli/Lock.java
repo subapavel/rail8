@@ -9,16 +9,19 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.UUID;
 
 /**
  * {@code rail8 lock <dir> [--deps <dir>]}: pins every dependency {@code package.yaml} declares (the first declaration of a name) to
  * its candidate's repository and {@code HEAD} commit, with the content of that commit ({@link Dependencies#pin}), and writes
- * {@code package.lock} — {@code kind: lock}, the entries sorted by name, an empty list without dependencies — over the previous one,
- * then prints one line per entry, {@code <name>@<version> <repository> <commit> sha256:<hex>}; exit 0. A file of the package that
+ * {@code package.lock} — {@code kind: lock}, the entries sorted by name, an empty list without dependencies — over the previous one
+ * through a temporary file in the package directory renamed over it ({@link #replace}), then prints one line per entry, {@code <name>@<version> <repository> <commit> sha256:<hex>}; exit 0. A file of the package that
  * does not parse, a {@code package.yaml} that does not pass its schema, or a dependency without its one candidate, not at the root of
  * a git working tree or with files other than its {@code HEAD}'s: a {@code problem: } line each, nothing written (an existing lock
  * untouched), exit 1.
@@ -50,9 +53,24 @@ final class Lock {
             for (Map.Entry<String, String> d : declared.entrySet()) deps.pin(d.getKey(), d.getValue(), problems).ifPresent(pins::add);
         }
         if (!problems.isEmpty()) return refused(problems, out);
-        Files.writeString(dir.resolve("package.lock"), text(pins));
+        replace(dir.resolve("package.lock"), text(pins));
         pins.forEach(p -> out.println(p.name() + "@" + p.version() + " " + p.repository() + " " + p.commit() + " " + p.content()));
         return 0;
+    }
+
+    /**
+     * Writes {@code text} to {@code file} through a temporary file beside it, {@code .<name>.<uuid>.tmp}, renamed over it at once, so
+     * that {@code file} holds its old bytes or the new ones, whole, whenever the command is stopped. The temporary file is deleted
+     * when the write or the rename fails.
+     */
+    static void replace(Path file, String text) throws IOException {
+        Path temp = file.resolveSibling("." + file.getFileName() + "." + UUID.randomUUID() + ".tmp");
+        try {
+            Files.writeString(temp, text, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
     }
 
     private static int refused(List<String> problems, PrintStream out) {

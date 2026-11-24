@@ -36,6 +36,8 @@ export interface Seed {
   identity?: null;
   /** Repositories on a git host, which Get a package can clone. */
   sources?: SourceSeed[];
+  /** The Rail8 command line a lock runs is missing. */
+  cli?: 'missing';
   /**
    * The author's own setup that the git half's git reads: lines added to their global git config, where `{port}`
    * stands for the port of the world's git host, and variables of the development server's environment. The real git
@@ -136,6 +138,8 @@ export interface RunningSeed {
   commit: string;
   state?: 'RUNNING' | 'FAILED';
   problems?: string[];
+  /** The direct dependencies its deploy resolved: each one's name, and the commit with the label `commit` of the clone `repository`, with its content digest. */
+  dependencies?: { name: string; repository: string; commit: string; content: string }[];
 }
 
 /** A world the contract suite asserts on, through `api` and an editor's save. */
@@ -332,6 +336,9 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
             state: r.state ?? 'RUNNING',
             problems: r.problems ?? [],
             deployedAt: DEPLOYED_AT,
+            ...(r.dependencies === undefined
+              ? {}
+              : { dependencies: r.dependencies.map((d) => ({ name: d.name, commit: isId(d.commit) ? d.commit : ids.get(`${d.repository}/${d.commit}`)!, content: d.content })) }),
           })),
         };
   let release = () => {};
@@ -381,6 +388,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     sent: [],
     folders,
     sources,
+    ...(seed.cli === 'missing' ? { cliMissing: true as const } : {}),
   };
   return { state, ids, held: { release, waiting: () => (waited ? Promise.resolve() : new Promise<void>((done) => waiters.push(done))) } };
 }

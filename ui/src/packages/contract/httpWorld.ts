@@ -6,6 +6,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { admitted, etagOf, Refusal, replaceFile, workingFolderWrites, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import { httpPackagesApi } from '../api';
@@ -22,6 +23,61 @@ import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type Clone
 
 const ORIGIN = 'http://localhost:5173';
 const TOKEN = 'the-admin-token';
+
+/**
+ * A fake of `rail8 lock <dir> --deps <dir>`, in Node, as the command line pins: each dependency `package.yaml`
+ * declares to the one folder of the candidates whose `package.yaml` has its name and version, at that clone's `HEAD`,
+ * when its files are those of `HEAD`, ignored ones too. Its content digest is the SHA-256 of the commit's tree id. It
+ * writes `package.lock` through a temporary file and a rename and prints a pin line each, exit 0; else a `problem:`
+ * line each, exit 1. `YAML_MODULE` stands for the path of the yaml package.
+ */
+const FAKE_LOCK = `#!/usr/bin/env node
+const { execFileSync } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { parse } = require(YAML_MODULE);
+const [, , command, dir, flag, deps] = process.argv;
+if (command !== 'lock' || flag !== '--deps') {
+  console.error('usage: rail8 lock <dir> --deps <dir>');
+  process.exit(2);
+}
+const read = (folder) => parse(fs.readFileSync(path.join(folder, 'package.yaml'), 'utf8'));
+const declared = new Map();
+for (const d of read(dir).dependencies ?? []) if (!declared.has(d.name)) declared.set(d.name, d.version);
+const own = fs.realpathSync(dir);
+const candidates = [];
+for (const name of fs.readdirSync(deps).sort()) {
+  try {
+    if (fs.realpathSync(path.join(deps, name)) !== own) candidates.push({ name, manifest: read(path.join(deps, name)) });
+  } catch {}
+}
+const git = (folder, ...args) => execFileSync('git', args, { cwd: path.join(deps, folder), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const problems = [];
+const pins = [];
+for (const [name, version] of [...declared].sort(([a], [b]) => (a < b ? -1 : 1))) {
+  const dependency = 'dependency ' + name + '@' + version + ': ';
+  const found = candidates.find((c) => c.manifest?.name === name && c.manifest?.version === version);
+  if (found === undefined) problems.push(dependency + 'no candidate in the working folder');
+  else if (!fs.existsSync(path.join(deps, found.name, '.git'))) problems.push(dependency + found.name + ' is not at the root of a git working tree');
+  else {
+    const head = git(found.name, 'rev-parse', 'HEAD');
+    if (git(found.name, 'status', '--porcelain', '--untracked-files=all', '--ignored') !== '') problems.push(dependency + found.name + ' differs from its HEAD ' + head + ': commit it first');
+    else pins.push({ name, version, repository: found.name, commit: head, content: 'sha256:' + crypto.createHash('sha256').update(git(found.name, 'rev-parse', 'HEAD^{tree}')).digest('hex') });
+  }
+}
+if (problems.length > 0) {
+  for (const p of problems) console.log('problem: ' + p);
+  process.exit(1);
+}
+const quoted = (value) => JSON.stringify(value);
+let text = '# written by rail8 lock: the direct dependencies, sorted by name, each with its content digest, repository and commit\\nschemaVersion: 1\\nkind: lock\\ndependencies:' + (pins.length === 0 ? ' []\\n' : '\\n');
+for (const p of pins) text += '  - name: ' + quoted(p.name) + '\\n    version: ' + quoted(p.version) + '\\n    content: ' + quoted(p.content) + '\\n    repository: ' + quoted(p.repository) + '\\n    commit: ' + quoted(p.commit) + '\\n';
+const temp = path.join(dir, '.package.lock.' + crypto.randomUUID() + '.tmp');
+fs.writeFileSync(temp, text);
+fs.renameSync(temp, path.join(dir, 'package.lock'));
+for (const p of pins) console.log(p.name + '@' + p.version + ' ' + p.repository + ' ' + p.commit + ' ' + p.content);
+`;
 
 const listen = (server: Pick<Server, 'listen' | 'address'>) => new Promise<number>((done) => server.listen(0, '127.0.0.1', () => done((server.address() as AddressInfo).port)));
 const shut = (server: Pick<Server, 'close'>) => new Promise<void>((done) => server.close(() => done()));
@@ -315,10 +371,17 @@ export const httpWorld: Build = async (seed) => {
   if (seed.author?.config !== undefined) await appendFile(join(home, '.gitconfig'), `${seed.author.config.replaceAll('{port}', String(hostPort))}\n`);
 
   // the node: what it runs, by repository, as a deploy changes it
-  const running = new Map(
+  const commitOf = (repository: string, commit: string) => (isId(commit) ? commit : ids.get(`${repository}/${commit}`)!);
+  const running = new Map<string, { commit: string; state: 'RUNNING' | 'FAILED'; problems: string[]; deployedAt: string; dependencies?: { name: string; commit: string; content: string }[] }>(
     (seed.node === 'silent' ? [] : (seed.node ?? [])).map((r) => [
       r.repository,
-      { commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`)!, state: r.state ?? 'RUNNING', problems: r.problems ?? [], deployedAt: DEPLOYED_AT },
+      {
+        commit: commitOf(r.repository, r.commit),
+        state: r.state ?? 'RUNNING',
+        problems: r.problems ?? [],
+        deployedAt: DEPLOYED_AT,
+        dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, commit: commitOf(d.repository, d.commit), content: d.content })),
+      },
     ]),
   );
   // the flows of a commit of the clone `repository`, as the fake node names them: each file under flows/, with its blob
@@ -396,7 +459,7 @@ export const httpWorld: Build = async (seed) => {
       state: r.state,
       problems: r.problems,
       content: 'sha256:00',
-      dependencies: [],
+      dependencies: (r.dependencies ?? []).map((d) => ({ name: d.name, version: '1.0.0', content: d.content, repository: d.name, commit: d.commit, direct: true })),
     }));
     answer(res, 200, { items });
   });
@@ -486,6 +549,13 @@ export const httpWorld: Build = async (seed) => {
       ),
     );
 
+  // the Rail8 command line a lock runs: a fake of rail8 lock, or a file that is not there
+  const cli = join(temp, 'rail8');
+  if (seed.cli !== 'missing') {
+    await writeFile(cli, FAKE_LOCK.replace('YAML_MODULE', JSON.stringify(createRequire(import.meta.url).resolve('yaml'))));
+    await chmod(cli, 0o755);
+  }
+
   // the clock the git half waits on the node by
   const clock = new FakeTimer();
   const middleware = gitPackages({
@@ -497,6 +567,7 @@ export const httpWorld: Build = async (seed) => {
     git: runs,
     ready: checkGit(runs),
     timer: clock,
+    cli,
   });
   // the session gate in token mode in front of the half, as the development server mounts it
   const gate = uiSession({ mode: { kind: 'token', token: TOKEN, variable: 'RAIL8_ADMIN_TOKEN' }, origins: [ORIGIN], target: `http://127.0.0.1:${nodePort}` });

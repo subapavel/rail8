@@ -63,6 +63,7 @@ const SCENES = {
   'package-changes': [menu('Packages'), pkg('orders'), expand('Changes', 'tests/orders.test.yaml')],
   'package-artifacts': [menu('Packages'), pkg('orders'), tab('Artifacts')],
   'package-history': [menu('Packages'), pkg('orders'), tab('History')],
+  'package-dependencies': [menu('Packages'), pkg('orders'), tab('Dependencies')],
   'package-deploy': [menu('Packages'), pkg('orders'), press('Deploy…')],
   'package-deployed': [menu('Packages'), pkg('orders'), press('Deploy…'), press('Deploy')],
   'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],

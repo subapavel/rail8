@@ -73,6 +73,28 @@ class LockCommandTest {
         assertLockSchema(invoice, 1);
     }
 
+    /**
+     * The new lock replaces the old file by a rename, never by a write into it: a second name of the old file, a hard link, keeps the
+     * old bytes, so a lock stopped halfway leaves {@code package.lock} whole; no temporary file stays beside it.
+     */
+    @Test
+    void theLockReplacesTheOldFileByARename() throws Exception {
+        Path deps = tmp.resolve("deps");
+        Path invoice = DepsFixture.invoiceWithCandidates(deps);
+        DepsFixture.lock(invoice, List.of(new Pin("common", "1.2.0", "sha256:" + "0".repeat(64), "common", "0".repeat(40))));
+        byte[] old = Files.readAllBytes(invoice.resolve("package.lock"));
+        Path second = Files.createLink(tmp.resolve("old.lock"), invoice.resolve("package.lock"));
+
+        Ran ran = run("lock", invoice.toString());
+
+        assertEquals(0, ran.exit(), ran.toString());
+        assertArrayEquals(old, Files.readAllBytes(second), "the old file itself is untouched: " + ran);
+        assertEquals(List.of(pinOf(deps.resolve("common")).locked()), Package.load(invoice).lock(), "package.lock is the new file");
+        try (var names = Files.list(invoice)) {
+            assertEquals(List.of(), names.map(n -> n.getFileName().toString()).filter(n -> n.endsWith(".tmp")).toList(), "no temporary file left");
+        }
+    }
+
     /** {@code --deps} names the candidates dir instead of the parent, whose own common 1.2.0 (other content) is not used; matched by package.yaml's name, not the dir name. */
     @Test
     void writesTheLockFromDepsOption() throws Exception {

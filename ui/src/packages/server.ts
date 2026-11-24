@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { nodeOf } from '../../server/adminProxy.ts';
 import type { ModuleServer } from '../../server/modules.ts';
 import { checkGit } from './server/git.ts';
@@ -9,8 +10,9 @@ import { realTimer } from './server/timer.ts';
  * The packages module's half of the development server, the git half: it serves the packages of the working folder
  * that RAIL8_WORKSPACE names under `/git`, through the author's own git found on PATH, checked once when the server
  * starts, and reads what the node at RAIL8_ADMIN_URL runs with each request's credential. Writes are refused under
- * RAIL8_READ_ONLY=true, and every write shares the working folder's writes with the editors' saves. When the development
- * server closes or restarts, every git process it started is stopped.
+ * RAIL8_READ_ONLY=true, and every write shares the working folder's writes with the editors' saves. A lock runs the
+ * Rail8 command line RAIL8_CLI names, by default the `bin/rail8` of the Rail8 checkout the UI runs from. When the
+ * development server closes or restarts, every git process it started is stopped.
  */
 const packagesServer: ModuleServer = ({ origins, env, writes }) => {
   let git: Runner | undefined;
@@ -27,6 +29,7 @@ const packagesServer: ModuleServer = ({ origins, env, writes }) => {
         git,
         ready: checkGit(git),
         timer: realTimer,
+        cli: env.RAIL8_CLI?.trim() || fileURLToPath(new URL('../../../bin/rail8', import.meta.url)),
       };
       server.middlewares.use(gitPackages(options));
     },

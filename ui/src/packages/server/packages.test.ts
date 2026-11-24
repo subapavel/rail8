@@ -91,8 +91,8 @@ describe('the list of packages over real git', () => {
       close: () => real.close(),
     };
     const running: Running[] = [
-      { repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z' },
-      { repository: 'stock', commit: ids.next, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z' },
+      { repository: 'orders', commit: ids.first, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
+      { repository: 'stock', commit: ids.next, state: 'RUNNING', problems: [], deployedAt: '2026-11-20T10:00:00Z', dependencies: [] },
     ];
 
     const listed = await listPackages(recording, root, { host: '127.0.0.1:8081', read: async () => ({ answered: true, running }) });

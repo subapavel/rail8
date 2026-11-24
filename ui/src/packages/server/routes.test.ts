@@ -12,6 +12,7 @@ import { FakeTimer } from './fakeTimer.ts';
 import { gitPackages, type GitPackagesOptions } from './routes.ts';
 import { runner, type Runner } from './runner.ts';
 import { realTimer } from './timer.ts';
+import { LOCK_REFUSALS } from '../rules.ts';
 
 const ORIGIN = 'http://localhost:5173';
 const idle: Runner = { run: () => Promise.reject(new Error('no git in this test')), undoable: () => Promise.reject(new Error('no git in this test')), close: async () => {} };
@@ -40,6 +41,7 @@ async function serve(options: Partial<GitPackagesOptions> = {}, mode: Mode = tok
     git: idle,
     ready: Promise.resolve(null),
     timer: new FakeTimer(),
+    cli: '/nowhere/bin/rail8',
     ...options,
   });
   server = createServer((req, res) => gate(req, res, () => middleware(req, res, () => res.writeHead(418).end())));
@@ -99,6 +101,16 @@ describe('the routes of the git half', () => {
     expect(await call('/git/packages/orders/pull', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
     expect(await call('/git/packages/orders/push', 'POST', '{}')).toMatchObject({ status: 400, body: { error: 'the request names no branch' } });
     expect(await call('/git/packages/orders/fetch', 'POST', '{}')).toMatchObject({ status: 404, body: { error: 'no working folder is set: start the UI with RAIL8_WORKSPACE' } });
+  });
+
+  test('take a lock by POST alone, among the writes of the working folder, and refuse it with 403 while the working folder is read-only, before its body is read', async () => {
+    const busy: WorkingFolderWrites = () => undefined;
+    const call = await serve({ writes: busy });
+    expect(await call('/git/packages/orders/lock')).toMatchObject({ status: 405, body: { error: 'POST is the only way to call /git/packages/orders/lock' } });
+    expect(await call('/git/packages/orders/lock', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
+    await new Promise<void>((done) => server!.close(() => done()));
+    server = undefined;
+    expect(await (await serve({ writable: false }))('/git/packages/orders/lock', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: LOCK_REFUSALS.readOnly } });
   });
 
   test('refuse a commit with 403 while the working folder is read-only, before its body is read', async () => {

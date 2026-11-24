@@ -12,6 +12,8 @@ export interface Running {
   state: 'RUNNING' | 'FAILED';
   problems: string[];
   deployedAt: string;
+  /** The direct dependencies its deploy resolved, by name: the commit and the content digest of each. */
+  dependencies: { name: string; commit: string; content: string }[];
 }
 
 /** What the node answered for `GET /admin/packages`: every package it runs from a repository, or why it gave no answer. */
@@ -92,6 +94,11 @@ export async function readNode(node: NodeCall, timer: Timer): Promise<NodeRead> 
         state: item.state === 'FAILED' ? 'FAILED' : 'RUNNING',
         problems: Array.isArray(item.problems) ? item.problems.filter((p): p is string => typeof p === 'string').map(said) : [],
         deployedAt: typeof item.deployedAt === 'string' ? item.deployedAt : '',
+        dependencies: (Array.isArray(item.dependencies) ? (item.dependencies as unknown[]) : []).flatMap((d) =>
+          isRecord(d) && d.direct === true && typeof d.name === 'string' && typeof d.commit === 'string' && typeof d.content === 'string'
+            ? [{ name: d.name, commit: d.commit, content: d.content }]
+            : [],
+        ),
       });
     }
     return { answered: true, running };

@@ -25,6 +25,7 @@ import {
 } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import { catFile, GitSaid, holds, LOG_FORMAT, parseDiffTree, parseLog, parseNameStatus, parseTree, read, type Diffed } from './git.ts';
+import { dependenciesOf } from './lock.ts';
 import { folderOf, rowOf, statusOf, type NodeState } from './packages.ts';
 import type { Runner } from './runner.ts';
 
@@ -199,18 +200,31 @@ export async function identityOf(git: Runner, clone: string): Promise<PackageSta
   return { name: ident[1]!, email: ident[2]! };
 }
 
-/** The package's state, as its tab shows it: its row, git's author identity, its changes against `HEAD` and its artifacts on disk. */
+/**
+ * The package's state, as its tab shows it: its row, git's author identity, its changes against `HEAD`, its artifacts
+ * on disk, and its dependencies with the tags of `package.yaml` and `package.lock`.
+ */
 export async function stateOf(git: Runner, clone: string, repository: string, node: NodeState): Promise<PackageState> {
   const status = await statusOf(git, clone);
   const compared = statusCompared(status.entries);
   const head = status.oid;
-  const [row, identity, changes] = await Promise.all([
+  const [row, identity, changes, dependencies] = await Promise.all([
     rowOf(git, clone, repository, node, status),
     identityOf(git, clone),
     workChanges(git, clone, repository, compared.slice(0, MAX_LISTED), indexFrom(status.entries), (inside) => (head === null ? null : `${head}:${inside}`)),
+    dependenciesOf(git, clone, repository, node),
   ]);
   const artifacts = await workArtifacts(clone, repository, changes);
-  return { ...row, identity, changes, artifacts: artifacts.artifacts, truncated: compared.length > MAX_LISTED || artifacts.truncated };
+  return {
+    ...row,
+    identity,
+    changes,
+    artifacts: artifacts.artifacts,
+    dependencies: dependencies.dependencies,
+    manifestTag: dependencies.manifestTag,
+    lockTag: dependencies.lockTag,
+    truncated: compared.length > MAX_LISTED || artifacts.truncated,
+  };
 }
 
 /** Whether `bytes` are binary: a NUL among the first 8000 bytes, as git looks for it, or no UTF-8. */

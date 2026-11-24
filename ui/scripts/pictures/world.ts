@@ -13,8 +13,10 @@ const test = (forFlow: string, send: string, reply: string) =>
   `schemaVersion: 1\nkind: test\nflow: ${forFlow}\nmocks:\n  erp-out: { reply: ${reply} }\ncases:\n  - name: one order\n    send: ${send}\n    expect: { steps: 3 }\n`;
 const mapping = (target: string, fields: number) =>
   `${JSON.stringify({ formatVersion: 1, target: { root: { element: target } }, targetFieldMappings: Object.fromEntries(Array.from({ length: fields }, (_, n) => [`/${target}/Field${n}`, { boxes: {} }])) }, null, 2)}\n`;
-const lock = (version: string) =>
-  `schemaVersion: 1\nkind: lock\ndependencies:\n  - name: "common"\n    version: "${version}"\n    content: "sha256:${'4'.repeat(64)}"\n    repository: "common"\n    commit: "${'c'.repeat(40)}"\n`;
+const lock = (version: string, more = '') =>
+  `schemaVersion: 1\nkind: lock\ndependencies:\n  - name: "common"\n    version: "${version}"\n    content: "sha256:${'4'.repeat(64)}"\n    repository: "common"\n    commit: "${'c'.repeat(40)}"\n${more}`;
+/** The pin of the package customers at its commit as the pictures show it. */
+const CUSTOMERS_PIN = `  - name: "customers"\n    version: "1.0.0"\n    content: "sha256:${'5'.repeat(64)}"\n    repository: "customers"\n    commit: "${idFor('customers/Start the customers package')}"\n`;
 
 const ORDERS = flow(
   'orders',
@@ -38,14 +40,15 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
 /**
  * The working folder the pictures show, in the terms of the contract suite's seed: the package `orders` with seven
  * commits on `main`, two of them not yet on its upstream, which has one of its own; the node runs the fifth commit;
- * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. A second package,
- * `customers`, is up to date and runs on the node, and a folder that is no package is listed below them.
+ * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Of its three
+ * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
+ * `customers` is up to date and runs on the node, `common` runs nowhere, and a folder that is no package is listed below them.
  */
 const SEED: Seed = {
   clones: [
     {
       folder: 'orders',
-      manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 2.4.0\ndescription: Orders from the web shop to the ERP, and its invoices back.\ndependencies: []\n',
+      manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 2.4.0\ndescription: Orders from the web shop to the ERP, and its invoices back.\ndependencies:\n  - name: common\n    version: 1.2.1\n  - name: customers\n    version: 1.0.0\n  - name: ledger\n    version: 2.0.0\n',
       files: {
         'flows/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders\ndescription: The flows of the orders package.\n',
         'flows/orders.yaml': ORDERS,
@@ -62,7 +65,7 @@ const SEED: Seed = {
       moves: { 'flows/orders.xsl': 'flows/order-to-idoc.xsl' },
       staged: {
         'flows/invoices.yaml': INVOICES.replace('mode: sync', 'mode: async'),
-        'package.lock': lock('1.2.1'),
+        'package.lock': lock('1.2.1', CUSTOMERS_PIN),
       },
       edits: {
         'flows/orders.yaml': ORDERS.replace('flows/orders.xsl', 'flows/order-to-idoc.xsl').replace('    endpoint: erp-out\n', '    endpoint: erp-out\n    retryable: true\n').replace('maxBodyBytes: 1048576', 'maxBodyBytes: 4194304'),
@@ -73,6 +76,7 @@ const SEED: Seed = {
         'fixtures/order-4711.xml': '<Order><Id>4711</Id></Order>\n',
       },
     },
+    { folder: 'common', manifest: 'schemaVersion: 1\nkind: package\nname: common\nversion: 1.2.1\n', commits: ['Share the VAT rounding'], commitFiles: { 'Share the VAT rounding': { 'Share the VAT rounding.txt': null, 'flows/vat.xsl': XSL } } },
     { folder: 'customers', commits: ['Start the customers package'], commitFiles: { 'Start the customers package': { 'Start the customers package.txt': null, 'flows/customers.yaml': flow('customers', 'crm-in', '  - type: to\n    name: erp\n    endpoint: erp-out\n') } } },
   ],
   plain: ['notes'],
@@ -81,7 +85,7 @@ const SEED: Seed = {
     { path: 'acme/payroll.git', fails: 'credentials' },
   ],
   node: [
-    { repository: 'orders', commit: 'Test the happy path of an order' },
+    { repository: 'orders', commit: 'Test the happy path of an order', dependencies: [{ name: 'common', repository: 'common', commit: 'c'.repeat(40), content: `sha256:${'4'.repeat(64)}` }] },
     { repository: 'customers', commit: 'Start the customers package' },
   ],
 };
@@ -128,8 +132,8 @@ export function pictureWorld(): PackagesApi {
     commit.at = known?.at ?? '2026-11-22T17:30:00+01:00';
   }
   orders.upstream!.fetchedAt = '2026-11-23T09:12:00+01:00';
-  const customers = state.folders.find((f) => f.name === 'customers')!;
-  for (const commit of customers.commits) {
+  const others = state.folders.filter((f) => f.name === 'customers' || f.name === 'common');
+  for (const commit of others.flatMap((f) => f.commits)) {
     commit.author = 'Petr Svoboda';
     commit.at = '2026-11-04T13:00:00+01:00';
   }

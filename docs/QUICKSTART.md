@@ -88,6 +88,12 @@ credential helper, ssh agent and keys; when it cannot, the dialog shows what git
 terminal, where git can ask, sets it up. The local node reads the working folder, so the package deploys at once; a node
 elsewhere deploys it only from a repository of the same name on its own git host.
 
+A package's **Dependencies** tab lists what its `package.yaml` declares: each dependency's pin in `package.lock`, the
+folder of the working folder that holds its name and version, at that folder's `HEAD`, and what the node resolved for it.
+**Lock** pins every dependency to that folder's `HEAD` through `bin/rail8 lock`, which the build above made; a
+dependency whose folder has uncommitted changes is refused with the reason. The new `package.lock` then shows in the
+Changes tab, pin by pin, and is committed like any other change.
+
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
 To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow from

@@ -8,6 +8,9 @@ import {
   type CommitAnswer,
   type DeployAnswer,
   type Deployed,
+  type Dependency,
+  type LockAnswer,
+  type LockedPin,
   type FetchAnswer,
   type FileVersion,
   type PackageList,
@@ -21,6 +24,13 @@ import {
 import {
   actorOf,
   artifactsOf,
+  candidateOf,
+  declaredOf,
+  dependencyOf,
+  LOCK_REFUSALS,
+  lockBodyOf,
+  lockStillHolds,
+  pinsOf,
   CLONE_REFUSALS,
   cloneSourceOf,
   commitBodyOf,
@@ -126,6 +136,8 @@ export interface FakeRunning {
   state: 'RUNNING' | 'FAILED';
   problems: string[];
   deployedAt: string;
+  /** The direct dependencies its deploy resolved, by name: the commit and the content digest of each. */
+  dependencies?: { name: string; commit: string; content: string }[];
 }
 
 /** The whole world the fake git half serves. */
@@ -152,6 +164,20 @@ export interface FakeState {
   folders: FakeFolder[];
   /** The repositories Get a package can clone. */
   sources?: FakeSource[];
+  /** The Rail8 command line a lock runs is missing. */
+  cliMissing?: true;
+}
+
+/** The file of the Rail8 command line the fake names. */
+export const FAKE_CLI = '/rail8/bin/rail8';
+
+/** `package.lock` pinning `pins` in their order, as `rail8 lock` writes it. */
+export function lockText(pins: readonly LockedPin[]): string {
+  const quoted = (value: string) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+  const entries = pins.map(
+    (p) => `  - name: ${quoted(p.name)}\n    version: ${quoted(p.version)}\n    content: ${quoted(p.content)}\n    repository: ${quoted(p.repository)}\n    commit: ${quoted(p.commit)}\n`,
+  );
+  return `# written by rail8 lock: the direct dependencies, sorted by name, each with its content digest, repository and commit\nschemaVersion: 1\nkind: lock\ndependencies:${pins.length === 0 ? ' []\n' : `\n${entries.join('')}`}`;
 }
 
 /**
@@ -291,6 +317,9 @@ async function commitOf(folder: FakeFolder, files: Record<string, string>, messa
   return made;
 }
 
+/** `files` as pairs of path and text, sorted by path. */
+const sortedFiles = (files: Record<string, string>) => sorted(Object.keys(files)).map((p) => [p, files[p]]);
+
 /** The files of the commit `id` of `folder`, or none for null. */
 function filesOf(folder: FakeFolder, id: string | null): Record<string, string> {
   return id === null ? {} : (folder.commits.find((c) => c.id === id)?.files ?? {});
@@ -413,16 +442,52 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     if (commitOnly ? !isCommitId(rev) : !isRevision(rev)) throw refused(400, `${name} ${JSON.stringify(rev)} is no revision: ${commitOnly ? '' : 'work, or '}a commit of 40 hex digits`);
     if (rev !== 'work' && !folder.commits.some((c) => c.id === rev)) throw refused(404, `the clone holds no commit ${rev}`);
   };
+  /**
+   * The dependencies of `folder`, as the real half finds them: each candidate among the other folders whose
+   * `package.yaml` on disk gives its name and version, with its `HEAD` and whether its files differ from it; and the
+   * folders of each dependency that has several.
+   */
+  const dependenciesOf = async (folder: FakeFolder) => {
+    const manifest = folder.disk['package.yaml'];
+    const lockFile = folder.disk['package.lock'];
+    const tags = { manifestTag: manifest === undefined ? null : await tagOf(manifest), lockTag: lockFile === undefined ? null : await tagOf(lockFile) };
+    const several = new Map<string, string[]>();
+    const declared = manifest === undefined ? [] : declaredOf(manifest);
+    const pins = pinsOf(lockFile ?? null);
+    const others = sorted(state.folders.filter((f) => f !== folder && f.disk['package.yaml'] !== undefined).map((f) => f.name)).map((name) => state.folders.find((f) => f.name === name)!);
+    const folders = others.flatMap((f) => {
+      const found = manifestOf(f.disk['package.yaml']!).package;
+      return found ? [{ folder: f.name, ...found }] : [];
+    });
+    const runs = state.node.answers ? state.node.running.find((r) => r.repository === folder.name) : undefined;
+    const dependencies = declared.map((d): Dependency => {
+      const found = candidateOf(d.name, d.version, folders);
+      if (found !== null && typeof found !== 'string') several.set(d.name, found.several);
+      const other = typeof found === 'string' ? state.folders.find((f) => f.name === found)! : null;
+      const clone = other !== null && other.git === 'clone' && other.head.commit !== null;
+      const candidate =
+        other === null
+          ? null
+          : { folder: other.name, head: clone ? other.head.commit : null, changed: !clone || JSON.stringify(sortedFiles(other.disk)) !== JSON.stringify(sortedFiles(filesOf(other, other.head.commit))) };
+      const running = runs?.dependencies?.find((r) => r.name === d.name);
+      return dependencyOf(d, pins.get(d.name), candidate, running === undefined ? undefined : { commit: running.commit, content: running.content });
+    });
+    return { dependencies, ...tags, several };
+  };
   const stateOf = async (folder: FakeFolder): Promise<PackageState> => {
     const entries = statusEntries(folder);
     const compared = statusCompared(entries);
     const changes = await workChanges(folder, compared, entries, filesOf(folder, folder.head.commit));
     const artifacts = await artifactsIn(folder, folder.disk, changes);
+    const { dependencies, manifestTag, lockTag } = await dependenciesOf(folder);
     return {
       ...rowOf(state, folder),
       identity: state.identity === null ? null : { ...state.identity },
       changes,
       artifacts: artifacts.artifacts,
+      dependencies,
+      manifestTag,
+      lockTag,
       truncated: compared.length > MAX_LISTED || artifacts.truncated,
     };
   };
@@ -571,6 +636,40 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         at = commit.parents[0];
       }
       return { items: items.slice(0, limit), next: items[limit]?.id ?? null };
+    },
+    async lock(repository, body): Promise<LockAnswer> {
+      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, LOCK_REFUSALS.readOnly);
+      const asked = lockBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked.error);
+      const folder = packageOf(repository);
+      return lock(async () => {
+        const now = await dependenciesOf(folder);
+        if (!lockStillHolds(asked, now)) throw refused(412, LOCK_REFUSALS.stale);
+        for (const d of now.dependencies) {
+          const several = now.several.get(d.name);
+          if (several !== undefined) throw refused(409, LOCK_REFUSALS.several(`${d.name}@${d.version}`, several));
+        }
+        if (state.cliMissing) throw refused(503, LOCK_REFUSALS.missing(FAKE_CLI));
+        const problems: string[] = [];
+        const pins: LockedPin[] = [];
+        for (const d of now.dependencies) {
+          const dependency = `dependency ${d.name}@${d.version}: `;
+          const other = d.candidate === null ? undefined : state.folders.find((f) => f.name === d.candidate!.folder);
+          if (other === undefined) problems.push(`${dependency}no candidate in the working folder`);
+          else if (other.git !== 'clone') problems.push(`${dependency}${other.name} is not at the root of a git working tree`);
+          else if (d.state === 'changed') problems.push(`${dependency}${other.name} differs from its HEAD ${other.head.commit ?? 'none'}: commit it first`);
+          else {
+            const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify(sortedFiles(filesOf(other, other.head.commit))))));
+            const content = `sha256:${Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+            pins.push({ name: d.name, version: d.version, repository: other.name, commit: other.head.commit!, content });
+          }
+        }
+        if (problems.length > 0) throw new PackagesError(422, LOCK_REFUSALS.problems, problems);
+        folder.disk['package.lock'] = lockText(pins);
+        return { pins, package: await stateOf(folder) };
+      });
     },
     async commit(repository, body): Promise<CommitAnswer> {
       if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
