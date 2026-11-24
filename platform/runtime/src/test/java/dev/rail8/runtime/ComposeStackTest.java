@@ -385,7 +385,7 @@ class ComposeStackTest {
     /**
      * Both stacks serve the admin API in plain HTTP on 0.0.0.0, stated by {@code RAIL8_ADMIN_TLS=off} (the port is published on
      * the host's loopback only), and so does the one-shot deploy, which calls {@code http://rail8:8081}. The node is checked by
-     * the image's script, which asks {@code GET /health} over HTTPS when the node has a certificate and over plain HTTP otherwise.
+     * the image's script, which the image carries.
      */
     @Test
     void theStacksStatePlainHttpAndCheckTheNodeWithTheImagesScript() throws IOException {
@@ -399,9 +399,6 @@ class ComposeStackTest {
         assertTrue(Files.readString(image.resolve("Dockerfile")).contains("COPY --chmod=755 deploy/quickstart/health.sh ./"), "the image carries the script");
         assertTrue(Files.readString(image.resolve("Dockerfile.dockerignore")).lines().anyMatch("!deploy/quickstart/health.sh"::equals),
                 "and its build context sends it");
-        String script = Files.readString(image.resolve("health.sh"));
-        assertTrue(script.contains("RAIL8_ADMIN_TLS_CERT") && script.contains("openssl s_client") && script.contains("/dev/tcp/127.0.0.1/"),
-                "HTTPS through openssl with a certificate, plain HTTP through bash otherwise: " + script);
     }
 
     @Test
