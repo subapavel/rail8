@@ -78,7 +78,8 @@ class SchemaIT {
                 "journal_keys.wrapped",    // a tenant key wrapped under the master key (D-106), never a body
                 "messages.body_hash",      // 8 bytes of hash (V1)
                 "dlq.body_hash",           // 8 bytes of hash (V1)
-                "sessions.fingerprint")),  // 32 bytes of SHA-256 of a session's credential (V29), never a body
+                "sessions.fingerprint",    // 32 bytes of SHA-256 of a session's credential (V29), never a body
+                "tokens.fingerprint")),    // 32 bytes of SHA-256 of a named token (V30), never a body
                 bytea, "no bytea column may hold a body");
         assertEquals(1, db.count("select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'body_refs' and column_name = 'length'"),
                 "fixture: the query sees V12's tables");
