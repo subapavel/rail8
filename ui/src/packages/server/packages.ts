@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { MAX_FILE_BYTES, Refusal } from '../../../server/workingFolder.ts';
 import type { Busy, Commit, Deployed, PackageList, PackageRow } from '../api.ts';
 import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS } from '../rules.ts';
-import { holds, parseStatus, read, type Status } from './git.ts';
+import { holds, LOG_FORMAT, parseLog, parseStatus, read, type Status } from './git.ts';
 import type { NodeRead } from './node.ts';
 import type { Runner } from './runner.ts';
 
@@ -41,9 +41,8 @@ export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'n
 
 /** The commit `oid` of the clone at `clone`, from `git log -1 -z`. */
 async function commitOf(git: Runner, clone: string, oid: string): Promise<Commit> {
-  const said = await read(git, clone, ['log', '-1', '-z', '--format=%H%x00%P%x00%an%x00%aI%x00%s', '--end-of-options', oid, '--']);
-  const [id = oid, parents = '', author = '', at = '', subject = ''] = said.split('\0');
-  return { id, parents: parents === '' ? [] : parents.split(' '), subject, author, at };
+  const [commit] = parseLog(await read(git, clone, ['log', '-1', '-z', LOG_FORMAT, '--end-of-options', oid, '--']));
+  return commit ?? { id: oid, parents: [], subject: '', author: '', at: '' };
 }
 
 /** The operation git left open in the clone, from the state files in its `.git`; else a path in conflict; else none. */

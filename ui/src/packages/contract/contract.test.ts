@@ -53,6 +53,19 @@ describe.each<[string, Build]>([
     ]);
   });
 
+  // git 2.45 and later write a time in UTC as Z, older ones as +00:00; the git half answers the offset either way
+  test.each([
+    ['UTC', /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$/],
+    ['Asia/Kolkata', /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+05:30$/],
+  ] as const)('a commit made in %s has its time with its offset, in the list, the tab and the history', async (zone, form) => {
+    const { api } = await open({ clones: [{ folder: 'orders', zone }] });
+    const at = expect.stringMatching(form);
+
+    expect((await api.list()).packages[0]!.head).toMatchObject({ at });
+    expect(await api.get('orders')).toMatchObject({ head: { at } });
+    expect((await api.log('orders')).items).toEqual([expect.objectContaining({ at })]);
+  });
+
   test('packages come sorted by repository, and a package.yaml that gives no name and version is a problem of its row', async () => {
     const listed = await list({
       clones: [

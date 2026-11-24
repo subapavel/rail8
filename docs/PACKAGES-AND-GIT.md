@@ -276,7 +276,11 @@ interface PackageRow {
   changed: number;                        // paths of the package's folder that differ from HEAD, untracked ones included
   deployed: Deployed;
 }
-interface Commit { id: string; parents: string[]; subject: string; author: string; at: string; deployed?: true }
+interface Commit {
+  id: string; parents: string[]; subject: string; author: string;
+  at: string;                             // the author date, always as ISO 8601 with its offset: UTC is +00:00, never Z
+  deployed?: true;
+}
 
 /** One package, as its tab shows it. */
 interface PackageState extends PackageRow {
