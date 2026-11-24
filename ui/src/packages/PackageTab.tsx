@@ -168,27 +168,25 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
             title={<h2>Uncommitted changes</h2>}
             headerBordered
             extra={
-              state.changes.length > 0 && (
-                <Flex gap="middle" align="center" wrap justify="flex-end">
-                  {state.deployed.node === 'answered' && state.deployed.relation !== 'none' && <Typography.Text type="secondary">Uncommitted changes are never deployed.</Typography.Text>}
-                  <DiscardButton refused={discardRefused(writable, state, chosen.length)} onClick={() => setDiscarding(true)} />
-                </Flex>
-              )
+              state.changes.length > 0 && <DiscardButton refused={discardRefused(writable, state, chosen.length)} onClick={() => setDiscarding(true)} />
             }
           >
             {state.changes.length === 0 ? (
               <Empty description="No file differs from the last commit." />
             ) : (
-              <ChangesTable
-                api={api}
-                repository={repository}
-                changes={state.changes}
-                before={state.head?.id ?? null}
-                after="work"
-                onStale={refresh}
-                label="Changes"
-                choice={{ picked, onPick: setPicked }}
-              />
+              <Flex vertical gap="small">
+                {state.deployed.node === 'answered' && state.deployed.relation !== 'none' && <Typography.Text type="secondary">Uncommitted changes are never deployed.</Typography.Text>}
+                <ChangesTable
+                  api={api}
+                  repository={repository}
+                  changes={state.changes}
+                  before={state.head?.id ?? null}
+                  after="work"
+                  onStale={refresh}
+                  label="Changes"
+                  choice={{ picked: chosen.map((c) => c.path), onPick: setPicked }}
+                />
+              </Flex>
             )}
           </ProCard>,
         )}

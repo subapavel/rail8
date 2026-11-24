@@ -51,7 +51,7 @@ function listedOf(picked: readonly Change[], changes: readonly Change[]): Listed
     });
 }
 
-type Shown = { kind: 'choosing' } | { kind: 'refused'; error: string; output?: string } | { kind: 'discarded'; answer: DiscardAnswer };
+type Shown = { kind: 'choosing' } | { kind: 'refused'; error: string; failed: boolean; output?: string } | { kind: 'discarded'; answer: DiscardAnswer };
 
 /**
  * The dialog of Discard changes…: every file the discard changes, each with what happens to it, and above them an alert
@@ -111,8 +111,8 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
       }
     } catch (error) {
       onState(null);
-      if (error instanceof PackagesError) setShown({ kind: 'refused', error: error.message, ...(error.output === undefined ? {} : { output: error.output }) });
-      else setShown({ kind: 'refused', error: error instanceof Error ? error.message : String(error) });
+      if (error instanceof PackagesError) setShown({ kind: 'refused', error: error.message, failed: error.status >= 500, ...(error.output === undefined ? {} : { output: error.output }) });
+      else setShown({ kind: 'refused', error: error instanceof Error ? error.message : String(error), failed: true });
     } finally {
       working.reload(paths.map((p) => p.path));
       setDiscarding(false);
@@ -123,7 +123,7 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
     const { answer } = shown;
     return (
       <MountedModal
-        title="Discarded in part"
+        title={answer.left.length > 0 ? 'Discarded in part' : 'Discarded'}
         onCancel={onClose}
         width={720}
         footer={[
@@ -133,13 +133,13 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
         ]}
       >
         <Flex vertical gap="middle">
-          <Typography.Text>{answer.discarded.length === 0 ? 'No change was discarded.' : `Discarded the changes of ${answer.discarded.map(inside).join(', ')}.`}</Typography.Text>
-          <Alert
-            type="warning"
-            showIcon
-            title={`Still changed: ${answer.left.map(inside).join(', ')}`}
-            description={answer.problem !== undefined && <Output text={answer.problem} />}
-          />
+          <Typography.Text>
+            {answer.discarded.length === 0 ? 'No chosen file reads as in the last commit yet.' : `Discarded the changes of ${answer.discarded.map(inside).join(', ')}.`}
+          </Typography.Text>
+          {answer.left.length > 0 && (
+            <Alert type="warning" showIcon title={`Still changed: ${answer.left.map(inside).join(', ')}`} description={answer.problem !== undefined && <Output text={answer.problem} />} />
+          )}
+          {answer.left.length === 0 && answer.problem !== undefined && <Alert type="warning" showIcon title={answer.problem} />}
         </Flex>
       </MountedModal>
     );
@@ -171,7 +171,7 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
           <Alert
             type="error"
             showIcon
-            title="The discard was refused"
+            title={shown.failed ? 'The discard failed' : 'The discard was refused'}
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>
