@@ -225,7 +225,7 @@ Environments are not branches. The same commit of a package repository moves fro
 each environment a pool of its own with its own Postgres and its own `RAIL8_GIT_REF`: for example
 `main` for test, and for prod a protected `release` branch that a reviewed pull request moves forward
 to the tested commit. Protecting that branch in every repository is the git host's work, set once for
-the group. A package's dependencies reach prod the same way: their pinned commits must be on their own
+the group; [the guide](PROTECTING-THE-RELEASE-BRANCH.md) gives the steps for GitLab, GitHub and Azure DevOps. A package's dependencies reach prod the same way: their pinned commits must be on their own
 release branches first. Rail8 checks only that each commit is reachable from the ref.
 
 What differs between environments is already in the files: an endpoint's `environments.<env>.config`
