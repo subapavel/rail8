@@ -194,7 +194,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           {result.kind === 'read' && result.list.configured && (
             <span>
               Deployed state on the node at <Typography.Text code>{result.list.node}</Typography.Text>
-              {result.list.packages.some((p) => p.deployed.node === 'answered' && p.deployed.pool !== undefined) && ', and on every node of its pool'}
+              {result.list.packages.some((p) => p.deployed.node === 'answered' && p.deployed.pool !== undefined && !('error' in p.deployed.pool)) && ', and on every node of its pool'}
             </span>
           )}
         </Flex>

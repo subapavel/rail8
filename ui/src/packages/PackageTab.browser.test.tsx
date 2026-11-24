@@ -162,7 +162,8 @@ describe('the tab of a package', () => {
     const tab = page.getByLabelText('orders', { exact: true });
     await expect.element(tab.getByText('Nodes of the pool')).toBeVisible();
     await expect.element(tab.getByText('Not running', { exact: true })).toBeVisible();
-    await expect.element(tab.getByText(`Behind the pool's commit ${ids.get('orders/second')!.slice(0, 7)}: node-b`)).toBeVisible();
+    await expect.element(tab.getByText(/^Behind the pool's commit/)).toMatchTextContent(`Behind the pool's commit ${ids.get('orders/second')!.slice(0, 7)}: node-b`);
+    expect(tab.getByText(/^Behind the pool's commit/).element().querySelector('code')?.textContent).toBe(ids.get('orders/second')!.slice(0, 7));
   });
 
   test('shows why, in place of what the node runs, to a session that may not read deployments', async () => {
