@@ -49,7 +49,7 @@ class PgAccessIT extends AccessContract {
 
     @BeforeEach
     void empty() {
-        pool.query("truncate audit, sessions, tokens, role_assignments, login_limits, users restart identity").execute().await();
+        pool.query("truncate audit, sessions, tokens, devices, role_assignments, login_limits, users restart identity").execute().await();
         pool.query("update admin_bridge set open = true").execute().await();
         pool.query("update token_ceiling set max_days = 365").execute().await();
     }

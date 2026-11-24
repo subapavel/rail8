@@ -5,8 +5,8 @@ import java.util.concurrent.Semaphore;
 
 /**
  * The node's two places to hash a password, with no queue. The shared place takes every hash; the second only those that
- * may take either place: a login that presents a valid device credential, a password change, a new person and a reset. So a
- * flood of logins from unknown browsers cannot keep everything else out.
+ * may take either place: a login that presents a valid device credential, a password change, a personal token's issue, a new
+ * person and a reset. So a flood of logins from unknown browsers cannot keep everything else out.
  */
 public final class HashPlaces {
 

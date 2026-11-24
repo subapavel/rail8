@@ -212,7 +212,7 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `deployments` | which commit of which repository each package runs, its content digest and the pins of its dependencies |
 | `node_packages` | what each node of the pool runs, written by that node alone as the epoch it joined with: each package's version, repository, commit, state and why it runs behind; nothing decides by it, and its loss loses no message |
 | `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
-| `users`, `role_assignments`, `sessions`, `tokens`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions and named tokens (by fingerprint), the longest a token lives, the failed logins of each name, and whether the shared token still works (part 10) |
+| `users`, `role_assignments`, `sessions`, `tokens`, `devices`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions, named tokens and browsers' device credentials (by fingerprint), the longest a token lives, the failed logins of each name and device, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
 
 Migrations run at node start (Flyway).
@@ -264,7 +264,8 @@ deleted.
 The audit is kept for `RAIL8_AUDIT_MAX_AGE`, from P30D to P3660D, P365D by default; a node whose
 value is shorter than `RAIL8_RETENTION_MAX_AGE` does not start, as a message's status reads its cancel
 from the audit. The same job deletes the sessions that ended longer ago than that, the tokens that
-expired or were revoked longer ago than that, and the login limit's rows without a failure for 24 hours.
+expired or were revoked longer ago than that, the device credentials that expired longer ago than that, and the login
+limit's rows without a failure for 24 hours.
 
 A message can be saved with a body whose key names another message (the caller's body, handed to a
 callee). The save keeps that body in the same transaction, and the message's work row points at the

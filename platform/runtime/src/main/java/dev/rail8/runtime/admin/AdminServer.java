@@ -231,8 +231,9 @@ import java.util.stream.Collectors;
  * {@code urn:rail8:admin:problem:unauthenticated} and {@code forbidden}.
  *
  * <p>The users and their sessions ({@link Access}): {@code POST /admin/sessions {name, password, device?}} (at most
- * {@link #LOGIN_BODY_MAX} bytes; a {@code device} is taken and not read) answers 201 {@code {session, expiresAt, idleSeconds,
- * me}}, or 401 {@code login-refused}, 429 {@code too-many-attempts} with {@code Retry-After}, 503 {@code busy}.
+ * {@link #LOGIN_BODY_MAX} bytes; a {@code device}, the browser's device credential or {@code ""}, asks for a new one and picks
+ * the row of the login limit) answers 201 {@code {session, expiresAt, idleSeconds, device?, me}}, or 401 {@code login-refused},
+ * 429 {@code too-many-attempts} with {@code Retry-After}, 503 {@code busy}.
  * {@code GET /admin/me} answers {@code {name, kind, roles, actions, refused, via, firstPassword, expiresAt, emergencyKey}};
  * {@code POST /admin/me/password {current, next}} and {@code POST /admin/me/logout} 204. {@code GET /admin/users} lists every
  * user ({@code {items}}) and {@code GET /admin/users/{name}} shows one: {@code {name, kind, roles:[{role, grantedAt, grantedBy,
@@ -1410,16 +1411,22 @@ public final class AdminServer {
     // --- the login, the caller's own and the users (on the request's virtual thread)
 
     /**
-     * {@code POST /admin/sessions {name, password, device?}}: a new session, 201 {@code {session, expiresAt, idleSeconds, me}}. A
-     * {@code device} is taken and not read: every login counts on its name's row of the limit.
+     * {@code POST /admin/sessions {name, password, device?}}: a new session, 201 {@code {session, expiresAt, idleSeconds, device?,
+     * me}}. A login with {@code device} asks for a device: the value is the device credential the browser holds, or {@code ""}
+     * for none. A valid one is counted on its own row of the login limit; anything else counts as none. The answer carries
+     * {@code device} only when the node issued a new one, which the browser keeps in place of the one it sent. A login without
+     * {@code device} asks for none and is counted on its name's row.
      */
     private Reply login(RoutingContext ctx) {
         String shape = "the body is {\"name\": \"<name>\", \"password\": \"<password>\"}";
         JsonObject o = object(ctx, shape, Set.of("name", "password"), Set.of("device"));
         if (o.containsKey("device") && !(o.getValue("device") instanceof String)) throw new Refused(shape);
-        Access.Login login = access.login(text(o, "name", shape), text(o, "password", shape), remote(ctx));
-        return Json.of(201, new JsonObject().put("session", login.session()).put("expiresAt", login.expiresAt().toString())
-                .put("idleSeconds", login.idleSeconds()).put("me", me(login.caller(), Optional.of(login.expiresAt()))));
+        Access.Login login = access.login(text(o, "name", shape), text(o, "password", shape), Optional.ofNullable(o.getString("device")),
+                remote(ctx));
+        JsonObject answer = new JsonObject().put("session", login.session()).put("expiresAt", login.expiresAt().toString())
+                .put("idleSeconds", login.idleSeconds());
+        login.device().ifPresent(d -> answer.put("device", d));
+        return Json.of(201, answer.put("me", me(login.caller(), Optional.of(login.expiresAt()))));
     }
 
     /**

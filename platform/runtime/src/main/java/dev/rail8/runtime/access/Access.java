@@ -55,13 +55,20 @@ public interface Access {
     }
 
     /**
-     * A login: a new session of {@code name} when {@code password} is theirs, counted on the name's row of the login limit.
+     * A login: a new session of {@code name} when {@code password} is theirs. The password decides alone; a device only picks
+     * the row of the login limit and the place to hash. A login that presents a valid device of the user is counted on that
+     * device's row and may take the node's second place to hash; any other is counted on the name's row and takes only the
+     * shared place. A full login that asks for a device, past a first password, is issued a new one, valid 90 days, and the
+     * device it presented ends; a user holds at most 10, the oldest ending first.
      *
+     * @param device empty: the login asks for no device (the command line's). Present: it asks, and the value is the device
+     *               credential the browser holds, {@code ""} for none (the UI server's). A value that is not a valid device of
+     *               the user counts as none, silently.
      * @param remote the address the login came from, for the audit
-     * @throws AccessRefused 401 {@code login-refused} with one text for every reason, 429 {@code too-many-attempts}, 503
-     *                       {@code busy}
+     * @throws AccessRefused 401 {@code login-refused} with one text for every reason, 429 {@code too-many-attempts} with the
+     *                       {@code Retry-After} of the row it was counted on, 503 {@code busy}
      */
-    Login login(String name, String password, String remote);
+    Login login(String name, String password, Optional<String> device, String remote);
 
     /**
      * {@code by}'s own password changed from {@code current} to {@code next}: the same session goes on without a first
@@ -202,8 +209,10 @@ public interface Access {
      * @param expiresAt when it ends at the latest
      * @param idleSeconds how long it lasts without a request
      * @param caller who it is
+     * @param device the device credential this login issued, shown once and never stored; empty when the login did not ask,
+     *               was of a first password, or found that another login had replaced the device it presented
      */
-    record Login(String session, Instant expiresAt, long idleSeconds, Caller caller) {}
+    record Login(String session, Instant expiresAt, long idleSeconds, Caller caller, Optional<String> device) {}
 
     /**
      * A change of roles.

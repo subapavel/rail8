@@ -49,6 +49,8 @@ abstract class Accounts implements Access {
     static final int TOKEN_MAX_DAYS = 365;
     static final int TOKEN_DEFAULT_DAYS = 90;
     static final Duration USE_EVERY = Duration.ofHours(1);
+    static final Duration DEVICE_LIFE = Duration.ofDays(90);
+    static final int DEVICES_PER_USER = 10;
     static final String UNKNOWN_ACTOR = "unknown";
 
     private static final System.Logger LOG = System.getLogger(Accounts.class.getName());
@@ -141,11 +143,15 @@ abstract class Accounts implements Access {
     }
 
     @Override
-    public Login login(String name, String password, String remote) {
+    public Login login(String name, String password, Optional<String> device, String remote) {
         String typed = name.toLowerCase(Locale.ROOT);
         String given = Passwords.normalize(password);
-        Optional<Tx.UserRow> user = query(tx -> tx.user(typed, Tx.Lock.NONE));
-        HashPlaces.Place place = places.take(false).orElseThrow(AccessRefused::busy);
+        Optional<String> deviceId = device.flatMap(Credentials::deviceId);
+        Tx.LoginRows read = query(tx -> tx.loginRows(typed, deviceId));
+        Optional<Tx.UserRow> user = read.user();
+        Optional<Tx.DeviceRow> known = deviceId.isEmpty() ? Optional.empty() : valid(read, device.get(), clock.instant());
+        String counted = known.map(Tx.DeviceRow::id).orElse(NAME_ROW);
+        HashPlaces.Place place = places.take(known.isPresent()).orElseThrow(AccessRefused::busy);
         try (place) {
             Instant now = clock.instant();
             // read for every name, known or not, so a known name's login takes the same steps as an unknown one's
@@ -155,13 +161,13 @@ abstract class Accounts implements Access {
                 warnFull(now);
                 throw loginRefused();
             }
-            int claimed = claim(typed, now);
+            int claimed = claim(typed, counted, now);
             Optional<Tx.UserRow> person = user.filter(u -> u.kind() == Kind.PERSON && u.blockedAt().isEmpty() && u.password().isPresent());
             boolean matched = hash.matches(given, person.flatMap(Tx.UserRow::password).orElse(hash.dummy())) && person.isPresent();
-            if (!matched) throw refusedLogin(typed, user, claimed, refusal(user), remote, now);
+            if (!matched) throw refusedLogin(typed, counted, user, claimed, refusal(user), remote, now);
             Tx.UserRow u = person.get();
             if (u.firstPassword() && u.passwordSetAt().map(at -> !now.isBefore(at.plus(FIRST_PASSWORD_LIFE))).orElse(true)) {
-                throw refusedLogin(typed, user, claimed, "first-password-expired", remote, now);
+                throw refusedLogin(typed, counted, user, claimed, "first-password-expired", remote, now);
             }
             String stored = u.password().orElseThrow();
             Optional<String> rehashed = hash.current(stored) ? Optional.empty() : Optional.of(hash.hash(given));
@@ -169,27 +175,74 @@ abstract class Accounts implements Access {
             String credential = Credentials.SESSION + id + "_" + Credentials.newSecret(random);
             Tx.SessionRow row = new Tx.SessionRow(id, u.id(), Credentials.fingerprint(credential), u.firstPassword(), now, now,
                     now.plus(SESSION_LIFE));
-            Optional<Set<Role>> roles = transaction(tx -> {
-                Optional<Tx.UserRow> locked = tx.user(u.id(), Tx.Lock.SHARE);
+            boolean issues = device.isPresent() && !u.firstPassword();
+            Optional<Made> made = transaction(tx -> {
+                Optional<Tx.UserRow> locked = tx.user(u.id(), issues ? Tx.Lock.UPDATE : Tx.Lock.SHARE);
                 if (locked.isEmpty() || locked.get().generation() != u.generation() || locked.get().blockedAt().isPresent()) {
-                    return Optional.<Set<Role>>empty();
+                    return Optional.<Made>empty();
                 }
                 List<Tx.SessionRow> alive = tx.sessions(u.id()).stream().filter(s -> live(s, now))
                         .sorted(Comparator.comparing(Tx.SessionRow::createdAt)).toList();
                 for (int i = 0; i <= alive.size() - SESSIONS_PER_USER; i++) tx.endSession(alive.get(i).id());
                 tx.insertSession(row);
-                tx.forgive(typed, NAME_ROW, claimed);
-                tx.audit(new Tx.AuditRow(now, u.name(), "login", "user/" + u.name(),
-                        new JsonObject().put("firstPassword", u.firstPassword()).put("remote", remote), OptionalLong.of(u.id()),
-                        Via.SESSION.id(), Optional.of(id)));
-                return Optional.of(roles(tx.grants(u.id())));
+                Optional<NewDevice> issued = issues ? issueDevice(tx, u, known) : Optional.empty();
+                boolean replaced = known.isPresent() && issued.isPresent();
+                if (replaced) tx.forgetLimit(typed, counted);
+                else tx.forgive(typed, counted, claimed);
+                JsonObject detail = new JsonObject().put("firstPassword", u.firstPassword()).put("remote", remote);
+                known.ifPresent(d -> detail.put("device", d.id()));
+                issued.ifPresent(d -> detail.put("issued", d.id()));
+                tx.audit(new Tx.AuditRow(now, u.name(), "login", "user/" + u.name(), detail, OptionalLong.of(u.id()), Via.SESSION.id(),
+                        Optional.of(id)));
+                return Optional.of(new Made(roles(tx.grants(u.id())), issued.map(NewDevice::credential)));
             });
-            if (roles.isEmpty()) throw refusedLogin(typed, user, claimed, "account-changed", remote, now);
+            if (made.isEmpty()) throw refusedLogin(typed, counted, user, claimed, "account-changed", remote, now);
             rehashed.ifPresent(h -> query(tx -> { tx.rehash(u.id(), stored, h); return null; }));
-            Caller caller = new Caller(OptionalLong.of(u.id()), u.name(), Kind.PERSON, roles.get(), Via.SESSION, Optional.of(id),
+            Caller caller = new Caller(OptionalLong.of(u.id()), u.name(), Kind.PERSON, made.get().roles(), Via.SESSION, Optional.of(id),
                     u.firstPassword());
-            return new Login(credential, row.expiresAt(), IDLE.toSeconds(), caller);
+            return new Login(credential, row.expiresAt(), IDLE.toSeconds(), caller, made.get().device());
         }
+    }
+
+    /** What a login's transaction made: the user's roles, and the device credential it issued. */
+    private record Made(Set<Role> roles, Optional<String> device) {}
+
+    /** A device just issued: its id, and its credential, shown once. */
+    private record NewDevice(String id, String credential) {}
+
+    /**
+     * The device a login presented when it is valid: its fingerprint matches the row's (compared with the dummy when there is
+     * no row), the row is the user's, at the user's generation, and {@code now} is before its expiry. Anything else is none.
+     */
+    private static Optional<Tx.DeviceRow> valid(Tx.LoginRows read, String presented, Instant now) {
+        boolean same = Credentials.same(Credentials.fingerprint(presented),
+                read.device().map(Tx.DeviceRow::fingerprint).orElse(Credentials.DUMMY_FINGERPRINT));
+        return read.device().filter(d -> same && read.user().isPresent() && d.user() == read.user().get().id()
+                && d.generation() == read.user().get().generation() && now.isBefore(d.expiresAt()));
+    }
+
+    /**
+     * A new device of {@code user} in {@code tx}, which holds the user's row {@code for update}; its instants come from the
+     * clock read now, after the lock. When the login presented {@code known} and another login has replaced or ended it
+     * meanwhile, nothing is issued: the first replacement wins. Otherwise {@code known} ends, so does every dead device of the
+     * user (another generation, or expired) and the oldest live ones until one place is left of {@link #DEVICES_PER_USER}.
+     */
+    private Optional<NewDevice> issueDevice(Tx tx, Tx.UserRow user, Optional<Tx.DeviceRow> known) {
+        Instant at = clock.instant();
+        List<Tx.DeviceRow> held = tx.devices(user.id());
+        if (known.isPresent() && held.stream().noneMatch(d -> d.id().equals(known.get().id()))) return Optional.empty();
+        List<Tx.DeviceRow> live = new ArrayList<>();
+        for (Tx.DeviceRow d : held) {
+            boolean dead = d.generation() != user.generation() || !at.isBefore(d.expiresAt());
+            if (dead || known.map(k -> k.id().equals(d.id())).orElse(false)) tx.endDevice(d.id());
+            else live.add(d);
+        }
+        live.sort(Comparator.comparing(Tx.DeviceRow::createdAt).thenComparing(Tx.DeviceRow::id));
+        for (int i = 0; i <= live.size() - DEVICES_PER_USER; i++) tx.endDevice(live.get(i).id());
+        String id = Credentials.newId(random);
+        String credential = Credentials.DEVICE + id + "_" + Credentials.newSecret(random);
+        tx.insertDevice(new Tx.DeviceRow(id, user.id(), Credentials.fingerprint(credential), user.generation(), at, at.plus(DEVICE_LIFE)));
+        return Optional.of(new NewDevice(id, credential));
     }
 
     @Override
@@ -564,9 +617,14 @@ abstract class Accounts implements Access {
 
     /** One attempt claimed on the name's row, else 429 with the seconds until the row takes another. */
     private int claim(String name, Instant now) {
-        OptionalInt claimed = query(tx -> tx.claim(name, NAME_ROW, now));
+        return claim(name, NAME_ROW, now);
+    }
+
+    /** One attempt claimed on the row {@code (name, device)}, else 429 with the seconds until the row takes another. */
+    private int claim(String name, String device, Instant now) {
+        OptionalInt claimed = query(tx -> tx.claim(name, device, now));
         if (claimed.isPresent()) return claimed.getAsInt();
-        Optional<Tx.Limit> row = query(tx -> tx.limit(name, NAME_ROW, false));
+        Optional<Tx.Limit> row = query(tx -> tx.limit(name, device, false));
         Duration left = row.map(l -> Duration.between(now, l.lastFailureAt().plus(wait(l.failures())))).orElse(Duration.ZERO);
         long seconds = left.toSeconds() + (left.toNanosPart() > 0 ? 1 : 0);   // rounded up: an attempt then is counted
         throw AccessRefused.tooManyAttempts(Math.max(1, seconds));
@@ -586,24 +644,32 @@ abstract class Accounts implements Access {
         return "wrong-password";
     }
 
-    private AccessRefused refusedLogin(String typed, Optional<Tx.UserRow> user, int failures, String reason, String remote, Instant now) {
-        return refusal(typed, user, failures, reason, remote, now, loginRefused());
+    private AccessRefused refusedLogin(String typed, String device, Optional<Tx.UserRow> user, int failures, String reason, String remote,
+                                       Instant now) {
+        return refusal(typed, device, user, failures, reason, remote, now, loginRefused());
+    }
+
+    private AccessRefused refusal(String typed, Optional<Tx.UserRow> user, int failures, String reason, String remote, Instant now,
+                                  AccessRefused answer) {
+        return refusal(typed, NAME_ROW, user, failures, reason, remote, now, answer);
     }
 
     /**
      * {@code answer}, after the refused attempt's audit row: the first failure of a run, then at most one an hour per row of the
-     * login limit, carrying the run's failures so far; the installation writes at most 1,000 an hour.
+     * login limit, carrying the run's failures so far and the device of a device's row; the installation writes at most 1,000
+     * an hour. The row is only marked as audited, never inserted: a row a reset deleted meanwhile writes as a first failure.
      */
-    private AccessRefused refusal(String typed, Optional<Tx.UserRow> user, int failures, String reason, String remote, Instant now,
-                                  AccessRefused answer) {
+    private AccessRefused refusal(String typed, String device, Optional<Tx.UserRow> user, int failures, String reason, String remote,
+                                  Instant now, AccessRefused answer) {
         String actor = actorOf(typed);
         transaction(tx -> {
-            Optional<Tx.Limit> row = tx.limit(typed, NAME_ROW, true);
+            Optional<Tx.Limit> row = tx.limit(typed, device, true);
             boolean due = failures == 1 || row.flatMap(Tx.Limit::auditedAt).map(at -> !now.isBefore(at.plus(REFUSED_AUDIT_EVERY))).orElse(true);
             if (!due || tx.countRefusalAudit(now.truncatedTo(ChronoUnit.HOURS)) > REFUSED_AUDIT_PER_HOUR) return null;
-            tx.limitAudited(typed, NAME_ROW, now);
-            tx.audit(new Tx.AuditRow(now, actor, "login.refused", "user/" + actor,
-                    new JsonObject().put("reason", reason).put("failures", failures).put("remote", remote),
+            tx.limitAudited(typed, device, now);
+            JsonObject detail = new JsonObject().put("reason", reason).put("failures", failures).put("remote", remote);
+            if (!device.equals(NAME_ROW)) detail.put("device", device);
+            tx.audit(new Tx.AuditRow(now, actor, "login.refused", "user/" + actor, detail,
                     user.map(u -> OptionalLong.of(u.id())).orElse(OptionalLong.empty()), Via.SESSION.id(), Optional.empty()));
             return null;
         });
