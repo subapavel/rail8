@@ -36,6 +36,7 @@ abstract class AccessContract {
     static final String SHARED = "the-shared-token-of-today";
     static final String REMOTE = "10.0.0.7";
     static final String NEW_PASSWORD = "a password of my own";
+    static final String NAME_ROW = "";   // the device of a name's own row of the login limit
 
     FakeClock clockA;
     FakeClock clockB;
@@ -51,6 +52,9 @@ abstract class AccessContract {
 
     /** Every audit row, oldest first, as {@code {at, actor, action, subject, detail, user, via, credential}}. */
     abstract List<JsonObject> audit();
+
+    /** The login limit filled with {@code count} names {@code limited-0}, {@code limited-1} and so on, each failed once at {@link #T0}. */
+    abstract void limitNames(int count);
 
     @BeforeEach
     void nodes() {
@@ -125,6 +129,16 @@ abstract class AccessContract {
 
     List<JsonObject> audit(String action) {
         return audit().stream().filter(r -> r.getString("action").equals(action)).toList();
+    }
+
+    /** The number of names the login limit counts. */
+    long limited() {
+        return ((Accounts) a).query(Tx::limitedNames);
+    }
+
+    /** The failures the login limit counts for {@code name}, or empty when it has no row. */
+    Optional<Integer> failures(String name) {
+        return ((Accounts) a).query(tx -> tx.limit(name, NAME_ROW, false)).map(Tx.Limit::failures);
     }
 
     // --- the bridge and the emergency key
@@ -329,6 +343,51 @@ abstract class AccessContract {
     }
 
     @Test
+    void aLoginHeldWhileTheOtherNodeResetsThePasswordMakesNoSession() {
+        String first = person("anna");
+        hash.duringNextMatch(() -> b.resetPassword(key(b).acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "anna"));
+        refused(401, "login-refused", () -> a.login("anna", first, REMOTE));
+        assertEquals("account-changed", audit("login.refused").getLast().getJsonObject("detail").getString("reason"));
+        assertEquals(List.of(), a.user("anna").orElseThrow().sessions(), "no session was made");
+    }
+
+    /**
+     * The login limit counts at most 100,000 names, a login in flight among them once it claimed. With that login holding the
+     * last name, an unknown name is refused without a row, hashed as any other; a known name and a name that has its row
+     * already are counted still.
+     */
+    @Test
+    void theCapOfNamesHoldsWithALoginInFlight() {
+        person("anna");
+        limitNames(Accounts.NAMES_MAX - 1);
+        hash.duringNextMatch(() -> {
+            assertEquals(Accounts.NAMES_MAX, limited(), "the login in flight claimed the last name");
+            int hashed = hash.matches.get();
+            refused(401, "login-refused", () -> b.login("ghost", "a password", REMOTE));
+            assertEquals(hashed + 1, hash.matches.get(), "the unknown name is hashed as any other");
+            assertEquals(Optional.empty(), failures("ghost"), "and refused without a row");
+            refused(401, "login-refused", () -> b.login("anna", "wrong password", REMOTE));
+            refused(401, "login-refused", () -> b.login("limited-1", "a password", REMOTE));
+        });
+        refused(401, "login-refused", () -> a.login("in-flight", "a password", REMOTE));
+        assertEquals(List.of(Optional.of(1), Optional.of(1), Optional.of(2)), List.of(failures("in-flight"), failures("anna"), failures("limited-1")));
+        assertEquals(Accounts.NAMES_MAX + 1, limited(), "the cap passed by the known name alone");
+    }
+
+    /** The installation writes at most 1,000 {@code login.refused} rows an hour; the refusals beyond them are not written. */
+    @Test
+    void atMostAThousandRefusedLoginsAreWrittenAnHour() {
+        for (int i = 0; i <= 1000; i++) {
+            String name = "guess-" + i;
+            refused(401, "login-refused", () -> a.login(name, "a password", REMOTE));
+        }
+        assertEquals(1000, audit("login.refused").size(), "the thousand and first is not written");
+        clockA.advance(Duration.ofHours(1));
+        refused(401, "login-refused", () -> a.login("guess-of-the-next-hour", "a password", REMOTE));
+        assertEquals("user/guess-of-the-next-hour", audit("login.refused").getLast().getString("subject"), "the next hour writes again");
+    }
+
+    @Test
     void aLoginWithOlderParametersHashesAgain() {
         String first = person("anna");
         Accounts accounts = (Accounts) a;
@@ -407,18 +466,24 @@ abstract class AccessContract {
         String two = login(a, "anna", NEW_PASSWORD);
         Caller anna = a.authenticate(bearer(one), Optional.empty());
 
+        b.authenticate(bearer(one), Optional.empty());
+        b.authenticate(bearer(two), Optional.empty());
         a.logout(anna.acting(Action.SELF_LOGOUT, PackageRef.ANY, REMOTE));
         refused(401, "unknown-credential", () -> a.authenticate(bearer(one), Optional.empty()));
+        refused(401, "unknown-credential", () -> b.authenticate(bearer(one), Optional.empty()));
         assertEquals(List.of("anna", "user/anna"), List.of(audit("logout").getFirst().getString("actor"), audit("logout").getFirst().getString("subject")));
 
         a.endSessions(root.acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna");
         refused(401, "unknown-credential", () -> a.authenticate(bearer(two), Optional.empty()));
+        refused(401, "unknown-credential", () -> b.authenticate(bearer(two), Optional.empty()));
         assertEquals(2, audit("session.end").getFirst().getJsonObject("detail").getInteger("sessions"),
                 "the session the password was changed in and the second");
 
         String three = login(a, "anna", NEW_PASSWORD);
+        b.authenticate(bearer(three), Optional.empty());
         a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
         refused(401, "unknown-credential", () -> a.authenticate(bearer(three), Optional.empty()));
+        refused(401, "unknown-credential", () -> b.authenticate(bearer(three), Optional.empty()));
         refused(401, "login-refused", () -> a.login("anna", NEW_PASSWORD, REMOTE));
         assertTrue(a.user("anna").orElseThrow().blockedAt().isPresent());
         a.unblock(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
@@ -479,6 +544,16 @@ abstract class AccessContract {
         refused(409, () -> a.changeRoles(by, "ci-deploy", Set.of(Role.ADMINISTRATOR), Set.of()));
         Access.Grant grant = a.user("bob").orElseThrow().roles().getFirst();
         assertEquals(List.of(Role.DEVELOPER, "root", "session"), List.of(grant.role(), grant.grantedBy(), grant.grantedVia()));
+    }
+
+    @Test
+    void aRoleTakenAwayIsRefusedAtTheOtherNodesNextRequest() {
+        Caller root = a.authenticate(bearer(session("root", Role.ADMINISTRATOR)), Optional.empty());
+        String bob = session("bob", Role.OPERATOR);
+        b.authenticate(bearer(bob), Optional.empty()).require(Action.MESSAGE_RETRY, PackageRef.ANY);
+        a.changeRoles(root.acting(Action.ROLES_CHANGE, PackageRef.ANY, REMOTE), "bob", Set.of(), Set.of(Role.OPERATOR));
+        Caller next = b.authenticate(bearer(bob), Optional.empty());
+        refused(403, "not-allowed", () -> next.require(Action.MESSAGE_RETRY, PackageRef.ANY));
     }
 
     @Test

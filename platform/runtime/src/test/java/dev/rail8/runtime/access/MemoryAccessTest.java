@@ -26,4 +26,12 @@ class MemoryAccessTest extends AccessContract {
     List<JsonObject> audit() {
         return store.audit();
     }
+
+    @Override
+    void limitNames(int count) {
+        ((Accounts) a).transaction(tx -> {
+            for (int i = 0; i < count; i++) tx.claim("limited-" + i, NAME_ROW, T0);
+            return null;
+        });
+    }
 }

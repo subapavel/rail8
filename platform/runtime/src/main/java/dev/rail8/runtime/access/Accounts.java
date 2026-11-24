@@ -123,7 +123,9 @@ abstract class Accounts implements Access {
         HashPlaces.Place place = places.take(false).orElseThrow(AccessRefused::busy);
         try (place) {
             Instant now = clock.instant();
-            if (user.isEmpty() && query(tx -> tx.limitedNames() >= NAMES_MAX && tx.limit(typed, NAME_ROW, false).isEmpty())) {
+            // read for every name, known or not, so a known name's login takes the same steps as an unknown one's
+            boolean full = query(tx -> tx.limitedNames() >= NAMES_MAX && tx.limit(typed, NAME_ROW, false).isEmpty());
+            if (user.isEmpty() && full) {
                 hash.matches(given, hash.dummy());
                 warnFull(now);
                 throw loginRefused();

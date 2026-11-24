@@ -9,6 +9,7 @@ import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 import io.vertx.sqlclient.Row;
+import io.vertx.sqlclient.Tuple;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.security.SecureRandom;
 import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -70,5 +72,11 @@ class PgAccessIT extends AccessContract {
                     .put("user", r.getLong(5)).put("via", r.getString(6)).put("credential", r.getString(7)));
         }
         return rows;
+    }
+
+    @Override
+    void limitNames(int count) {
+        pool.preparedQuery("insert into login_limits (name, device, failures, last_failure_at)"
+                + " select 'limited-' || g, '', 1, $1 from generate_series(0, $2 - 1) g").execute(Tuple.of(T0.atOffset(ZoneOffset.UTC), count)).await();
     }
 }
