@@ -19,6 +19,8 @@ import {
   type PackageRow,
   type PackagesApi,
   type PackageState,
+  type Pool,
+  type PoolNode,
   type PullAnswer,
   type PushAnswer,
   type RemoteBody,
@@ -148,6 +150,12 @@ export interface FakeRunning {
   dependencies?: { name: string; commit: string; content: string }[];
 }
 
+/** What the fake node's pool runs: its record of each package, by repository, and every node whose lease holds, sorted by id. */
+export interface FakePool {
+  records: { repository: string; commit: string }[];
+  nodes: { node: string; packages: { repository: string; commit: string; state: 'RUNNING' | 'FAILED'; deployedAt: string; behind: string[] }[] }[];
+}
+
 /** The whole world the fake git half serves. */
 export interface FakeState {
   /** False when no working folder is set. */
@@ -162,10 +170,11 @@ export interface FakeState {
   /**
    * The node at RAIL8_ADMIN_URL: its host, and what it runs, or why it gives no answer (with `refusesToken` when it
    * refuses the UI server's token). A node that answers takes a deploy as it runs, unless `deploys` scripts it: a refusal
-   * of its own of every deploy and check, or `silent`, no answer to a deploy, though it answers its check.
+   * of its own of every deploy and check, or `silent`, no answer to a deploy, though it answers its check. `pool` is
+   * what its pool route answers, or why it fails; with none, it answers no pool route.
    */
   node:
-    | { host: string; answers: true; running: FakeRunning[]; deploys?: FakeNodeRefusal | 'silent' }
+    | { host: string; answers: true; running: FakeRunning[]; deploys?: FakeNodeRefusal | 'silent'; pool?: FakePool | { error: string } }
     | { host: string; answers: false; error: string; refusesToken?: true };
   /** Every deploy and check the node was sent, in order: whether it was the check, its body and its actor. */
   sent: FakeSent[];
@@ -264,19 +273,36 @@ function whyNot(folder: FakeFolder): string | null {
   return null;
 }
 
+/** How `commit` relates to the folder's `HEAD`. */
+function relationOf(folder: FakeFolder, commit: string): { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commits?: number } {
+  const head = folder.head.commit;
+  if (commit === head) return { relation: 'deployed' };
+  if (head === null || !folder.commits.some((c) => c.id === commit)) return { relation: 'other' };
+  if (reach(folder, head).has(commit)) return { relation: 'behind', commits: beyond(folder, head, commit) };
+  if (reach(folder, commit).has(head)) return { relation: 'ahead', commits: beyond(folder, commit, head) };
+  return { relation: 'other' };
+}
+
+/** What every node of `pool` runs of the folder's repository, each with whether it runs the pool's record of it. */
+function poolOf(pool: FakePool, folder: FakeFolder): Pool {
+  const record = pool.records.find((r) => r.repository === folder.name)?.commit ?? null;
+  const nodes = pool.nodes.map(({ node, packages }): PoolNode => {
+    const runs = packages.find((p) => p.repository === folder.name);
+    if (runs === undefined) return { node, follows: record === null, behind: [], relation: 'none' };
+    const { commit, state, deployedAt, behind } = runs;
+    return { node, follows: commit === record, behind: [...behind], commit, state, deployedAt, ...relationOf(folder, commit) };
+  });
+  return { record, nodes };
+}
+
 function deployedOf(state: FakeState, folder: FakeFolder): Deployed {
   const node = state.node;
   if (!node.answers) return { node: 'unreachable', host: node.host, error: node.error };
+  const pool = node.pool === undefined ? {} : { pool: 'error' in node.pool ? { ...node.pool } : poolOf(node.pool, folder) };
   const running = node.running.find((r) => r.repository === folder.name);
-  if (running === undefined) return { node: 'answered', host: node.host, relation: 'none' };
+  if (running === undefined) return { node: 'answered', host: node.host, relation: 'none', ...pool };
   const { commit, state: runs, problems, deployedAt } = running;
-  const shown = { node: 'answered' as const, host: node.host, commit, state: runs, problems: [...problems], deployedAt };
-  const head = folder.head.commit;
-  if (commit === head) return { ...shown, relation: 'deployed' };
-  if (head === null || !folder.commits.some((c) => c.id === commit)) return { ...shown, relation: 'other' };
-  if (reach(folder, head).has(commit)) return { ...shown, relation: 'behind', commits: beyond(folder, head, commit) };
-  if (reach(folder, commit).has(head)) return { ...shown, relation: 'ahead', commits: beyond(folder, commit, head) };
-  return { ...shown, relation: 'other' };
+  return { node: 'answered', host: node.host, commit, state: runs, problems: [...problems], deployedAt, ...relationOf(folder, commit), ...pool };
 }
 
 function rowOf(state: FakeState, folder: FakeFolder): PackageRow {
@@ -941,6 +967,8 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
           ...node.running.filter((r) => r.repository !== repository),
           { repository, commit: asked.commit, state: 'RUNNING', problems: [], deployedAt: folder.commits.find((c) => c.id === asked.commit)!.at },
         ];
+        // the deploy writes the pool's record; the pool's nodes follow it later
+        if (node.pool !== undefined && 'records' in node.pool) node.pool.records = [...node.pool.records.filter((r) => r.repository !== repository), { repository, commit: asked.commit }];
       }
       return {
         deploy: {

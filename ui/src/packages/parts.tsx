@@ -6,7 +6,7 @@ import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
 import { useMay } from '../SessionGate';
 import { ageOf } from './age';
-import type { Artifact, Busy, Change, Commit, PackageRow, PackagesApi, PackageState } from './api';
+import type { Artifact, Busy, Change, Commit, Deployed, PackageRow, PackagesApi, PackageState, PoolNode } from './api';
 import { CHANGE, inside, KIND, nameOf, useCommitChanges } from './data';
 import { FileChange } from './FileChange';
 import { MAX_LISTED } from './rules';
@@ -66,16 +66,73 @@ export function ArtifactName({ artifact, open }: { artifact: Artifact; open: (sc
   );
 }
 
+type Status = { status: 'success' | 'warning' | 'error' | 'processing' | 'default'; text: string; hint?: string };
+
+/** What one node runs of a package, as one status with its words: `idle` when it runs nothing of it, `changed` the files that differ from `HEAD`. */
+function runStatus(runs: PoolNode | Exclude<Deployed, { node: 'unreachable' }>, changed: number, idle: string): Status {
+  if (runs.relation === 'none') return { status: 'default', text: idle };
+  if (runs.state === 'FAILED') return { status: 'error', text: 'Failed' };
+  if (runs.relation === 'deployed') return changed > 0 ? { status: 'warning', text: 'Deployed, with changes since' } : { status: 'success', text: 'Deployed' };
+  if (runs.relation === 'behind') return { status: 'warning', text: `Behind ${runs.commits}` };
+  if (runs.relation === 'ahead') return { status: 'processing', text: `Ahead ${runs.commits}`, hint: 'The node runs commits that HEAD lacks: pull them.' };
+  return { status: 'default', text: 'Other commit' };
+}
+
 /** What the node runs of the package, as one status with its words, and what to do about it where that is not plain: the vocabulary of the deployed state. */
-export function deployedStatus(state: PackageRow): { status: 'success' | 'warning' | 'error' | 'processing' | 'default'; text: string; hint?: string } {
+export function deployedStatus(state: PackageRow): Status {
   const deployed = state.deployed;
   if (deployed.node === 'unreachable') return { status: 'default', text: 'Unknown' };
-  if (deployed.relation === 'none') return { status: 'default', text: `Not running on ${deployed.host}` };
-  if (deployed.state === 'FAILED') return { status: 'error', text: 'Failed' };
-  if (deployed.relation === 'deployed') return state.changed > 0 ? { status: 'warning', text: 'Deployed, with changes since' } : { status: 'success', text: 'Deployed' };
-  if (deployed.relation === 'behind') return { status: 'warning', text: `Behind ${deployed.commits}` };
-  if (deployed.relation === 'ahead') return { status: 'processing', text: `Ahead ${deployed.commits}`, hint: 'The node runs commits that HEAD lacks: pull them.' };
-  return { status: 'default', text: 'Other commit' };
+  return runStatus(deployed, state.changed, `Not running on ${deployed.host}`);
+}
+
+/**
+ * What every node of the node's pool runs of the package, when the node answers its pool route: one line per commit
+ * with its status and how many of the nodes run it, then the nodes that do not run the pool's record of it, each with
+ * why once a tick failed; or why the pool could not be read. Nothing for a session that may not read deployments.
+ */
+export function PoolFact({ state }: { state: PackageRow }) {
+  const deployed = state.deployed;
+  const readable = useMay('deployment.read');
+  if (readable !== true || deployed.node === 'unreachable' || deployed.pool === undefined) return null;
+  const pool = deployed.pool;
+  if ('error' in pool) return <Typography.Text type="secondary">What each node of the pool runs is unknown: {pool.error}</Typography.Text>;
+  const groups = new Map<string, PoolNode[]>();
+  for (const node of pool.nodes) {
+    const key = node.relation === 'none' ? 'none' : `${node.commit} ${node.state}`;
+    groups.set(key, [...(groups.get(key) ?? []), node]);
+  }
+  const of = pool.nodes.length;
+  const behind = pool.nodes.filter((n) => !n.follows);
+  return (
+    <Flex vertical>
+      {[...groups.values()].map((nodes) => {
+        const first = nodes[0]!;
+        const { status, text, hint } = runStatus(first, state.changed, 'Not running');
+        return (
+          <Flex key={first.node} gap="small" wrap align="center">
+            <Tooltip title={hint}>
+              <Badge status={status} text={text} />
+            </Tooltip>
+            <Typography.Text type="secondary">
+              {first.relation !== 'none' && <Typography.Text code>{short(first.commit)}</Typography.Text>} on {nodes.length} of {of} {of === 1 ? 'node' : 'nodes'}
+            </Typography.Text>
+          </Flex>
+        );
+      })}
+      {behind.length > 0 && (
+        <Typography.Text type="warning">
+          {pool.record === null ? 'Running though the pool records no deploy of it' : `Behind the pool's commit ${short(pool.record)}`}: {behind.map((n) => n.node).join(', ')}
+        </Typography.Text>
+      )}
+      {behind.flatMap((n) =>
+        n.behind.map((why, i) => (
+          <Typography.Text key={`${n.node} ${i}`} type="secondary">
+            {n.node}: {why}
+          </Typography.Text>
+        )),
+      )}
+    </Flex>
+  );
 }
 
 /** What the node runs: its status, with its hint on hover, unless `withStatus` is false, the commit and when it was deployed, and the problems of a failed deploy. */
@@ -153,7 +210,7 @@ export function UpstreamFact({ state, at }: { state: PackageRow; at: Date }) {
   );
 }
 
-/** The facts of a package, as the items of a description list; what the node runs without its status, which the page shows apart. */
+/** The facts of a package, as the items of a description list; what the node runs without its status, which the page shows apart, and what each node of its pool runs. */
 export function factsOf(state: PackageState, at: Date): NonNullable<DescriptionsProps['items']> {
   return [
     { key: 'repository', label: 'Repository', children: state.repository },
@@ -161,6 +218,7 @@ export function factsOf(state: PackageState, at: Date): NonNullable<Descriptions
     { key: 'head', label: 'Last commit', children: <CommitFact state={state} at={at} /> },
     { key: 'upstream', label: 'Upstream', children: <UpstreamFact state={state} at={at} /> },
     { key: 'deployed', label: `Deployed on ${state.deployed.host}`, children: <DeployedFact state={state} at={at} withStatus={false} /> },
+    ...(state.deployed.node === 'answered' && state.deployed.pool !== undefined ? [{ key: 'pool', label: 'Nodes of the pool', children: <PoolFact state={state} /> }] : []),
   ];
 }
 

@@ -43,6 +43,8 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
  * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Of its three
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
  * `customers` is up to date and runs on the node, `common` runs nowhere, and a folder that is no package is listed below them.
+ * The node's pool has three nodes: `node-b` still runs the commit before the pool's record of `orders`, as it could not
+ * fetch the record's commit.
  */
 const SEED: Seed = {
   clones: [
@@ -88,6 +90,21 @@ const SEED: Seed = {
     { repository: 'orders', commit: 'Test the happy path of an order', dependencies: [{ name: 'common', repository: 'common', commit: 'c'.repeat(40), content: `sha256:${'4'.repeat(64)}` }] },
     { repository: 'customers', commit: 'Start the customers package' },
   ],
+  pool: {
+    records: [
+      { repository: 'customers', commit: 'Start the customers package' },
+      { repository: 'orders', commit: 'Test the happy path of an order' },
+    ],
+    nodes: ['node-a', 'node-b', 'node-c'].map((node) => ({
+      node,
+      packages: [
+        { repository: 'customers', commit: 'Start the customers package' },
+        node === 'node-b'
+          ? { repository: 'orders', commit: 'Add the invoices flow', behind: ['the commit could not be fetched from the git host: connection timed out'] }
+          : { repository: 'orders', commit: 'Test the happy path of an order' },
+      ],
+    })),
+  },
 };
 
 /** A commit id as git gives one, 40 hex digits, drawn from `text` so that it is the same in every picture. */
@@ -125,6 +142,12 @@ export function pictureWorld(): PackagesApi {
     if (folder.upstream !== null) folder.upstream.commit = idOf(folder.upstream.commit);
   }
   if (state.node.answers) for (const running of state.node.running) running.commit = idOf(running.commit);
+  const pool = state.node.answers && state.node.pool !== undefined && !('error' in state.node.pool) ? state.node.pool : null;
+  for (const record of pool?.records ?? []) record.commit = idOf(record.commit);
+  for (const runs of pool?.nodes.flatMap((n) => n.packages) ?? []) {
+    runs.commit = idOf(runs.commit);
+    runs.deployedAt = runs.repository === 'orders' ? '2026-11-18T10:02:00Z' : '2026-11-05T08:00:00Z';
+  }
   const orders = state.folders.find((f) => f.name === 'orders')!;
   for (const commit of orders.commits) {
     const known = COMMITS.find((c) => c.subject === commit.subject);

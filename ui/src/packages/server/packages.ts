@@ -3,19 +3,23 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isSessionRefused } from '../../../server/session.ts';
 import { MAX_FILE_BYTES, Refusal } from '../../../server/workingFolder.ts';
-import type { Busy, Commit, Deployed, PackageList, PackageRow } from '../api.ts';
+import type { Busy, Commit, Deployed, PackageList, PackageRow, Pool, PoolNode } from '../api.ts';
 import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS } from '../rules.ts';
 import { holds, LOG_FORMAT, parseLog, parseStatus, read, type Status } from './git.ts';
-import type { NodeRead } from './node.ts';
+import type { NodeRead, PoolRead } from './node.ts';
 import type { Runner } from './runner.ts';
 
 /** How many folders are read at once: each runs its git reads one after the other. */
 const AT_ONCE = 4;
 
-/** What the rows need of the node: what it runs, read once and only when a row needs it, and its host. */
+/**
+ * What the rows need of the node: its host, what it runs and what its pool runs (null: it answers no pool route), each
+ * read once and only when a row needs it.
+ */
 export interface NodeState {
   host: string;
   read: () => Promise<NodeRead>;
+  pool: () => Promise<PoolRead | { error: string } | null>;
 }
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -76,26 +80,56 @@ async function packageOf(clone: string): Promise<Pick<PackageRow, 'package' | 'p
   return manifestOf(await readFile(file, 'utf8'));
 }
 
+/** How a commit a node runs relates to the clone's `head`: `deployed`, `behind`, `ahead` or `other`, with how many commits apart. */
+type Relation = { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commits?: number };
+
 /**
- * What the node runs of `repository`, related to the clone's `head`: the relation by `cat-file -e`,
- * `merge-base --is-ancestor` in both directions and `rev-list --count`, named by the node's host.
+ * How `commit` relates to the clone's `head`, by `cat-file -e`, `merge-base --is-ancestor` in both directions and
+ * `rev-list --count`.
  */
-async function deployedOf(git: Runner, clone: string, repository: string, head: Commit | null, node: NodeState): Promise<Deployed> {
-  const answer = await node.read();
-  if (!answer.answered) return { node: 'unreachable', host: node.host, error: answer.error };
-  const running = answer.running.find((r) => r.repository === repository);
-  if (running === undefined) return { node: 'answered', host: node.host, relation: 'none' };
-  const { commit, state, problems, deployedAt } = running;
-  const shown = { node: 'answered', host: node.host, commit, state, problems, deployedAt } as const;
-  if (head !== null && commit === head.id) return { ...shown, relation: 'deployed' };
-  if (head === null || !/^[0-9a-f]{40}$/.test(commit)) return { ...shown, relation: 'other' };
+async function relationOf(git: Runner, clone: string, head: Commit | null, commit: string): Promise<Relation> {
+  if (head !== null && commit === head.id) return { relation: 'deployed' };
+  if (head === null || !/^[0-9a-f]{40}$/.test(commit)) return { relation: 'other' };
   // cat-file -e exits with 1, or 128 for an object it cannot name, when the clone lacks the commit
-  if (!(await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${commit}^{commit}`], [1, 128]))) return { ...shown, relation: 'other' };
+  if (!(await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${commit}^{commit}`], [1, 128]))) return { relation: 'other' };
   const isAncestor = (older: string, newer: string) => holds(git, clone, ['merge-base', '--is-ancestor', '--end-of-options', older, newer], [1]);
   const count = async (range: string) => Number((await read(git, clone, ['rev-list', '--count', '--end-of-options', range, '--'])).trim());
-  if (await isAncestor(commit, head.id)) return { ...shown, relation: 'behind', commits: await count(`${commit}..${head.id}`) };
-  if (await isAncestor(head.id, commit)) return { ...shown, relation: 'ahead', commits: await count(`${head.id}..${commit}`) };
-  return { ...shown, relation: 'other' };
+  if (await isAncestor(commit, head.id)) return { relation: 'behind', commits: await count(`${commit}..${head.id}`) };
+  if (await isAncestor(head.id, commit)) return { relation: 'ahead', commits: await count(`${head.id}..${commit}`) };
+  return { relation: 'other' };
+}
+
+/**
+ * What every node of the pool runs of `repository`, each commit related to the clone's `head` once: the pool's record of
+ * it, and each node with whether what it runs is that record.
+ */
+async function poolOf(read: PoolRead, repository: string, relate: (commit: string) => Promise<Relation>): Promise<Pool> {
+  const record = read.records.find((r) => r.repository === repository)?.commit ?? null;
+  const nodes = await Promise.all(
+    read.nodes.map(async ({ node, packages }): Promise<PoolNode> => {
+      const runs = packages.find((p) => p.repository === repository);
+      if (runs === undefined) return { node, follows: record === null, behind: [], relation: 'none' };
+      const { commit, state, deployedAt, behind } = runs;
+      return { node, follows: commit === record, behind, commit, state, deployedAt, ...(await relate(commit)) };
+    }),
+  );
+  return { record, nodes };
+}
+
+/** What the node runs of `repository`, related to the clone's `head`, named by the node's host, with what its pool runs when it answers it. */
+async function deployedOf(git: Runner, clone: string, repository: string, head: Commit | null, node: NodeState): Promise<Deployed> {
+  const [answer, pooled] = await Promise.all([node.read(), node.pool()]);
+  if (!answer.answered) return { node: 'unreachable', host: node.host, error: answer.error };
+  const related = new Map<string, Promise<Relation>>();
+  const relate = (commit: string) => {
+    if (!related.has(commit)) related.set(commit, relationOf(git, clone, head, commit));
+    return related.get(commit)!;
+  };
+  const pool = pooled === null ? {} : { pool: 'error' in pooled ? pooled : await poolOf(pooled, repository, relate) };
+  const running = answer.running.find((r) => r.repository === repository);
+  if (running === undefined) return { node: 'answered', host: node.host, relation: 'none', ...pool };
+  const { commit, state, problems, deployedAt } = running;
+  return { node: 'answered', host: node.host, commit, state, problems, deployedAt, ...(await relate(commit)), ...pool };
 }
 
 /** What `git status` says of the package's folder, the clone at the real path `clone`, untracked files included. */

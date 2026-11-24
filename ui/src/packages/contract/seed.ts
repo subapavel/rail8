@@ -19,6 +19,11 @@ export interface Seed {
   /** What the node runs (nothing by default), or `silent`: it gives no answer. */
   node?: 'silent' | RunningSeed[];
   /**
+   * What the node answers for `GET /admin/pool/packages`: the pool's records and what each of its nodes runs, or `fails`,
+   * a 500 that names why. None by default: the node answers no pool route (404).
+   */
+  pool?: PoolSeed | 'fails';
+  /**
    * How the node takes a deploy and its check, which it otherwise takes as it runs, recording the commit deployed: with a
    * refusal of its own of every one, or `silent`, giving no answer to a deploy though it answers its check.
    */
@@ -143,6 +148,18 @@ export interface RunningSeed {
   /** The direct dependencies its deploy resolved: each one's name, and the commit with the label `commit` of the clone `repository`, with its content digest. */
   dependencies?: { name: string; repository: string; commit: string; content: string }[];
 }
+
+/**
+ * A pool: its record of each package, and every node whose lease holds with what it runs. Each commit is the commit with
+ * that label of the clone `repository`, or the commit itself when it is 40 hex digits.
+ */
+export interface PoolSeed {
+  records: { repository: string; commit: string }[];
+  nodes: { node: string; packages: { repository: string; commit: string; state?: 'RUNNING' | 'FAILED'; behind?: string[] }[] }[];
+}
+
+/** Why the node's pool route fails, as its 500 names it. */
+export const POOL_FAILS = 'what each node runs could not be read: connection reset by peer';
 
 /** A world the contract suite asserts on, through `api` and an editor's save. */
 export interface World {
@@ -329,6 +346,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     ...(seed.links ?? []).map(({ folder }) => plainOf(folder, 'clone', true)),
   ];
   const host = '127.0.0.1:8081';
+  const commitOf = (repository: string, commit: string) => (isId(commit) ? commit : ids.get(`${repository}/${commit}`)!);
   const node: FakeState['node'] =
     seed.node === 'silent'
       ? { host, answers: false, error: `the node at ${host} does not answer (is it running?)` }
@@ -338,6 +356,20 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
           host,
           answers: true,
           ...(seed.deploys === undefined ? {} : { deploys: seed.deploys }),
+          ...(seed.pool === undefined
+            ? {}
+            : {
+                pool:
+                  seed.pool === 'fails'
+                    ? { error: `the node at ${host} answered 500: ${POOL_FAILS}` }
+                    : {
+                        records: seed.pool.records.map((r) => ({ repository: r.repository, commit: commitOf(r.repository, r.commit) })),
+                        nodes: seed.pool.nodes.map((n) => ({
+                          node: n.node,
+                          packages: n.packages.map((p) => ({ repository: p.repository, commit: commitOf(p.repository, p.commit), state: p.state ?? 'RUNNING', deployedAt: DEPLOYED_AT, behind: p.behind ?? [] })),
+                        })),
+                      },
+              }),
           running: (seed.node ?? []).map((r) => ({
             repository: r.repository,
             commit: isId(r.commit) ? r.commit : ids.get(`${r.repository}/${r.commit}`)!,

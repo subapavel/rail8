@@ -76,6 +76,48 @@ describe('the Packages screen', () => {
     await expect.element(rowOf('returns').getByText('Not running on 127.0.0.1:8081')).toBeVisible();
   });
 
+  test('names how many nodes of the pool run which commit, and the nodes behind its record', async () => {
+    const why = 'the commit could not be fetched: connection refused';
+    const state = open({
+      clones: [{ folder: 'orders', commits: ['first', 'second'] }, { folder: 'billing' }],
+      node: [{ repository: 'orders', commit: 'second' }],
+      pool: {
+        records: [{ repository: 'orders', commit: 'second' }],
+        nodes: [
+          { node: 'node-a', packages: [{ repository: 'orders', commit: 'second' }] },
+          { node: 'node-b', packages: [{ repository: 'orders', commit: 'first', behind: [why] }] },
+          { node: 'node-c', packages: [{ repository: 'orders', commit: 'second', state: 'FAILED' }] },
+        ],
+      },
+    });
+    const second = state.folders.find((f) => f.name === 'orders')!.commits.find((c) => c.subject === 'second')!.id.slice(0, 7);
+
+    await expect.element(page.getByText('Deployed state on the node at 127.0.0.1:8081, and on every node of its pool')).toBeVisible();
+    const orders = rowOf('orders');
+    await expect.element(orders.getByText('Behind 1')).toBeVisible();
+    await expect.element(orders.getByText('Failed')).toBeVisible();
+    await expect.element(orders).toMatchTextContent(`Deployed${second} on 1 of 3 nodes`);
+    await expect.element(orders).toMatchTextContent(`Failed${second} on 1 of 3 nodes`);
+    await expect.element(orders.getByText(`Behind the pool's commit ${second}: node-b`)).toBeVisible();
+    await expect.element(orders.getByText(`node-b: ${why}`)).toBeVisible();
+    await expect.element(rowOf('billing').getByText('Not running', { exact: true })).toBeVisible();
+    await expect.element(rowOf('billing')).toMatchTextContent('on 3 of 3 nodes');
+  });
+
+  test('a node that answers no pool route shows the single node, and a pool that cannot be read says why', async () => {
+    open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }] });
+
+    await expect.element(rowOf('orders').getByText('Deployed', { exact: true })).toBeVisible();
+    expect(rowOf('orders').element().textContent).not.toMatch(/ of \d+ nodes?|pool/);
+    expect(page.getByText(/every node of its pool/).elements()).toHaveLength(0);
+
+    root?.unmount();
+    document.body.innerHTML = '';
+    open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }], pool: 'fails' });
+
+    await expect.element(rowOf('orders').getByText(/^What each node of the pool runs is unknown: the node at 127\.0\.0\.1:8081 answered 500/)).toBeVisible();
+  });
+
   test('reads Ahead and Other commit, a detached HEAD and a merge left open', async () => {
     open({
       clones: [

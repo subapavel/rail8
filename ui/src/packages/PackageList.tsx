@@ -8,7 +8,7 @@ import { ReadSpinner } from '../ReadSpinner';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
 import { GetPackageDialog } from './GetPackageDialog';
 import { NewPackageDialog } from './NewPackageDialog';
-import { BranchFact, CommitFact, DeployedFact, UpstreamFact } from './parts';
+import { BranchFact, CommitFact, DeployedFact, PoolFact, UpstreamFact } from './parts';
 import { MAX_PACKAGES } from './rules';
 
 export interface PackageListProps {
@@ -151,7 +151,16 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
             { title: 'Last commit', key: 'head', render: (_, row) => <CommitFact state={row} at={at} /> },
             { title: 'Upstream', key: 'upstream', render: (_, row) => <UpstreamFact state={row} at={at} /> },
             { title: 'Changed files', dataIndex: 'changed', align: 'right', width: 120 },
-            { title: 'Deployed', key: 'deployed', render: (_, row) => <DeployedFact state={row} at={at} /> },
+            {
+              title: 'Deployed',
+              key: 'deployed',
+              render: (_, row) => (
+                <Flex vertical gap="small">
+                  <DeployedFact state={row} at={at} />
+                  <PoolFact state={row} />
+                </Flex>
+              ),
+            },
           ]}
         />
         {list.others.length > 0 && (
@@ -185,6 +194,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           {result.kind === 'read' && result.list.configured && (
             <span>
               Deployed state on the node at <Typography.Text code>{result.list.node}</Typography.Text>
+              {result.list.packages.some((p) => p.deployed.node === 'answered' && p.deployed.pool !== undefined) && ', and on every node of its pool'}
             </span>
           )}
         </Flex>

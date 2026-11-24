@@ -41,8 +41,8 @@ earlier one built.
 ### The Packages screen
 
 The Packages screen is the first screen of the Design group. It is a ProTable with one row per package of the working
-folder, sorted by repository. Above the table it names the node it reads, the host of `RAIL8_ADMIN_URL`. Each row
-shows:
+folder, sorted by repository. Above the table it names the node it reads, the host of `RAIL8_ADMIN_URL`, and says when
+it shows every node of that node's pool too. Each row shows:
 
 - the repository;
 - the package's name and version;
@@ -51,7 +51,9 @@ shows:
 - ahead and behind its upstream, as of the last fetch;
 - the number of changed files;
 - the deployed state on that node: Deployed, Deployed with changes since, Behind *n*, Ahead *n*, Other commit, Failed,
-  or Not running on *node*.
+  or Not running on *node*;
+- in a pool, below it, how many of the pool's nodes run which commit, and the nodes behind the pool's record
+  ("Every node of the pool").
 
 **New package** and **Get a package…** sit above the table.
 
@@ -68,7 +70,8 @@ mappings.
 
 A row opens the package in a tab of its own, `package:<repository>`.
 
-The header shows the package's name and version, the branch, the last commit, ahead and behind, and the deployed state.
+The header shows the package's name and version, the branch, the last commit, ahead and behind, and the deployed state,
+with the nodes of the pool in a pool.
 Its actions are Commit…, Deploy…, Fetch, Pull and Push. Each action is disabled, with the reason, when its route
 would refuse it.
 
@@ -640,12 +643,12 @@ after the author looked is put back unseen: no bytes are lost.
 
 ## Deployed state
 
-### Today: the node at RAIL8_ADMIN_URL
+### The node at RAIL8_ADMIN_URL
 
 The git half reads `GET /admin/packages` and `GET /admin/components` from the node at `RAIL8_ADMIN_URL`, with
 `RAIL8_ADMIN_TOKEN`, as the mapping half does. `/admin/packages` gives what that node runs, and `/admin/components`
-gives its environment. Every relation names that node, the host of `RAIL8_ADMIN_URL`. It says what that node runs and
-nothing of the pool's other nodes.
+gives its environment. Every relation names that node, the host of `RAIL8_ADMIN_URL`. The pool's other nodes are in
+"Every node of the pool".
 
 The node's entry for the package is matched by `repository`. Its commit is related to `HEAD` with
 `cat-file -e <commit>^{commit}`, `merge-base --is-ancestor` in both directions, and `rev-list --count`:
@@ -671,19 +674,43 @@ so while there are any.
 
 ### Every node of the pool
 
-A pool's nodes follow its records ("Several nodes" in `docs/DEPLOY-FROM-GIT.md`), but no admin route says what each
-node runs. A node keeps that only in memory, and shows it in `/health` as `BEHIND`. Showing it per node takes a change
-on the node. That change is a step of its own, designed first, and the owner sees its design before it is built:
+A pool's nodes follow its records ("Several nodes" in `docs/DEPLOY-FROM-GIT.md`). Each node writes a row per package
+it runs, and `GET /admin/pool/packages`, on any node, answers the pool's records and those rows for every node whose
+lease holds. The git half reads that route from the node at `RAIL8_ADMIN_URL` beside `/admin/packages`, once per
+request, and the deployed state gains `pool`:
 
-- Each node writes, in Postgres, a row per package it runs: the repository, the commit, its state, and why it is
-  behind. It writes the row when it installs or undeploys a package, and when a tick fails to install one.
-- `GET /admin/pool/packages` answers those rows for every node whose lease holds.
-- Every deploy names the state it expects, and the node refuses it, changing nothing, when the pool holds another. Two
-  authors, or an author and CI, then never replace each other's deploy unseen. That state is the commit of the pool's
-  record of the package, or `none` ("The expected state of a deploy" in [DEPLOY-FROM-GIT](DEPLOY-FROM-GIT.md)).
+```ts
+type Pool =
+  | { record: string | null; nodes: PoolNode[] }
+  | { error: string };
+type PoolNode = { node: string; follows: boolean; behind: string[] } & (
+  | { relation: 'none' }
+  | { relation: 'deployed' | 'behind' | 'ahead' | 'other'; commit: string; commits?: number;
+      state: 'RUNNING' | 'FAILED'; deployedAt: string });
+```
 
-The deployed state then gains one entry per node, with the same relations. Until then, it shows the node at
-`RAIL8_ADMIN_URL`, and names it.
+- **The record.** `record` is the commit of the pool's record of the package, matched by `repository`, or null when
+  the pool records no such package.
+- **Each node.** One entry per node, sorted by id. Its commit is related to `HEAD` as the node at `RAIL8_ADMIN_URL`'s
+  is, with the same relations, each commit once per package. A node with no row for the repository is `none`. Its
+  state reads "Failed" when it is `FAILED`.
+- **Behind the record.** `follows` is false when the node's row differs from the record: another commit, a row with no
+  record, or a record with no row. That node has not followed yet, or it is behind, and `behind` says why once a tick
+  failed.
+- **No pool route.** When the node answers the route 404, `pool` is absent. The UI keeps the single node at
+  `RAIL8_ADMIN_URL`, named as it is.
+- **No answer.** Any other way the route gives no answer is `error`, beside what the node runs.
+
+The Packages screen, in the row's Deployed column, and a package's tab, as **Nodes of the pool** among its facts, show:
+
+- one line per commit the nodes run: its status, its short id and how many of the nodes run it, as "Behind 1
+  `a1b2c3d` on 1 of 3 nodes";
+- the nodes that do not follow, as "Behind the pool's commit `c3d4e5f`: node-b", or "Running though the pool records
+  no deploy of it" when there is no record;
+- each such node's reasons, as "node-b: the commit could not be fetched…".
+
+The deploy needs nothing here. Every deploy names the state it expects, the commit of the pool's record or `none`, and
+the node refuses it, changing nothing, when the pool holds another ("Deploy").
 
 ## Deploy
 
@@ -1061,7 +1088,8 @@ Modules still import no other module. The shell gains two contracts, as files di
     - A file and the artifacts at `work` and at a commit.
     - `HEAD` refused as a revision.
     - `.git/config` refused as a path, and a link that leaves the package.
-  - **Deployed state.** Each relation.
+  - **Deployed state.** Each relation. A pool of three nodes, one current, one behind and one failed; a node with no
+    row and a row with no record; a node that answers no pool route; and a pool route that fails.
   - **Commit.**
     - A commit of chosen paths that leaves other staged paths staged.
     - A chosen path staged with other content (409).
@@ -1177,6 +1205,7 @@ Modules still import no other module. The shell gains two contracts, as files di
 11. **New package.** `POST /git/packages` and its dialog.
 12. **What each node runs, on the node.** The rows of what each node runs and `GET /admin/pool/packages`. It is designed
     first and depends on nothing in the UI, so its design may start at any time.
-13. **Every node in the UI.** One entry per node in the deployed state.
+13. **Every node in the UI.** `GET /admin/pool/packages` read beside `/admin/packages`, one entry per node in the
+    deployed state, and the nodes of the pool on the Packages screen and in a package's tab.
 14. **Discard.** `…/discard` with its two plumbing writes, the Changes table's tick boxes, and **Discard changes…**
     with its dialog.

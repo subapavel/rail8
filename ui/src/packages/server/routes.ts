@@ -13,7 +13,7 @@ import { lockBodyOf, lockPackage, LockRefused } from './lock.ts';
 import { createPackage } from './newPackage.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
-import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
+import { hostOf, readNode, readPool, type NodeRead, type NodeTarget } from './node.ts';
 import { fetchRemote, pullRemote, pushRemote, remoteBodyOf, RemoteRefused } from './remote.ts';
 import type { Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
@@ -121,7 +121,8 @@ export function gitPackages(options: GitPackagesOptions) {
   const nodeState = (req: IncomingMessage): NodeState => {
     const node = nodeFor(req, options.node.target, options.fetch);
     let answer: Promise<NodeRead> | undefined;
-    return { host, read: () => (answer ??= readNode(node, options.timer)) };
+    let pool: ReturnType<typeof readPool> | undefined;
+    return { host, read: () => (answer ??= readNode(node, options.timer)), pool: () => (pool ??= readPool(node, options.timer)) };
   };
 
   const list = async (req: IncomingMessage): Promise<PackageList> => {
