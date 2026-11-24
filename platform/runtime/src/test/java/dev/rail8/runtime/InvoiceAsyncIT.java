@@ -221,12 +221,12 @@ class InvoiceAsyncIT {
             NodeIT.until(() -> {
                 try {
                     JsonArray found = new JsonObject(NodeIT.get(admin, "/admin/messages?key=invoiceId:4711").body()).getJsonArray("items");
-                    return found.size() == 1 && id.equals(found.getString(0))
+                    return found.size() == 1 && new JsonObject().put("id", id).put("flow", "demo/invoice-async").equals(found.getJsonObject(0))
                             && new JsonObject(NodeIT.get(admin, "/admin/messages/" + id).body()).getJsonArray("steps").size() == 6;
                 } catch (IOException | InterruptedException e) {
                     throw new AssertionError("the admin API did not answer", e);
                 }
-            }, "the invoice is found by its key and its six steps (ingress and five) are recorded");
+            }, "the invoice is found by its key, with its qualified flow, and its six steps (ingress and five) are recorded");
             assertEquals("demo/invoice-async", new JsonObject(NodeIT.get(admin, "/admin/messages/" + id).body()).getString("flow"));
         }
     }

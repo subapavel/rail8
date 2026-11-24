@@ -24,6 +24,9 @@ import dev.rail8.core.flow.WorkerPolicy;
 import dev.rail8.core.flow.Workers;
 import dev.rail8.core.queue.InMemoryWorkQueue;
 import dev.rail8.core.record.Meter;
+import dev.rail8.runtime.access.Argon2id;
+import dev.rail8.runtime.access.HashPlaces;
+import dev.rail8.runtime.access.PgAccess;
 import dev.rail8.runtime.blob.TieredBlobStore;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.Doors;
@@ -50,6 +53,8 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
 
 import java.nio.file.Files;
+import java.security.SecureRandom;
+import java.time.Clock;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
@@ -127,9 +132,11 @@ final class AdminPgFixture implements AutoCloseable {
         shop.endpoint("orders-in", "in", new JsonObject().put("path", "/orders"))
                 .flow("orders", "1.0.0", "at-least-once", "orders-in", 65_536, new JsonArray().add(new JsonObject().put("type", "probe").put("name", "probe")));
         OnVirtualThread.call(() -> deployments.deploy("shop", shop.folderIn(tmp.resolve("folders"))));
+        // the audit's rows of a body view, by the node's clock, sort with those of a retry and a cancel, by Postgres's: the system clock
         server = new AdminServer(new AdminServer.Config("127.0.0.1", 0, Optional.of(TOKEN)), messages, dlq, blobs,
                 new AdminServer.HealthProbe(Map.of(), () -> 0L), Optional.of(deployments), queue, new PgFailedMessages(pool, queue), Optional.empty(),
-                new PgMessageList(pool), new Workers(), WorkSignals.NONE);
+                new PgMessageList(pool), new Workers(), WorkSignals.NONE, AdminServer.Modules.NONE,
+                new PgAccess(pool, Clock.systemUTC(), new Argon2id(new SecureRandom()), new HashPlaces(), new SecureRandom(), Optional.of(TOKEN)));
         port = server.start(vertx).await(10, TimeUnit.SECONDS);
     }
 

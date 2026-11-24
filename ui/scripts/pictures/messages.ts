@@ -1,4 +1,4 @@
-import type { AdminApi, Listed, StepRecord, Timeline } from '../../src/messages/admin';
+import type { AdminApi, Audited, Listed, StepRecord, Timeline } from '../../src/messages/admin';
 
 const step = (n: number, name: string, startedAt: string, outcome: StepRecord['outcome'] = 'OK', error: string | null = null): StepRecord => ({
   step: n,
@@ -23,6 +23,18 @@ const orders: Timeline = {
   ],
 };
 
+/** An order that went through every step, which no one has acted on since. */
+const delivered: Timeline = {
+  id: 'm-7f39',
+  flow: 'demo/orders',
+  steps: [
+    step(0, 'ingress', '2026-11-23T09:42:10Z'),
+    step(1, 'orders/validate', '2026-11-23T09:42:10.004Z'),
+    step(2, 'orders/map', '2026-11-23T09:42:10.009Z'),
+    step(3, 'orders/send', '2026-11-23T09:42:10.015Z'),
+  ],
+};
+
 const listed = (id: string, status: Listed['status'], startedAt: string, order: string): Listed => ({
   id,
   flow: 'demo/orders',
@@ -32,7 +44,13 @@ const listed = (id: string, status: Listed['status'], startedAt: string, order: 
   keys: { order },
 });
 
-/** The messages of the pictures: a few recent orders, the first of which failed at its last step. */
+/** Who acted on the failed order: a holder of the message bodies role viewed a payload, and a technical account retried it once before. */
+const audited: Audited[] = [
+  { id: 41, at: '2026-11-23T09:58:12Z', action: 'message.body.view', actor: 'dirk', via: 'session', credential: '3f9c0a7d21b84e65', detail: { step: 2 } },
+  { id: 37, at: '2026-11-23T09:52:40Z', action: 'message.retry', actor: 'ci-ops', via: 'token', credential: 'a1d27c9e40f3b851', detail: {} },
+];
+
+/** The messages of the pictures: a few recent orders, the first of which failed at its last step and has an audit; the others have none. */
 export function pictureMessages(): AdminApi {
   return {
     list: async () => ({
@@ -45,8 +63,9 @@ export function pictureMessages(): AdminApi {
     }),
     counts: async () => ({ completed: 2, failed: 1, running: 0, cancelled: 0 }),
     flows: async () => ['demo/orders'],
-    timeline: async (id) => (id === orders.id ? orders : null),
+    timeline: async (id) => [orders, delivered].find((t) => t.id === id) ?? null,
     payload: async () => ({ contentType: 'application/json', text: '{"order":"A-7"}', complete: true }),
     restart: async (id) => ({ id, attempt: 2 }),
+    audit: async (id) => ({ items: id === orders.id ? audited : [], next: null }),
   };
 }

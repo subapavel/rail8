@@ -233,7 +233,7 @@ curl -H "$auth" "localhost:8081/admin/messages?from=$from&to=$(date -u +%FT%TZ)"
 # {"items":[{"id":"<id>","flow":"demo/invoice-sync","status":"completed","startedAt":"…","durationNanos":…,"keys":{"invoiceId":"4711"}}],"next":null}
 curl -H "$auth" "localhost:8081/admin/messages?from=$from&to=$(date -u +%FT%TZ)&status=failed"   # the ones that failed: none
 curl -H "$auth" "localhost:8081/admin/message-counts?from=$from&to=$(date -u +%FT%TZ)"   # {"completed":1,"failed":0,"running":0,"cancelled":0}: by status
-curl -H "$auth" 'localhost:8081/admin/messages?key=invoiceId:4711'    # the ids of the messages with that key, at any time: {"items":["<id>"],"next":null}
+curl -H "$auth" 'localhost:8081/admin/messages?key=invoiceId:4711'    # the messages with that key, at any time: {"items":[{"id":"<id>","flow":"demo/invoice-sync"}],"next":null}
 curl -H "$auth" localhost:8081/admin/messages/<id>/steps/5/body       # the payload after step 5: the partner's answer
 ```
 

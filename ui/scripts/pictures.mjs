@@ -88,6 +88,7 @@ const SCENES = {
   'session-failed': [visit('failed')],
   'session-refused-tab': [visit('in&start=mappings')],
   'session-no-body': [visit('in'), menu('Messages'), message('m-7f3a')],
+  'message-no-audit': [visit('in'), menu('Messages'), message('m-7f39')],
   'session-no-deployments': [visit('none'), menu('Packages')],
   'session-no-deployment': [visit('none'), menu('Packages'), pkg('orders')],
   users: [visit('admin'), menu('Users'), expand('Users', 'anna')],

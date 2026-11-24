@@ -41,7 +41,7 @@ public final class InMemoryMessageStore implements MessageStore {
 
     private final Map<Row, Snapshot> rows = new LinkedHashMap<>();   // guarded by this
     private final Set<KeyRow> keyRows = new HashSet<>();   // guarded by this
-    private final Map<Carried, List<String>> carriers = new HashMap<>();   // guarded by this; per key, the ids in the order they first carried it
+    private final Map<Carried, List<Found>> carriers = new HashMap<>();   // guarded by this; per key, the messages in the order they first carried it
 
     @Override
     public synchronized Future<Void> record(Snapshot snapshot) {
@@ -49,7 +49,7 @@ public final class InMemoryMessageStore implements MessageStore {
         rows.putIfAbsent(new Row(snapshot.messageId(), snapshot.step(), snapshot.attempt()), snapshot);
         for (Map.Entry<String, String> k : snapshot.keys().asMap().entrySet()) {
             if (keyRows.add(new KeyRow(k.getKey(), k.getValue(), snapshot.messageId()))) {
-                carriers.computeIfAbsent(new Carried(k.getKey(), k.getValue()), c -> new ArrayList<>()).add(snapshot.messageId());
+                carriers.computeIfAbsent(new Carried(k.getKey(), k.getValue()), c -> new ArrayList<>()).add(new Found(snapshot.messageId(), snapshot.flow()));
             }
         }
         return Future.succeededFuture();
@@ -64,18 +64,18 @@ public final class InMemoryMessageStore implements MessageStore {
     }
 
     @Override
-    public synchronized Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+    public synchronized Future<Page<Found>> findByKey(String name, String value, Optional<String> after, int limit) {
         Page.requireLimit(limit);
-        List<String> ids = carriers.getOrDefault(new Carried(name, value), List.of());
+        List<Found> carried = carriers.getOrDefault(new Carried(name, value), List.of());
         long from = after.map(InMemoryMessageStore::lastIndex).orElse(-1L) + 1;
-        int start = (int) Math.min(ids.size(), from);   // a cursor past the end (another key's) is an empty last page
-        int end = Math.min(ids.size(), start + limit);
-        Optional<String> next = end < ids.size() ? Optional.of(Page.cursor(Integer.toString(end - 1))) : Optional.empty();
-        return Future.succeededFuture(new Page<>(ids.subList(start, end), next));
+        int start = (int) Math.min(carried.size(), from);   // a cursor past the end (another key's) is an empty last page
+        int end = Math.min(carried.size(), start + limit);
+        Optional<String> next = end < carried.size() ? Optional.of(Page.cursor(Integer.toString(end - 1))) : Optional.empty();
+        return Future.succeededFuture(new Page<>(carried.subList(start, end), next));
     }
 
     @Override
-    public synchronized Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+    public synchronized Future<Page<Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
         Page.requireLimit(limit);
         Optional<Passed> from = after.map(InMemoryMessageStore::passed);
         Map<String, Snapshot> latest = new HashMap<>();
@@ -84,9 +84,9 @@ public final class InMemoryMessageStore implements MessageStore {
         }
         List<Passed> passed = latest.values().stream().map(s -> new Passed(s.startedAt(), s.messageId())).sorted(NEWEST_FIRST)
                 .filter(p -> from.isEmpty() || NEWEST_FIRST.compare(p, from.get()) > 0).toList();
-        List<String> ids = passed.stream().limit(limit).map(Passed::messageId).toList();
+        List<Found> found = passed.stream().limit(limit).map(p -> new Found(p.messageId(), latest.get(p.messageId()).flow())).toList();
         Optional<String> next = passed.size() > limit ? Optional.of(cursor(passed.get(limit - 1))) : Optional.empty();
-        return Future.succeededFuture(new Page<>(ids, next));
+        return Future.succeededFuture(new Page<>(found, next));
     }
 
     /** {@code <epoch second>:<nano>:<id>} of {@code p}, as a cursor. */

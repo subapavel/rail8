@@ -65,7 +65,7 @@ class FindByKeyPagingPropertyTest {
         record(store, before, seen, order);
         List<String> beforeOrder = List.copyOf(order);
 
-        Page<String> page = store.findByKey("invoiceId", "4711", Optional.empty(), limit).await();
+        Page<String> page = InMemoryMessageStoreTest.page(store, "4711", Optional.empty(), limit);
         assertTrue(page.items().size() <= limit, "a page holds at most limit items: " + page);
         boolean continued = page.next().isPresent();
         if (continued) assertEquals(limit, page.items().size(), "a page with a next cursor is full: " + page);
@@ -75,7 +75,7 @@ class FindByKeyPagingPropertyTest {
         record(store, after, seen, order);   // the store grows between two pages
         int pages = 1;
         while (page.next().isPresent()) {
-            page = store.findByKey("invoiceId", "4711", page.next(), limit).await();
+            page = InMemoryMessageStoreTest.page(store, "4711", page.next(), limit);
             pages++;
             assertTrue(page.items().size() <= limit, "a page holds at most limit items: " + page);
             assertFalse(page.items().isEmpty(), "a next cursor is handed out only when another item exists (limit + 1 fetch)");

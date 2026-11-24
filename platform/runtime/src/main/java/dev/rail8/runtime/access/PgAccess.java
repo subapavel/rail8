@@ -54,6 +54,8 @@ public final class PgAccess extends Accounts {
             + " values ('*', '*', 1, $1) on conflict (name, device) do update"
             + " set failures = case when l.last_failure_at < $1 then 1 else least(l.failures + 1, 1000000) end,"
             + " last_failure_at = greatest(l.last_failure_at, $1) returning failures";
+    /** The audit rows of subject $1, on the index {@code audit_subject_at}; the caller adds the order and the limit. */
+    private static final String AUDIT_OF = "select id, at, actor, action, subject, detail, user_id, via, credential from audit where subject = $1";
 
     private final Pool pool;
 
@@ -405,6 +407,21 @@ public final class PgAccess extends Accounts {
             run("insert into audit (at, actor, action, subject, detail, user_id, via, credential) values ($1, $2, $3, $4, $5, $6, $7, $8)",
                     Tuple.of(at(row.at()), row.actor(), row.action(), row.subject(), row.detail(),
                             row.user().isPresent() ? row.user().getAsLong() : null, row.via(), row.credential().orElse(null)));
+        }
+
+        @Override public List<AuditedRow> audit(String subject, OptionalLong before, int limit) {
+            RowSet<Row> rows = before.isPresent()
+                    ? run(AUDIT_OF + " and (at, id) < (select at, id from audit where id = $2) order by at desc, id desc limit $3",
+                            Tuple.of(subject, before.getAsLong(), limit))
+                    : run(AUDIT_OF + " order by at desc, id desc limit $2", Tuple.of(subject, limit));
+            List<AuditedRow> out = new ArrayList<>();
+            for (Row r : rows) {
+                Long user = r.getLong("user_id");
+                out.add(new AuditedRow(r.getLong("id"), new AuditRow(instant(r, "at"), r.getString("actor"), r.getString("action"),
+                        r.getString("subject"), r.getJsonObject("detail"), user == null ? OptionalLong.empty() : OptionalLong.of(user),
+                        r.getString("via"), Optional.ofNullable(r.getString("credential")))));
+            }
+            return out;
         }
     }
 }

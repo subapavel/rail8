@@ -372,7 +372,7 @@ class QuickstartIT {
                 JsonArray ids = new JsonObject(get(node.adminPort(), "/admin/messages?key=invoiceId:" + invoiceId).body()).getJsonArray("items");
                 if (ids.isEmpty()) return false;
                 assertEquals(1, ids.size(), "one message under invoiceId:" + invoiceId + ": " + ids.encode());
-                HttpResponse<String> timeline = get(node.adminPort(), "/admin/messages/" + ids.getString(0));
+                HttpResponse<String> timeline = get(node.adminPort(), "/admin/messages/" + ids.getJsonObject(0).getString("id"));
                 if (timeline.statusCode() != 200) return false;
                 JsonObject t = new JsonObject(timeline.body());
                 found.set(t);

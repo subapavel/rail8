@@ -182,7 +182,7 @@ class CallsBetweenFlowsIT {
             HttpResponse<String> r = NodeIT.get(admin, "/admin/messages?key=rail8.ref:" + ref);
             assertEquals(200, r.statusCode(), r.body());
             Set<String> ids = new HashSet<>();
-            new JsonObject(r.body()).getJsonArray("items").forEach(id -> ids.add((String) id));
+            new JsonObject(r.body()).getJsonArray("items").forEach(item -> ids.add(((JsonObject) item).getString("id")));
             return ids;
         } catch (IOException | InterruptedException e) {
             throw new AssertionError("the admin API did not answer", e);
@@ -195,7 +195,7 @@ class CallsBetweenFlowsIT {
             HttpResponse<String> r = NodeIT.get(admin, "/admin/messages?flow=" + flow + "&step=ingress");
             assertEquals(200, r.statusCode(), r.body());
             List<String> ids = new ArrayList<>();
-            new JsonObject(r.body()).getJsonArray("items").forEach(id -> ids.add((String) id));
+            new JsonObject(r.body()).getJsonArray("items").forEach(item -> ids.add(((JsonObject) item).getString("id")));
             return ids;
         } catch (IOException | InterruptedException e) {
             throw new AssertionError("the admin API did not answer", e);

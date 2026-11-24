@@ -50,6 +50,9 @@ interface Tx {
     record AuditRow(Instant at, String actor, String action, String subject, JsonObject detail, OptionalLong user, String via,
                     Optional<String> credential) {}
 
+    /** An audit row as read back, with its id. */
+    record AuditedRow(long id, AuditRow row) {}
+
     /** Whether the bridge's marker is open. */
     boolean bridgeOpen();
 
@@ -182,4 +185,10 @@ interface Tx {
     int countRefusalAudit(Instant hour);
 
     void audit(AuditRow row);
+
+    /**
+     * The audit rows of {@code subject}, newest first: by {@code at}, then by id, both descending; at most {@code limit}. With
+     * {@code before}, only those after the row of that id in this order, none when that row is gone.
+     */
+    List<AuditedRow> audit(String subject, OptionalLong before, int limit);
 }

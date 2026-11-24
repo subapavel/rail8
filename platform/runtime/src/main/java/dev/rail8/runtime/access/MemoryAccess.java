@@ -414,5 +414,20 @@ public final class MemoryAccess extends Accounts {
             audit.add(new AuditRow(row.at(), row.actor(), row.action(), row.subject(), row.detail().copy(), row.user(), row.via(),
                     row.credential()));
         }
+
+        /** The id of a row is its place in the list, from 1, as an identity column would number it. */
+        @Override public List<AuditedRow> audit(String subject, OptionalLong before, int limit) {
+            Comparator<AuditedRow> newestFirst = Comparator.comparing((AuditedRow a) -> a.row().at()).thenComparingLong(AuditedRow::id).reversed();
+            List<AuditedRow> all = new ArrayList<>();
+            for (int i = 0; i < audit.size(); i++) all.add(new AuditedRow(i + 1, audit.get(i)));
+            Optional<AuditedRow> from = before.isPresent() && before.getAsLong() >= 1 && before.getAsLong() <= all.size()
+                    ? Optional.of(all.get((int) before.getAsLong() - 1)) : Optional.empty();
+            if (before.isPresent() && from.isEmpty()) return List.of();
+            return all.stream().filter(a -> a.row().subject().equals(subject))
+                    .filter(a -> from.isEmpty() || newestFirst.compare(a, from.get()) > 0)
+                    .sorted(newestFirst).limit(limit)
+                    .map(a -> new AuditedRow(a.id(), new AuditRow(a.row().at(), a.row().actor(), a.row().action(), a.row().subject(),
+                            a.row().detail().copy(), a.row().user(), a.row().via(), a.row().credential()))).toList();
+        }
     }
 }

@@ -109,7 +109,7 @@ final class Expectations {
                 continue;
             }
             String id = o.messageId().get();
-            if (!o.messages().findByKey(name, value, Optional.empty(), Page.MAX_LIMIT).await().items().contains(id)) {
+            if (!o.messages().findByKey(name, value, Optional.empty(), Page.MAX_LIMIT).await().items().stream().anyMatch(f -> f.id().equals(id))) {
                 String carried = o.messages().timeline(id).await().stream().map(s -> s.keys().get(name)).filter(Objects::nonNull)
                         .reduce((first, last) -> last).orElse(NONE);
                 failed.add(line("keys." + name, value, carried));

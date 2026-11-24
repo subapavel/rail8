@@ -97,9 +97,10 @@ import java.util.stream.Collectors;
  * every attempt by attempt, then step, each naming its {@code attempt} and showing the lines the step's code logged as its
  * {@code log}, {@link StepLogJson}), the payload after step n (the latest attempt's,
  * or {@code ?attempt=k}'s), the search for messages and the DLQ a page at a time ({@code {items, next|null}}), {@code /health},
- * and the probes {@code /live} and {@code /ready}. {@code GET /admin/messages} finds message ids by business key
+ * and the probes {@code /live} and {@code /ready}. {@code GET /admin/messages} finds messages by business key
  * ({@code ?key=name:value}, {@link MessageStore#findByKey}) or by a step they passed ({@code ?flow=<flow id>&step=<step name>},
- * {@link MessageStore#findByStep}), with {@code limit} and {@code after}; it is 400 for neither, for a key with a flow or step,
+ * {@link MessageStore#findByStep}), with {@code limit} and {@code after}, each item {@code {id, flow}} with the qualified
+ * {@code <package>/<flow>}; it is 400 for neither, for a key with a flow or step,
  * and for a flow without a step or a step without a flow. With {@code from} or {@code to} it is instead the list of recent
  * messages ({@link PgMessageList}): {@code from} and {@code to} are ISO-8601 instants, both required, and {@code flow},
  * {@code status} (completed, failed, running or cancelled), {@code key=name:value} and {@code step} narrow it; its items are
@@ -695,6 +696,7 @@ public final class AdminServer {
             admin.get("/admin/messages", Action.MESSAGE_READ, (c, who) -> search(c));
             admin.get("/admin/message-counts", Action.MESSAGE_READ, (c, who) -> counts(c));
             admin.get("/admin/messages/:id", Action.MESSAGE_READ, (c, who) -> timeline(c));
+            admin.get("/admin/messages/:id/audit", Action.MESSAGE_READ, (c, who) -> audit(c));
             admin.get("/admin/messages/:id/steps/:n/body", Action.MESSAGE_BODY, AdminServer.this::body);
             admin.get("/admin/dlq", Action.MESSAGE_READ, (c, who) -> dlq(c));
             deployments.ifPresent(d -> {
@@ -1085,6 +1087,17 @@ public final class AdminServer {
         return Json.of(200, new JsonObject().put("id", id).put("flow", timeline.getFirst().flow()).put("steps", steps));
     }
 
+    /**
+     * {@code GET /admin/messages/{id}/audit}: who retried the message, cancelled it or viewed its body, newest first, a page at
+     * a time with {@code limit} and {@code after}; each item {@code {id, at, action, actor, via, credential, detail}}, with
+     * {@code credential} null when the caller had none of its own.
+     */
+    private Reply audit(RoutingContext ctx) {
+        Page<Access.Audited> page = refusable(() -> access.messageAudit(ctx.pathParam("id"), after(ctx), limit(ctx)));
+        return Json.of(200, page(page, a -> new JsonObject().put("id", a.id()).put("at", a.at().toString()).put("action", a.action())
+                .put("actor", a.actor()).put("via", a.via()).put("credential", a.credential().orElse(null)).put("detail", a.detail())));
+    }
+
     private Reply body(RoutingContext ctx, Caller who) {
         String id = ctx.pathParam("id");
         int n = refusable(() -> Integer.parseInt(ctx.pathParam("n")));
@@ -1133,13 +1146,18 @@ public final class AdminServer {
         if (flow != null || step != null) {
             if (ctx.request().getParam("key") != null) throw new Refused("search by key or by flow and step, not both");
             if (flow == null || flow.isEmpty() || step == null || step.isEmpty()) throw new Refused("a search by step names both flow and step");
-            return Json.of(200, page(refusable(() -> messages.findByStep(flow, step, after(ctx), limit(ctx)).await()), id -> id));
+            return Json.of(200, page(refusable(() -> messages.findByStep(flow, step, after(ctx), limit(ctx)).await()), AdminServer::found));
         }
         String key = Objects.requireNonNullElse(ctx.request().getParam("key"), "");
         int colon = key.indexOf(':');
         if (colon < 0) throw new Refused("key must be name:value");
-        Page<String> page = refusable(() -> messages.findByKey(key.substring(0, colon), key.substring(colon + 1), after(ctx), limit(ctx)).await());
-        return Json.of(200, page(page, id -> id));
+        Page<MessageStore.Found> page = refusable(() -> messages.findByKey(key.substring(0, colon), key.substring(colon + 1), after(ctx), limit(ctx)).await());
+        return Json.of(200, page(page, AdminServer::found));
+    }
+
+    /** A message a search found, as {@code {id, flow}}. */
+    private static JsonObject found(MessageStore.Found f) {
+        return new JsonObject().put("id", f.id()).put("flow", f.flow());
     }
 
     /** The list of recent messages: {@code from} and {@code to}, and the optional {@code flow}, {@code status}, {@code key} and {@code step}. */

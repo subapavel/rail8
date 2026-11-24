@@ -127,10 +127,10 @@ class RecordingPropertyTest {
 
         @Override public Future<List<Snapshot>> timeline(String messageId) { return Future.succeededFuture(List.copyOf(recorded)); }
 
-        @Override public Future<Page<String>> findByKey(String name, String value, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByKey(String name, String value, Optional<String> after, int limit) {
             return Future.succeededFuture(new Page<>(List.of(), Optional.empty()));
         }
-        @Override public Future<Page<String>> findByStep(String flow, String step, Optional<String> after, int limit) {
+        @Override public Future<Page<MessageStore.Found>> findByStep(String flow, String step, Optional<String> after, int limit) {
             return Future.succeededFuture(new Page<>(List.of(), Optional.empty()));
         }
     }

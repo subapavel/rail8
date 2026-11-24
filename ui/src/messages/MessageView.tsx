@@ -3,7 +3,16 @@ import { useEffect, useState } from 'react';
 import { MountedModal } from '../MountedModal';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed } from '../SessionGate';
-import { PAYLOAD_SHOWN, type AdminApi, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
+import {
+  PAYLOAD_SHOWN,
+  type AdminApi,
+  type Audited,
+  type Outcome,
+  type Payload,
+  type StepRecord,
+  type Timeline,
+  type Via,
+} from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
 
 export interface MessageViewProps {
@@ -45,7 +54,8 @@ function OutcomeLabel({ outcome }: { outcome: Outcome }) {
  * with its outcome, start, wall and CPU time, payload size and error, and the waits between steps that are not
  * negligible. Under the last attempt, the time between steps that no wait row shows and the total, which is the
  * message's duration in the list. The payload after a step opens in a dialog when its bytes were kept. When the latest attempt failed, its error is shown with a Restart action, which runs the message
- * again from its arrival; Refresh reads the steps again.
+ * again from its arrival. Below the steps, the message's audit: who retried it, cancelled it or viewed its payloads, and
+ * how they proved who they are. Refresh reads the steps and the audit again.
  */
 export function MessageView({ api, id }: MessageViewProps) {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
@@ -104,7 +114,10 @@ export function MessageView({ api, id }: MessageViewProps) {
         <Alert showIcon type="error" title="The message could not be read" description={load.message} />
       )}
       {load.kind === 'loaded' && (
-        <Progress timeline={load.timeline} restart={restart} onRestart={runAgain} onShow={setShown} />
+        <>
+          <Progress timeline={load.timeline} restart={restart} onRestart={runAgain} onShow={setShown} />
+          <MessageAudit api={api} id={id} />
+        </>
       )}
       {shown !== null && <PayloadDialog api={api} id={id} step={shown} onClose={() => setShown(null)} />}
     </Flex>
@@ -298,5 +311,135 @@ function PayloadDialog({ api, id, step, onClose }: PayloadDialogProps) {
         </Flex>
       )}
     </MountedModal>
+  );
+}
+
+type AuditLoad =
+  | { kind: 'loading' }
+  | { kind: 'failed'; message: string }
+  | { kind: 'loaded'; rows: Audited[]; next: string | null; older: 'idle' | 'loading' | { failed: string } };
+
+const viaLabels: Record<Via, string> = {
+  session: 'Session',
+  token: 'Token',
+  'emergency-key': 'Emergency key',
+  'shared-token': 'Shared token',
+  local: 'Local, no credential',
+  declared: 'Name declared, before users',
+};
+
+/** What a row of the audit did, for people; an act this screen does not know shows its id. */
+function auditAction(row: Audited): string {
+  if (row.action === 'message.retry') return 'Retried';
+  if (row.action === 'message.cancel') return 'Cancelled';
+  if (row.action === 'message.body.view') {
+    return typeof row.detail.step === 'number' ? `Viewed the payload after step ${row.detail.step}` : 'Viewed a payload';
+  }
+  return row.action;
+}
+
+/**
+ * The message's audit, newest first: when, what was done, who did it and how they proved who they are, with the id of their
+ * session or token when they had one. Older rows load a page at a time.
+ */
+function MessageAudit({ api, id }: { api: AdminApi; id: string }) {
+  const [load, setLoad] = useState<AuditLoad>({ kind: 'loading' });
+  const [reads, setReads] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    api.audit(id).then(
+      (page) => {
+        if (current) setLoad({ kind: 'loaded', rows: page.items, next: page.next, older: 'idle' });
+      },
+      (failed: unknown) => {
+        if (current) setLoad({ kind: 'failed', message: reason(failed) });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [api, id, reads]);
+
+  const loadOlder = (shown: Extract<AuditLoad, { kind: 'loaded' }>) => {
+    if (shown.next === null) return;
+    setLoad({ ...shown, older: 'loading' });
+    api.audit(id, shown.next).then(
+      (page) => setLoad({ kind: 'loaded', rows: [...shown.rows, ...page.items], next: page.next, older: 'idle' }),
+      (failed: unknown) => setLoad({ ...shown, older: { failed: reason(failed) } }),
+    );
+  };
+
+  return (
+    <section aria-label="Audit">
+      <Typography.Title level={2}>Audit</Typography.Title>
+      {load.kind === 'loading' && <ReadSpinner label="Reading the audit" />}
+      {load.kind === 'failed' && (
+        <Alert
+          showIcon
+          type="error"
+          title="The audit could not be read"
+          description={load.message}
+          action={
+            <Button
+              onClick={() => {
+                setLoad({ kind: 'loading' });
+                setReads((n) => n + 1);
+              }}
+            >
+              Try again
+            </Button>
+          }
+        />
+      )}
+      {load.kind === 'loaded' && load.rows.length === 0 && (
+        <Empty description="No one has retried, cancelled or viewed a payload of this message." />
+      )}
+      {load.kind === 'loaded' && load.rows.length > 0 && (
+        <Flex vertical gap="small">
+          <div className="rail8-table-scroll">
+            <table className="rail8-document-table" aria-label="Audit of the message">
+              <thead>
+                <tr>
+                  {['When', 'Action', 'Who', 'How'].map((label) => (
+                    <th scope="col" key={label}>
+                      {label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {load.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.at}</td>
+                    <td>{auditAction(row)}</td>
+                    <td>{row.actor}</td>
+                    <td>
+                      {viaLabels[row.via] ?? row.via}
+                      {row.credential !== null && (
+                        <>
+                          {' '}
+                          <Typography.Text code>{row.credential}</Typography.Text>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {typeof load.older === 'object' && (
+            <Alert showIcon type="error" title="The older rows could not be read" description={load.older.failed} />
+          )}
+          {load.next !== null && (
+            <Flex justify="center">
+              <Button onClick={() => loadOlder(load)} loading={load.older === 'loading'}>
+                Show older
+              </Button>
+            </Flex>
+          )}
+        </Flex>
+      )}
+    </section>
   );
 }
