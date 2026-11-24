@@ -7,6 +7,7 @@ import io.vertx.core.json.JsonObject;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -205,6 +206,14 @@ public interface Access {
      */
     Page<Audited> messageAudit(String message, Optional<String> after, int limit);
 
+    /**
+     * One page of the whole audit, narrowed by {@code filter}, newest first (by instant, then by id, both descending).
+     * {@code after} is the previous page's {@link Page#next()} cursor, empty for the first page.
+     *
+     * @throws IllegalArgumentException for a {@code limit} outside 1..{@link Page#MAX_LIMIT} or a cursor not handed out here
+     */
+    Page<Audited> audit(AuditFilter filter, Optional<String> after, int limit);
+
     /** Whether the node holds an emergency key. */
     boolean emergencyKey();
 
@@ -231,13 +240,35 @@ public interface Access {
      * @param id the row's id, as the answers of a retry and a cancel name it ({@code auditId})
      * @param at when it was written
      * @param action what was done, such as {@code message.retry}, {@code message.cancel} or {@code message.body.view}
+     * @param subject what it was done to, such as {@code message/<id>} or {@code user/<name>}
      * @param actor who did it: a user's name, {@code emergency-key}, or the name a caller of the bridge declared
      * @param via how the caller proved who it is: {@code session}, {@code token}, {@code emergency-key}, {@code shared-token},
      *            {@code local}, or {@code declared} for rows written before users existed
      * @param credential the id of the session or token, never its secret; empty for the others
      * @param detail what the row records besides, such as the step of a body viewed and the remote address
      */
-    record Audited(long id, Instant at, String action, String actor, String via, Optional<String> credential, JsonObject detail) {}
+    record Audited(long id, Instant at, String action, String subject, String actor, String via, Optional<String> credential,
+                   JsonObject detail) {}
+
+    /**
+     * What a read of the whole audit keeps; an empty part keeps every row.
+     *
+     * @param user the rows of the user of this name, who proved who they are with a session or a token; none for a name no
+     *             user has
+     * @param action the rows of this action, such as {@code login} or {@code message.retry}
+     * @param from the rows written at this instant or later
+     * @param to the rows written before this instant
+     * @throws IllegalArgumentException when {@code from} is not before {@code to}
+     */
+    record AuditFilter(Optional<String> user, Optional<String> action, Optional<Instant> from, Optional<Instant> to) {
+        public AuditFilter {
+            Objects.requireNonNull(user, "user");
+            Objects.requireNonNull(action, "action");
+            Objects.requireNonNull(from, "from");
+            Objects.requireNonNull(to, "to");
+            if (from.isPresent() && to.isPresent() && !from.get().isBefore(to.get())) throw new IllegalArgumentException("from must be before to");
+        }
+    }
 
     /**
      * A change of roles.

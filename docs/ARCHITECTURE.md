@@ -1161,6 +1161,9 @@ own, and while the node holds the emergency key the screen says to unset it. The
 technical account's tokens and revokes any user's token. The Tokens screen shows the installation's ceiling of a token's
 life, which an administrator changes, and every user's tokens that expire within 14 days. On My tokens a person lists
 and revokes their own tokens, and issues one with the password asked again. A token issued in the UI shows once, to copy.
+The Audit screen lists the whole audit, newest first, with each row's actor, how they proved who they are and the id of
+their session or token, narrowed by user, action and time. Export CSV saves every row the filters keep, read page by
+page, as a UTF-8 file with every column, up to 100,000 rows; a longer list asks for a narrower time.
 
 The UI's end-to-end scenarios (`ui/e2e/`, Playwright) run nightly: the 20,128-field tree scrolled
 over a fake mapping service on a development-only page, and the `@stack` scenarios against the
@@ -1272,6 +1275,7 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `GET /admin/messages/{id}` | a message's steps with their times and the lines their code logged |
 | `GET /admin/messages/{id}/steps/{n}/body` | the body after step `n` |
 | `GET /admin/messages/{id}/audit` | who retried, cancelled or viewed the body of a message, and how, newest first |
+| `GET /admin/audit?user=…&action=…&from=…&to=…` | the whole audit (administrator), newest first, 50 rows a page by default and 500 at most, narrowed by a user's name, an action and a time (`from` included, `to` left out) |
 | `GET /admin/dlq`, `POST /admin/dlq/{id}/retry`, `POST /admin/dlq/{id}/cancel` | failed messages, running one again, ending one |
 | `POST /admin/messages/{id}/cancel` | cancelling a message that has not ended |
 | `GET /admin/work/stopped` | keys of ordered flows stopped behind a failed message |
@@ -1353,7 +1357,6 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Named tokens at the command line and in the UI, device credentials for the login, and the
-  audit's view at a message and the Audit screen
+- Named tokens at the command line and in the UI, and device credentials for the login
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.

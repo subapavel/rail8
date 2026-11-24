@@ -254,7 +254,8 @@ import java.util.stream.Collectors;
  * days?}} one of a technical account (409 for a person): 201 {@code {id, name, expiresAt, token}}, the token shown once.
  * {@code POST /admin/me/tokens/{id}/revoke} revokes one of the caller's own and {@code POST /admin/tokens/{id}/revoke} anyone's:
  * 204, and 404 for an id it does not find. {@code POST /admin/tokens/ceiling {maxDays}} sets the installation's ceiling of a
- * token's life, 1 to 365 days: 200 {@code {maxDays, defaultDays}}.
+ * token's life, 1 to 365 days: 200 {@code {maxDays, defaultDays}}. {@code GET /admin/audit} reads the whole audit a page at
+ * a time, newest first, narrowed by {@code user}, {@code action}, {@code from} and {@code to}.
  * A view of a body ({@code message.body}) is written to the audit before any byte of it is sent, 503 when it cannot be.
  *
  * @since 0.1
@@ -686,6 +687,7 @@ public final class AdminServer {
             });
             admin.post("/admin/users/:name/tokens", Action.TOKEN_ISSUE, USERS_BODY_MAX, AdminServer.this::issueToken);
             admin.get("/admin/tokens", Action.TOKEN_READ, (c, who) -> tokens(access.tokens(expiringWithin(c))));
+            admin.get("/admin/audit", Action.AUDIT_READ, (c, who) -> wholeAudit(c));
             admin.post("/admin/tokens/ceiling", Action.TOKEN_CEILING, USERS_BODY_MAX, AdminServer.this::ceiling);
             admin.post("/admin/tokens/:id/revoke", Action.TOKEN_REVOKE, (c, who) -> {
                 access.revokeToken(who.acting(Action.TOKEN_REVOKE, PackageRef.ANY, remote(c)), c.pathParam("id"));
@@ -1096,6 +1098,21 @@ public final class AdminServer {
         Page<Access.Audited> page = refusable(() -> access.messageAudit(ctx.pathParam("id"), after(ctx), limit(ctx)));
         return Json.of(200, page(page, a -> new JsonObject().put("id", a.id()).put("at", a.at().toString()).put("action", a.action())
                 .put("actor", a.actor()).put("via", a.via()).put("credential", a.credential().orElse(null)).put("detail", a.detail())));
+    }
+
+    /**
+     * {@code GET /admin/audit}: the whole audit, newest first, a page at a time with {@code limit} and {@code after}, narrowed
+     * by the optional {@code user} (a user's name), {@code action}, {@code from} and {@code to} (ISO-8601 instants, {@code from}
+     * included, {@code to} not); each item {@code {id, at, action, subject, actor, via, credential, detail}}, with
+     * {@code credential} null when the caller had none of its own.
+     */
+    private Reply wholeAudit(RoutingContext ctx) {
+        Access.AuditFilter filter = refusable(() -> new Access.AuditFilter(given(ctx, "user"), given(ctx, "action"),
+                given(ctx, "from").map(from -> instant(ctx, "from")), given(ctx, "to").map(to -> instant(ctx, "to"))));
+        Page<Access.Audited> page = refusable(() -> access.audit(filter, after(ctx), limit(ctx)));
+        return Json.of(200, page(page, a -> new JsonObject().put("id", a.id()).put("at", a.at().toString()).put("action", a.action())
+                .put("subject", a.subject()).put("actor", a.actor()).put("via", a.via()).put("credential", a.credential().orElse(null))
+                .put("detail", a.detail())));
     }
 
     private Reply body(RoutingContext ctx, Caller who) {

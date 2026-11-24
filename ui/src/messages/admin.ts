@@ -1,3 +1,4 @@
+import type { AuditRow } from '../audit';
 import { uiFetch } from '../session';
 
 /** How a recorded step ended: it handed a message on, it handed nothing on, or it threw. */
@@ -86,24 +87,8 @@ export interface Restarted {
   attempt: number;
 }
 
-/** How a caller proved who it is, as the audit records it; `declared` for rows written before users existed. */
-export type Via = 'session' | 'token' | 'emergency-key' | 'shared-token' | 'local' | 'declared';
-
 /** One row of a message's audit: a retry, a cancel or a view of a body. */
-export interface Audited {
-  id: number;
-  /** When it was written, as an ISO-8601 instant. */
-  at: string;
-  /** What was done: `message.retry`, `message.cancel`, `message.body.view`, or another act. */
-  action: string;
-  /** Who did it: a user's name, `emergency-key`, or the name a caller declared before users existed. */
-  actor: string;
-  via: Via;
-  /** The id of the session or token, never its secret; null for the others. */
-  credential: string | null;
-  /** What the row records besides, such as the `step` of a body viewed. */
-  detail: Record<string, unknown>;
-}
+export type Audited = AuditRow;
 
 /** What the message screens ask of a node. Every call rejects with an {@link AdminError} when the node refuses it. */
 export interface AdminApi {

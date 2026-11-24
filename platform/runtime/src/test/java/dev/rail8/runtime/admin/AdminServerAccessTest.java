@@ -37,9 +37,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class AdminServerAccessTest extends AdminAccessFixture {
 
-    /** The routes of the table that a later step mounts: the Audit screen's. */
-    static final Set<String> LATER = Set.of("GET /admin/audit");
-
     /** What a first password may do, by the decision point's rule: read itself, change the password and log out. */
     static final Set<String> FIRST_PASSWORD = Set.of("self.read", "self.password", "self.logout");
 
@@ -94,7 +91,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
                 actions.stream().map(Action::id).toList(), "the actions of " + route + " are the table's"));
         Set<String> unmounted = new TreeSet<>(table.routes());
         unmounted.removeAll(walked.routes().keySet());
-        assertEquals(new TreeSet<>(LATER), unmounted, "every route of the table is mounted but those of later steps");
+        assertEquals(Set.of(), unmounted, "every route of the table is mounted");
     }
 
     @Test

@@ -11,7 +11,8 @@ import { screenList, type Screen } from '../../src/screens';
 import { sessionClient, type Me } from '../../src/session';
 import { SessionGate } from '../../src/SessionGate';
 import { Shell } from '../../src/Shell';
-import { myTokensScreen, tokensScreen, usersScreen } from '../../src/users/screen';
+import { auditScreen, myTokensScreen, tokensScreen, usersScreen } from '../../src/users/screen';
+import { pictureAudit } from './audit';
 import { pictureMessages } from './messages';
 import { pictureUsers } from './users';
 import { NOW, pictureWorld } from './world';
@@ -27,6 +28,7 @@ const fakes: Record<string, Screen> = {
   messages: messagesScreen(pictureMessages(), () => NOW),
   users: usersScreen(people.users, people.tokens),
   tokens: tokensScreen(people.tokens),
+  audit: auditScreen(pictureAudit()),
   'my-tokens': myTokensScreen(people.tokens),
 };
 const screens = screenList(home, modules).map((screen) => fakes[screen.id] ?? screen);
@@ -68,7 +70,7 @@ const ADMINISTRATOR: Me = {
   roles: ['administrator'],
   actions: [
     'self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue', 'user.read', 'user.create', 'roles.change', 'administrators.change',
-    'user.block', 'user.password-reset', 'session.end', 'token.read', 'token.issue', 'token.revoke', 'token.ceiling',
+    'user.block', 'user.password-reset', 'session.end', 'token.read', 'token.issue', 'token.revoke', 'token.ceiling', 'audit.read',
   ],
   refused: {
     'message.read': { code: 'not-allowed', needs: ['operator'] },

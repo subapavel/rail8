@@ -53,6 +53,18 @@ interface Tx {
     /** An audit row as read back, with its id. */
     record AuditedRow(long id, AuditRow row) {}
 
+    /**
+     * What a read of the audit keeps; an empty part keeps every row.
+     *
+     * @param subject the rows of this subject
+     * @param user the rows whose {@code user_id} is that of the user of this name; none for a name no user has
+     * @param action the rows of this action
+     * @param from the rows at this instant or later
+     * @param to the rows before this instant
+     */
+    record AuditFilter(Optional<String> subject, Optional<String> user, Optional<String> action, Optional<Instant> from,
+                       Optional<Instant> to) {}
+
     /** Whether the bridge's marker is open. */
     boolean bridgeOpen();
 
@@ -187,8 +199,8 @@ interface Tx {
     void audit(AuditRow row);
 
     /**
-     * The audit rows of {@code subject}, newest first: by {@code at}, then by id, both descending; at most {@code limit}. With
+     * The audit rows {@code filter} keeps, newest first: by {@code at}, then by id, both descending; at most {@code limit}. With
      * {@code before}, only those after the row of that id in this order, none when that row is gone.
      */
-    List<AuditedRow> audit(String subject, OptionalLong before, int limit);
+    List<AuditedRow> audit(AuditFilter filter, OptionalLong before, int limit);
 }

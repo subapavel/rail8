@@ -1,4 +1,4 @@
-import { UsersError, type Issued, type Kind, type LiveToken, type Role, type Token, type TokensApi, type User, type UsersApi } from './api';
+import { UsersError, type AuditApi, type AuditEntry, type Issued, type Kind, type LiveToken, type Role, type Token, type TokensApi, type User, type UsersApi } from './api';
 
 /**
  * The users a fake node holds, which its acts change in place, and the first passwords it handed out, in order; with
@@ -165,6 +165,29 @@ export function fakeTokensApi(state: FakeUsers, actor: string, now: () => Date, 
       };
       state.users = state.users.map((u) => ({ ...u, tokens: u.tokens.map((t) => ({ ...t, expiresAt: latest(t) })) }));
       return ceiling();
+    },
+  };
+}
+
+/**
+ * A node's audit in memory: `rows`, newest first, which it narrows as the node does (the user by the actor's name, the
+ * action, `from` included and `to` left out) and hands out at most `size` rows a page, however many are asked for. A bad
+ * cursor is 400.
+ */
+export function fakeAuditApi(rows: readonly AuditEntry[], size = 50): AuditApi {
+  return {
+    async read(query, after, limit = 50) {
+      const kept = rows.filter(
+        (r) =>
+          (query.user === undefined || r.actor === query.user) &&
+          (query.action === undefined || r.action === query.action) &&
+          (query.from === undefined || Date.parse(r.at) >= Date.parse(query.from)) &&
+          (query.to === undefined || Date.parse(r.at) < Date.parse(query.to)),
+      );
+      const start = after === undefined ? 0 : Number(after);
+      if (!Number.isInteger(start) || start < 0) throw new UsersError(400, 'not a cursor of the audit');
+      const end = start + Math.min(size, limit);
+      return { items: kept.slice(start, end), next: end < kept.length ? String(end) : null };
     },
   };
 }

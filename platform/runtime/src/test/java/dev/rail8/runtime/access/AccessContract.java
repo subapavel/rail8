@@ -1467,6 +1467,55 @@ abstract class AccessContract {
     }
 
     @Test
+    void theWholeAuditIsNarrowedByUserActionAndTimeNewestFirstAPageAtATime() {
+        Actor anna = a.authenticate(bearer(session("anna", Role.MESSAGE_BODIES)), Optional.empty()).acting(Action.MESSAGE_BODY, PackageRef.ANY, REMOTE);
+        Actor dirk = a.authenticate(bearer(session("dirk", Role.MESSAGE_BODIES)), Optional.empty()).acting(Action.MESSAGE_BODY, PackageRef.ANY, REMOTE);
+        Instant t1 = T0.plusSeconds(60);
+        Instant t2 = T0.plusSeconds(120);
+        Instant t3 = T0.plusSeconds(180);
+        clockA.advance(Duration.ofSeconds(60));
+        a.bodyViewed(anna, "m-1", 1);
+        clockA.advance(Duration.ofSeconds(60));
+        a.bodyViewed(dirk, "m-1", 2);
+        clockA.advance(Duration.ofSeconds(60));
+        a.bodyViewed(anna, "m-2", 3);
+        Function<Access.AuditFilter, List<Integer>> views = filter -> a.audit(filter, Optional.empty(), Page.MAX_LIMIT).items().stream()
+                .map(r -> r.detail().getInteger("step")).toList();
+        Optional<String> viewed = Optional.of("message.body.view");
+
+        assertEquals(List.of(3, 1), views.apply(new Access.AuditFilter(Optional.of("anna"), viewed, Optional.empty(), Optional.empty())),
+                "anna's views, newest first");
+        List<Access.Audited> annas = a.audit(new Access.AuditFilter(Optional.of("anna"), Optional.empty(), Optional.empty(), Optional.empty()),
+                Optional.empty(), Page.MAX_LIMIT).items();
+        assertTrue(annas.stream().allMatch(r -> r.actor().equals("anna")), "only what anna did: " + annas);
+        assertTrue(annas.stream().anyMatch(r -> r.action().equals("login")), "her logins too: " + annas);
+        Access.Audited newest = annas.getFirst();
+        assertEquals(List.of("message.body.view", "message/m-2", "session", t3), List.of(newest.action(), newest.subject(), newest.via(), newest.at()));
+        assertEquals(List.of(), views.apply(new Access.AuditFilter(Optional.of("nobody"), Optional.empty(), Optional.empty(), Optional.empty())),
+                "a name no user has: no rows");
+
+        assertEquals(List.of(3, 2), views.apply(new Access.AuditFilter(Optional.empty(), viewed, Optional.of(t2), Optional.empty())), "from included");
+        assertEquals(List.of(1), views.apply(new Access.AuditFilter(Optional.empty(), viewed, Optional.empty(), Optional.of(t2))), "to left out");
+        assertEquals(List.of(2, 1), views.apply(new Access.AuditFilter(Optional.empty(), viewed, Optional.of(t1), Optional.of(t3))));
+        List<Access.Audited> before = a.audit(new Access.AuditFilter(Optional.empty(), Optional.empty(), Optional.empty(), Optional.of(t1)),
+                Optional.empty(), Page.MAX_LIMIT).items();
+        assertTrue(before.stream().map(Access.Audited::action).toList().containsAll(List.of("user.create", "login", "password.change")),
+                "every action: " + before);
+
+        Access.AuditFilter all = new Access.AuditFilter(Optional.empty(), viewed, Optional.empty(), Optional.empty());
+        Page<Access.Audited> first = a.audit(all, Optional.empty(), 2);
+        assertEquals(List.of(3, 2), first.items().stream().map(r -> r.detail().getInteger("step")).toList());
+        Page<Access.Audited> second = b.audit(all, first.next(), 2);
+        assertEquals(List.of(1), second.items().stream().map(r -> r.detail().getInteger("step")).toList(), "the next page goes on from the last row");
+        assertEquals(Optional.empty(), second.next());
+
+        assertThrows(IllegalArgumentException.class, () -> new Access.AuditFilter(Optional.empty(), Optional.empty(), Optional.of(t2), Optional.of(t2)),
+                "from not before to");
+        for (int limit : List.of(0, Page.MAX_LIMIT + 1)) assertThrows(IllegalArgumentException.class, () -> a.audit(all, Optional.empty(), limit), "limit " + limit);
+        assertThrows(IllegalArgumentException.class, () -> a.audit(all, Optional.of(Page.cursor("x")), 10), "a cursor not handed out");
+    }
+
+    @Test
     void aCredentialPastedIntoAPathIsAuditedWithoutItsSecret() {
         String secret = "s3cr-et_" + "x".repeat(35);
         a.keyUsed(key(a), "POST", "/admin/tokens/rail8t_0123456789abcdef_" + secret + "/revoke", REMOTE, Optional.of(Action.TOKEN_REVOKE), true);

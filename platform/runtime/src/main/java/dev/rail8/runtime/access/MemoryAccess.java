@@ -416,14 +416,19 @@ public final class MemoryAccess extends Accounts {
         }
 
         /** The id of a row is its place in the list, from 1, as an identity column would number it. */
-        @Override public List<AuditedRow> audit(String subject, OptionalLong before, int limit) {
+        @Override public List<AuditedRow> audit(AuditFilter filter, OptionalLong before, int limit) {
             Comparator<AuditedRow> newestFirst = Comparator.comparing((AuditedRow a) -> a.row().at()).thenComparingLong(AuditedRow::id).reversed();
             List<AuditedRow> all = new ArrayList<>();
             for (int i = 0; i < audit.size(); i++) all.add(new AuditedRow(i + 1, audit.get(i)));
             Optional<AuditedRow> from = before.isPresent() && before.getAsLong() >= 1 && before.getAsLong() <= all.size()
                     ? Optional.of(all.get((int) before.getAsLong() - 1)) : Optional.empty();
             if (before.isPresent() && from.isEmpty()) return List.of();
-            return all.stream().filter(a -> a.row().subject().equals(subject))
+            Optional<OptionalLong> user = filter.user().map(name -> user(name, Lock.NONE).map(u -> OptionalLong.of(u.id())).orElse(OptionalLong.of(-1)));
+            return all.stream().filter(a -> filter.subject().map(a.row().subject()::equals).orElse(true))
+                    .filter(a -> user.map(a.row().user()::equals).orElse(true))
+                    .filter(a -> filter.action().map(a.row().action()::equals).orElse(true))
+                    .filter(a -> filter.from().map(at -> !a.row().at().isBefore(at)).orElse(true))
+                    .filter(a -> filter.to().map(a.row().at()::isBefore).orElse(true))
                     .filter(a -> from.isEmpty() || newestFirst.compare(a, from.get()) > 0)
                     .sorted(newestFirst).limit(limit)
                     .map(a -> new AuditedRow(a.id(), new AuditRow(a.row().at(), a.row().actor(), a.row().action(), a.row().subject(),

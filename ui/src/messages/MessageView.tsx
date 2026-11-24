@@ -1,5 +1,6 @@
 import { Alert, Button, Descriptions, Empty, Flex, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { auditAction, AuditHow } from '../audit';
 import { MountedModal } from '../MountedModal';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed } from '../SessionGate';
@@ -11,7 +12,6 @@ import {
   type Payload,
   type StepRecord,
   type Timeline,
-  type Via,
 } from './admin';
 import { account, duration, INGRESS, latestState, type WaitReason } from './progress';
 
@@ -319,25 +319,6 @@ type AuditLoad =
   | { kind: 'failed'; message: string }
   | { kind: 'loaded'; rows: Audited[]; next: string | null; older: 'idle' | 'loading' | { failed: string } };
 
-const viaLabels: Record<Via, string> = {
-  session: 'Session',
-  token: 'Token',
-  'emergency-key': 'Emergency key',
-  'shared-token': 'Shared token',
-  local: 'Local, no credential',
-  declared: 'Name declared, before users',
-};
-
-/** What a row of the audit did, for people; an act this screen does not know shows its id. */
-function auditAction(row: Audited): string {
-  if (row.action === 'message.retry') return 'Retried';
-  if (row.action === 'message.cancel') return 'Cancelled';
-  if (row.action === 'message.body.view') {
-    return typeof row.detail.step === 'number' ? `Viewed the payload after step ${row.detail.step}` : 'Viewed a payload';
-  }
-  return row.action;
-}
-
 /**
  * The message's audit, newest first: when, what was done, who did it and how they proved who they are, with the id of their
  * session or token when they had one. Older rows load a page at a time.
@@ -415,13 +396,7 @@ function MessageAudit({ api, id }: { api: AdminApi; id: string }) {
                     <td>{auditAction(row)}</td>
                     <td>{row.actor}</td>
                     <td>
-                      {viaLabels[row.via] ?? row.via}
-                      {row.credential !== null && (
-                        <>
-                          {' '}
-                          <Typography.Text code>{row.credential}</Typography.Text>
-                        </>
-                      )}
+                      <AuditHow row={row} />
                     </td>
                   </tr>
                 ))}
