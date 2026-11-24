@@ -99,7 +99,7 @@ public final class Plugins implements AutoCloseable {
     /** The most jars one plugin's directory may hold. */
     public static final int MAX_JARS = 512;
     /** The command line's own commands: a module of one of these names brings no command. */
-    public static final List<String> CLI_COMMANDS = List.of("validate", "test", "lock", "deploy", "new-adapter", "help");
+    public static final List<String> CLI_COMMANDS = List.of("validate", "test", "lock", "deploy", "user", "key", "new-adapter", "help");
     /** The packages a plugin shares with the node, by name prefix: their classes and resources are the node's. */
     static final List<String> SHARED = List.of("dev.rail8.api.", "io.vertx.core.", "io.netty.", "org.slf4j.");
 

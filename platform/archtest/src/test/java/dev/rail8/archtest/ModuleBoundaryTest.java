@@ -71,6 +71,10 @@ class ModuleBoundaryTest {
     @Test void theCliNamesNoComponentOrStepButTheMockAndTheHttpComponent() { Rules.CLI_NAMES_NO_COMPONENT_OR_STEP.check(tree); }
     @Test void noRuntimeClassNamesTheMock() { Rules.RUNTIME_NEVER_NAMES_THE_MOCK.check(tree); }
     @Test void onlyThePeerLinkUsesVertxNetTypes() { Rules.ONLY_THE_PEER_LINK_OPENS_RAW_TCP.check(tree); }
+    @Test void onlyCallerActingMakesAnActor() {
+        assertTrue(tree.contain(Rules.ACTOR) && tree.contain(Rules.CALLER), "the rule checks the actor and the decision point, not an empty set");
+        Rules.ONLY_THE_DECISION_POINT_MAKES_AN_ACTOR.check(tree);
+    }
 
     /**
      * The two rules on naming a component or step check the node's entry point, the CLI and the seven modules that ship with the

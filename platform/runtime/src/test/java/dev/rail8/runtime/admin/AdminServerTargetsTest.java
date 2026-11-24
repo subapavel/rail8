@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 
 import static dev.rail8.runtime.admin.AdminServerDeployTest.Answer;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertError;
+import static dev.rail8.runtime.admin.AdminServerDeployTest.assertUnauthenticated;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -174,14 +175,14 @@ class AdminServerTargetsTest {
                 """), listed.json(), "A (an override) before B (the defaults), sorted by target; the unshared limit is not listed");
     }
 
-    /** Without the token, with a wrong one or without the Bearer scheme the route is 401 {error}, naming no target; with it 200. */
+    /** Without the token, with a wrong one or without the Bearer scheme the route is 401 {error, code}, naming no target; with it 200. */
     @Test
     void targetsRouteIs401WithoutTheToken() throws Exception {
         int port = serve();
         assertTrue(targets.of(A).acquire().succeeded(), "fixture: A has a call in flight");
         for (String auth : Arrays.asList(null, "Bearer wrong", TOKEN)) {
             Answer a = get(port, "/admin/targets", auth);
-            assertError(401, a, "GET /admin/targets with Authorization " + auth);
+            assertUnauthenticated(a, auth, "GET /admin/targets with Authorization " + auth);
             assertFalse(a.body().toString().contains("a.example"), "a refused request learns no target: " + a.body());
         }
         Answer ok = get(port, "/admin/targets", AUTH);

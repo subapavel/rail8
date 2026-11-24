@@ -16,6 +16,7 @@ import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.TargetLimit;
 import dev.rail8.core.admission.Targets;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.cache.Caches;
 import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.dlq.Dlq;
@@ -101,7 +102,7 @@ import java.util.stream.Stream;
  * whose effective hash changed; a deploy of a package listed {@link DeployedPackage.State#FAILED} (no install of its record
  * succeeded on this node) is a first deploy.
  *
- * <p>{@link #deploy(String, String, String)} blocks: call it on a virtual thread. Its order: a bad repository name or commit, or
+ * <p>{@link #deploy(String, String, Actor)} blocks: call it on a virtual thread. Its order: a bad repository name or commit, or
  * a ref in a deployed environment ({@link Kind#BAD_REQUEST}); a node without {@code RAIL8_GIT_BASE} ({@link Kind#FORBIDDEN}); a
  * closing node
  * ({@link Kind#STOPPING}); another deploy, an undeploy or a restore holding the node's lock ({@link Kind#CONFLICT}: one deploy at
@@ -726,31 +727,31 @@ public final class Deployments {
      * comment for the order. In {@code dev} and {@code ci} the commit may be a ref ({@code HEAD}, a branch or tag name, or a full name
      * under {@code refs/heads/} or {@code refs/tags/}), resolved in the repository at the fetch. Blocking: on a virtual thread.
      *
-     * @param actor who deploys, as the audit row names them
+     * @param by who deploys, as the audit row names them
      * @return the package deployed and the flows added, swapped and removed
      * @throws DeployRefusedException what the admin API answers with its own status
      * @throws IOException the data directory or the git cache cannot be written: the node's failure, not the package's
      */
-    public DeployResult deploy(String repository, String commitOrRef, String actor) throws DeployRefusedException, IOException {
-        return fromGit(repository, commitOrRef, Objects.requireNonNull(actor, "actor"));
+    public DeployResult deploy(String repository, String commitOrRef, Actor by) throws DeployRefusedException, IOException {
+        return fromGit(repository, commitOrRef, Objects.requireNonNull(by, "by"));
     }
 
     /**
-     * What {@link #deploy(String, String, String)} of {@code commitOrRef} of {@code repository} would do, with every problem: the
+     * What {@link #deploy(String, String, Actor)} of {@code commitOrRef} of {@code repository} would do, with every problem: the
      * same refusals, fetch, write, dependencies and checks, then the flows it built are stopped and closed and the directories it
      * wrote deleted. Nothing that runs changes, no record and no audit row is written; the commits fetched stay in the git cache.
      * Blocking: on a virtual thread.
      *
      * @return the package as the deploy would list it, and the flows it would add, swap and remove
-     * @throws DeployRefusedException as {@link #deploy(String, String, String)}
-     * @throws IOException as {@link #deploy(String, String, String)}
+     * @throws DeployRefusedException as {@link #deploy(String, String, Actor)}
+     * @throws IOException as {@link #deploy(String, String, Actor)}
      */
     public DeployResult check(String repository, String commitOrRef) throws DeployRefusedException, IOException {
         return fromGit(repository, commitOrRef, null);
     }
 
     /** A deploy from git ({@code actor} given) or its check ({@code actor} null). */
-    private DeployResult fromGit(String repository, String commitOrRef, String actor) throws DeployRefusedException, IOException {
+    private DeployResult fromGit(String repository, String commitOrRef, Actor actor) throws DeployRefusedException, IOException {
         try {
             PackageRepositories.checkNames(repository, commitOrRef, config.deployed());
         } catch (IllegalArgumentException refused) {
@@ -871,7 +872,7 @@ public final class Deployments {
     }
 
     /** Writes the audit row of a deploy; one that is not written is a WARNING. */
-    private void audit(String actor, String repository, String commit, JsonObject outcome) {
+    private void audit(Actor actor, String repository, String commit, JsonObject outcome) {
         JsonObject detail = new JsonObject().put("repository", repository).put("commit", commit).mergeIn(outcome);
         Future<Void> written = Future.future(done -> records.audit(actor, repository, detail).onComplete(done));
         written.otherwiseEmpty().await();
@@ -885,13 +886,13 @@ public final class Deployments {
      * while the deploy or its flows run changes nothing of them. No record and no audit row is written, so a restore never installs
      * it, and the package lists no repository and no commit. Its dependencies are read only from the directories the node has
      * with the content their lock pins: nothing is fetched. Otherwise its order is the one of
-     * {@link #deploy(String, String, String)}: a bad name ({@link Kind#BAD_REQUEST}); a deployed environment ({@link Kind#FORBIDDEN}:
+     * {@link #deploy(String, String, Actor)}: a bad name ({@link Kind#BAD_REQUEST}); a deployed environment ({@link Kind#FORBIDDEN}:
      * a deploy with no origin is dev and ci only); a closing node ({@link Kind#STOPPING}); another deploy holding the lock
      * ({@link Kind#CONFLICT}); then the copy, in which anything but a regular file or a directory is {@link Kind#BAD_REQUEST}; then
      * the checks, the build and the swap. Blocking: on a virtual thread.
      *
      * @return the package deployed and the flows added, swapped and removed
-     * @throws DeployRefusedException as {@link #deploy(String, String, String)}
+     * @throws DeployRefusedException as {@link #deploy(String, String, Actor)}
      * @throws IOException {@code folder} cannot be read or the data directory written: the caller's or the node's failure
      */
     public DeployResult deploy(String name, Path folder) throws DeployRefusedException, IOException {
@@ -1057,7 +1058,7 @@ public final class Deployments {
      * listing stays as it was; a dependency is read only from a directory the node has with the content its lock pins. Blocking: on
      * a virtual thread.
      *
-     * <p>It reports what the load, the check and the build refuse. It does not reach what only {@link #deploy(String, String, String)}
+     * <p>It reports what the load, the check and the build refuse. It does not reach what only {@link #deploy(String, String, Actor)}
      * and its install check: the package name's pattern, the fetch and the write of the commit with
      * their limits, the dependencies a deploy would fetch, the consumer of each flow (its component may still refuse it), the start
      * of each flow and the write of its record. An empty list is no promise that a deploy succeeds.

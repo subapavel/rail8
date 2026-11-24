@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
@@ -22,7 +23,7 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
     /**
      * One audit row of a deploy, as {@link DeploymentStore#audit} was given it.
      *
-     * @param actor who deployed
+     * @param actor who deployed, by name
      * @param subject {@code repository/<repository>}
      * @param detail the commit and the outcome
      */
@@ -58,8 +59,8 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
     }
 
     @Override
-    public Future<Void> audit(String actor, String repository, JsonObject detail) {
-        audited.add(new Audited(actor, "repository/" + repository, detail.copy()));
+    public Future<Void> audit(Actor by, String repository, JsonObject detail) {
+        audited.add(new Audited(by.name(), "repository/" + repository, detail.copy()));
         return Future.succeededFuture();
     }
 

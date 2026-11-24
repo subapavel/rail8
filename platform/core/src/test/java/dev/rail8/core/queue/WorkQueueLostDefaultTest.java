@@ -1,5 +1,6 @@
 package dev.rail8.core.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.record.Page;
 import dev.rail8.testkit.FakeClock;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -36,9 +38,9 @@ class WorkQueueLostDefaultTest {
     void theDefaultDiscardsNothingAndTheRowStaysClaimable() {
         rows.enqueue("m-1", "orders", 1, null).await();
         long seq = rows.claim("w1", "orders", 1, LEASE).await().get(0).seq();
-        assertEquals(Optional.empty(), rows.discard(seq, "ops-anna", "10.0.0.7").await(), "no lost row: nothing discarded");
+        assertEquals(Optional.empty(), rows.discard(seq, new Actor("ops-anna", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7")).await(), "no lost row: nothing discarded");
         assertEquals(1, rows.size(), "the row is still there");
-        assertEquals(Optional.empty(), rows.discard(seq + 1000, "ops-anna", "10.0.0.7").await(), "an unknown seq: nothing either");
+        assertEquals(Optional.empty(), rows.discard(seq + 1000, new Actor("ops-anna", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7")).await(), "an unknown seq: nothing either");
     }
 
     /** The in-memory queue counts no blocks: a held keyed head with a row of its key behind it lists {@code blocks} 0. */

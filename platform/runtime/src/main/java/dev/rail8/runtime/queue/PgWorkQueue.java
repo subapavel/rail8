@@ -4,6 +4,7 @@ import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobNotFoundException;
 import dev.rail8.api.BodyLostException;
 import dev.rail8.api.Timer;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.batch.BatchingWriter;
 import dev.rail8.core.batch.OverloadedException;
 import dev.rail8.core.dlq.Parked;
@@ -300,13 +301,15 @@ public final class PgWorkQueue implements WorkQueue {
     /**
      * Only a lost row, a keyed one under its key's lock taken in the statement, as {@link #COMPLETE} takes it,
      * deleted and audited in one statement — the audit row cannot outlive the delete nor the delete go unaudited: $1 seq, $2 actor,
-     * $3 remote. The flow and key the next-of-key read needs are answered from the audit row's detail.
+     * $3 remote, $4 the actor's user, $5 via, $6 credential. The flow and key the next-of-key read needs are answered from the audit
+     * row's detail.
      */
     private static final String DISCARD = "with gone as (delete from work where seq = $1 and lost_at is not null and (partition_key is null or"
             + " (select true from pg_advisory_xact_lock(" + KEY_LOCK_CLASS + ", hashtext(flow || chr(31) || partition_key))))"
             + " returning seq, id, flow, partition_key, lost_at)"
-            + " insert into audit(at, actor, action, subject, detail) select now(), $2, 'work.discard', 'work/' || g.seq, jsonb_build_object("
-            + "'flow', g.flow, 'messageId', g.id, 'partitionKey', g.partition_key, 'lostAt', g.lost_at, 'remote', $3::text) from gone g"
+            + " insert into audit(at, actor, action, subject, detail, user_id, via, credential) select now(), $2, 'work.discard', 'work/' || g.seq,"
+            + " jsonb_build_object('flow', g.flow, 'messageId', g.id, 'partitionKey', g.partition_key, 'lostAt', g.lost_at, 'remote', $3::text),"
+            + " $4, $5, $6 from gone g"
             + " returning id, detail->>'flow' as flow, detail->>'partitionKey' as partition_key";
 
     /**
@@ -315,9 +318,19 @@ public final class PgWorkQueue implements WorkQueue {
      */
     static final String NEXT_OF_KEY_NODE = "select (select o.body_node from work o where o.flow = $1 and o.partition_key = $2 order by o.seq limit 1)";
 
-    /** Only a held row that is not stopped: the hold and the lease cleared, the attempts kept; its flow and body node answered. */
-    private static final String RELEASE = "update work set held_at = null, locked_by = null, locked_until = null where seq = $1 and held_at is not null"
-            + " and stopped_at is null returning flow, body_node";
+    /**
+     * Only a held row that is not stopped: the hold and the lease cleared, the attempts kept, and the release audited in the same
+     * statement — $2 actor, $3 remote, $4 the actor's user, $5 via, $6 credential; its flow and body node answered.
+     */
+    private static final String RELEASE = "with r as (update work set held_at = null, locked_by = null, locked_until = null where seq = $1"
+            + " and held_at is not null and stopped_at is null returning seq, id, flow, partition_key, body_node),"
+            + " a as (insert into audit(at, actor, action, subject, detail, user_id, via, credential) select now(), $2, 'work.release', 'work/' || r.seq,"
+            + " jsonb_build_object('flow', r.flow, 'messageId', r.id, 'partitionKey', r.partition_key, 'remote', $3::text), $4, $5, $6 from r returning id)"
+            + " select r.flow, r.body_node, (select id from a) as audit_id from r";
+
+    /** Only a held row that is not stopped: the hold and the lease cleared, the attempts kept. */
+    private static final String RELEASE_UNAUDITED = "update work set held_at = null, locked_by = null, locked_until = null where seq = $1"
+            + " and held_at is not null and stopped_at is null";
 
     /** Any row of the flow, held or not: a completed row is deleted ({@link #COMPLETE}). On the index {@code work_flow_seq}. */
     private static final String HAS_ITEMS = "select exists(select 1 from work where flow = $1)";
@@ -728,8 +741,9 @@ public final class PgWorkQueue implements WorkQueue {
      * {@link #DISCARD} and, for a keyed row, {@link #NEXT_OF_KEY_NODE} in one transaction: a failed audit insert fails the
      * statement, so nothing is deleted. Nothing lost under {@code seq}: the transaction commits empty and nothing is audited.
      */
-    @Override public Future<Optional<Discarded>> discard(long seq, String actor, String remote) {
-        return PgTx.inTransaction(pool, tx -> Future.succeededFuture().compose(start -> tx.preparedQuery(DISCARD).execute(Tuple.of(seq, actor, remote))).compose(rows -> {
+    @Override public Future<Optional<Discarded>> discard(long seq, Actor by) {
+        Tuple params = Tuple.of(seq, by.name(), by.remote(), by.userOrNull(), by.via(), by.credential().orElse(null));
+        return PgTx.inTransaction(pool, tx -> Future.succeededFuture().compose(start -> tx.preparedQuery(DISCARD).execute(params)).compose(rows -> {
             if (rows.rowCount() == 0) return Future.succeededFuture(Optional.<Discarded>empty());
             Row audited = rows.iterator().next();
             long auditId = audited.getLong("id");
@@ -742,13 +756,13 @@ public final class PgWorkQueue implements WorkQueue {
     }
 
     @Override public Future<Boolean> release(long seq) {
-        return releaseRow(seq).map(Optional::isPresent);
+        return pool.preparedQuery(RELEASE_UNAUDITED).execute(Tuple.of(seq)).map(rows -> rows.rowCount() > 0);
     }
 
-    /** The released row's flow and body node (none: an older row, its body in {@code bodies}). */
-    @Override public Future<Optional<Released>> releaseRow(long seq) {
-        return pool.preparedQuery(RELEASE).execute(Tuple.of(seq)).map(rows -> rows.rowCount() == 0 ? Optional.<Released>empty()
-                : Optional.of(released(rows.iterator().next())));
+    /** The released row's flow and body node (none: an older row, its body in {@code bodies}), the release audited. */
+    @Override public Future<Optional<Released>> releaseRow(long seq, Actor by) {
+        return pool.preparedQuery(RELEASE).execute(Tuple.of(seq, by.name(), by.remote(), by.userOrNull(), by.via(), by.credential().orElse(null)))
+                .map(rows -> rows.rowCount() == 0 ? Optional.<Released>empty() : Optional.of(released(rows.iterator().next())));
     }
 
     private static Released released(Row r) {

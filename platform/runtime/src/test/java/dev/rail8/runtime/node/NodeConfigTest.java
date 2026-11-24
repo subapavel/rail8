@@ -396,8 +396,21 @@ class NodeConfigTest {
     /** P2-07 (D-088): the retention job's keys default to a max age of P7D, an interval of PT1H and batches of 1000 rows. */
     @Test
     void retentionDefaults() {
-        assertEquals(new Retention.Config(Duration.ofDays(7), Duration.ofHours(1), 1000), NodeConfig.from(minimal()).retention(),
-                "RAIL8_RETENTION_MAX_AGE P7D, RAIL8_RETENTION_INTERVAL PT1H, RAIL8_RETENTION_BATCH 1000");
+        assertEquals(new Retention.Config(Duration.ofDays(7), Duration.ofDays(365), Duration.ofHours(1), 1000), NodeConfig.from(minimal()).retention(),
+                "RAIL8_RETENTION_MAX_AGE P7D, RAIL8_AUDIT_MAX_AGE P365D, RAIL8_RETENTION_INTERVAL PT1H, RAIL8_RETENTION_BATCH 1000");
+    }
+
+    /** The audit outlives the messages: an audit max age shorter than the messages' refuses the start, naming both keys. */
+    @Test
+    void anAuditShorterThanTheMessagesRefusesTheStart() {
+        Map<String, String> shorter = with(with(minimal(), "RAIL8_RETENTION_MAX_AGE", "P60D"), "RAIL8_AUDIT_MAX_AGE", "P59D");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> NodeConfig.from(shorter));
+        assertTrue(e.getMessage().contains("RAIL8_AUDIT_MAX_AGE") && e.getMessage().contains("RAIL8_RETENTION_MAX_AGE"), e.getMessage());
+        assertThrows(IllegalArgumentException.class, () -> NodeConfig.from(with(minimal(), "RAIL8_RETENTION_MAX_AGE", "P366D")),
+                "P366D of messages and the audit's default of P365D");
+
+        Retention.Config same = NodeConfig.from(with(with(minimal(), "RAIL8_RETENTION_MAX_AGE", "P60D"), "RAIL8_AUDIT_MAX_AGE", "P60D")).retention();
+        assertEquals(Duration.ofDays(60), same.auditMaxAge(), "as long as the messages is enough");
     }
 
     @Test
@@ -407,14 +420,18 @@ class NodeConfigTest {
         assertEquals(new Retention.Config(Duration.ofHours(30 * 24 + 12), Duration.ofMinutes(15), 250), c.retention(), "ISO-8601 durations, a whole number");
     }
 
-    /** The edges of each range are accepted: max age PT1H..P366D, interval PT1M..P1D, batch 1..10000. */
+    /**
+     * The edges of each range are accepted: max age PT1H..P366D, audit max age P30D..P3660D, interval PT1M..P1D, batch 1..10000
+     * (the audit's P3660D unless it is the key read, so that it outlives every max age).
+     */
     @ParameterizedTest(name = "{0}={1}")
-    @CsvSource({"RAIL8_RETENTION_MAX_AGE, PT1H", "RAIL8_RETENTION_MAX_AGE, P366D", "RAIL8_RETENTION_INTERVAL, PT1M",
-            "RAIL8_RETENTION_INTERVAL, P1D", "RAIL8_RETENTION_BATCH, 1", "RAIL8_RETENTION_BATCH, 10000"})
+    @CsvSource({"RAIL8_RETENTION_MAX_AGE, PT1H", "RAIL8_RETENTION_MAX_AGE, P366D", "RAIL8_AUDIT_MAX_AGE, P30D", "RAIL8_AUDIT_MAX_AGE, P3660D",
+            "RAIL8_RETENTION_INTERVAL, PT1M", "RAIL8_RETENTION_INTERVAL, P1D", "RAIL8_RETENTION_BATCH, 1", "RAIL8_RETENTION_BATCH, 10000"})
     void retentionAcceptsTheEdgesOfEachRange(String key, String value) {
-        Retention.Config c = NodeConfig.from(with(minimal(), key, value)).retention();
+        Retention.Config c = NodeConfig.from(with(with(minimal(), "RAIL8_AUDIT_MAX_AGE", "P3660D"), key, value)).retention();
         Object read = switch (key) {
             case "RAIL8_RETENTION_MAX_AGE" -> c.maxAge();
+            case "RAIL8_AUDIT_MAX_AGE" -> c.auditMaxAge();
             case "RAIL8_RETENTION_INTERVAL" -> c.interval();
             default -> c.batch();
         };
@@ -429,6 +446,10 @@ class NodeConfigTest {
                 Arguments.of("RAIL8_RETENTION_MAX_AGE", "-P7D"),
                 Arguments.of("RAIL8_RETENTION_MAX_AGE", "7d"),
                 Arguments.of("RAIL8_RETENTION_MAX_AGE", "a week"),
+                Arguments.of("RAIL8_AUDIT_MAX_AGE", "P29DT23H59M59.999999999S"),
+                Arguments.of("RAIL8_AUDIT_MAX_AGE", "P3660DT0.000000001S"),
+                Arguments.of("RAIL8_AUDIT_MAX_AGE", "PT0S"),
+                Arguments.of("RAIL8_AUDIT_MAX_AGE", "a year"),
                 Arguments.of("RAIL8_RETENTION_INTERVAL", "PT59.999999999S"),
                 Arguments.of("RAIL8_RETENTION_INTERVAL", "P1DT0.000000001S"),
                 Arguments.of("RAIL8_RETENTION_INTERVAL", "PT0S"),

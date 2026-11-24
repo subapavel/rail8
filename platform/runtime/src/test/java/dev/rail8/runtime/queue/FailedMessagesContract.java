@@ -1,6 +1,7 @@
 package dev.rail8.runtime.queue;
 
 import dev.rail8.api.Props;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.Dlq;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.FailedMessages.Done;
@@ -19,6 +20,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -45,7 +47,7 @@ public abstract class FailedMessagesContract {
 
     protected static final Duration LEASE = Duration.ofSeconds(30);
     protected static final String NODE = "n1";
-    protected static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "127.0.0.1");
+    protected static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     /** An empty queue and DLQ for this case; {@link #failed()} acts on them. */
     protected abstract WorkQueue emptyQueue();
@@ -334,7 +336,7 @@ public abstract class FailedMessagesContract {
         assertEquals(List.of("q1", "t", "ops", Kind.CANCEL, OptionalInt.empty(), Optional.of("wrong order"), Optional.empty()),
                 facts(first.event()), "one cancel event, its reason stripped");
         assertEquals(Optional.empty(), first.node(), "no one holds the row");
-        assertEquals(first, await(failed().end("q1", new FailedMessages.Actor("bob", "127.0.0.2"), Optional.of("again"))),
+        assertEquals(first, await(failed().end("q1", new Actor("bob", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.2"), Optional.of("again"))),
                 "a second end answers the first cancel");
 
         WorkQueue.Item q1 = claimedOne(NODE);

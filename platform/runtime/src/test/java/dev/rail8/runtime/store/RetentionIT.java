@@ -438,7 +438,7 @@ class RetentionIT {
         assertEquals(cutoff, run.cutoff(), "the injected clock minus the max age");
         assertEquals(List.of(3L, 2L, 4L, 1000L, 0L), List.of(run.messages(), run.keys(), run.bodies(), run.bodyBytes(), run.kept()),
                 "messages, keys, bodies, bodyBytes, kept");
-        assertEquals(2, run.batches(), "one batch per phase: each scans fewer rows than the batch");
+        assertEquals(5, run.batches(), "one batch per phase, five phases: each scans fewer rows than the batch");
         Retention.Totals t = r.totals();
         assertEquals(List.of(1L, 0L, 0L, 3L, 2L, 4L, 1000L), List.of((long) t.runs(), (long) t.skipped(), (long) t.failed(), (long) t.messages(),
                 (long) t.keys(), (long) t.bodies(), (long) t.bodyBytes()),
@@ -596,7 +596,8 @@ class RetentionIT {
                 "two rows per transaction, one table per transaction, phase after phase: the batch bounds every delete");
         long unlocked = db.query("select count(*) from deleted_in where not advisory").execute().await().iterator().next().getLong(0);
         assertEquals(0L, unlocked, "every deleting transaction held the advisory lock while it deleted");
-        assertEquals(6, run.batches(), "3 batches per phase: 2 rows, 2 rows, then 0 rows (fewer than the batch ends the phase)");
+        assertEquals(9, run.batches(), "3 batches per phase of messages and bodies: 2 rows, 2 rows, then 0 rows (fewer than the batch ends "
+                + "the phase); one empty batch for each of the audit, the sessions and the login limit");
     }
 
     /**
@@ -633,8 +634,8 @@ class RetentionIT {
                 "each message's two messages rows and its key row are deleted in one transaction, never split across batches");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(4L, 2L, 0L), List.of(run.messages(), run.keys(), run.kept()), "messages, keys, kept");
-        assertEquals(3, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
-                + "one for bodies");
+        assertEquals(6, run.batches(), "messages: the batch that scanned a@0 and b@0 took both messages whole, then one empty batch; "
+                + "one for bodies, one for each of the audit, the sessions and the login limit");
     }
 
     @Test
@@ -651,7 +652,8 @@ class RetentionIT {
         assertEquals(seededWithout("messages d-1@0", "messages d-2@0"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(2L, 3L), List.of(run.messages(), run.kept()), "messages, kept");
-        assertEquals(4, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies");
+        assertEquals(7, run.batches(), "messages in 3 batches (2 kept; 1 kept and 1 deleted; 1 deleted), then one for bodies, then one "
+                + "for each of the audit, the sessions and the login limit");
     }
 
     /** The bodies phase passes kept rows the same way: its cursor moves past the head it keeps. */
@@ -669,8 +671,8 @@ class RetentionIT {
         assertEquals(seededWithout("body o-1/0/body", "body o-2/0/body"), left(), "the rows behind the kept head go");
         assertEquals("DONE", outcome(run));
         assertEquals(List.of(0L, 2L), List.of(run.messages(), run.bodies()), "messages, bodies");
-        assertEquals(4, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
-                + "a cursor that went back would scan more batches");
+        assertEquals(7, run.batches(), "one empty messages batch, then 5 rows in batches of 2 for bodies (k-1 k-2 | k-3 o-1 | o-2): "
+                + "a cursor that went back would scan more batches; then one for each of the audit, the sessions and the login limit");
     }
 
     /**
@@ -1164,5 +1166,76 @@ class RetentionIT {
         await(running, "the run");
 
         assertEquals(batch, held, "the batch holds exactly its " + batch + " rows: never " + batch + " per table");
+    }
+
+    // --- the audit, the expired sessions and the login limit go by age
+
+    /**
+     * Audit rows older than the clock minus the audit's max age go, and sessions that expired longer ago than that; a row of the
+     * login limit goes a day after its last failure. A row exactly at its cutoff stays; batches of 2 bound every delete.
+     */
+    @Test
+    void theAuditExpiredSessionsAndOldLoginLimitsGoByAge() {
+        Duration auditAge = Duration.ofDays(30);
+        Instant auditCutoff = clock.instant().minus(auditAge);
+        Instant limitCutoff = clock.instant().minus(Duration.ofHours(24));
+        for (int i = 1; i <= 3; i++) audit("old-" + i, auditCutoff.minus(MICRO.multipliedBy(i)));
+        audit("at-cutoff", auditCutoff);
+        audit("new", auditCutoff.plus(MICRO));
+        long anna = user("anna");
+        for (int i = 1; i <= 3; i++) session("000000000000000" + i, anna, auditCutoff.minus(MICRO.multipliedBy(i)));
+        session("00000000000000a0", anna, auditCutoff);
+        session("00000000000000b0", anna, auditCutoff.plus(MICRO));
+        limit("anna", "", limitCutoff.minus(MICRO));
+        limit("bob", "0123456789abcdef", limitCutoff.minus(DAY));
+        limit("carol", "", limitCutoff);
+        limit("*", "*", limitCutoff.plus(MICRO));
+
+        Retention r = new Retention(pool, clock, timer, new Retention.Config(MAX_AGE, auditAge, INTERVAL, 2));
+        jobs.add(r);
+        Retention.Run run = run(r);
+
+        assertEquals("DONE", outcome(run));
+        assertEquals(List.of("at-cutoff", "new"), strings("select subject from audit order by at"), "the audit at and after its cutoff");
+        assertEquals(List.of("00000000000000a0", "00000000000000b0"), strings("select id from sessions order by expires_at"),
+                "the sessions that expired at the audit's cutoff or later");
+        assertEquals(List.of("carol", "*"), strings("select name from login_limits order by last_failure_at"),
+                "the rows of the login limit with a failure in the last 24 hours");
+        assertEquals(List.of(3L, 3L, 2L), List.of(run.audit(), run.sessions(), run.limits()), "audit, sessions, limits");
+        assertEquals(8, run.batches(), "one batch each for messages and bodies; the audit and the sessions in 2 batches (2 rows, then 1); "
+                + "the login limit in 2 (2 rows, then 0)");
+    }
+
+    /** An audit row of {@code subject} at {@code at}. */
+    void audit(String subject, Instant at) {
+        db.preparedQuery("insert into audit (at, actor, action, subject, detail) values ($1, 'ops', 'message.cancel', $2, '{}'::jsonb)")
+                .execute(Tuple.of(at(at), subject)).await();
+    }
+
+    /** A person named {@code name}: its id. */
+    long user(String name) {
+        return db.preparedQuery("insert into users (name, kind, source, created_at, created_by) values ($1, 'person', 'rail8', $2, 'ops') returning id")
+                .execute(Tuple.of(name, at(clock.instant()))).await().iterator().next().getLong(0);
+    }
+
+    /** A session {@code id} of {@code user} that expires at {@code expires}. */
+    void session(String id, long user, Instant expires) {
+        OffsetDateTime created = at(expires.minus(Duration.ofHours(12)));
+        db.preparedQuery("insert into sessions (id, user_id, fingerprint, first_password, created_at, last_seen_at, expires_at) "
+                        + "values ($1, $2, $3, false, $4, $4, $5)")
+                .execute(Tuple.of(id, user, Buffer.buffer(new byte[32]), created, at(expires))).await();
+    }
+
+    /** A row of the login limit for {@code name} on {@code device}, its last failure at {@code last}. */
+    void limit(String name, String device, Instant last) {
+        db.preparedQuery("insert into login_limits (name, device, failures, last_failure_at) values ($1, $2, 3, $3)")
+                .execute(Tuple.of(name, device, at(last))).await();
+    }
+
+    /** The first column of {@code sql}'s rows, as text. */
+    List<String> strings(String sql) {
+        List<String> values = new ArrayList<>();
+        for (Row r : db.query(sql).execute().await()) values.add(r.getString(0));
+        return values;
     }
 }

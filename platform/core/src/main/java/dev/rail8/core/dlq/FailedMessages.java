@@ -1,5 +1,6 @@
 package dev.rail8.core.dlq;
 
+import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 
 import java.time.Instant;
@@ -27,22 +28,6 @@ public interface FailedMessages {
     int REASON_MAX = 1024;
     /** The longest copy of a failure's text an audit row keeps, in UTF-16 units: longer texts are cut to it. */
     int ERROR_MAX = 4096;
-
-    /**
-     * Who acted: the self-declared name ({@code unknown} when none was given) and the client's address.
-     *
-     * @param name the actor's name; never blank
-     * @param remote the address the act came from
-     * @since 0.1
-     */
-    record Actor(String name, String remote) {
-
-        public Actor {
-            Objects.requireNonNull(name, "name");
-            Objects.requireNonNull(remote, "remote");
-            if (name.isBlank()) throw new IllegalArgumentException("an actor's name is not blank");
-        }
-    }
 
     /** What an act did: retry or cancel. */
     enum Kind { RETRY, CANCEL }

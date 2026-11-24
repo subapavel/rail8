@@ -201,7 +201,7 @@ class DeploymentsRollbackEdgeTest {
     OnVirtualThread.Call<DeployResult> deploying(Map<String, byte[]> files, String label) {
         String id = repos.commit("shop", files);
         commits.put(label, id);
-        return OnVirtualThread.start(() -> deployments.deploy("shop", id, "test"));
+        return OnVirtualThread.start(() -> deployments.deploy("shop", id, TestActors.named("test")));
     }
 
     /** Waits until {@code call} ended, however (at most {@link OnVirtualThread#BOUND}); what it ended with is read afterwards. */

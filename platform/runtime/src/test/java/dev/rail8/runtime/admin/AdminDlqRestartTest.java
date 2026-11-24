@@ -3,6 +3,7 @@ package dev.rail8.runtime.admin;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobNotFoundException;
 import dev.rail8.api.BodyLostException;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.runtime.queue.NotAdmittedException;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
@@ -59,6 +60,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -353,7 +355,7 @@ class AdminDlqRestartTest {
         retryAnswer = () -> {
             Thread t = Thread.currentThread();
             restartedOn.add("virtual=" + t.isVirtual() + " eventLoop=" + io.vertx.core.Context.isOnEventLoopThread() + " " + t);
-            return real.retry(id, "shop/orders", null, 1, new FailedMessages.Actor("unknown", "127.0.0.1"));
+            return real.retry(id, "shop/orders", null, 1, new Actor("unknown", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1"));
         };
         parked(id, "shop/orders", 1, Props.empty().with(Envelope.ATTEMPT, 1));
 

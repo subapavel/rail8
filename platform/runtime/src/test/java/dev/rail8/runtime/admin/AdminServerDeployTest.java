@@ -1,5 +1,6 @@
 package dev.rail8.runtime.admin;
 
+import dev.rail8.runtime.deploy.TestActors;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
@@ -243,6 +244,18 @@ class AdminServerDeployTest {
         JsonObject body = a.json();
         assertEquals(Set.of("error"), body.fieldNames(), what + ": the body is {error} only: " + body);
         assertTrue(!body.getString("error").isBlank(), what + ": {error} names the failure");
+    }
+
+    /**
+     * The admin API's 401: {@code {error, code}}, the code {@code no-credential} when the request carried no Authorization
+     * header ({@code auth} null) and {@code unknown-credential} when it carried one the node does not know.
+     */
+    static void assertUnauthenticated(Answer a, String auth, String what) {
+        assertJson(401, a, what);
+        JsonObject body = a.json();
+        assertEquals(Set.of("error", "code"), body.fieldNames(), what + ": the body is {error, code}: " + body);
+        assertTrue(!body.getString("error").isBlank(), what + ": {error} names the failure");
+        assertEquals(auth == null ? "no-credential" : "unknown-credential", body.getString("code"), what);
     }
 
     /** The array's values, objects as {@link JsonObject} (its stream wraps them; {@code getList()} would not). */
@@ -735,9 +748,9 @@ class AdminServerDeployTest {
         byte[] body = body("shop", repos.commit(shop()));
         for (String auth : java.util.Arrays.asList(null, "Bearer wrong", TOKEN)) {
             Answer a = request(port, HttpMethod.POST, "/admin/deploy", auth, body);
-            assertError(401, a, "POST with Authorization " + auth);
-            assertError(401, request(port, HttpMethod.GET, "/admin/flows", auth, null), "GET /admin/flows with Authorization " + auth);
-            assertError(401, request(port, HttpMethod.GET, "/admin/packages", auth, null), "GET /admin/packages with Authorization " + auth);
+            assertUnauthenticated(a, auth, "POST with Authorization " + auth);
+            assertUnauthenticated(request(port, HttpMethod.GET, "/admin/flows", auth, null), auth, "GET /admin/flows with Authorization " + auth);
+            assertUnauthenticated(request(port, HttpMethod.GET, "/admin/packages", auth, null), auth, "GET /admin/packages with Authorization " + auth);
         }
         assertEquals(List.of(), doors.events(), "nothing was deployed without the token");
         assertEquals(List.of(), deployments.flows());
@@ -861,9 +874,9 @@ class AdminServerDeployTest {
         Deployments first = deployments(tmp.resolve("node-1"), rows, true);
         String alpha = repos.commit(pkg("alpha", "2.0.0", Map.of("orders", "sync")));
         String zeta = repos.commit(pkg("zeta", "3.0.0", Map.of("beta", "sync")));
-        OnVirtualThread.call(() -> first.deploy("alpha", alpha, "test"));
+        OnVirtualThread.call(() -> first.deploy("alpha", alpha, TestActors.named("test")));
         rt.clock().advance(Duration.ofHours(1));
-        OnVirtualThread.call(() -> first.deploy("zeta", zeta, "test"));
+        OnVirtualThread.call(() -> first.deploy("zeta", zeta, TestActors.named("test")));
         OnVirtualThread.call(() -> { first.close(); return null; });
         repos.delete("zeta");
         DeploymentRecord zetaRow = rows.read().await().records().get(1);
@@ -1015,7 +1028,7 @@ class AdminServerDeployTest {
         assertJson(200, deploy(shop()), "fixture");
 
         for (String auth : java.util.Arrays.asList(null, "Bearer wrong", TOKEN)) {
-            assertError(401, delete(port, "/admin/packages/shop", auth), "DELETE with Authorization " + auth);
+            assertUnauthenticated(delete(port, "/admin/packages/shop", auth), auth, "DELETE with Authorization " + auth);
         }
 
         assertEquals(List.of("shop"), names(get("/admin/packages")), "nothing was undeployed without the token");
@@ -1054,12 +1067,12 @@ class AdminServerDeployTest {
                     @Override public Future<Void> close() { return lock.close(); }
                 }));
             }
-            @Override public Future<Void> audit(String actor, String repository, JsonObject detail) { return rows.audit(actor, repository, detail); }
+            @Override public Future<Void> audit(dev.rail8.core.audit.Actor by, String repository, JsonObject detail) { return rows.audit(by, repository, detail); }
             @Override public Future<Void> endMarks() { return rows.endMarks(); }
         };
         Deployments failing = deployments(tmp.resolve("node-3"), failingDelete, true);
         String solo = repos.commit(pkg("solo", "1.0.0", Map.of("one", "sync")));
-        OnVirtualThread.call(() -> failing.deploy("solo", solo, "test"));
+        OnVirtualThread.call(() -> failing.deploy("solo", solo, TestActors.named("test")));
         int at = serve(Optional.of(failing));
 
         assertError(500, delete(at, "/admin/packages/solo", AUTH), "a record delete that fails");

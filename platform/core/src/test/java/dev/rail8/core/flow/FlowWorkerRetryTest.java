@@ -8,6 +8,7 @@ import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepFactory;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -36,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -657,7 +659,7 @@ class FlowWorkerRetryTest {
 
     // --- the operator's retry, under the same id
 
-    static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "127.0.0.1");
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     /**
      * The in-memory half of {@code POST /admin/dlq/{id}/retry}: {@code in}, parked after k hand-outs, retried — its DLQ row out and

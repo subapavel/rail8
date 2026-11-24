@@ -3,6 +3,7 @@ package dev.rail8.core.flow;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.queue.InMemoryFailedMessages;
 import dev.rail8.core.queue.WorkQueue;
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import static dev.rail8.core.flow.FlowWorkerTest.NO_FILES;
@@ -32,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 @Timeout(60)
 class FlowWorkerStopTest {
 
-    static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "127.0.0.1");
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     final FlowWorkerRetryTest.World w = new FlowWorkerRetryTest.World();
     final FailedMessages operator = new InMemoryFailedMessages(w.rows);

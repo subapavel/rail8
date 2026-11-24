@@ -1,5 +1,6 @@
 package dev.rail8.runtime.admin;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;

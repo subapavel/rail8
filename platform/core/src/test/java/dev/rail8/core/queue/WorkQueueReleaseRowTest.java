@@ -1,5 +1,6 @@
 package dev.rail8.core.queue;
 
+import dev.rail8.core.audit.Actor;
 import dev.rail8.testkit.FakeClock;
 import org.junit.jupiter.api.Test;
 
@@ -7,6 +8,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -21,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class WorkQueueReleaseRowTest {
 
     static final Duration LEASE = Duration.ofSeconds(30);
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "10.0.0.7");
     final InMemoryWorkQueue rows = new InMemoryWorkQueue(FakeClock.at(Instant.parse("2026-11-10T10:00:00Z")));
 
     /** {@code id} of {@code flow} enqueued, claimed and held: its seq. */
@@ -35,9 +38,9 @@ class WorkQueueReleaseRowTest {
     void theDefaultReleasesAndCannotTellTheRow() {
         WorkQueue plain = new WorkQueueEnqueueLeasedDefaultTest.Plain(rows);
         long seq = held("m-1", "orders");
-        assertEquals(Optional.of(WorkQueue.Released.UNTOLD), plain.releaseRow(seq).await(), "released: neither flow nor node told");
+        assertEquals(Optional.of(WorkQueue.Released.UNTOLD), plain.releaseRow(seq, BY).await(), "released: neither flow nor node told");
         assertEquals(Optional.empty(), rows.held(Optional.empty(), 10).await().items().stream().findFirst(), "the row is no longer held");
-        assertEquals(Optional.empty(), plain.releaseRow(seq).await(), "a row not held: nothing released");
+        assertEquals(Optional.empty(), plain.releaseRow(seq, BY).await(), "a row not held: nothing released");
     }
 
     /** {@code completeRow}'s default (the in-memory queue's too): completed with no next node, or stale. */
@@ -57,10 +60,10 @@ class WorkQueueReleaseRowTest {
     @Test
     void theInMemoryQueueTellsTheReleasedRowsFlow() {
         long seq = held("m-1", "invoices");
-        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("invoices"), Optional.empty())), rows.releaseRow(seq).await(),
+        assertEquals(Optional.of(new WorkQueue.Released(Optional.of("invoices"), Optional.empty())), rows.releaseRow(seq, BY).await(),
                 "its flow; no body node: it holds no bodies");
-        assertEquals(Optional.empty(), rows.releaseRow(seq).await(), "released once");
-        assertEquals(Optional.empty(), rows.releaseRow(999).await(), "an unknown seq");
+        assertEquals(Optional.empty(), rows.releaseRow(seq, BY).await(), "released once");
+        assertEquals(Optional.empty(), rows.releaseRow(999, BY).await(), "an unknown seq");
         long again = held("m-2", "invoices");
         assertTrue(rows.release(again).await(), "release answers the same as a boolean");
         assertFalse(rows.release(again).await());

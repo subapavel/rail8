@@ -27,6 +27,7 @@ import io.vertx.core.http.HttpClientAgent;
 import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.RequestOptions;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -184,7 +185,9 @@ class AdminServerBrowserGuardTest {
         assertEquals(403, a.status(), what + ": " + a.body());
         String type = a.headers().get("content-type");
         assertTrue(type != null && type.startsWith("application/json"), what + ": " + type);
-        assertEquals(Set.of("error"), a.json().fieldNames(), what + ": {error} only: " + a.body());
+        assertEquals(Set.of("error", "code", "needs"), a.json().fieldNames(), what + ": {error, code, needs} only: " + a.body());
+        assertEquals("browser", a.json().getString("code"), what + ": " + a.body());
+        assertEquals(new JsonArray(), a.json().getJsonArray("needs"), what + ": no action would let a browser in: " + a.body());
         String error = a.json().getString("error");
         assertTrue(error != null && !error.isBlank(), what + ": the error says why: " + a.body());
         assertNull(a.headers().get("www-authenticate"), what + ": the guard's refusal, not the token check's: " + a.headers());

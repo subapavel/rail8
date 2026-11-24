@@ -7,6 +7,7 @@ import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepFactory;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -35,6 +36,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -669,7 +671,7 @@ class FlowWorkerFastPathTest {
         assertEquals(List.of(a1.id()), parked.stream().map(Parked::messageId).toList(), "A1 parked");
         assertEquals(0, w1.poll().await(5, SECONDS), "A2 waits behind A1");
 
-        FailedMessages.Actor by = new FailedMessages.Actor("ops", "127.0.0.1");
+        Actor by = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
         assertInstanceOf(FailedMessages.Done.class, new InMemoryFailedMessages(l.rows).cancel(a1.id(), by, Optional.empty()).await(), "A1 cancelled");
         assertEquals(1, w1.poll().await(5, SECONDS), "A2 is claimed");
         until(() -> l.rows.size() == 0 && w1.unsettled() == 0, () -> "A2 done: " + l.queue.events());

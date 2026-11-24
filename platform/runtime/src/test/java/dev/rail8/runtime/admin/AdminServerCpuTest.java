@@ -42,6 +42,7 @@ import java.util.function.Supplier;
 
 import static dev.rail8.runtime.admin.AdminServerDeployTest.Answer;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertError;
+import static dev.rail8.runtime.admin.AdminServerDeployTest.assertUnauthenticated;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertJson;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.pkg;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -259,7 +260,7 @@ class AdminServerCpuTest {
     void flowCpuNeedsTheToken() throws Exception {
         int port = sampling();
         for (String auth : java.util.Arrays.asList(null, "Bearer wrong", TOKEN)) {
-            assertError(401, get(port, "/admin/flows/shop%2Forders/cpu", auth), "Authorization " + auth);
+            assertUnauthenticated(get(port, "/admin/flows/shop%2Forders/cpu", auth), auth, "Authorization " + auth);
         }
         assertJson(200, get(port, "/admin/flows/shop%2Forders/cpu", AUTH), "with the token");
     }

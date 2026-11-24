@@ -27,7 +27,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static dev.rail8.runtime.admin.AdminServerDeployTest.Answer;
-import static dev.rail8.runtime.admin.AdminServerDeployTest.assertError;
+import static dev.rail8.runtime.admin.AdminServerDeployTest.assertUnauthenticated;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.assertJson;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -139,7 +139,9 @@ class AdminServerModulesTest {
     @Test
     void theRouteIsBehindTheBrowserGuardAndTheToken() throws Exception {
         int port = start(AdminServer.Modules.NONE);
-        assertError(401, get(port, Map.of()), "without the token");
-        assertError(403, get(port, Map.of("Authorization", "Bearer " + TOKEN, "Origin", "https://evil.example")), "from a browser");
+        assertUnauthenticated(get(port, Map.of()), null, "without the token");
+        Answer browser = get(port, Map.of("Authorization", "Bearer " + TOKEN, "Origin", "https://evil.example"));
+        assertJson(403, browser, "from a browser");
+        assertEquals("browser", browser.json().getString("code"), browser.json().encode());
     }
 }

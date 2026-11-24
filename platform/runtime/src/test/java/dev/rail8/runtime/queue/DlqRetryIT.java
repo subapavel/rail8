@@ -6,6 +6,7 @@ import dev.rail8.api.StepResources;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.FailedMessages;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.flow.FlowBuilder;
@@ -48,6 +49,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -179,7 +181,7 @@ class DlqRetryIT {
         return dlq.get(id).await();
     }
 
-    static final FailedMessages.Actor BY = new FailedMessages.Actor("ops", "127.0.0.1");
+    static final Actor BY = new Actor("ops", OptionalLong.empty(), "local", Optional.empty(), "127.0.0.1");
 
     /** The retry of {@code id} of {@code orders} after attempt k = 1 fails: the injected failure, nothing changed. */
     void refused(Envelope in, Parked before, String what) {

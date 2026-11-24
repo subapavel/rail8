@@ -3,6 +3,7 @@ package dev.rail8.runtime.deploy;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
@@ -168,11 +169,11 @@ class DeploymentsRestoreTest {
         }
 
         DeployResult deploy(String repository, String commit) throws Exception {
-            return OnVirtualThread.call(() -> deployments.deploy(repository, commit, "test"));
+            return OnVirtualThread.call(() -> deployments.deploy(repository, commit, TestActors.named("test")));
         }
 
         DeployRefusedException refused(String repository, String commit) throws Exception {
-            return joinRefused(OnVirtualThread.start(() -> deployments.deploy(repository, commit, "test")), "the deploy of " + repository + " on " + id
+            return joinRefused(OnVirtualThread.start(() -> deployments.deploy(repository, commit, TestActors.named("test"))), "the deploy of " + repository + " on " + id
                     + " is refused");
         }
 
@@ -230,7 +231,7 @@ class DeploymentsRestoreTest {
         }
 
         @Override
-        public Future<Void> audit(String actor, String repository, JsonObject detail) {
+        public Future<Void> audit(Actor by, String repository, JsonObject detail) {
             return fail("a restore writes no audit row: " + detail);
         }
 

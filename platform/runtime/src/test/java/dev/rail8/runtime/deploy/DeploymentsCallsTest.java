@@ -142,7 +142,7 @@ class DeploymentsCallsTest {
     /** Commits {@code p} to the repository of its name and deploys that commit on {@code d}, which writes its record. */
     DeployResult deployCommitted(Deployments d, PackageDraft p) throws Exception {
         String commit = repos.commit(p);
-        return OnVirtualThread.call(() -> d.deploy(p.name(), commit, "test"));
+        return OnVirtualThread.call(() -> d.deploy(p.name(), commit, TestActors.named("test")));
     }
 
     DeployResult deploy(Deployments d, PackageDraft p) throws Exception {

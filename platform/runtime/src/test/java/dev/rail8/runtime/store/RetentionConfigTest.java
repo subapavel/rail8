@@ -44,4 +44,14 @@ class RetentionConfigTest {
             assertThrows(IllegalArgumentException.class, () -> new Retention.Config(WEEK, HOUR, over), "batch " + over);
         }
     }
+
+    /** The audit is kept a year by default, or as long as the messages when that is longer; never shorter than the messages. */
+    @Test
+    void theAuditOutlivesTheMessages() {
+        assertEquals(Duration.ofDays(365), new Retention.Config(WEEK, HOUR, 1000).auditMaxAge(), "a year by default");
+        assertEquals(Duration.ofDays(366), new Retention.Config(Duration.ofDays(366), HOUR, 1000).auditMaxAge(), "as long as the messages");
+        assertEquals(WEEK, new Retention.Config(WEEK, WEEK, HOUR, 1000).auditMaxAge(), "as long as the messages is enough");
+        assertThrows(IllegalArgumentException.class, () -> new Retention.Config(WEEK, WEEK.minusNanos(1), HOUR, 1000), "shorter than the messages");
+        assertThrows(NullPointerException.class, () -> new Retention.Config(WEEK, null, HOUR, 1000), "no audit max age");
+    }
 }

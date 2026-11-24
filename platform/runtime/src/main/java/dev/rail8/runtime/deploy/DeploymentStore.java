@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
@@ -53,10 +54,11 @@ public interface DeploymentStore {
     Future<Optional<PoolLock>> lock();
 
     /**
-     * Appends the audit row of one deploy: when (the store's clock), {@code actor}, the action {@code deploy}, the subject
-     * {@code repository/<repository>} and {@code detail}, which names the commit and the outcome. Never a body or a credential.
+     * Appends the audit row of one deploy: when (the store's clock), who deployed ({@code by}: the actor, the user, how they
+     * proved who they are and the id of their credential), the action {@code deploy}, the subject {@code repository/<repository>}
+     * and {@code detail}, which names the commit and the outcome. Never a body or a credential's secret.
      */
-    Future<Void> audit(String actor, String repository, JsonObject detail);
+    Future<Void> audit(Actor by, String repository, JsonObject detail);
 
     /**
      * The pool's lock, held: the one way to write records. Each write is one transaction that changes one record and raises the

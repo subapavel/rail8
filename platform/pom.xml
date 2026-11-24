@@ -53,6 +53,7 @@
     <archunit.version>1.5.1</archunit.version>
     <testcontainers.version>2.0.5</testcontainers.version>
     <slf4j.version>2.0.17</slf4j.version>
+    <bouncycastle.version>1.86</bouncycastle.version> <!-- MIT: Argon2id for the admin API's passwords -->
     <postgresql-jdbc.version>42.7.14</postgresql-jdbc.version> <!-- BSD-2-Clause; runtime scope, for Flyway only -->
     <flyway.version>13.10.3</flyway.version>
     <jgit.version>7.8.1.202611041320-r</jgit.version> <!-- BSD-3-Clause (EDL 1.0): JGit, the node's git client; it brings JavaEWAH and commons-codec (Apache-2.0) and slf4j-api (MIT) -->
@@ -246,6 +247,11 @@
         <groupId>org.slf4j</groupId>
         <artifactId>slf4j-api</artifactId>
         <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcprov-jdk18on</artifactId>
+        <version>${bouncycastle.version}</version>
       </dependency>
       <dependency>
         <!-- MIT: SLF4J's provider over java.util.logging, so a library's SLF4J lines reach the node's log -->

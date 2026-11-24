@@ -64,7 +64,8 @@ class AdminServerDiscardTest {
     void start() throws Exception {
         WorkQueue queue = (WorkQueue) Proxy.newProxyInstance(WorkQueue.class.getClassLoader(), new Class<?>[] {WorkQueue.class}, (p, m, args) -> {
             if (m.getName().equals("discard")) {
-                asked.add(args[0] + " " + args[1] + " " + args[2]);
+                dev.rail8.core.audit.Actor by = (dev.rail8.core.audit.Actor) args[1];
+                asked.add(args[0] + " " + by.name() + " " + by.remote());
                 return Future.succeededFuture(answer);
             }
             try {
