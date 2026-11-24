@@ -182,6 +182,14 @@ public final class MemoryAccess extends Accounts {
             return new ArrayList<>(new TreeMap<>(grants.getOrDefault(user, Map.of())).values());
         }
 
+        @Override public Map<Long, List<Access.Grant>> grants() {
+            Map<Long, List<Access.Grant>> out = new HashMap<>();
+            grants.forEach((user, held) -> {
+                if (!held.isEmpty()) out.put(user, new ArrayList<>(new TreeMap<>(held).values()));
+            });
+            return out;
+        }
+
         @Override public long unblockedAdministrators() {
             return users.values().stream().filter(u -> u.kind() == Kind.PERSON && u.blockedAt().isEmpty()
                     && grants.getOrDefault(u.id(), Map.of()).containsKey(Role.ADMINISTRATOR)).count();
@@ -242,6 +250,10 @@ public final class MemoryAccess extends Accounts {
 
         @Override public List<SessionRow> sessions(long user) {
             return sessions.values().stream().filter(s -> s.user() == user).toList();
+        }
+
+        @Override public List<SessionRow> sessions(Instant now, Instant seenSince) {
+            return sessions.values().stream().filter(s -> s.expiresAt().isAfter(now) && !s.lastSeenAt().isBefore(seenSince)).toList();
         }
 
         @Override public void insertSession(SessionRow row) {
