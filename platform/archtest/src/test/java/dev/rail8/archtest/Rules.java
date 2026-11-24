@@ -193,6 +193,15 @@ final class Rules {
             .because("the CLI finds a node's components and steps as the node does, as modules on its class path; it names only "
                     + "the mock it tests with and the http component's answer to a delivery");
 
+    /** The command line's one way to a node's admin API, which decides the URL, plain HTTP and the trusted certificates first. */
+    static final String ADMIN_API = "dev.rail8.cli.AdminApi";
+
+    static final ArchRule ONLY_THE_ADMIN_API_MAKES_AN_HTTP_CLIENT = noClasses().that().resideInAPackage(CLI)
+            .and().doNotHaveFullyQualifiedName(ADMIN_API)
+            .should().dependOnClassesThat().haveFullyQualifiedName("java.net.http.HttpClient")
+            .because("a command reaches a node only through " + ADMIN_API + ", which refuses plain HTTP to a host other than loopback "
+                    + "before the token or a password is sent");
+
     static final ArchRule RUNTIME_NEVER_NAMES_THE_MOCK = noClasses().that().resideInAPackage(RUNTIME)
             .should().dependOnClassesThat().resideInAPackage("dev.rail8.components.mock..")
             .because("a deployed node refuses a mock binding (ARCHITECTURE §11); no runtime class, Main included, names one (F-4)");

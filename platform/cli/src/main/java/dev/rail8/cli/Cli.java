@@ -54,7 +54,9 @@ public final class Cli {
                   ask the node at <url>/admin/deploy to deploy that commit of the package repository <repository>, which
                   it reads under its RAIL8_GIT_BASE (a ref such as HEAD or main in dev and ci only); with --check it
                   answers what the deploy would do and changes nothing (url: --admin, else $RAIL8_ADMIN, else
-                  http://localhost:8081; bearer token: $RAIL8_ADMIN_TOKEN only)
+                  http://localhost:8081; plain http:// only to localhost, 127.0.0.0/8 or ::1 unless $RAIL8_ADMIN_TLS=off;
+                  https:// trusts the system's certificates, or those of the PEM file $RAIL8_ADMIN_CA only; bearer token:
+                  $RAIL8_ADMIN_TOKEN only)
               user add <name> [--role <role>] [--admin <url>]
                   ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
                   print the first password it answers, once; the person chooses a password of their own at the first login
@@ -99,8 +101,9 @@ public final class Cli {
      * Runs the command {@code args} names, on a virtual thread of its own (the node's deploy code blocks on Vert.x futures), and
      * returns its exit code; never exits the JVM.
      *
-     * @param env     the environment the command reads: deploy and user {@code RAIL8_ADMIN} and {@code RAIL8_ADMIN_TOKEN}, validate and test
-     *                {@code RAIL8_PLUGINS}; a module's command is given all of it
+     * @param env     the environment the command reads: deploy and user {@code RAIL8_ADMIN}, {@code RAIL8_ADMIN_TOKEN},
+     *                {@code RAIL8_ADMIN_TLS} and {@code RAIL8_ADMIN_CA}, validate and test {@code RAIL8_PLUGINS}; a module's command is
+     *                given all of it
      * @param modules the class loader whose service files name the modules: the CLI's own, which are a node's
      * @param clock   the clock a module's command is given
      */
