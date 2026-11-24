@@ -49,6 +49,8 @@ const row = (name, action) => (page) =>
 const confirmIn = (name, action) => (page) => page.getByRole('tooltip').filter({ hasText: `${name}?` }).getByRole('button', { name: action, exact: true }).click();
 /** Ticks the checkbox labelled `label` in the open dialog. */
 const check = (label) => (page) => page.getByRole('dialog').getByLabel(label, { exact: true }).check();
+/** Ticks the row of `file` in the Changes table. */
+const pick = (file) => (page) => shown(page).getByRole('table', { name: 'Changes' }).getByRole('checkbox', { name: `Choose ${file}`, exact: true }).check();
 /** Ends the session of the page, so the login shows over its tabs. */
 const end = (page) => page.evaluate(() => window.endSession());
 /** Opens the message `id` from its row on the Messages screen. */
@@ -67,6 +69,8 @@ const SCENES = {
   'package-deploy': [menu('Packages'), pkg('orders'), press('Deploy…')],
   'package-deployed': [menu('Packages'), pkg('orders'), press('Deploy…'), press('Deploy')],
   'package-commit': [menu('Packages'), pkg('orders'), press('Commit…')],
+  'package-discard': [menu('Packages'), pkg('orders'), pick('flows/order-to-idoc.xsl'), pick('tests/legacy.test.yaml'), pick('fixtures/order-4711.xml'), press('Discard changes…'), fill('Type 3 to discard 3 files. They cannot be brought back.', '3')],
+  'package-discard-one': [menu('Packages'), pkg('orders'), pick('mappings/order-to-idoc.mapping.json'), press('Discard changes…')],
   'package-push-refused': [menu('Packages'), pkg('orders'), press('Push')],
   'packages-get': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/invoices.git')],
   'packages-get-refused': [menu('Packages'), press('Get a package…'), fill('Address', 'https://git.example.com/acme/payroll.git'), press('Get')],

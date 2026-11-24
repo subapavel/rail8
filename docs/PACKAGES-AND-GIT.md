@@ -24,8 +24,9 @@ earlier one built.
   name of the folder is what a deploy and a pin name.
 - The UI runs the author's own git binary. A commit from the UI is therefore the commit a terminal would make, with the
   same identity, hooks, signing and credentials.
-- The UI never loses the author's work. It runs a short, fixed list of git commands. None of them drops a change, moves
-  a branch backwards or rewrites history. Everything else is left to a terminal and to the git host.
+- The UI loses the author's work only when the author asks for it, for the files its dialog names first: a discard.
+  Every other command it runs keeps every change, never moves a branch backwards and never rewrites history. It runs a
+  short, fixed list of git commands. Everything else is left to a terminal and to the git host.
 - Every write states what the author saw. When that no longer holds, the write is refused and changes nothing. What is
   committed is what the author reviewed, and what is deployed is the commit named, as 40 hex digits.
 - A flow's text is never shown. Each kind of artifact is compared by what it means:
@@ -74,7 +75,9 @@ would refuse it.
 The tab has four tabs of its own:
 
 - **Changes.** Every file of the package that differs from the last commit: added, modified, deleted or renamed. Each
-  file shows its kind and its readable change ("Readable changes"). Commit… starts here.
+  file shows its kind and its readable change ("Readable changes"). Commit… starts here. Each row has a tick box,
+  except a row staged in a terminal with other content; **Discard changes…**, in the card's header, puts the ticked
+  files back as they are in the last commit ("Discard").
 - **Artifacts.** The package's flows, endpoints, mappings and tests, and the other files they use.
   - They are listed by kind, each with its id, whether it changed, and, for a file, the artifacts that use it.
   - A row opens the artifact in the tab its own screen opens.
@@ -186,6 +189,9 @@ The git half runs only these commands:
     request checked, when the commit fails or the server closes during it. It leaves the file on disk, and git
     itself refuses it for an entry that is neither `HEAD`'s version nor the one on disk;
   - `commit --only`;
+  - `update-index -z --index-info`, of the index entries of the paths a discard names: set to the last commit's, or
+    removed;
+  - `checkout-index -f -u -z --stdin`, of the paths a discard names that the last commit holds;
   - `fetch`;
   - `merge --ff-only --no-overwrite-ignore`, of the commit the fetch left in the upstream;
   - `push`, of the checked commit to the upstream branch.
@@ -197,7 +203,8 @@ It never runs:
 - `cherry-pick` or `revert`;
 - `branch`, `tag`, `remote` or `update-ref`;
 - `config` writes, `gc` or submodule commands;
-- `--force`, `--no-verify` or `--amend`, nor anything else that drops the author's own work.
+- `--force`, `--no-verify` or `--amend`, nor anything else that drops the author's own work. A discard drops only the
+  paths its request names, through the two plumbing writes above, which take exact paths on stdin and no pathspec.
 
 `rail8 lock` writes `package.lock` and nothing else.
 
@@ -222,7 +229,8 @@ The editors' saves and the git writes share one lock of the working folder.
   its own copy of what it imports. It lasts as long as the development server's process, so the halves made again on
   a restart get the same lock. `replaceFile`, `writeNew` and `createFile` take the lock as an argument.
 - **Who takes it.** Every save of the flow screen, the endpoint form and the mapping studio, and every git write that
-  reads or writes the files of a clone: commit, pull, lock and new package. Fetch and push touch no file and do not
+  reads or writes the files of a clone: commit, discard, pull, lock and new package. A discard holds it from its first
+  read to its read-back. Fetch and push touch no file and do not
   take it. A clone of Get a package holds one admission for its whole run, and the lock only for the move into place.
 - **The save's recheck.** Under the lock, each save compares its `If-Match` with the bytes on disk once more, just
   before its rename. The mapping save compares the bytes it read for its check. Each save also resolves its path
@@ -263,6 +271,7 @@ success with `package: null` and the reason.
 | `POST /git/packages` `{repository, name}` | 201 `PackageState`: a new package ("New package") |
 | `POST /git/clone` `{address}` | 201 `{repository, package}`, with `reason` or `problem` when `package` is null ("Get a package") |
 | `POST /git/packages/{repository}/commit` `{message, branch, head, paths}` | `{commit, output, package}` ("Commit") |
+| `POST /git/packages/{repository}/discard` `{head, paths}` | `{discarded, left, package}`, with `problem` ("Discard") |
 | `POST /git/packages/{repository}/deploy` `{commit, check, expect}` | `{deploy, replaces, package}` ("Deploy") |
 | `POST /git/packages/{repository}/lock` `{manifestTag, lockTag, dependencies}` | `{pins, package}` ("Dependencies") |
 | `POST /git/packages/{repository}/fetch` `{}` | `{package}` ("Remote") |
@@ -332,14 +341,14 @@ Every refusal is `{error, problems?, output?}`, with the status:
 | Status | When |
 | --- | --- |
 | 400 | A malformed body, repository name, path or revision. A path with a `.git` segment. A message that is blank, over 8 KiB or holds a NUL. More than 1000 paths. |
-| 403 | A foreign page. Any write under `RAIL8_READ_ONLY=true` except a deploy check. A path that leaves the package's real folder. |
+| 403 | A foreign page. Any write under `RAIL8_READ_ONLY=true` except a deploy check. A path that leaves the package's real folder, or for a discard leads into `.git`. |
 | 404 | No working folder, no such package, a path outside it, or a revision the clone lacks. |
-| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
-| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
+| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. A path a discard does not handle, or where a discard would make a file and a folder of the same name meet ("Discard"). No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
+| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag` or, for a discard, its `index`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
 | 413 | A body over its limit. |
-| 422 | No git identity. Nothing to commit. A hook refused the commit (its `output`). A fetch or a push git failed, as when it could not sign in (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
+| 422 | No git identity. Nothing to commit. Nothing to discard. A hook refused the commit (its `output`). A fetch or a push git failed, as when it could not sign in (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
 | node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a failure on the node: of git, of the deploy record's write (or a write whose outcome is unknown), or of a start, which was rolled back. The package's state read after it shows what runs. |
-| 500 | git or `rail8 lock` wrote more than its output limit, and was stopped. |
+| 500 | git or `rail8 lock` wrote more than its output limit, and was stopped. A discard's index write that failed while no other git held `index.lock`, with git's words; a discard whose read-back failed after it wrote. |
 | 502 | The node does not answer, or refuses `RAIL8_ADMIN_TOKEN` (its 401). |
 | 503 | git, or the `rail8` command for a lock, is missing. Too many calls are waiting. |
 | 504 | git or `rail8 lock` took longer than its limit. For a deploy: the node gave no answer in time, and the outcome is unknown. |
@@ -543,6 +552,91 @@ never writes git config and takes no identity typed into it.
 
 **Open tabs.** A commit changes no file, so every open tab keeps its working copy, and its `ETag` stays valid. A tab's
 unsaved changes stay in the tab, uncommitted, until it saves them and they are committed later.
+
+## Discard
+
+**Discard changes…**, in the header of the Changes card, puts the files the author ticked back as they are in the last
+commit, in the index and on disk. It is disabled, with the reason, on a read-only server, on a busy clone, and while
+no file is ticked. Nothing is ticked at first, the select-all box ticks every row it may, and a row staged in a
+terminal with other content (`differs`) cannot be ticked.
+
+**The dialog** lists every file the discard changes, a rename as one file on two lines, and what happens to each:
+
+- a modified file "gets the last commit's version";
+- an added file "is deleted: the last commit lacks it";
+- a deleted file "comes back from the last commit";
+- a renamed file is deleted, and the path it was renamed from comes back, or gets the last commit's version when it is
+  on disk again;
+- a staged change adds "and unstaged", and a file too large to compare "too large to compare: you have not seen its
+  change".
+
+Above the list, each listed file an open tab holds with unsaved edits has an alert with **Show tab**: "The tab keeps
+its unsaved edits. When it saves them after the discard, the editor finds the file changed on disk, unless the discard
+left its bytes as they were."
+
+One file is confirmed with a tick box, "Discard this change. It cannot be brought back."; more than one by typing their
+count, "Type *n* to discard *n* files. They cannot be brought back." The danger button, **Discard *n* files**, stays
+disabled until then. Focus starts on Cancel, and Enter sends nothing. The confirmation is dropped whenever a listed
+file, what happens to it, its tag or an unsaved-tab alert changes, as when the tab reads the package again on focus.
+
+When Discard is pressed, the dialog reads the open tabs again, both paths of a rename included. A listed file that got
+unsaved edits meanwhile is named at the top, the confirmation is dropped, and nothing is sent. After any answer, the
+open tabs without unsaved edits of the listed files read them again; a removed file's tab then reads "could not be
+read". A discard that left nothing closes the dialog and names what it discarded; one that left files stays open to say
+which, and why. A refusal says why, and the tab reads the package again.
+
+**Gone at once.** The UI keeps no copy and offers no undo, and the dialog says so before the author confirms. A raw blob
+keeps the bytes but no path, mode or link, git may prune it at once, and writing it back can destroy newer work. A real
+way to bring a discard back is a feature of its own. The protection comes before the act: the list of what happens to
+each file, the tag and index state the request states, a confirmation that cannot be given by accident, and the
+unsaved tabs named first.
+
+`POST …/discard` takes `{head, paths: [{path, tag, index}]}`: `head` as the author saw it (null: no commit yet), and for
+each chosen path the tag of its bytes on disk as the author saw them (null: not on disk) and its row's index state,
+`clean` or `staged` (null: a renamed change's old path with no row of its own). A renamed change is named with the path
+it was renamed from. The paths the body names are exactly the paths the discard may change.
+
+1. **Before the lock.** 403 read-only or a foreign page, 503 when 9 writes are under way, 413 for a body over 1 MiB, 400
+   for a malformed body, 404 for a path outside the package, and 422 for no path.
+2. **Under the working folder's lock,** from the first read to the read-back, in this order:
+   1. 409 when the clone is busy. A detached `HEAD` is allowed: nothing moves.
+   2. 412 when `head` is not `HEAD`.
+   3. 412 when a path is no longer among the changes, a rename is named without its old path, the old path is named as
+      not on disk while it is on disk (the commit's rules), or a path's `index` is not its row's index state now.
+   4. 403 when a path, or a folder on its way, leaves the package's real folder or leads into `.git`.
+   5. 412 when a tag is not the tag of the bytes on disk now.
+   6. 409 for a path the discard does not handle: its index `differs`; it is intent to add (`git add -N`); it is a
+      symbolic link on disk, a dangling one included; it is a submodule; its index entry is skip-worktree (sparse
+      checkout); or it is another path but for letter case.
+   7. 409 when a file and a folder of the same name would meet, since git deletes one to make room for the other: a
+      leading folder that is a link, a chosen path that is a folder holding anything, ignored files included, and, for
+      a path the last commit holds, an index entry under it or one at a leading folder. The last commit holds a path
+      when `ls-tree -r -z <head>` lists it by its exact name.
+3. **The index.** `git update-index -z --index-info` sets each chosen path's entry to the last commit's mode and blob, or
+   removes it when the last commit lacks the path, in one atomic write. When it fails, nothing has changed: 409 when
+   another git holds `index.lock`, else 500 with git's words, never decided from git's words.
+4. **The files.** An empty folder at a chosen path the last commit holds is removed with `rmdir`. Then
+   `git checkout-index -f -u -z --stdin` writes the chosen paths the last commit holds from the index, in path order,
+   through the author's smudge and eol filters, with the index's mode, and a link as a link. No hook runs.
+5. **Removed files.** Only when nothing before failed, the half unlinks each chosen path the last commit lacks that is a
+   file on disk, after resolving its folder and reading its tag once more. Folders the unlinks empty stay.
+6. **The read-back.** `git status` of the chosen paths alone: a path it no longer lists is `discarded`, one it lists is
+   `left`, with `problem` saying why. When it fails after the index write, the answer is 500: "the discard ran, but what
+   it changed could not be read: …; the package's Changes show it", never that nothing was discarded.
+
+```ts
+interface DiscardAnswer {
+  discarded: string[];                    // sorted: the chosen paths that now read as in the last commit
+  left: string[];                         // sorted: those that do not
+  package: PackageState | null;           // null: the state could not be read after it, as when package.yaml was discarded
+  problem?: string;                       // why a path is left, or why package is null; git's words
+}
+```
+
+**What remains is stated, not closed.** A smudge filter is the author's own code: it runs as on any checkout and can
+write wherever it likes. A program other than the UI, such as a terminal, can write a chosen file between the tag check
+and the write; that write is lost, as the working folder's lock covers the UI's own writes only. A file mode changed
+after the author looked is put back unseen: no bytes are lost.
 
 ## Deployed state
 
@@ -822,7 +916,7 @@ The UI leaves these to the git host:
 It leaves these to a terminal:
 
 - branches, merges other than a fast-forward, rebases and conflicts;
-- stash, reset, discard and amend;
+- stash, reset and amend;
 - remotes and submodules.
 
 ## New package
@@ -894,7 +988,7 @@ Modules still import no other module. The shell gains two contracts, as files di
 | Limit | Value |
 | --- | --- |
 | Packages listed | 100 |
-| Changed paths of one package, of one `…/changes`, and paths of one commit | 1000 |
+| Changed paths of one package, of one `…/changes`, and paths of one commit or one discard | 1000 |
 | The walk of a package's artifacts, on disk or at a revision | the working folder's: 1000 files, depth 16 |
 | One version of one file, read | 1 MiB |
 | A write's body | 1 MiB |
@@ -904,6 +998,7 @@ Modules still import no other module. The shell gains two contracts, as files di
 | Calls waiting | 8 writes, 32 reads |
 | A git read | 10 s, 4 MiB on each stream |
 | A commit, with its hooks | 60 s, 1 MiB on each stream |
+| A discard's index write and its file write | 60 s each, 1 MiB on each stream |
 | Taking a stopped commit's added paths out of the index | at most six git calls, each 10 s and 1 MiB on each stream |
 | Fetch, pull, push | 120 s each, 1 MiB on each stream |
 | A clone of Get a package | 300 s, 1 MiB on each stream |
@@ -922,8 +1017,9 @@ Modules still import no other module. The shell gains two contracts, as files di
 
 - Editing on a shared server, and writes to git there, until sign-in exists. A server for the UI outside development
   answers the reads and refuses every write, as `RAIL8_READ_ONLY=true` does.
-- Branches, merges other than a fast-forward, rebases, conflicts, stash, reset, discard, amend, and anything that
-  rewrites history.
+- Branches, merges other than a fast-forward, rebases, conflicts, stash, reset, amend, and anything that rewrites
+  history.
+- An undo of a discard. What a discard drops is gone at once.
 - Remotes, submodules and worktrees.
 - A package at a folder other than its clone's root.
 - Choosing hunks, and the index as such. The author chooses whole files.
@@ -949,8 +1045,8 @@ Modules still import no other module. The shell gains two contracts, as files di
   - a child whose descendant keeps a pipe open;
   - a server shut down while a child runs;
   - a server shut down while a commit runs, whose undo still runs before the close ends.
-- **The git half.** `PackagesApi` (`list`, `get`, `file`, `changes`, `artifacts`, `log`, `create`, `commit`, `deploy`,
-  `lock`, `fetch`, `pull`, `push`) has two implementations:
+- **The git half.** `PackagesApi` (`list`, `get`, `file`, `changes`, `artifacts`, `log`, `create`, `commit`, `discard`,
+  `deploy`, `lock`, `fetch`, `pull`, `push`) has two implementations:
   - `httpPackagesApi`, over the routes, with real git in temporary folders, a bare `file://` upstream, a fake node
     (`/admin/packages`, `/admin/components`, `/admin/deploy` with scripted answers) and a fake lock;
   - `fakePackagesApi`, in memory: commits as maps of path to bytes, the files on disk, the index, an upstream, busy
@@ -984,6 +1080,22 @@ Modules still import no other module. The shell gains two contracts, as files di
       file on disk without staging it.
     - A save that waits for a commit and is then refused by its recheck.
     - A detached HEAD, a merge in progress and a conflict (409).
+  - **Discard.**
+    - A modified, an added and a deleted file in one discard, each read back as in the last commit, the files not
+      chosen left as they were; a staged change, and a rename with both its paths.
+    - A stale `head`, `tag` or `index`, a path no longer among the changes, a rename named without its old path, and
+      its old path named as not on disk while it is on disk (412).
+    - A path outside the package, a `.git` segment, and a changed link out of the package (403), and the hostile values.
+    - A save that waits for a discard and is refused by its recheck, a discard that waits for a save, and one that
+      waits for a commit.
+    - A path whose index `differs`, a busy clone, and a detached `HEAD`, which is allowed.
+    - A file that replaced a folder, a folder that replaced a file, and a staged file whose name the last commit holds
+      as a folder (409).
+    - A branch with no commit, read-only, a foreign page, a malformed body and no path.
+    - On the real git half only: a symbolic link on disk, a dangling one, a submodule, a skip-worktree entry, an
+      intent-to-add entry and an alias in letter case (409); a link to a folder in a path's way and a folder of only
+      ignored files (409); a link, an executable bit and a crlf file brought back, with no hook run; and a required
+      smudge filter that fails, which leaves its path and the paths after it, with git's words.
   - **Deploy.**
     - A check, then a deploy, sending 40 hex digits and the actor, with a name outside ASCII, such as `Jiří`.
     - A deploy refused by the node, its problems passed on.
@@ -1013,6 +1125,13 @@ Modules still import no other module. The shell gains two contracts, as files di
 - **The screens.**
   - Browser tests run on `fakePackagesApi`.
   - A pull runs while a second window saves a file of the package.
+  - A discard of one of two changed files leaves the other changed; a file unsaved in an open tab is named first, and
+    its tab keeps its edits while a clean tab reads its file again; one file is confirmed with a tick box and several
+    by typing their count, and each is dropped when the listed files change.
+- **A discard whose git fails.** On a runner over real git that answers one call itself: an index write that fails
+  while another git holds `index.lock` (409, nothing changed) and one that fails without it (500); a file write that
+  fails, after which nothing is unlinked and the paths are left; and a read-back that fails after the writes (500,
+  never "nothing was discarded").
   - One `@stack` scenario edits a flow, commits it, deploys the commit to the quickstart's node, and sends a message
     through the new flow.
 
@@ -1059,3 +1178,5 @@ Modules still import no other module. The shell gains two contracts, as files di
 12. **What each node runs, on the node.** The rows of what each node runs and `GET /admin/pool/packages`. It is designed
     first and depends on nothing in the UI, so its design may start at any time.
 13. **Every node in the UI.** One entry per node in the deployed state.
+14. **Discard.** `…/discard` with its two plumbing writes, the Changes table's tick boxes, and **Discard changes…**
+    with its dialog.

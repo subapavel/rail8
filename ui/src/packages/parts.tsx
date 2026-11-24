@@ -174,8 +174,12 @@ export function PackageAlerts({ state }: { state: PackageState }) {
   );
 }
 
-/** The files `changes` lists, dense, each row opening its readable change between the revisions `before` and `after`. */
-export function ChangesTable({ api, repository, changes, before, after, onStale, label }: {
+/**
+ * The files `changes` lists, dense, each row opening its readable change between the revisions `before` and `after`.
+ * With `choice`, each row has a tick box, ticked when `choice.picked` holds its path, except a row whose index `differs`,
+ * which cannot be ticked; `choice.onPick` gets the ticked paths after each tick.
+ */
+export function ChangesTable({ api, repository, changes, before, after, onStale, label, choice }: {
   api: PackagesApi;
   repository: string;
   changes: Change[];
@@ -183,6 +187,7 @@ export function ChangesTable({ api, repository, changes, before, after, onStale,
   after: string;
   onStale: () => void;
   label: string;
+  choice?: { picked: readonly string[]; onPick: (paths: string[]) => void };
 }) {
   return (
     <ProTable<Change>
@@ -195,6 +200,14 @@ export function ChangesTable({ api, repository, changes, before, after, onStale,
       toolBarRender={false}
       pagination={false}
       cardProps={false}
+      tableAlertRender={false}
+      rowSelection={
+        choice && {
+          selectedRowKeys: [...choice.picked],
+          getCheckboxProps: (change) => ({ disabled: change.index === 'differs', 'aria-label': `Choose ${change.path.slice(change.path.indexOf('/') + 1)}` }),
+          onChange: (keys) => choice.onPick(keys.map(String)),
+        }
+      }
       expandable={{ expandedRowRender: (change) => <FileChange api={api} repository={repository} change={change} before={before} after={after} onStale={onStale} /> }}
       columns={[
         { title: 'File', dataIndex: 'path', render: (_, c) => <ChangedPath change={c} /> },
