@@ -1,5 +1,5 @@
 import { ProTable } from '@ant-design/pro-components';
-import { Alert, Badge, Button, Flex, Tag, Typography, type DescriptionsProps } from 'antd';
+import { Alert, Badge, Button, Flex, Tag, Tooltip, Typography, type DescriptionsProps } from 'antd';
 import { useCallback, useContext } from 'react';
 import { ArtifactKinds } from '../artifacts';
 import { ReadSpinner } from '../ReadSpinner';
@@ -65,26 +65,30 @@ export function ArtifactName({ artifact, open }: { artifact: Artifact; open: (sc
   );
 }
 
-/** What the node runs of the package, as one status with its words: the vocabulary of the deployed state. */
-export function deployedStatus(state: PackageRow): { status: 'success' | 'warning' | 'error' | 'processing' | 'default'; text: string } {
+/** What the node runs of the package, as one status with its words, and what to do about it where that is not plain: the vocabulary of the deployed state. */
+export function deployedStatus(state: PackageRow): { status: 'success' | 'warning' | 'error' | 'processing' | 'default'; text: string; hint?: string } {
   const deployed = state.deployed;
   if (deployed.node === 'unreachable') return { status: 'default', text: 'Unknown' };
   if (deployed.relation === 'none') return { status: 'default', text: `Not running on ${deployed.host}` };
   if (deployed.state === 'FAILED') return { status: 'error', text: 'Failed' };
   if (deployed.relation === 'deployed') return state.changed > 0 ? { status: 'warning', text: 'Deployed, with changes since' } : { status: 'success', text: 'Deployed' };
   if (deployed.relation === 'behind') return { status: 'warning', text: `Behind ${deployed.commits}` };
-  if (deployed.relation === 'ahead') return { status: 'processing', text: `Ahead ${deployed.commits}` };
+  if (deployed.relation === 'ahead') return { status: 'processing', text: `Ahead ${deployed.commits}`, hint: 'The node runs commits that HEAD lacks: pull them.' };
   return { status: 'default', text: 'Other commit' };
 }
 
-/** What the node runs: its status unless `withStatus` is false, the commit and when it was deployed, and the problems of a failed deploy. */
+/** What the node runs: its status, with its hint on hover, unless `withStatus` is false, the commit and when it was deployed, and the problems of a failed deploy. */
 export function DeployedFact({ state, at, withStatus = true }: { state: PackageRow; at: Date; withStatus?: boolean }) {
   const deployed = state.deployed;
-  const { status, text } = deployedStatus(state);
+  const { status, text, hint } = deployedStatus(state);
   return (
     <Flex vertical>
       <Flex gap="small" wrap align="center">
-        {(withStatus || deployed.node === 'unreachable' || deployed.relation === 'none') && <Badge status={status} text={text} />}
+        {(withStatus || deployed.node === 'unreachable' || deployed.relation === 'none') && (
+          <Tooltip title={hint}>
+            <Badge status={status} text={text} />
+          </Tooltip>
+        )}
         {deployed.node === 'answered' && deployed.relation !== 'none' && (
           <Typography.Text type="secondary">
             <Typography.Text code>{short(deployed.commit)}</Typography.Text> deployed {deployed.deployedAt === '' ? 'at an unknown time' : <Age at={deployed.deployedAt} now={at} />}
@@ -111,12 +115,14 @@ export function BranchFact({ state }: { state: PackageRow }) {
   );
 }
 
-/** The last commit: its subject, then its id, author and age. */
+/** The last commit: its subject, cut to one line with the whole of it on hover, then its id, author and age. */
 export function CommitFact({ state, at }: { state: PackageRow; at: Date }) {
   if (state.head === null) return <Typography.Text type="secondary">No commit yet</Typography.Text>;
   return (
     <Flex vertical>
-      <Typography.Text>{state.head.subject}</Typography.Text>
+      <Typography.Text ellipsis={{ tooltip: state.head.subject }} style={{ maxWidth: 320 }}>
+        {state.head.subject}
+      </Typography.Text>
       <Typography.Text type="secondary">
         <Typography.Text code>{short(state.head.id)}</Typography.Text> {state.head.author}, <Age at={state.head.at} now={at} />
       </Typography.Text>

@@ -114,6 +114,41 @@ describe('the tab of a package', () => {
     await expect.element(tab.getByText('Behind 1')).toBeVisible();
     await expect.element(page.getByRole('tab', { name: 'Changes (0)' })).toBeVisible();
     await expect.element(page.getByText('No file differs from the last commit.')).toBeVisible();
+    await expect.element(page.getByText('Uncommitted changes are never deployed.')).not.toBeInTheDocument();
+  });
+
+  test('keeps each of its own tabs as it was left while another one is shown', async () => {
+    const labels = Array.from({ length: 52 }, (_, n) => `c${String(n).padStart(2, '0')}`);
+    await openOrders({ clones: [{ folder: 'orders', commits: labels, edits: { 'c00.txt': 'edited\n' } }] });
+    await expand(changeRow('c00.txt'));
+    await expect.element(changes().getByLabelText('Line diff')).toBeVisible();
+    await page.getByRole('tab', { name: 'History' }).click();
+    const rows = () => page.getByRole('table', { name: 'History' }).getByRole('row').filter({ hasText: /^c\d\d/ });
+    await page.getByRole('button', { name: 'Show older commits' }).click();
+    await expect.element(rows()).toHaveLength(52);
+
+    await page.getByRole('tab', { name: /^Changes/ }).click();
+    await expect.element(changes().getByLabelText('Line diff')).toBeVisible();
+    await page.getByRole('tab', { name: 'History' }).click();
+    await expect.element(rows()).toHaveLength(52);
+  });
+
+  test('says when the history could not be read, and reads it again on Try again', async () => {
+    let refuse = true;
+    await openOrders({ clones: [{ folder: 'orders', commits: ['first', 'second'] }] }, (api) => ({
+      ...api,
+      log: async (repository, at) => {
+        if (refuse) throw new Error('git log failed');
+        return api.log(repository, at);
+      },
+    }));
+    await page.getByRole('tab', { name: 'History' }).click();
+    await expect.element(page.getByText('The history could not be read')).toBeVisible();
+    await expect.element(page.getByText('git log failed')).toBeVisible();
+
+    refuse = false;
+    await button('Try again').click();
+    await expect.element(page.getByRole('table', { name: 'History' }).getByRole('row').filter({ hasText: /^second/ })).toBeVisible();
   });
 
   test('lists each changed file with its kind, its change and how it is staged', async () => {

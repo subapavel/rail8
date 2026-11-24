@@ -120,7 +120,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
             { title: 'Branch', key: 'branch', render: (_, row) => <BranchFact state={row} /> },
             { title: 'Last commit', key: 'head', render: (_, row) => <CommitFact state={row} at={at} /> },
             { title: 'Upstream', key: 'upstream', render: (_, row) => <UpstreamFact state={row} at={at} /> },
-            { title: 'Changed files', dataIndex: 'changed', align: 'right' },
+            { title: 'Changed files', dataIndex: 'changed', align: 'right', width: 120 },
             { title: 'Deployed', key: 'deployed', render: (_, row) => <DeployedFact state={row} at={at} /> },
           ]}
         />

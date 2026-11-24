@@ -1,7 +1,7 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Col, Descriptions, Empty, Flex, Row, Statistic, Tag, theme, Typography } from 'antd';
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
@@ -34,8 +34,8 @@ function commitRefused(writable: boolean, state: PackageState | null): string | 
 
 /** The commits of the branch in a titled card, with the button that reads older ones in the card's corner. */
 function HistoryCard({ api, repository, state, now }: { api: PackagesApi; repository: string; state: PackageState; now: Date }) {
-  const { commits, next, failure, read, more, older } = useHistory(api, repository, state.head?.id ?? null);
-  if (failure !== null) return <Alert type="error" showIcon title="The history could not be read" description={failure} />;
+  const { commits, next, failure, read, more, older, retry } = useHistory(api, repository, state.head?.id ?? null);
+  if (failure !== null) return <Alert type="error" showIcon title="The history could not be read" description={failure} action={<Button onClick={retry}>Try again</Button>} />;
   return (
     <ProCard
       title={<h2>Commits on {state.branch ?? 'the detached HEAD'}</h2>}
@@ -76,13 +76,16 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
  * chosen tab's sections, each in a titled card: Changes lists every file that differs from the last commit, each with
  * its kind and its readable change; Artifacts lists the package's flows, endpoints, mappings and tests and the files
  * they use, each opening in its own screen's tab when a module owns its kind; History lists the commits of the
- * branch, each opening the files it changed. Commit…, the page's main action, opens the commit dialog, and says why
+ * branch, each opening the files it changed. Each of the three keeps its open rows and the commits it read while
+ * another is shown. Commit…, the page's main action, opens the commit dialog, and says why
  * when the commit route would refuse it. The package is read again when the tab is shown again, when the window gets
  * the focus, on Refresh, and when a file changed after its change was listed; a commit's answer redraws it.
  */
 export function PackageTab({ api, repository, now, open, writable }: PackageTabProps) {
   const { read, refresh, show, root } = usePackage(api, repository, now);
   const [pane, setPane] = useState('changes');
+  // the page's own tabs shown so far: each stays mounted once shown, so it keeps its open rows and the pages it read
+  const [shown, setShown] = useState<readonly string[]>(['changes']);
   const [committing, setCommitting] = useState(false);
   const refusedId = useId();
   const { token } = theme.useToken();
@@ -90,6 +93,13 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
   const at = read.kind === 'read' ? read.at : now();
   const deployed = state === null ? null : deployedStatus(state);
   const refused = commitRefused(writable, state);
+
+  const choose = (key: string) => {
+    setPane(key);
+    setShown((keys) => (keys.includes(key) ? keys : [...keys, key]));
+  };
+  /** The page's own tab `key` once it was shown, hidden while another one is chosen. */
+  const paneOf = (key: string, content: ReactNode) => shown.includes(key) && <div hidden={pane !== key}>{content}</div>;
 
   let body;
   if (read.kind === 'reading') {
@@ -101,21 +111,26 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
     body = (
       <Flex vertical gap="large">
         <PackageAlerts state={state} />
-        {pane === 'changes' && (
+        {paneOf(
+          'changes',
           <ProCard
             title={<h2>Uncommitted changes</h2>}
             headerBordered
-            extra={state.deployed.node === 'answered' && state.deployed.relation !== 'none' && <Typography.Text type="secondary">Uncommitted changes are never deployed.</Typography.Text>}
+            extra={
+              state.changes.length > 0 &&
+              state.deployed.node === 'answered' &&
+              state.deployed.relation !== 'none' && <Typography.Text type="secondary">Uncommitted changes are never deployed.</Typography.Text>
+            }
           >
             {state.changes.length === 0 ? (
               <Empty description="No file differs from the last commit." />
             ) : (
               <ChangesTable api={api} repository={repository} changes={state.changes} before={state.head?.id ?? null} after="work" onStale={refresh} label="Changes" />
             )}
-          </ProCard>
+          </ProCard>,
         )}
-        {pane === 'artifacts' && <ArtifactCards state={state} open={open} />}
-        {pane === 'history' && <HistoryCard api={api} repository={repository} state={state} now={at} />}
+        {paneOf('artifacts', <ArtifactCards state={state} open={open} />)}
+        {paneOf('history', <HistoryCard api={api} repository={repository} state={state} now={at} />)}
       </Flex>
     );
   }
@@ -160,7 +175,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
               ]
         }
         tabActiveKey={pane}
-        onTabChange={setPane}
+        onTabChange={choose}
       >
         {body}
       </Page>

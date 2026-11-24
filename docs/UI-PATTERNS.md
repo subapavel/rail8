@@ -62,7 +62,7 @@ Reference: Pro's Advanced Profile; in Rail8, a package's tab (`package-*.png`).
 - The actions in `extra`.
 - The facts in `content` as `Descriptions size="small" column={2}`.
 - The key state in `extraContent` as Statistics, a status with its dot.
-- The object's views in `tabList`.
+- The object's views in `tabList`. A view stays mounted once shown, so it keeps its open rows and the pages it read.
 - Below, the shown view's sections, each a titled card. Two cards stand side by side from the `xl` breakpoint on
   (`Row` with the `marginLG` gutter, `Col xs={24} xl={12}`).
 
@@ -98,7 +98,7 @@ The content area always shows one of these.
 | State | What shows |
 | --- | --- |
 | Loading | `ReadSpinner` with what is read, such as "Reading the packages", in place of the content |
-| Empty | `Empty` with a heading of level 2 saying what is missing, a line on how to get it, and the action if there is one |
+| Empty | `Empty` saying what is missing, how to get it, and the action if there is one; in place of a whole page's content it starts with a heading of level 2 |
 | Failed | `Alert type="error" showIcon`: "The … could not be read", the reason, and Try again as its action |
 | Partly read | `Alert type="warning" showIcon` above the content, saying what is missing |
 

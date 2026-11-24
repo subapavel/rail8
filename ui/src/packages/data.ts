@@ -91,10 +91,11 @@ export function usePackage(api: PackagesApi, repository: string, now: () => Date
   return { read, refresh, show, root };
 }
 
-/** The commits of the branch whose tip is `head`, newest first, a page at a time, read again when `head` changes. */
+/** The commits of the branch whose tip is `head`, newest first, a page at a time, read again when `head` changes and on `retry`. */
 export function useHistory(api: PackagesApi, repository: string, head: string | null) {
   const [shown, setShown] = useState<{ commits: Commit[]; next: string | null; failure: string | null; read: boolean }>({ commits: [], next: null, failure: null, read: false });
   const [more, setMore] = useState(false);
+  const [asked, setAsked] = useState(0);
   /** Counts the reads of the first page, so that an older page asked for before the latest one is dropped. */
   const reads = useRef(0);
 
@@ -108,7 +109,13 @@ export function useHistory(api: PackagesApi, repository: string, head: string | 
     return () => {
       current = false;
     };
-  }, [api, repository, head]);
+  }, [api, repository, head, asked]);
+
+  /** Reads the first page again, after a read that failed. */
+  const retry = () => {
+    setShown((s) => ({ ...s, failure: null, read: false }));
+    setAsked((n) => n + 1);
+  };
 
   const older = (before: string) => {
     const read = reads.current;
@@ -121,7 +128,7 @@ export function useHistory(api: PackagesApi, repository: string, head: string | 
       )
       .finally(() => setMore(false));
   };
-  return { ...shown, more, older };
+  return { ...shown, more, older, retry };
 }
 
 /** The files the commit `commit` changed against its first parent; none to read for the first commit of the branch. */
