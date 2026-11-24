@@ -3,6 +3,7 @@ package dev.rail8.runtime.node;
 import dev.rail8.core.admission.Targets;
 import dev.rail8.core.flow.FlowBuilder;
 import dev.rail8.core.flow.RetryPolicy;
+import dev.rail8.ingress.ServerCertificate;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.deploy.Secrets;
 import dev.rail8.runtime.git.GitSettings;
@@ -39,7 +40,9 @@ import java.util.regex.Pattern;
  *
  * @param nodeId {@code RAIL8_NODE_ID}, else {@code $HOSTNAME}: a DNS label (lower-case letters, digits and inner dashes, at most 63)
  * @param env {@code RAIL8_ENV}, required
- * @param admin {@code RAIL8_ADMIN_HOST} (127.0.0.1), {@code RAIL8_ADMIN_PORT} (8081, 0 binds any free port), {@code RAIL8_ADMIN_TOKEN}
+ * @param admin {@code RAIL8_ADMIN_HOST} (127.0.0.1), {@code RAIL8_ADMIN_PORT} (8081, 0 binds any free port), {@code RAIL8_ADMIN_TOKEN};
+ *              {@code RAIL8_ADMIN_TLS_CERT} and {@code RAIL8_ADMIN_TLS_KEY}, the PEM files of the listener's certificate and key,
+ *              read now ({@link ServerCertificate#fromEnv}); {@code RAIL8_ADMIN_TLS}, {@code off} or not set
  * @param dataDir {@code RAIL8_DATA_DIR} (/var/lib/rail8): the spool lives under it
  * @param stopDeadline {@code RAIL8_STOP_DEADLINE}, ISO-8601, not negative (PT10S)
  * @param maxPackageBytes {@code RAIL8_MAX_PACKAGE_BYTES}, 1 byte to 1 GiB (64 MiB)
@@ -712,8 +715,13 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
             throw new IllegalArgumentException("RAIL8_NODE_ID (else $HOSTNAME) must be a DNS label of at most 63 lower-case letters, digits and inner dashes, was "
                     + (nodeId == null ? "absent" : "'" + nodeId + "'"));
         }
+        String adminTls = env.getOrDefault("RAIL8_ADMIN_TLS", "");
+        if (!adminTls.isEmpty() && !adminTls.equals("off")) {
+            throw new IllegalArgumentException("RAIL8_ADMIN_TLS must be off or not set, was '" + adminTls + "'");
+        }
         AdminServer.Config admin = new AdminServer.Config(env.getOrDefault("RAIL8_ADMIN_HOST", "127.0.0.1"),
-                (int) number(env, "RAIL8_ADMIN_PORT", 8081, 0, 65535), Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")));
+                (int) number(env, "RAIL8_ADMIN_PORT", 8081, 0, 65535), Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")),
+                ServerCertificate.fromEnv(env, "RAIL8_ADMIN_TLS"), adminTls.equals("off"));
         String pgHost = env.getOrDefault("RAIL8_PG_HOST", "localhost");
         int poolSize = (int) number(env, "RAIL8_PG_POOL_SIZE", 21, 2, 1024);
         int intakePoolSize = (int) number(env, "RAIL8_PG_POOL_INTAKE", Pg.intakeDefault(poolSize), 1, 1023);

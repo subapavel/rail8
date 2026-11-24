@@ -123,6 +123,12 @@ abstract class AdminAccessFixture {
     }
 
     private AdminServer server(Optional<String> token) {
+        return server(new AdminServer.Config("127.0.0.1", 0, token));
+    }
+
+    /** A server of {@code config} over the fixture's store, with every route of {@code /admin}; stopped after the test. */
+    AdminServer server(AdminServer.Config config) {
+        Optional<String> token = config.token();
         Access access = around(Access.class, new MemoryAccess(store, rt.clock(), hash, new HashPlaces(), new SecureRandom(), token), m -> {
             if (auditFails.get() && (m.getName().equals("keyUsed") || m.getName().equals("bodyViewed"))) throw AccessRefused.unaudited("the audit is down");
         });
@@ -130,7 +136,7 @@ abstract class AdminAccessFixture {
             if (m.getName().equals("open")) viewsAtOpen.add(views());
         });
         AdminServer.Modules modules = new AdminServer.Modules(List.of(), Map.of("demo", List.of(ping("GET"), ping("POST"))), rt.clock());
-        AdminServer server = new AdminServer(new AdminServer.Config("127.0.0.1", 0, token), messages, new InMemoryDlq(), blobs,
+        AdminServer server = new AdminServer(config, messages, new InMemoryDlq(), blobs,
                 new AdminServer.HealthProbe(Map.of(), () -> 0L), Optional.of(deployments), Optional.of(rows), Optional.of(new InMemoryFailedMessages(rows)),
                 Optional.empty(), Optional.empty(), new Workers(), WorkSignals.NONE, modules, access);
         started.add(server);
