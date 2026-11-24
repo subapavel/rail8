@@ -111,7 +111,8 @@ import java.util.stream.Stream;
  *
  * <p>Before the node starts the run migrates the database, sets {@code synchronous_commit = on} on it (ALTER DATABASE: the
  * node's sessions commit durably whatever the database's default, and a node refuses off), truncates every table but
- * Flyway's history and {@code deploy_pool}, the pool's generation in its one row that a node reads its records with, and, for
+ * Flyway's history, {@code deploy_pool}, the pool's generation in its one row that a node reads its records with, and
+ * {@code admin_bridge}, the one row that keeps the open loopback API the run deploys through, and, for
  * {@code worker} only, installs the two triggers (any other run drops them). Arguments: BenchMain's
  * {@code --host --port --db --user --password --messages --warmup --concurrency --name --out --sync-commit --commit} plus
  * {@code --scenario sync|ack|worker} (required), {@code --recording keep|metadata-only} (keep), {@code --step passthrough|xslt|mapping}
@@ -250,7 +251,7 @@ public final class NodeBenchMain {
             drop trigger if exists bench_claim on work;
             drop trigger if exists bench_complete on work;
             do $$ begin execute (select 'truncate ' || string_agg(format('%I', tablename), ', ') from pg_tables
-              where schemaname = current_schema() and tablename not in ('flyway_schema_history', 'deploy_pool')); end $$;
+              where schemaname = current_schema() and tablename not in ('flyway_schema_history', 'deploy_pool', 'admin_bridge')); end $$;
             """;
 
     /**
