@@ -8,6 +8,7 @@ import type { Screen } from '../screens';
 import { useMay } from '../SessionGate';
 import type { Commit, PackagesApi, PackageState } from './api';
 import { CommitDialog } from './CommitDialog';
+import { DependenciesCard } from './Dependencies';
 import { DeployDialog } from './DeployDialog';
 import { GROUPS, useHistory, usePackage } from './data';
 import { useRemote } from './remote';
@@ -82,12 +83,13 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
 /**
  * The tab of one package, as a detail page: its header names the package and its version, holds Refresh, the
  * package's facts as a small description list (repository, branch, last commit, upstream, and the commit the node
- * runs), what the node runs and the count of changed files at its right, and three tabs of its own. Below it, the
+ * runs), what the node runs and the count of changed files at its right, and four tabs of its own. Below it, the
  * chosen tab's sections, each in a titled card: Changes lists every file that differs from the last commit, each with
  * its kind and its readable change; Artifacts lists the package's flows, endpoints, mappings and tests and the files
  * they use, each opening in its own screen's tab when a module owns its kind; History lists the commits of the
- * branch, each opening the files it changed, and each with Deploy this commit…, which is how the author goes back. Each
- * of the three keeps its open rows and the commits it read while another is shown. Commit…, the page's main action,
+ * branch, each opening the files it changed, and each with Deploy this commit…, which is how the author goes back;
+ * Dependencies lists what `package.yaml` declares, with its pin, its candidate and Lock (see {@link DependenciesCard}).
+ * Each of them keeps its open rows and the commits it read while another is shown. Commit…, the page's main action,
  * opens the commit dialog, and says why when the commit route would refuse it; its Commit and deploy goes on to the
  * deploy dialog of the new commit. Deploy… opens the deploy dialog of `HEAD`. Fetch, Pull and Push share the branch
  * with its upstream (see {@link useRemote}). The package is read again when the tab is shown again, when the window gets
@@ -149,6 +151,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
         )}
         {paneOf('artifacts', <ArtifactCards state={state} open={open} />)}
         {paneOf('history', <HistoryCard api={api} repository={repository} state={state} now={at} onDeploy={setDeploying} />)}
+        {paneOf('dependencies', <DependenciesCard api={api} repository={repository} state={state} writable={writable} onState={onState} />)}
       </Flex>
     );
   }
@@ -200,6 +203,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
                 { key: 'changes', tab: `Changes (${state.changes.length})` },
                 { key: 'artifacts', tab: `Artifacts (${state.artifacts.length})` },
                 { key: 'history', tab: 'History' },
+                { key: 'dependencies', tab: `Dependencies (${state.dependencies.length})` },
               ]
         }
         tabActiveKey={pane}

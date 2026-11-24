@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Kind, PackageRow, RemoteBody } from './api';
+import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -506,3 +506,145 @@ export const CLONE_REFUSALS = {
     'git could not clone the repository, and nothing was written: if git could not sign in or does not know the host’s key, run git ls-remote with this address in a terminal, where it can ask, then try again',
   tooLarge: `the repository is over ${CLONE_MAX_BYTES / (1024 * 1024 * 1024)} GiB or ${CLONE_MAX_ENTRIES.toLocaleString('en-US')} files and folders on disk, so nothing was written: clone it in a terminal`,
 } as const;
+
+/** `rail8 lock` runs at most 120 s, and writes at most 1 MiB on each stream. */
+export const LOCK_LIMITS = { ms: 120_000, bytes: 1024 * 1024 } as const;
+
+/** How the Rail8 command line is built, from the root of the Rail8 checkout: JDK 25 and its jar, as the quickstart builds them. */
+export const BUILD_CLI = './mvnw -B -ntp -q package -DskipTests -pl :rail8-cli -am';
+
+/** What a lock answers when it is refused, in both halves. */
+export const LOCK_REFUSALS = {
+  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was locked',
+  stale: 'package.yaml, package.lock or a dependency’s folder is no longer what you saw: look at the dependencies again; nothing was locked',
+  several: (dependency: string, folders: readonly string[]) =>
+    `several folders of the working folder hold ${dependency}: ${folders.join(', ')}; rail8 lock could pin any of them, so remove or rename all but one; nothing was locked`,
+  problems: 'rail8 lock refused the lock, for the problems it names; nothing was written',
+  missing: (cli: string) =>
+    `the Rail8 command line ${cli} is missing or cannot run: build it with ${BUILD_CLI} from the root of the Rail8 checkout (it needs JDK 25), or set RAIL8_CLI to it, then lock again`,
+  failed: (code: number | null) => `rail8 lock ended with ${code === null ? 'a signal' : `exit code ${code}`}, as it says; nothing may have been written`,
+} as const;
+
+/** The dependencies a `package.yaml` of `text` declares, the first declaration of each name, sorted by name; none when it cannot be read. */
+export function declaredOf(text: string): { name: string; version: string }[] {
+  let doc: unknown;
+  try {
+    doc = parse(text);
+  } catch {
+    return [];
+  }
+  const list = isRecord(doc) && Array.isArray(doc.dependencies) ? (doc.dependencies as unknown[]) : [];
+  const declared = new Map<string, string>();
+  for (const d of list) {
+    if (isRecord(d) && typeof d.name === 'string' && typeof d.version === 'string' && !declared.has(d.name)) declared.set(d.name, d.version);
+  }
+  return [...declared].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, version]) => ({ name, version }));
+}
+
+/** The pins of a `package.lock` of `text`, by name, each with its repository, commit and content as text; none for null or a lock that cannot be read. */
+export function pinsOf(text: string | null): Map<string, Pin> {
+  const pins = new Map<string, Pin>();
+  if (text === null) return pins;
+  let doc: unknown;
+  try {
+    doc = parse(text);
+  } catch {
+    return pins;
+  }
+  const list = isRecord(doc) && Array.isArray(doc.dependencies) ? (doc.dependencies as unknown[]) : [];
+  for (const d of list) {
+    if (!isRecord(d) || typeof d.name !== 'string' || pins.has(d.name)) continue;
+    const { repository, commit, content } = d;
+    if (typeof repository === 'string' && typeof commit === 'string' && typeof content === 'string') pins.set(d.name, { repository, commit, content });
+  }
+  return pins;
+}
+
+/**
+ * The candidate of `name` at `version` among `folders`, the folders directly in the working folder with the name and
+ * version their `package.yaml` gives, the package's own aside: the one that holds them, null when none does, or the
+ * names of the folders when several do.
+ */
+export function candidateOf(name: string, version: string, folders: readonly { folder: string; name: string; version: string }[]): string | null | { several: string[] } {
+  const matching = folders.filter((f) => f.name === name && f.version === version).map((f) => f.folder);
+  if (matching.length === 0) return null;
+  return matching.length === 1 ? matching[0]! : { several: matching };
+}
+
+/**
+ * The dependency `declared`, pinned by `pin`, with its candidate `candidate`: its folder, the commit its `HEAD` names
+ * (null: none) and whether its files differ from that commit; null when it has no candidate, or several. `running` is
+ * what the node resolved for it.
+ */
+export function dependencyOf(
+  declared: { name: string; version: string },
+  pin: Pin | undefined,
+  candidate: { folder: string; head: string | null; changed: boolean } | null,
+  running?: { commit: string; content: string },
+): Dependency {
+  let state: Dependency['state'];
+  if (candidate === null) state = 'missing';
+  else if (candidate.changed || candidate.head === null) state = 'changed';
+  else if (pin === undefined) state = 'unpinned';
+  else state = pin.repository === candidate.folder && pin.commit === candidate.head ? 'pinned' : 'moved';
+  return {
+    ...declared,
+    pin: pin ?? null,
+    candidate: candidate === null ? null : { folder: candidate.folder, head: candidate.head },
+    state,
+    ...(running === undefined ? {} : { running }),
+  };
+}
+
+/**
+ * `body` as a lock takes it, or its refusal (400): each tag is text or null, and each dependency is
+ * `{name, folder, head}`, its name text, its folder a repository name or null, and its head 40 hex digits or null, each
+ * name once.
+ */
+export function lockBodyOf(body: unknown): LockBody | { status: 400; error: string } {
+  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+  const { manifestTag, lockTag, dependencies } = body;
+  const tag = (value: unknown) => value === null || typeof value === 'string';
+  if (!tag(manifestTag) || !tag(lockTag)) return { status: 400, error: 'manifestTag and lockTag are each a tag or null' };
+  if (!Array.isArray(dependencies)) return { status: 400, error: 'dependencies is no list' };
+  if (dependencies.length > MAX_LISTED) return { status: 400, error: `a lock names at most ${MAX_LISTED} dependencies` };
+  const named: LockBody['dependencies'] = [];
+  for (const d of dependencies as unknown[]) {
+    if (
+      !isRecord(d) ||
+      typeof d.name !== 'string' ||
+      (d.folder !== null && (typeof d.folder !== 'string' || !isRepositoryName(d.folder))) ||
+      (d.head !== null && (typeof d.head !== 'string' || !isCommitId(d.head)))
+    ) {
+      return { status: 400, error: 'each dependency is {name, folder, head}: its folder a repository name or null, its head a commit of 40 hex digits or null' };
+    }
+    if (named.some((n) => n.name === d.name)) return { status: 400, error: `the dependency ${d.name} is named twice` };
+    named.push({ name: d.name, folder: d.folder, head: d.head });
+  }
+  return { manifestTag: manifestTag as string | null, lockTag: lockTag as string | null, dependencies: named };
+}
+
+/**
+ * Whether `body` states what `dependencies`, `manifestTag` and `lockTag` are now: the same two tags, and for each
+ * dependency, and only those, its candidate's folder and `HEAD`.
+ */
+export function lockStillHolds(body: LockBody, now: { manifestTag: string | null; lockTag: string | null; dependencies: readonly Dependency[] }): boolean {
+  if (body.manifestTag !== now.manifestTag || body.lockTag !== now.lockTag || body.dependencies.length !== now.dependencies.length) return false;
+  return now.dependencies.every((d) => {
+    const said = body.dependencies.find((b) => b.name === d.name);
+    return said !== undefined && said.folder === (d.candidate?.folder ?? null) && said.head === (d.candidate?.head ?? null);
+  });
+}
+
+/** The pins of the lines `rail8 lock` printed, `<name>@<version> <repository> <commit> <content>`; null when a line is none of them. */
+export function lockedPinsOf(said: string): LockedPin[] | null {
+  const pins: LockedPin[] = [];
+  for (const line of said.split('\n')) {
+    if (line.trim() === '') continue;
+    const words = line.split(' ');
+    const at = words[0]?.indexOf('@') ?? -1;
+    if (words.length !== 4 || at <= 0) return null;
+    pins.push({ name: words[0]!.slice(0, at), version: words[0]!.slice(at + 1), repository: words[1]!, commit: words[2]!, content: words[3]! });
+  }
+  return pins;
+}

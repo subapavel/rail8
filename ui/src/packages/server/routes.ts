@@ -4,10 +4,11 @@ import { foreign } from '../../../server/adminProxy.ts';
 import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
 import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import type { CloneAnswer, PackageList, PackageState } from '../api.ts';
-import { cloneSourceOf, CLONE_REFUSALS, REMOTE_REFUSALS } from '../rules.ts';
+import { cloneSourceOf, CLONE_REFUSALS, LOCK_REFUSALS, REMOTE_REFUSALS } from '../rules.ts';
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
+import { lockBodyOf, lockPackage, LockRefused } from './lock.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, type NodeRead, type NodeTarget } from './node.ts';
@@ -33,6 +34,8 @@ export interface GitPackagesOptions {
   timer: Timer;
   /** What calls the node, under each request's credential; the runtime's `fetch` by default. */
   fetch?: typeof fetch;
+  /** The Rail8 command line a lock runs: RAIL8_CLI, or the `bin/rail8` of the Rail8 checkout. */
+  cli: string;
 }
 
 const PREFIX = '/git';
@@ -64,6 +67,12 @@ const PREFIX = '/git';
  *   working folder; 503 when the server is closing; 422 with git's `output` when git fails, and over the size limit;
  *   504 past 300 s. It holds one admission of the working folder's writes for its whole run, and the lock only for
  *   the move into place.
+ * - `POST …/{repository}/lock` `{manifestTag, lockTag, dependencies}`: 200 `{pins, package}`, the pins `rail8 lock`
+ *   wrote into `package.lock` (see {@link lockPackage}), with the package's state after it. Refused with 403 under
+ *   RAIL8_READ_ONLY=true, with 503 before its body is read while 9 writes of the working folder are under way, with 413
+ *   for a body over 1 MiB, with 412 when what it states is no longer on disk, with 409 while a dependency has several
+ *   candidates, with 422 and the command line's `problems` when it refused, and with 503, saying how to build it, when
+ *   the command line is missing.
  * - `POST …/{repository}/fetch` `{}`: 200 `{package}`, a fetch of the branch's remote (see {@link fetchRemote}).
  * - `POST …/{repository}/pull` `{branch, head, upstream}`: 200 `{head, changed, package}`, a fetch and a fast-forward
  *   to the upstream under the working folder's lock (see {@link pullRemote}), with 503 before its body is read while
@@ -158,6 +167,17 @@ export function gitPackages(options: GitPackagesOptions) {
     return withState(req, clone, repository, 'the push', { pushed: await pushRemote(options.git, clone, asked) });
   };
 
+  const lock = (req: IncomingMessage, repository: string) => {
+    if (!options.writable) throw new Refusal(403, LOCK_REFUSALS.readOnly);
+    return admitted(options.writes, async (held) => {
+      const body = lockBodyOf(await jsonBody(req));
+      const clone = await cloneIn(repository);
+      const node = nodeState(req);
+      const pins = await lockPackage(options.git, held, options.cli, clone, repository, body, node);
+      return withState(req, clone, repository, 'the lock', { pins });
+    });
+  };
+
   let cloning = false;
   const clone = (req: IncomingMessage): Promise<CloneAnswer> => {
     if (!options.writable) throw new Refusal(403, CLONE_REFUSALS.readOnly);
@@ -238,7 +258,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
-    const writes = ['commit', 'deploy', 'fetch', 'pull', 'push'];
+    const writes = ['commit', 'deploy', 'lock', 'fetch', 'pull', 'push'];
     const method = under?.[2] !== undefined && writes.includes(under[2]) ? 'POST' : 'GET';
     if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
     if (under === null) return { value: await list(req) };
@@ -249,6 +269,7 @@ export function gitPackages(options: GitPackagesOptions) {
       throw new Refusal(400, 'the repository name is not well encoded');
     }
     if (under[2] === 'fetch' || under[2] === 'pull' || under[2] === 'push') return { value: await remote(req, repository, under[2]) };
+    if (under[2] === 'lock') return { value: await lock(req, repository) };
     if (method === 'POST') return { value: await (under[2] === 'commit' ? commit(req, repository) : deploy(req, repository)) };
     return one(req, repository, under[2], url.searchParams);
   };
@@ -271,6 +292,8 @@ export function gitPackages(options: GitPackagesOptions) {
         if (res.headersSent) sendFailure(res, error);
         else if (isSessionRefused(error)) refusedSession(res, error);
         else if (error instanceof CommitRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { error: error.message, output: error.output });
+        else if (error instanceof LockRefused)
+          send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }), ...(error.output === undefined ? {} : { output: error.output }) });
         else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });
         else sendFailure(res, error);
       },

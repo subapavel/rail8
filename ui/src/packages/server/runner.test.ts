@@ -100,6 +100,32 @@ describe('the runner on a fake process', () => {
     expect(child.stdinText).toBe('a message\n');
   });
 
+  test('starts another program with its arguments alone, and names it in its refusals', async () => {
+    const processes = fakeProcesses();
+    const timer = new FakeTimer();
+    const runs = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+    const program = { file: '/rail8/bin/rail8', name: 'rail8 lock', missing: 'no command line' };
+
+    const ran = runs.run({ args: ['lock', '/work/orders', '--deps', '/work'], mode: 'write', program, limits: { ms: 1000, bytes: 1024 } });
+    const child = processes.children[0]!;
+    timer.advance(1000);
+    child.exit(null);
+
+    expect(child.command).toBe('/rail8/bin/rail8');
+    expect(child.args).toEqual(['lock', '/work/orders', '--deps', '/work']);
+    expect(await refusalOf(ran)).toMatchObject({ status: 504, message: 'rail8 lock took longer than 1 s and was stopped' });
+  });
+
+  test('refuses a program that cannot be found with 503 and what its call says', async () => {
+    const processes = fakeProcesses();
+    const runs = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
+
+    const ran = runs.run({ args: ['lock'], mode: 'write', program: { file: '/nowhere/rail8', name: 'rail8 lock', missing: 'build the command line first' } });
+    processes.children[0]!.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+
+    expect(await refusalOf(ran)).toMatchObject({ status: 503, message: 'build the command line first' });
+  });
+
   test('removes every GIT_ and RAIL8_ variable, turns prompts off, and sets the C locale and no optional locks for reads only', async () => {
     const processes = fakeProcesses();
     const env = {

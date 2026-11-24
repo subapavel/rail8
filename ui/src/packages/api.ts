@@ -93,15 +93,51 @@ export interface Change {
 }
 
 /**
+ * One dependency of a package, as its Dependencies tab shows it: its name and version from `package.yaml`; its pin from
+ * `package.lock` (null: none); its candidate, the one folder directly in the working folder, the package's own aside,
+ * whose `package.yaml` has that name and version, which `rail8 lock` would pin, with the commit its `HEAD` names (null:
+ * none, or no clone at the folder's root), never looked up by the pin's repository (null: no such folder, or several);
+ * and its state:
+ *
+ * - `pinned`: the candidate is the pinned repository, and its `HEAD` is the pinned commit;
+ * - `unpinned`: `package.lock` pins nothing for it yet, and a lock would pin the candidate;
+ * - `moved`: the candidate is another folder, or its `HEAD` another commit, than the pin, and a lock would pin it;
+ * - `changed`: the candidate's files differ from its `HEAD`, or it has no `HEAD`, so a lock would refuse it;
+ * - `missing`: no folder holds that name and version, or several do.
+ *
+ * `running` is what the node resolved for it, when the node runs the package.
+ */
+export interface Dependency {
+  name: string;
+  version: string;
+  pin: Pin | null;
+  candidate: { folder: string; head: string | null } | null;
+  state: 'pinned' | 'unpinned' | 'moved' | 'changed' | 'missing';
+  running?: { commit: string; content: string };
+}
+
+/** A pin of `package.lock`: the repository and commit of the dependency, and the content digest of that commit, `sha256:<hex>`. */
+export interface Pin {
+  repository: string;
+  commit: string;
+  content: string;
+}
+
+/**
  * One package, as its tab shows it: its row, git's author identity in its clone, every file of its folder that differs
- * from `HEAD`, sorted by path, and its artifacts on disk, sorted by path. `truncated` says when either list was cut at
- * its limit.
+ * from `HEAD`, sorted by path, its artifacts on disk, sorted by path, its dependencies, sorted by name, and the git
+ * half's tags of `package.yaml` and `package.lock` on disk. `truncated` says when either list was cut at its limit.
  */
 export interface PackageState extends PackageRow {
   /** The author identity git gives in this clone, as `git var GIT_AUTHOR_IDENT` names it; null when it gives none, and a commit is refused. */
   identity: { name: string; email: string } | null;
   changes: Change[];
   artifacts: Artifact[];
+  dependencies: Dependency[];
+  /** The tag of `package.yaml` on disk; null when it is not there. */
+  manifestTag: string | null;
+  /** The tag of `package.lock` on disk; null when there is none. */
+  lockTag: string | null;
   truncated: boolean;
 }
 
@@ -201,6 +237,30 @@ export interface RemoteBody {
   upstream: string | null;
 }
 
+/**
+ * A lock of the package's dependencies: what the author saw, the tags of `package.yaml` and `package.lock` (null: none),
+ * and each dependency's candidate folder with its `HEAD`, as the package's state gave them (null: none). It is refused,
+ * changing nothing, when any of them is no longer what is on disk.
+ */
+export interface LockBody {
+  manifestTag: string | null;
+  lockTag: string | null;
+  dependencies: { name: string; folder: string | null; head: string | null }[];
+}
+
+/** One pin `rail8 lock` wrote, as it printed it: the dependency's name and version, and its pin. */
+export interface LockedPin extends Pin {
+  name: string;
+  version: string;
+}
+
+/** What a lock answers: the pins `rail8 lock` wrote, sorted by name, and the package's state after it (null when it could not be read, and `problem` says why). */
+export interface LockAnswer {
+  pins: LockedPin[];
+  package: PackageState | null;
+  problem?: string;
+}
+
 /** What a fetch answers: the package's state after it (null when it could not be read, and `problem` says why). */
 export interface FetchAnswer {
   package: PackageState | null;
@@ -271,6 +331,12 @@ export interface PackagesApi {
    * submodules or LFS content. An entry of that name is never written into.
    */
   clone(address: string): Promise<CloneAnswer>;
+  /**
+   * Pins the package's dependencies: once it has checked under the working folder's lock that `package.yaml`,
+   * `package.lock` and each candidate are still what the author saw, it runs `rail8 lock`, which writes `package.lock`.
+   * Refused while a dependency has several candidates; the command line's problems are a refusal's `problems`.
+   */
+  lock(repository: string, body: LockBody): Promise<LockAnswer>;
   /** Fetches the remote of the package's branch, with the author's own credentials; it changes no file. */
   fetch(repository: string): Promise<FetchAnswer>;
   /**
@@ -350,6 +416,7 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     commit: (repository, body) => post<CommitAnswer>(of(repository, '/commit'), body),
     deploy: (repository, body) => post<DeployAnswer>(of(repository, '/deploy'), body),
     clone: (address) => post<CloneAnswer>('/git/clone', { address }),
+    lock: (repository, body) => post<LockAnswer>(of(repository, '/lock'), body),
     fetch: (repository) => post<FetchAnswer>(of(repository, '/fetch'), {}),
     pull: (repository, body) => post<PullAnswer>(of(repository, '/pull'), body),
     push: (repository, body) => post<PushAnswer>(of(repository, '/push'), body),
