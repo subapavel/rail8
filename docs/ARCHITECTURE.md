@@ -211,7 +211,7 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `nodes` | node membership and leases |
 | `deployments` | which commit of which repository each package runs, its content digest and the pins of its dependencies |
 | `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
-| `users`, `role_assignments`, `sessions`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions (by fingerprint), the failed logins of each name, and whether the shared token still works (part 10) |
+| `users`, `role_assignments`, `sessions`, `tokens`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions and named tokens (by fingerprint), the longest a token lives, the failed logins of each name, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
 
 Migrations run at node start (Flyway).
@@ -262,8 +262,8 @@ deleted.
 
 The audit is kept for `RAIL8_AUDIT_MAX_AGE`, from P30D to P3660D, P365D by default; a node whose
 value is shorter than `RAIL8_RETENTION_MAX_AGE` does not start, as a message's status reads its cancel
-from the audit. The same job deletes the sessions that ended longer ago than that and the login
-limit's rows without a failure for 24 hours.
+from the audit. The same job deletes the sessions that ended longer ago than that, the tokens that
+expired or were revoked longer ago than that, and the login limit's rows without a failure for 24 hours.
 
 A message can be saved with a body whose key names another message (the caller's body, handed to a
 callee). The save keeps that body in the same transaction, and the message's work row points at the
@@ -1153,8 +1153,8 @@ run's records are written in groups, after the bodies they refer to are durable.
 ### Admin API
 
 On `127.0.0.1:8081` by default; without `RAIL8_ADMIN_TOKEN` it may only listen on loopback. Every
-`/admin` request but the login carries `Authorization: Bearer <credential>`: a user's session, or the
-emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
+`/admin` request but the login carries `Authorization: Bearer <credential>`: a user's session or
+named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
 
 - With `RAIL8_ADMIN_TLS_CERT` and `RAIL8_ADMIN_TLS_KEY`, absolute paths of PEM files (each at most
   64 KiB, read once at the start), the port serves HTTPS only: the certificate file holds the
@@ -1183,9 +1183,16 @@ emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
   to 5 minutes: 429 with `Retry-After`. Passwords, 12 characters at least, are hashed with Argon2id,
   two at once on a node (503 `busy` beyond). A new user and a reset password get a first password the
   node generates, valid 7 days, which may only read itself, change the password and log out.
+- A named token, `rail8t_…`, is shown once and kept as its fingerprint. A person issues their own in
+  a session, the password asked again and counted as a login; an administrator logged in issues a
+  technical account's. A user holds at most 20 live, each named, and each expires: 90 days by default,
+  at most the installation's ceiling of 1 to 365 days. Lowering the ceiling shortens the live tokens
+  longer than it; raising it lengthens none. A token carries its user's roles but never does what needs
+  a person logged in (403 `session-required`): it changes no account. A revoke holds on every node at
+  the next request.
 - `RAIL8_ADMIN_TOKEN` of the form `rail8k_…` (`rail8 key new`) is the emergency key: it reads and
-  makes users, gives and takes the administrator role, blocks, resets passwords and ends sessions, and
-  nothing else. Each use is written to the audit before anything runs, a use refused or of no route
+  makes users, gives and takes the administrator role, blocks, resets passwords, ends sessions, reads
+  and revokes tokens, and nothing else. Each use is written to the audit before anything runs, a use refused or of no route
   too, or the answer is 503.
 - During the bridge, until the marker `admin_bridge` closes, a token of another form is the shared
   token of before: it may do what existed before users and what the key may, the audit naming the
@@ -1214,8 +1221,10 @@ emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
 | `GET /admin/modules` | the loaded modules and plugins, each with its version, api, SHA-256, where it came from and what it brings (part 5) |
 | `GET`, `POST /admin/modules/{module}/{path}` | the admin services of the node's modules (part 5) |
 | `POST /admin/sessions`; `GET /admin/me`, `POST /admin/me/password`, `POST /admin/me/logout` | the login; who the caller is and every action it may do, its own password change, its logout |
-| `GET /admin/users`, `GET /admin/users/{name}`, `POST /admin/users` | the users with their roles, who granted each, their block and live sessions; a new user |
+| `GET /admin/users`, `GET /admin/users/{name}`, `POST /admin/users` | the users with their roles, who granted each, their block, live sessions and tokens; a new user |
 | `POST /admin/users/{name}/roles`, `/block`, `/unblock`, `/password-reset`, `/sessions/end` | roles changed by difference, a block, a reset to a first password, the end of every session of a user |
+| `GET /admin/me/tokens`, `POST /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | the caller's own live tokens with the ceiling, a new one, a revoke |
+| `POST /admin/users/{name}/tokens`; `GET /admin/tokens?expiringWithin=…`, `POST /admin/tokens/{id}/revoke`, `POST /admin/tokens/ceiling` | a technical account's new token; every live token, those expiring soon, a revoke of any, the ceiling |
 
 The list of recent messages reads Postgres only. `from` and `to` are ISO-8601 instants at most 31 days
 apart; it lists the messages whose arrival started at `from` or later and before `to`, each with its id,
@@ -1279,6 +1288,7 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
   can be changed at run time, holding the lines custom code logs.
 - Metrics and alerts inside the platform, OpenTelemetry for export, with no required extra product;
   a full queue waits and alerts, it never drops.
-- Named tokens for the command line and for machines, the UI's login and its Users screen, device credentials for the login, and the audit's view at a message and the Audit screen
+- Named tokens at the command line and in the UI, the UI's login and its Users screen, device credentials for the login, and the
+  audit's view at a message and the Audit screen
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.
