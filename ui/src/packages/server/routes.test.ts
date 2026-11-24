@@ -98,6 +98,7 @@ describe('the routes of the git half', () => {
     }
     expect(await call('/git/packages/orders/pull', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
     expect(await call('/git/packages/orders/push', 'POST', '{}')).toMatchObject({ status: 400, body: { error: 'the request names no branch' } });
+    expect(await call('/git/packages/orders/fetch', 'POST', '{}')).toMatchObject({ status: 404, body: { error: 'no working folder is set: start the UI with RAIL8_WORKSPACE' } });
   });
 
   test('refuse a commit with 403 while the working folder is read-only, before its body is read', async () => {

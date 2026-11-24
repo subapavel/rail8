@@ -146,8 +146,8 @@ describe.each<[string, Build]>([
     const body = bodyOf(await api.get('orders'));
     expect(body.upstream).toBeNull();
 
-    for (const call of [api.fetch('orders'), api.pull('orders', body), api.push('orders', body)]) {
-      expect(await refusalOf(call)).toMatchObject({ status: 409, message: REMOTE_REFUSALS.noUpstream });
+    for (const call of [() => api.fetch('orders'), () => api.pull('orders', body), () => api.push('orders', body)]) {
+      expect(await refusalOf(call())).toMatchObject({ status: 409, message: REMOTE_REFUSALS.noUpstream });
     }
     expect(REMOTE_REFUSALS.noUpstream).toContain('git push -u');
   });
@@ -167,8 +167,8 @@ describe.each<[string, Build]>([
       const state = await api.get('orders');
       const body: RemoteBody = { branch: state.branch ?? 'main', head: state.head!.id, upstream: state.upstream?.name ?? 'origin/main' };
 
-      for (const call of [api.fetch('orders'), api.pull('orders', body), api.push('orders', body)]) {
-        expect((await refusalOf(call)).status, JSON.stringify(clone)).toBe(409);
+      for (const call of [() => api.fetch('orders'), () => api.pull('orders', body), () => api.push('orders', body)]) {
+        expect((await refusalOf(call())).status, JSON.stringify(clone)).toBe(409);
       }
       await world!.close();
       world = undefined;
@@ -193,7 +193,7 @@ describe.each<[string, Build]>([
     await world!.close();
 
     const foreign = await one({ upstream: { at: 'first' } }, { foreignPage: true });
-    for (const call of [foreign.api.fetch('orders'), foreign.api.pull('orders', body), foreign.api.push('orders', body)]) expect((await refusalOf(call)).status).toBe(403);
+    for (const call of [() => foreign.api.fetch('orders'), () => foreign.api.pull('orders', body), () => foreign.api.push('orders', body)]) expect((await refusalOf(call())).status).toBe(403);
   });
 
   test('a remote that asks for a password no credential helper gives fails at once, and opens no askpass window', async () => {

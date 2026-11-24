@@ -445,11 +445,15 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     if (upstream === null) throw refused(409, REMOTE_REFUSALS.noUpstream);
     return (folder.remote ??= { commit: upstream.commit, commits: [] });
   };
-  /** A fetch of `remote` into `folder`: its commits, its branch's commit as the upstream's, and the time of the fetch. */
+  /**
+   * A fetch of `remote` into `folder`: its commits, and its branch's commit as the upstream's. The fake has no clock: the
+   * fetch is dated one minute after the newest commit the folder knows, as each fake commit is a minute after its parent.
+   */
   const fetched = (folder: FakeFolder, remote: FakeRemote) => {
     if (remote.signIn) throw new PackagesError(422, REMOTE_REFUSALS.failed('fetch'), undefined, "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled");
     for (const commit of remote.commits.splice(0)) if (!folder.commits.some((c) => c.id === commit.id)) folder.commits.push(commit);
-    folder.upstream = { ...folder.upstream!, commit: remote.commit, fetchedAt: new Date().toISOString() };
+    const newest = Math.max(...folder.commits.map((c) => Date.parse(c.at)));
+    folder.upstream = { ...folder.upstream!, commit: remote.commit, fetchedAt: new Date(newest + 60_000).toISOString() };
   };
 
   let cloning = false;
