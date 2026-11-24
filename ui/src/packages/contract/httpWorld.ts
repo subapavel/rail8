@@ -12,7 +12,7 @@ import { checkGit } from '../server/git.ts';
 import { gitPackages } from '../server/routes.ts';
 import { runner, type Spawn } from '../server/runner.ts';
 import { realTimer } from '../server/timer.ts';
-import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed } from './seed';
+import { AUTHOR, DEPLOYED_AT, isId, manifestFor, OLD_GIT, type Build, type CloneSeed, type Zone } from './seed';
 
 const ORIGIN = 'http://localhost:5173';
 const TOKEN = 'the-admin-token';
@@ -37,9 +37,13 @@ export const httpWorld: Build = async (seed) => {
   await mkdir(work, { recursive: true });
   // the author's own git config, which the git half's git reads: their identity, or none, with no guess from the machine
   await writeFile(join(home, '.gitconfig'), seed.identity === null ? '[user]\n\tuseConfigOnly = true\n' : `[user]\n\tname = ${AUTHOR.name}\n\temail = ${AUTHOR.email}\n`);
-  const setup = { PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' };
+  // the seed's own git, in UTC whatever the machine's time zone, unless a clone names another
+  const setup = { PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C', TZ: 'UTC' };
   const identity = ['-c', 'user.name=Seed Author', '-c', 'user.email=seed@example.com', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main'];
-  const git = (cwd: string, ...args: string[]) => execFileSync('git', [...identity, ...args], { cwd, env: setup, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim();
+  const zoned = (zone: Zone, cwd: string, ...args: string[]) =>
+    execFileSync('git', [...identity, ...args], { cwd, env: { ...setup, TZ: zone }, stdio: ['ignore', 'pipe', 'pipe'] }).toString('utf8').trim();
+  const git = (cwd: string, ...args: string[]) => zoned('UTC', cwd, ...args);
+  const zones = new Map((seed.clones ?? []).map((c) => [c.folder, c.zone ?? 'UTC']));
   const write = async (file: string, text: string) => {
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, text);
@@ -49,7 +53,7 @@ export const httpWorld: Build = async (seed) => {
   const ids = new Map<string, string>();
   const commit = (clone: string, folder: string, label: string) => {
     git(clone, 'add', '-A');
-    git(clone, 'commit', '-q', '--allow-empty', '-m', label);
+    zoned(zones.get(folder) ?? 'UTC', clone, 'commit', '-q', '--allow-empty', '-m', label);
     ids.set(`${folder}/${label}`, git(clone, 'rev-parse', 'HEAD'));
   };
 

@@ -166,13 +166,16 @@ export function parseTree(output: string): TreeEntry[] {
 /** The format `log` is read with: id, parents, author, author date and subject, each ended by NUL, as `-z` ends each commit. */
 export const LOG_FORMAT = '--format=%H%x00%P%x00%an%x00%aI%x00%s';
 
-/** The output of `git log -z` with {@link LOG_FORMAT}, read. */
+/**
+ * The output of `git log -z` with {@link LOG_FORMAT}, read. A commit's time is always given with its offset: git 2.45
+ * and later write a time in UTC as `Z`, which is given as `+00:00`.
+ */
 export function parseLog(output: string): Commit[] {
   const fields = output.split('\0');
   const commits: Commit[] = [];
   for (let i = 0; i + 4 < fields.length; i += 5) {
     const [id = '', parents = '', author = '', at = '', subject = ''] = fields.slice(i, i + 5);
-    commits.push({ id, parents: parents === '' ? [] : parents.split(' '), subject, author, at });
+    commits.push({ id, parents: parents === '' ? [] : parents.split(' '), subject, author, at: at.replace(/Z$/, '+00:00') });
   }
   return commits;
 }

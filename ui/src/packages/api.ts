@@ -8,7 +8,7 @@ export interface Commit {
   parents: string[];
   subject: string;
   author: string;
-  /** The author date, as ISO 8601 with its offset. */
+  /** The author date, always as ISO 8601 with its offset, such as `2026-11-24T05:00:45+00:00`: UTC is `+00:00`, never `Z`. */
   at: string;
   deployed?: true;
 }

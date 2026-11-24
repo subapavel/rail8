@@ -32,6 +32,10 @@ export interface Seed {
 /** The author identity git gives by default. */
 export const AUTHOR = { name: 'Jiří Novák', email: 'jiri@example.com' } as const;
 
+/** A time zone a seeded commit is made in, by its name, with the offset git gives its times. */
+export const ZONES = { UTC: '+00:00', 'Asia/Kolkata': '+05:30' } as const;
+export type Zone = keyof typeof ZONES;
+
 /** A clone of its own on branch `main`. */
 export interface CloneSeed {
   folder: string;
@@ -41,6 +45,8 @@ export interface CloneSeed {
   files?: Record<string, string>;
   /** The commits of `main`, oldest first, by label: each adds the file `<label>.txt`. None: no commit yet. By default `first`. */
   commits?: string[];
+  /** The time zone the seeded commits are made in, one without summer time. By default UTC. */
+  zone?: Zone;
   /** Files a labelled commit writes besides `<label>.txt`, by path; null deletes one. */
   commitFiles?: Record<string, Record<string, string | null>>;
   /** The upstream `origin/main`, fetched: at the commit `at` of main, with the commits `more` of its own on top. */
@@ -126,7 +132,12 @@ export const isId = (commit: string) => /^[0-9a-f]{40}$/.test(commit);
 export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, string> } {
   const ids = new Map<string, string>();
   let count = 0;
-  const at = (n: number) => new Date(Date.parse('2026-11-01T09:00:00Z') + n * 60_000).toISOString().replace('.000Z', '+00:00');
+  // the time of the nth commit, a minute apart, as git writes it in `zone`
+  const at = (n: number, zone: Zone = 'UTC') => {
+    const offset = ZONES[zone];
+    const minutes = (offset.startsWith('-') ? -1 : 1) * (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4)));
+    return new Date(Date.parse('2026-11-01T09:00:00Z') + (n + minutes) * 60_000).toISOString().slice(0, 19) + offset;
+  };
 
   const cloneOf = (clone: CloneSeed): FakeFolder => {
     const folder: FakeFolder = {
@@ -150,7 +161,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
         else files[path] = text;
       }
       count++;
-      const made = { id: count.toString(16).padStart(40, '0'), parents: parent === null ? [] : [parent], subject: label, author: 'Seed Author', at: at(count), files };
+      const made = { id: count.toString(16).padStart(40, '0'), parents: parent === null ? [] : [parent], subject: label, author: 'Seed Author', at: at(count, clone.zone), files };
       folder.commits.push(made);
       ids.set(`${clone.folder}/${label}`, made.id);
       return made;
