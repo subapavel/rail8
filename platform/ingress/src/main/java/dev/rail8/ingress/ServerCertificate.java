@@ -24,10 +24,13 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -116,6 +119,29 @@ public final class ServerCertificate {
     /** {@code options} serving HTTPS with this certificate and the key that was checked. */
     public HttpServerOptions secure(HttpServerOptions options) {
         return options.setSsl(true).setKeyCertOptions(KeyCertOptions.wrap(keys));
+    }
+
+    /** The first certificate's {@code notAfter}: the last instant it is valid. */
+    public Instant notAfter() {
+        return leaf.getNotAfter().toInstant();
+    }
+
+    /**
+     * A notice for an operator when the first certificate expires within {@code within} of {@code now}, or has expired; empty
+     * before that. It names the certificate's variable, its file, its subject and its {@code notAfter}, never the key or a file's
+     * content.
+     *
+     * @param now    the instant to judge by, from the caller's clock
+     * @param within how long before {@code notAfter} the notice starts; not negative
+     */
+    public Optional<String> expiryNotice(Instant now, Duration within) {
+        Objects.requireNonNull(now, "now");
+        if (within.isNegative()) throw new IllegalArgumentException("within must not be negative: " + within);
+        Instant notAfter = notAfter();
+        if (now.isBefore(notAfter.minus(within))) return Optional.empty();
+        String state = now.isAfter(notAfter) ? "expired at " : "expires at ";
+        return Optional.of("the certificate in " + certVariable + " (" + certPath + ", " + leaf.getSubjectX500Principal().getName() + ") "
+                + state + notAfter + ": put a new one in that file and restart the node to serve it");
     }
 
     /** The variables and their files, the certificate's subject and its expiry; never the key. */

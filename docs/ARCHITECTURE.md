@@ -1158,7 +1158,9 @@ emergency key. The rules are those of `docs/USERS-AND-ROLES.md`:
   server's certificate first, then its chain in order, and the key, PKCS#8, PKCS#1 or SEC1 without a
   password, must be the first certificate's. A refused file names the variable and the path, never
   the content. `/live`, `/ready` and `/health` are then HTTPS too, and so is a probe of them (scheme
-  HTTPS in Kubernetes).
+  HTTPS in Kubernetes). From 14 days before the certificate's `notAfter`, and after it, `/health`
+  lists a notice naming `RAIL8_ADMIN_TLS_CERT`, its path, the certificate's subject and its
+  `notAfter`; it is judged on each request by the node's clock. A new certificate takes a restart.
 - On a bind other than loopback without a certificate, the node starts with a WARNING and answers
   403 `tls-required` to every login and every session, before the login's body is read; the
   emergency key and the shared token go on. `RAIL8_ADMIN_TLS=off` states that the network to the
