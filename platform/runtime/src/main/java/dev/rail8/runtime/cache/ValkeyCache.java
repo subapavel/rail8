@@ -211,7 +211,8 @@ public final class ValkeyCache implements Caches {
 
     /**
      * KEYS[1] the value, KEYS[2] the lock, KEYS[3] the package's entries, KEYS[4] their bytes; ARGV[1] the entry, ARGV[2] ''
-     * to delete the value and the lock, or a digest to delete the value only while its d is that digest: 1 deleted, 0 not.
+     * to delete the value and the lock, or a digest to delete the value only while its d is that digest: 0 when the value's d
+     * was not that digest, else 1.
      */
     private static final String REMOVE = """
             #!lua

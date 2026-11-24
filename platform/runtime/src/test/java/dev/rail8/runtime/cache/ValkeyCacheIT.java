@@ -30,6 +30,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -373,6 +374,55 @@ class ValkeyCacheIT extends CacheContract {
             assertEquals("token-2", result(first));
             assertEquals("token-2", result(later.call()), "the later caller got the next token, not the one it saw fail");
             assertEquals(2, loads.get(), "the next token was loaded once");
+        }
+    }
+
+    @Test
+    void aReadSentAgainThatFindsTheValueWithNoRemoveMeanwhileReturnsIt() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> new Cache.Entry("token-" + loads.incrementAndGet(), Duration.ofMinutes(5));
+            assertEquals("token-1", call(() -> b.scope(pkg).get("k", loader)));
+            Held read = heldA.holdNext();
+            CompletableFuture<String> first = async(() -> a.scope(pkg).get("k", loader));
+            read.awaitHeld();
+            call(() -> { a.scope(pkg).remove("k", "token-0"); return null; });   // another value: token-1 stays, and A reads again
+            read.release();
+            assertEquals("token-1", result(first), "the read sent again found token-1 with no remove meanwhile and returned it");
+            assertEquals(1, loads.get());
+        }
+    }
+
+    @Test
+    void aReadThatFindsTheValueOnceTheBoundOfAWaitHasPassedReturnsItThoughARemoveRanMeanwhile() throws Exception {
+        HeldClient heldA = new HeldClient();
+        try (Node a = new Node("node-a", heldA); Node b = new Node("node-b")) {
+            String pkg = freshPackage();
+            AtomicInteger loads = new AtomicInteger();
+            Cache.Loader loader = () -> {
+                loads.incrementAndGet();
+                return new Cache.Entry("token-2", Duration.ofMinutes(5));
+            };
+            Parked loading = park(b.scope(pkg), "k", "token-1", Duration.ofMinutes(5));
+            CompletableFuture<String> first = async(() -> a.scope(pkg).get("k", loader));
+            Instant giveUp = FakeRuntime.T0.plus(ValkeyCache.MAX_WAIT);
+            a.awaitPoll();
+            while (a.clock.instant().plus(a.timer.nextDelay()).isBefore(giveUp)) {
+                a.endPause();
+                a.awaitPoll();
+            }
+            loading.release.countDown();
+            assertEquals("token-1", result(loading.call));
+            Held read = heldA.holdNext();
+            a.endPause();   // A reads again once the bound of its wait has passed
+            read.awaitHeld();   // and the read found token-1
+            call(() -> { a.scope(pkg).remove("k", "token-0"); return null; });
+            call(() -> { b.scope(pkg).remove("k", "token-1"); return null; });
+            read.release();
+            assertEquals("token-1", result(first), "A read no more and returned the value it found");
+            assertEquals(0, loads.get());
         }
     }
 
