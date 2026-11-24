@@ -42,8 +42,8 @@ import java.util.concurrent.CompletionException;
  *       or more certificates (at most {@value #CA_MAX_BYTES} bytes), those certificates only. {@code off} never turns the
  *       certificate's check or the host name's check off.</li>
  * </ul>
- * A request carries {@code Authorization: Bearer $RAIL8_ADMIN_TOKEN} when that is set and not blank, and a redirect is never
- * followed.
+ * Each request carries the bearer its command gives, or none, and a redirect is never followed. {@link #token} and {@link #key}
+ * choose that bearer from the environment.
  */
 final class AdminApi {
 
@@ -51,15 +51,56 @@ final class AdminApi {
     /** The most bytes {@code RAIL8_ADMIN_CA} may hold. */
     static final long CA_MAX_BYTES = 64L * 1024;
     private static final Duration CONNECT = Duration.ofSeconds(10);
+    /** The prefix of the emergency key's form. */
+    private static final String KEY_PREFIX = "rail8k_";
 
     private final String url;
     private final Optional<SSLContext> trust;
-    private final Optional<String> token;
 
-    private AdminApi(String url, Optional<SSLContext> trust, Optional<String> token) {
+    private AdminApi(String url, Optional<SSLContext> trust) {
         this.url = url;
         this.trust = trust;
-        this.token = token;
+    }
+
+    /**
+     * The bearer of every command but {@code rail8 user} and {@code rail8 bootstrap}: {@code RAIL8_TOKEN}, else, during the
+     * bridge, the shared token in {@code RAIL8_ADMIN_TOKEN}, else none. A blank value counts as not set. A value that starts
+     * with {@code rail8k_}, the emergency key's form, is never sent.
+     *
+     * @throws Cli.Usage the bearer it would choose starts with {@code rail8k_}; the message starts with {@code command} and never
+     *                   holds the value
+     */
+    static Optional<String> token(String command, Map<String, String> env) {
+        Optional<String> token = set(env, "RAIL8_TOKEN");
+        if (token.isPresent()) {
+            if (token.get().startsWith(KEY_PREFIX)) {
+                throw new Cli.Usage(command + ": RAIL8_TOKEN holds a value of the emergency key's form, so nothing is sent: it takes a token"
+                        + " of an account, rail8t_…");
+            }
+            return token;
+        }
+        Optional<String> shared = set(env, "RAIL8_ADMIN_TOKEN");
+        if (shared.isPresent() && shared.get().startsWith(KEY_PREFIX)) {
+            throw new Cli.Usage(command + ": RAIL8_ADMIN_TOKEN holds the emergency key, which only rail8 user and rail8 bootstrap send,"
+                    + " so nothing is sent: set RAIL8_TOKEN to a token of an account");
+        }
+        return shared;
+    }
+
+    /**
+     * The bearer of {@code rail8 user} and {@code rail8 bootstrap}: {@code RAIL8_ADMIN_TOKEN}, the emergency key, or during the
+     * bridge the shared token.
+     *
+     * @throws Cli.Usage {@code RAIL8_ADMIN_TOKEN} is not set or blank; the message starts with {@code command}
+     */
+    static String key(String command, Map<String, String> env) {
+        return set(env, "RAIL8_ADMIN_TOKEN")
+                .orElseThrow(() -> new Cli.Usage(command + ": RAIL8_ADMIN_TOKEN is not set: it holds the emergency key"));
+    }
+
+    /** The value of {@code name} in {@code env}, empty when it is not set or blank. */
+    private static Optional<String> set(Map<String, String> env, String name) {
+        return Optional.ofNullable(env.get(name)).filter(v -> !v.isBlank());
     }
 
     /**
@@ -92,7 +133,7 @@ final class AdminApi {
         Optional<SSLContext> trust = scheme.equals("https")
                 ? Optional.ofNullable(env.get("RAIL8_ADMIN_CA")).filter(ca -> !ca.isEmpty()).map(ca -> trusting(command, ca))
                 : Optional.empty();
-        return new AdminApi(url, trust, Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")).filter(t -> !t.isBlank()));
+        return new AdminApi(url, trust);
     }
 
     /** The URL, without a trailing slash. */
@@ -101,14 +142,15 @@ final class AdminApi {
     }
 
     /**
-     * {@code POST <url><pathAndQuery>} with {@code json} as {@code application/json}, waiting at most {@code answer} for the answer.
+     * {@code POST <url><pathAndQuery>} with {@code json} as {@code application/json} and {@code Authorization: Bearer <bearer>}
+     * when {@code bearer} is present, waiting at most {@code answer} for the answer.
      *
      * @throws NoAnswer the node could not be reached or did not answer in time, or the TLS handshake failed
      */
-    HttpResponse<String> post(String pathAndQuery, byte[] json, Duration answer) throws NoAnswer {
+    HttpResponse<String> post(String pathAndQuery, byte[] json, Optional<String> bearer, Duration answer) throws NoAnswer {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url + pathAndQuery)).timeout(answer)
                 .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json));
-        token.ifPresent(t -> request.header("Authorization", "Bearer " + t));
+        bearer.ifPresent(t -> request.header("Authorization", "Bearer " + t));
         HttpClient.Builder client = HttpClient.newBuilder().connectTimeout(CONNECT).followRedirects(HttpClient.Redirect.NEVER);
         trust.ifPresent(client::sslContext);
         try (HttpClient http = client.build()) {

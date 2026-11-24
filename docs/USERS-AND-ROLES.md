@@ -815,8 +815,8 @@ Each step is one issue, built and merged on its own. Step 1 and step 2 are group
   rule for a node during the bridge. It is independent of 1a and may come first.
 - **1c. The deploy's audit with its record.** `class:B`. The rows of a deploy and an undeploy written in the
   transactions of `PoolLock.save` and `PoolLock.delete`, with the user who deployed and the commit's author.
-- **1d. The UI server's session.** `class:C`. Token mode and session mode, the cookie, the `/session` routes,
-  `Rail8-Session` and its 409, and the login screen.
+- **1d. The UI server's session.** `class:C`. Token mode, with `RAIL8_TOKEN` or the shared token, and session mode,
+  the cookie, the `/session` routes, `Rail8-Session` and its 409, and the login screen.
 - **1e. The Users screen.** `class:B`. An administrator creates users, changes roles, blocks a user, resets a password
   and ends a user's sessions, and sees who granted each role. It is the first step the owner sees.
 - **1f. Devices.** `class:C`. The device credential, its migration and its row of the login limit, before the cut.
@@ -824,13 +824,13 @@ Each step is one issue, built and merged on its own. Step 1 and step 2 are group
 **Step 2, named tokens and the cut.**
 - **2a. Named tokens.** `class:C`. The tokens' migration, personal and technical tokens: issue, list, revoke, the warning
   of their expiry, and the installation's ceiling. A token never changes an account. The shared token still works.
-- **2b. Tokens at the command line and in the development server.** `class:B`. `RAIL8_TOKEN` in the command line and in
-  the development server's token mode, and `rail8 bootstrap`. The UI's screens of tokens: a person's own, a technical
-  account's on the Users screen, the ceiling, and the tokens that expire within 14 days.
+- **2b. Tokens at the command line.** `class:B`. `RAIL8_TOKEN` in the command line, and `rail8 bootstrap`.
+- **2e. The UI's screens of tokens.** `class:B`, after 1d and 1e. A person's own tokens, a technical account's on the
+  Users screen, the ceiling, and the tokens that expire within 14 days.
 - **2c. This repository's callers on named tokens.** `class:A`. CI, the compose stacks, the quickstart and the
   end-to-end scenarios: a key generated for each run, `rail8 bootstrap`, and `RAIL8_TOKEN`. Each stack runs on one host's
   own network, so its nodes and its clients set `RAIL8_ADMIN_TLS=off`.
-- **2d. The cut.** `class:C`, merged last so `main` stays green. The marker closed, the key's form enforced,
+- **2d. The cut.** `class:C`, merged last, after 2c and 2e, so `main` stays green. The marker closed, the key's form enforced,
   `X-Rail8-Actor` and the open loopback API gone, the default of `via` dropped, the rule of encryption at the node's
   start, and the list of grants through the shared token.
 

@@ -89,16 +89,14 @@ final class Users {
     }
 
     static int add(Add add, Map<String, String> env, PrintStream out, PrintStream err) {
-        if (Optional.ofNullable(env.get("RAIL8_ADMIN_TOKEN")).filter(t -> !t.isBlank()).isEmpty()) {
-            throw new Cli.Usage("user add: RAIL8_ADMIN_TOKEN is not set: it holds the emergency key");
-        }
+        String key = AdminApi.key("user add", env);
         AdminApi admin = AdminApi.of("user add", add.admin(), env);
         JsonArray roles = new JsonArray();
         add.role().ifPresent(roles::add);
         byte[] body = new JsonObject().put("name", add.name()).put("kind", "person").put("roles", roles).encode().getBytes(StandardCharsets.UTF_8);
         HttpResponse<String> answer;
         try {
-            answer = admin.post("/admin/users", body, ANSWER);
+            answer = admin.post("/admin/users", body, Optional.of(key), ANSWER);
         } catch (AdminApi.NoAnswer unreachable) {
             err.println("rail8 user add: " + unreachable.getMessage());
             return 1;

@@ -19,8 +19,8 @@ import java.util.ServiceConfigurationError;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The {@code rail8} command line: {@code validate}, {@code test}, {@code lock}, {@code deploy}, {@code user add}, {@code key new},
- * {@code new-adapter} and {@code help},
+ * The {@code rail8} command line: {@code validate}, {@code test}, {@code lock}, {@code deploy}, {@code user add}, {@code bootstrap},
+ * {@code key new}, {@code new-adapter} and {@code help},
  * and {@code rail8 <name>}, the command a module of its class path brings ({@link dev.rail8.api.plugin.Command}).
  * Exit codes: 0 done, 1 the package has problems, a flow test failed, or the node refused or could not be reached, 2 a usage
  * error or refused plugins (nothing done).
@@ -58,11 +58,18 @@ public final class Cli {
                   answers what the deploy would do, the state it replaces as replaces, and changes nothing (url:
                   --admin, else $RAIL8_ADMIN, else http://localhost:8081; plain http:// only to localhost, 127.0.0.0/8
                   or ::1 unless $RAIL8_ADMIN_TLS=off; https:// trusts the system's certificates, or those of the PEM
-                  file $RAIL8_ADMIN_CA only; bearer token: $RAIL8_ADMIN_TOKEN only)
+                  file $RAIL8_ADMIN_CA only; bearer token: $RAIL8_TOKEN, else a shared token in $RAIL8_ADMIN_TOKEN;
+                  never a value of the emergency key's form, rail8k_...)
               user add <name> [--role <role>] [--admin <url>]
                   ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
                   print the first password it answers, once; the person chooses a password of their own at the first login
                   (url as for deploy; bearer token: $RAIL8_ADMIN_TOKEN only, the emergency key)
+              bootstrap --admin <name> --deploy-account <name> --token-file <path>
+                  make the first users of a stack that starts itself: create the administrator <name> with the emergency
+                  key, log in with the first password, set a new generated password and print it, once; in that session
+                  create the technical account with the developer role and write its token to <path>, then log out
+                  (url: $RAIL8_ADMIN, else http://localhost:8081, otherwise as for deploy; bearer token of the first
+                  step: $RAIL8_ADMIN_TOKEN only, the emergency key)
               key new
                   print a new emergency key, rail8k_ and 43 base64url characters, for the node's RAIL8_ADMIN_TOKEN while the
                   first administrator is made or administrators are locked out; unset it on the node afterwards
@@ -103,7 +110,8 @@ public final class Cli {
      * Runs the command {@code args} names, on a virtual thread of its own (the node's deploy code blocks on Vert.x futures), and
      * returns its exit code; never exits the JVM.
      *
-     * @param env     the environment the command reads: deploy and user {@code RAIL8_ADMIN}, {@code RAIL8_ADMIN_TOKEN},
+     * @param env     the environment the command reads: deploy, user and bootstrap {@code RAIL8_ADMIN}, {@code RAIL8_TOKEN} (deploy),
+     *                {@code RAIL8_ADMIN_TOKEN},
      *                {@code RAIL8_ADMIN_TLS} and {@code RAIL8_ADMIN_CA}, validate and test {@code RAIL8_PLUGINS}; a module's command is
      *                given all of it
      * @param modules the class loader whose service files name the modules: the CLI's own, which are a node's
@@ -124,6 +132,7 @@ public final class Cli {
                 }
                 case "deploy" -> Deploy.run(Deploy.arguments(args), env, out, err);
                 case "user" -> Users.user(args, env, out, err);
+                case "bootstrap" -> Bootstrap.run(Bootstrap.arguments(args), env, out, err);
                 case "key" -> Users.key(args, out);
                 case "help" -> help(modules, out, err);
                 case "test" -> {
