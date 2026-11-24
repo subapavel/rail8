@@ -97,8 +97,13 @@ public final class BuiltinsMathV1 {
    *
    * @param builtin the builtin every call of the filter calls
    * @param filter the filter, run with {@code -c} on stdin {@code null}
+   * @param values the values the filter passes to the builtin, as written in it, in the order they were drawn
    */
-  public record Generated(long seed, Builtin builtin, String filter) {
+  public record Generated(long seed, Builtin builtin, String filter, List<String> values) {
+    public Generated {
+      values = List.copyOf(values);
+    }
+
 
     /** The case block, LF-terminated: {@code case}, {@code arg -c}, {@code filter}, {@code stdin}, {@code end}. */
     public String block() {
@@ -143,10 +148,12 @@ public final class BuiltinsMathV1 {
     long round = seed / COUNT;
     boolean otherKind = (round / 2) % 2 == 1;
     int calls = r.between(1, 4);
+    List<String> drawn = new ArrayList<>();
     StringBuilder b = new StringBuilder(f.exact() ? "" : PRINTER);
     if (f.arity() == 0) {
       List<String> values = new ArrayList<>();
       for (int k = 0; k < calls; k++) values.add(k == 0 && otherKind ? kind(r) : value(r));
+      drawn.addAll(values);
       b.append(String.join(", ", values)).append(" | ").append(guarded(f, f.name()));
     } else if (round % 2 == 0) {
       int forced = r.below(f.arity());
@@ -154,6 +161,7 @@ public final class BuiltinsMathV1 {
       for (int k = 0; k < calls; k++) {
         List<String> args = new ArrayList<>();
         for (int a = 0; a < f.arity(); a++) args.add(k == 0 && otherKind && a == forced ? kind(r) : value(r));
+        drawn.addAll(args);
         tuples.add("[" + String.join(", ", args) + "]");
       }
       List<String> vars = VARIABLES.subList(0, f.arity());
@@ -166,11 +174,12 @@ public final class BuiltinsMathV1 {
         List<String> values = new ArrayList<>();
         int count = r.between(1, 2);
         for (int k = 0; k < count; k++) values.add(k == 0 && otherKind && a == forced ? kind(r) : value(r));
+        drawn.addAll(values);
         args.add(String.join(", ", values));
       }
       b.append(guarded(f, f.name() + "(" + String.join("; ", args) + ")"));
     }
-    return new Generated(seed, f, b.toString());
+    return new Generated(seed, f, b.toString(), drawn);
   }
 
   /** {@code try call catch .}, the call's result through {@code p} when the builtin is computed. */
