@@ -21,6 +21,9 @@ import dev.rail8.runtime.deploy.Doors;
 import dev.rail8.runtime.deploy.GitRepos;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.node.OnVirtualThread;
+import dev.rail8.runtime.secret.MemorySecretStores;
+import dev.rail8.runtime.secret.SecretStore;
+import dev.rail8.runtime.secret.StoreKey;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonArray;
@@ -60,13 +63,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * loopback without a token. The password hash is a {@link FakeHash}, the clock {@link #rt}'s; the node's modules are one plugin,
  * {@code demo}, with {@code GET} and {@code POST ping}. While {@link #auditFails} is set, the audit rows of a use of the key and
  * of a view of a body are not written; while {@link #revokeFails} is set, a revoke of a token throws as a failed store would; {@link #viewsAtOpen} holds, for each stream of a body opened, how many views the audit
- * held at that moment.
+ * held at that moment. Its deployments read the secret store {@link #secrets}, whose routes the servers mount.
  */
 abstract class AdminAccessFixture {
 
     static final String KEY = "rail8k_" + "k".repeat(43);
     static final String SHARED = "s3cret-token";
     static final String PASSWORD = "a password of my own";
+    /** The secret store's key: 32 bytes of 7, in base64. */
+    static final String STORE_KEY = java.util.Base64.getEncoder().encodeToString("7".repeat(32).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
 
     static Vertx vertx;
     static HttpClient http;
@@ -81,6 +86,10 @@ abstract class AdminAccessFixture {
     final AtomicBoolean revokeFails = new AtomicBoolean();
     final List<Long> viewsAtOpen = new CopyOnWriteArrayList<>();
     final List<AdminServer> started = new ArrayList<>();
+    /** The node's secret store, under {@link #STORE_KEY}, over a database of its own. */
+    SecretStore secrets;
+    /** The database {@link #secrets} reads, where a test starts the stores of other nodes. */
+    final MemorySecretStores secretDb = new MemorySecretStores();
     Deployments deployments;
     AdminServer keyServer;
     int key;
@@ -109,7 +118,9 @@ abstract class AdminAccessFixture {
         env.put("RAIL8_GIT_BASE", repos.base().toString());
         Doors doors = new Doors();
         Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors));
-        deployments = new Deployments(NodeConfig.from(env), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(),
+        NodeConfig config = NodeConfig.from(env);
+        secrets = secretDb.start("node-1", Map.of(StoreKey.VARIABLE, STORE_KEY), rt.clock(), rt.timer());
+        deployments = new Deployments(config.withSecrets(config.secrets().withStore(secrets)), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(),
                 messages, new InMemoryDlq(), rows, () -> 0L);
         keyServer = server(Optional.of(KEY));
         key = keyServer.start(vertx).await(10, TimeUnit.SECONDS);
@@ -120,6 +131,7 @@ abstract class AdminAccessFixture {
     @AfterEach
     void stop() throws Exception {
         for (AdminServer s : started) s.stop().await(10, TimeUnit.SECONDS);
+        secrets.close();
         OnVirtualThread.call(() -> { deployments.close(); return null; });
     }
 

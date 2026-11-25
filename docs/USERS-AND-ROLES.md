@@ -82,9 +82,9 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 | `token.revoke` | `POST /admin/tokens/{id}/revoke` | administrator logged in, the key |
 | `token.ceiling` | `POST /admin/tokens/ceiling` | administrator logged in |
 | `audit.read` | `GET /admin/audit` | administrator |
-| `secret.list` | the secret store's list: names, never a value | developer, secret-administrator |
-| `secret.write` | the secret store's create and overwrite | secret-administrator |
-| `secret.delete` | the secret store's delete | secret-administrator |
+| `secret.list` | `GET /admin/secrets`, `GET /admin/secrets/{name}`: names, never a value | developer, secret-administrator |
+| `secret.write` | `POST /admin/secrets`, `POST /admin/secrets/{name}`: the create and the overwrite | secret-administrator |
+| `secret.delete` | `DELETE /admin/secrets/{name}` | secret-administrator |
 | `self.read` | `GET /admin/me` | every caller, the key included |
 | `self.password` | `POST /admin/me/password` | a person logged in |
 | `self.logout` | `POST /admin/me/logout` | a session |
