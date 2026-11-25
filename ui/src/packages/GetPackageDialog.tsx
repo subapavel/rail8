@@ -1,8 +1,10 @@
 import { Alert, Button, Flex, Form, Input, Typography } from 'antd';
 import { useId, useState } from 'react';
+import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { PackagesError, type CloneAnswer, type PackagesApi } from './api';
-import { cloneSourceOf } from './rules';
+import { ADDRESS_TEXTS, refusalIn } from './refusals';
+import { ADDRESS_REFUSALS, cloneSourceOf } from './rules';
 
 export interface GetPackageDialogProps {
   api: PackagesApi;
@@ -26,6 +28,8 @@ export function GetPackageDialog({ api, onPackage, onCloned, onClose }: GetPacka
   const [text, setText] = useState('');
   const [shown, setShown] = useState<Shown>({ kind: 'asking' });
   const addressId = useId();
+  const texts = useText();
+  const { t } = texts;
   const source = text.trim() === '' ? null : cloneSourceOf(text);
   const getting = shown.kind === 'getting';
   const ready = source !== null && 'address' in source && !getting;
@@ -52,18 +56,18 @@ export function GetPackageDialog({ api, onPackage, onCloned, onClose }: GetPacka
     const { answer } = shown;
     return (
       <MountedModal
-        title={`Got ${answer.repository}`}
+        title={t('packages.get.got', { folder: answer.repository })}
         onCancel={onClose}
         footer={[
           <Button key="close" type="primary" onClick={onClose}>
-            Close
+            {t('packages.close')}
           </Button>,
         ]}
       >
         {'reason' in answer ? (
-          <Alert type="warning" showIcon title={`The folder ${answer.repository} holds the clone, but it is no package`} description={answer.reason} />
+          <Alert type="warning" showIcon title={t('packages.get.noPackage', { folder: answer.repository })} description={answer.reason} />
         ) : (
-          <Alert type="warning" showIcon title={`The folder ${answer.repository} holds the clone, but its state could not be read`} description={answer.problem} />
+          <Alert type="warning" showIcon title={t('packages.get.unread', { folder: answer.repository })} description={answer.problem} />
         )}
       </MountedModal>
     );
@@ -71,32 +75,32 @@ export function GetPackageDialog({ api, onPackage, onCloned, onClose }: GetPacka
 
   return (
     <MountedModal
-      title="Get a package"
+      title={t('packages.get')}
       onCancel={getting ? undefined : onClose}
       closable={!getting}
       width={640}
       footer={[
         <Button key="cancel" disabled={getting} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="get" type="primary" loading={getting} disabled={!ready && !getting} onClick={() => void get()}>
-          Get
+          {t('packages.get.get')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        <Typography.Text>Clones a repository into a new folder of the working folder, named as the repository, as git clone does in a terminal.</Typography.Text>
+        <Typography.Text>{t('packages.get.intro')}</Typography.Text>
         {shown.kind === 'refused' && (
           <Alert
             type="error"
             showIcon
-            title="The package was not got"
+            title={t('packages.get.refused')}
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>
                 {shown.output !== undefined && shown.output !== '' && (
                   <Typography.Paragraph style={{ marginBottom: 0 }}>
-                    <pre aria-label="What git said" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                    <pre aria-label={t('packages.gitSaid')} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                       {shown.output}
                     </pre>
                   </Typography.Paragraph>
@@ -107,17 +111,17 @@ export function GetPackageDialog({ api, onPackage, onCloned, onClose }: GetPacka
         )}
         <Form layout="vertical" requiredMark onFinish={() => void get()}>
           <Form.Item
-            label="Address"
+            label={t('packages.get.address')}
             htmlFor={addressId}
             required
             style={{ marginBottom: 0 }}
             validateStatus={source !== null && 'error' in source ? 'error' : undefined}
             help={
               source === null
-                ? 'The https or ssh address of the repository, as its Clone button gives it'
+                ? t('packages.get.address.help')
                 : 'error' in source
-                  ? source.error
-                  : `Goes into the folder ${source.repository}`
+                  ? refusalIn(texts, ADDRESS_REFUSALS, ADDRESS_TEXTS, source.error)
+                  : t('packages.get.into', { folder: source.repository })
             }
           >
             <Input

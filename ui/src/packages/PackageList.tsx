@@ -3,12 +3,13 @@ import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Empty, Flex, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { GitCredentialsAlert } from '../GitCredentialsAlert';
+import { useText } from '../language';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
 import { GetPackageDialog } from './GetPackageDialog';
 import { NewPackageDialog } from './NewPackageDialog';
-import { BranchFact, CommitFact, DeployedFact, PoolFact, UpstreamFact } from './parts';
+import { BranchFact, code, CommitFact, DeployedFact, PoolFact, UpstreamFact } from './parts';
 import { MAX_PACKAGES } from './rules';
 
 export interface PackageListProps {
@@ -35,6 +36,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const [getting, setGetting] = useState(false);
   const [making, setMaking] = useState(false);
+  const { t, rich } = useText();
 
   useEffect(() => {
     let current = true;
@@ -49,35 +51,35 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
 
   const refreshButton = (
     <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-      Refresh
+      {t('packages.refresh')}
     </Button>
   );
 
   const newButton = (writable: boolean, key = 'new') => (
     <Button key={key} icon={<PlusOutlined aria-hidden />} disabled={!writable} onClick={() => setMaking(true)}>
-      New package
+      {t('packages.new')}
     </Button>
   );
 
   const getButton = (writable: boolean, key = 'get') => (
     <Button key={key} type="primary" icon={<CloudDownloadOutlined aria-hidden />} disabled={!writable} onClick={() => setGetting(true)}>
-      Get a package…
+      {t('packages.get.open')}
     </Button>
   );
 
   let body;
   if (result.kind === 'reading') {
-    body = <ReadSpinner label="Reading the packages" />;
+    body = <ReadSpinner label={t('packages.reading')} />;
   } else if (result.kind === 'failed') {
-    body = <Alert showIcon type="error" title="The packages could not be read" description={result.message} action={<Button onClick={refresh}>Try again</Button>} />;
+    body = <Alert showIcon type="error" title={t('packages.unread')} description={result.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   } else if (!result.list.configured) {
     body = (
       <ProCard>
         <Empty
           description={
             <>
-              <Typography.Title level={2}>No working folder</Typography.Title>
-              Start the UI with <code>RAIL8_WORKSPACE</code> set to the folder that holds your packages, such as <code>RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev</code>.
+              <Typography.Title level={2}>{t('packages.workspace.none')}</Typography.Title>
+              {rich('packages.workspace.none.hint', { code: (chunks) => <code>{chunks}</code> })}
             </>
           }
         />
@@ -92,21 +94,21 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           <Alert
             type="warning"
             showIcon
-            title="Not every folder of the working folder is listed"
-            description={`The working folder holds more than ${MAX_PACKAGES} packages, or more than ${MAX_PACKAGES} folders that are no package; only the first ones are listed.`}
+            title={t('packages.list.truncated')}
+            description={t('packages.list.truncated.description', { max: MAX_PACKAGES })}
           />
         )}
-        {silent !== undefined && <Alert type="warning" showIcon title={`The node at ${list.node} does not answer`} description={silent.error} />}
+        {silent !== undefined && <Alert type="warning" showIcon title={t('packages.node.silent', { node: list.node })} description={silent.error} />}
         <GitCredentialsAlert />
         <ProTable<PackageRow>
-          aria-label="Packages"
+          aria-label={t('packages.screen.title')}
           rowKey="repository"
           size="small"
           dataSource={list.packages}
           search={false}
           options={false}
           pagination={false}
-          headerTitle={<h2>Packages of the working folder</h2>}
+          headerTitle={<h2>{t('packages.list.title')}</h2>}
           toolBarRender={() => [
             refreshButton,
             newButton(list.writable),
@@ -117,8 +119,8 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
               <Empty
                 description={
                   <>
-                    <Typography.Title level={2}>No packages</Typography.Title>
-                    The working folder holds no clone with <code>package.yaml</code> at its root. Make one with New package, or get one from its git host with Get a package….
+                    <Typography.Title level={2}>{t('packages.list.none')}</Typography.Title>
+                    {rich('packages.list.none.hint', { code: (chunks) => <code>{chunks}</code> })}
                   </>
                 }
               >
@@ -133,7 +135,7 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
           }}
           columns={[
             {
-              title: 'Repository',
+              title: t('packages.repository'),
               dataIndex: 'repository',
               render: (_, row) => (
                 <Button type="link" className="rail8-link" onClick={() => onOpen(row.repository, list.writable)}>
@@ -142,25 +144,25 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
               ),
             },
             {
-              title: 'Package',
+              title: t('frame.package'),
               key: 'package',
               render: (_, row) =>
                 row.package === null ? <Typography.Text type="danger">{row.problem}</Typography.Text> : `${row.package.name} ${row.package.version}`,
             },
-            { title: 'Branch', key: 'branch', render: (_, row) => <BranchFact state={row} /> },
-            { title: 'Last commit', key: 'head', render: (_, row) => <CommitFact state={row} at={at} /> },
-            { title: 'Upstream', key: 'upstream', render: (_, row) => <UpstreamFact state={row} at={at} /> },
-            { title: 'Changed files', dataIndex: 'changed', align: 'right', width: 120 },
+            { title: t('packages.branch'), key: 'branch', render: (_, row) => <BranchFact state={row} /> },
+            { title: t('packages.lastCommit'), key: 'head', render: (_, row) => <CommitFact state={row} at={at} /> },
+            { title: t('packages.upstream'), key: 'upstream', render: (_, row) => <UpstreamFact state={row} at={at} /> },
+            { title: t('packages.changed'), dataIndex: 'changed', align: 'right', width: 120 },
             {
-              title: 'Deployed',
+              title: t('packages.deployed'),
               key: 'deployed',
               render: (_, row) => (
                 <Flex vertical gap="small">
                   <DeployedFact state={row} at={at} />
                   <PoolFact state={row} />
                   {row.pinnedBehind !== undefined && (
-                    <Tooltip title={`${row.pinnedBehind === 1 ? '1 package the node runs pins' : `${row.pinnedBehind} packages the node runs pin`} a commit of it behind the one it runs: see Used by in its tab.`}>
-                      <Badge status="warning" text={`Pinned behind by ${row.pinnedBehind}`} />
+                    <Tooltip title={t('packages.pinnedBehind.hint', { count: row.pinnedBehind })}>
+                      <Badge status="warning" text={t('packages.pinnedBehind', { count: row.pinnedBehind })} />
                     </Tooltip>
                   )}
                 </Flex>
@@ -170,18 +172,18 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
         />
         {list.others.length > 0 && (
           <ProTable<Listed['others'][number]>
-            aria-label="Folders that are no package"
+            aria-label={t('packages.others')}
             rowKey="folder"
             size="small"
             dataSource={list.others}
             search={false}
             options={false}
             pagination={false}
-            headerTitle={<h2>Folders that are no package</h2>}
-            toolbar={{ subTitle: 'Their files stay in the lists of flows, endpoints and mappings.' }}
+            headerTitle={<h2>{t('packages.others')}</h2>}
+            toolbar={{ subTitle: t('packages.others.hint') }}
             columns={[
-              { title: 'Folder', dataIndex: 'folder' },
-              { title: 'Why it is no package', dataIndex: 'reason' },
+              { title: t('packages.folder'), dataIndex: 'folder' },
+              { title: t('packages.others.why'), dataIndex: 'reason' },
             ]}
           />
         )}
@@ -191,15 +193,16 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
 
   return (
     <Page
-      title="Packages"
-      tags={result.kind === 'read' && result.list.configured && !result.list.writable ? <Tag>Read-only</Tag> : undefined}
+      title={t('packages.screen.title')}
+      tags={result.kind === 'read' && result.list.configured && !result.list.writable ? <Tag>{t('packages.readOnly.tag')}</Tag> : undefined}
       content={
         <Flex vertical>
-          <span>The packages of the working folder: each one a clone of its own, with its branch, its last commit and what the node runs of it.</span>
+          <span>{t('packages.list.content')}</span>
           {result.kind === 'read' && result.list.configured && (
             <span>
-              Deployed state on the node at <Typography.Text code>{result.list.node}</Typography.Text>
-              {result.list.packages.some((p) => p.deployed.node === 'answered' && p.deployed.pool !== undefined && !('error' in p.deployed.pool)) && ', and on every node of its pool'}
+              {result.list.packages.some((p) => p.deployed.node === 'answered' && p.deployed.pool !== undefined && !('error' in p.deployed.pool))
+                ? rich('packages.list.node.pool', { code, node: result.list.node })
+                : rich('packages.list.node', { code, node: result.list.node })}
             </span>
           )}
         </Flex>

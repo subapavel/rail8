@@ -1,10 +1,12 @@
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, App, Button, Flex, Form, Input, Tag, Typography } from 'antd';
 import { useId, useState } from 'react';
+import { say, useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { useWorkingFiles, type WorkingFile } from '../workingFiles';
 import { PackagesError, type Change, type Commit, type CommitAnswer, type PackagesApi, type PackageState } from './api';
-import { short } from './parts';
+import { CHANGE } from './data';
+import { code, short } from './parts';
 
 export interface CommitDialogProps {
   api: PackagesApi;
@@ -18,12 +20,8 @@ export interface CommitDialogProps {
   onDeploy: (commit: Pick<Commit, 'id' | 'subject'>) => void;
 }
 
-const STATUS: Record<Change['status'], { label: string; color: string }> = {
-  added: { label: 'Added', color: 'success' },
-  modified: { label: 'Modified', color: 'warning' },
-  deleted: { label: 'Deleted', color: 'error' },
-  renamed: { label: 'Renamed', color: 'processing' },
-};
+/** The colour of the tag of each change. */
+const COLOR: Record<Change['status'], string> = { added: 'success', modified: 'warning', deleted: 'error', renamed: 'processing' };
 
 /** The path of `path` within its package: the working folder's path without its first segment. */
 const inside = (path: string) => path.slice(path.indexOf('/') + 1);
@@ -71,6 +69,8 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
   const [shown, setShown] = useState<Shown>({ kind: 'choosing' });
   const { notification } = App.useApp();
   const messageId = useId();
+  const texts = useText();
+  const { t } = texts;
 
   const ticked = (change: Change) => change.index !== 'differs' && (choices.get(change.path) ?? tickedAtFirst(change, open));
   const chosen = state.changes.filter(ticked);
@@ -102,7 +102,13 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
       const touched = made !== null && (made.staged.length > 0 || made.rewritten.length > 0 || made.changedOnDisk.length > 0);
       const plain = made !== null && !touched && (made.parents[0] ?? null) === head && answer.problem === undefined;
       if (plain) {
-        notification.success({ key: `commit:${repository}`, title: `Committed ${short(made.id)} ${made.subject}`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss commit notification' } });
+        notification.success({
+          key: `commit:${repository}`,
+          title: t('packages.commit.done', { commit: short(made.id), subject: made.subject }),
+          duration: 8,
+          role: 'status',
+          closable: { 'aria-label': t('packages.commit.dismiss') },
+        });
         onClose();
         if (deploy) onDeploy(made);
       } else {
@@ -123,7 +129,7 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
       shown.deploy && made !== null
         ? [
             <Button key="close" onClick={onClose}>
-              Close
+              {t('packages.close')}
             </Button>,
             <Button
               key="deploy"
@@ -133,16 +139,16 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
                 onDeploy(made);
               }}
             >
-              Deploy this commit…
+              {t('packages.deploy.thisCommit')}
             </Button>,
           ]
         : [
             <Button key="close" type="primary" onClick={onClose}>
-              Close
+              {t('packages.close')}
             </Button>,
           ];
     return (
-      <MountedModal title="Committed" onCancel={onClose} footer={footer} width={720}>
+      <MountedModal title={t('packages.commit.committed')} onCancel={onClose} footer={footer} width={720}>
         <Committed answer={shown.answer} head={shown.head} />
       </MountedModal>
     );
@@ -150,39 +156,37 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
 
   return (
     <MountedModal
-      title={`Commit to ${state.branch ?? 'a branch'}`}
+      title={state.branch === null ? t('packages.commit.title.noBranch') : t('packages.commit.title', { branch: state.branch })}
       onCancel={committing !== null ? undefined : onClose}
       width={880}
       footer={[
         <Button key="cancel" disabled={committing !== null} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="deploy" loading={committing === 'deploy'} disabled={committing === 'commit' || message.trim() === '' || chosen.length === 0} onClick={() => void commit(true)}>
-          Commit and deploy
+          {t('packages.commit.andDeploy')}
         </Button>,
         <Button key="commit" type="primary" loading={committing === 'commit'} disabled={committing === 'deploy' || message.trim() === '' || chosen.length === 0} onClick={() => void commit(false)}>
-          Commit
+          {t('packages.commit')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
         {identity !== null && (
-          <Typography.Text>
-            Committing as {identity.name} &lt;{identity.email}&gt;
-          </Typography.Text>
+          <Typography.Text>{t('packages.commit.as', { identity: `${identity.name} <${identity.email}>` })}</Typography.Text>
         )}
         {dirtied.length > 0 && (
           <Alert
             type="warning"
             showIcon
-            title={`${dirtied.map(inside).join(', ')} got unsaved changes in an open tab meanwhile, so ${dirtied.length === 1 ? 'it is' : 'they are'} unticked: tick ${dirtied.length === 1 ? 'it' : 'them'} to commit the version on disk.`}
+            title={t('packages.commit.dirtied', { paths: dirtied.map(inside).join(', '), count: dirtied.length })}
           />
         )}
         {shown.kind === 'refused' && (
           <Alert
             type="error"
             showIcon
-            title="The commit was refused"
+            title={t('packages.commit.refused')}
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>
@@ -192,12 +196,12 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
           />
         )}
         <Form layout="vertical" requiredMark>
-          <Form.Item label="Message" htmlFor={messageId} required style={{ marginBottom: 0 }}>
+          <Form.Item label={t('packages.commit.message')} htmlFor={messageId} required style={{ marginBottom: 0 }}>
             <Input.TextArea id={messageId} autoSize={{ minRows: 3, maxRows: 10 }} value={message} onChange={(event) => setMessage(event.target.value)} />
           </Form.Item>
         </Form>
         <ProTable<Change>
-          aria-label="Changes to commit"
+          aria-label={t('packages.commit.changes.chosen')}
           rowKey="path"
           size="small"
           dataSource={state.changes}
@@ -208,7 +212,7 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
           pagination={false}
           rowSelection={{
             selectedRowKeys: chosen.map((change) => change.path),
-            getCheckboxProps: (change) => ({ disabled: change.index === 'differs', 'aria-label': `Commit ${inside(change.path)}` }),
+            getCheckboxProps: (change) => ({ disabled: change.index === 'differs', 'aria-label': t('packages.commit.path', { path: inside(change.path) }) }),
             onSelect: (change, selected) => setChoices((current) => new Map(current).set(change.path, selected)),
             onSelectAll: (selected, _, changed) =>
               setChoices((current) => {
@@ -219,18 +223,18 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
           }}
           columns={[
             {
-              title: 'File',
+              title: t('packages.file'),
               dataIndex: 'path',
               render: (_, c) => (
                 <Flex vertical>
                   <Typography.Text>{inside(c.path)}</Typography.Text>
-                  {c.renamedFrom !== undefined && <Typography.Text type="secondary">from {inside(c.renamedFrom)}</Typography.Text>}
+                  {c.renamedFrom !== undefined && <Typography.Text type="secondary">{t('packages.renamedFrom', { path: inside(c.renamedFrom) })}</Typography.Text>}
                 </Flex>
               ),
             },
-            { title: 'Change', dataIndex: 'status', render: (_, c) => <Tag color={STATUS[c.status].color}>{STATUS[c.status].label}</Tag> },
+            { title: t('packages.change'), dataIndex: 'status', render: (_, c) => <Tag color={COLOR[c.status]}>{say(texts, CHANGE[c.status].label)}</Tag> },
             {
-              title: 'Note',
+              title: t('packages.commit.note'),
               key: 'note',
               render: (_, c) => {
                 const file = open.get(c.path);
@@ -238,7 +242,7 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
                   <Flex vertical gap={4} align="start">
                     {file?.dirty === true && (
                       <Flex gap="small" align="center" wrap>
-                        <Typography.Text type="secondary">unsaved in an open tab</Typography.Text>
+                        <Typography.Text type="secondary">{t('packages.note.unsaved')}</Typography.Text>
                         <Button
                           size="small"
                           onClick={() => {
@@ -246,12 +250,12 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
                             file.show();
                           }}
                         >
-                          Show tab
+                          {t('packages.showTab')}
                         </Button>
                       </Flex>
                     )}
-                    {c.index === 'differs' && <Typography.Text type="secondary">staged in a terminal with other content: commit or unstage it there</Typography.Text>}
-                    {c.large === true && <Typography.Text type="secondary">too large to compare</Typography.Text>}
+                    {c.index === 'differs' && <Typography.Text type="secondary">{t('packages.commit.note.differs')}</Typography.Text>}
+                    {c.large === true && <Typography.Text type="secondary">{t('packages.note.large')}</Typography.Text>}
                   </Flex>
                 );
               },
@@ -265,9 +269,10 @@ export function CommitDialog({ api, repository, state, onState, onClose, onDeplo
 
 /** What git and the hooks said. */
 function Output({ text }: { text: string }) {
+  const { t } = useText();
   return (
     <Typography.Paragraph style={{ marginBottom: 0 }}>
-      <pre aria-label="What git and the hooks said" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+      <pre aria-label={t('packages.commit.output')} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
         {text}
       </pre>
     </Typography.Paragraph>
@@ -277,53 +282,40 @@ function Output({ text }: { text: string }) {
 /** A commit a hook or a terminal changed: how, and what git and the hooks said. */
 function Committed({ answer, head }: { answer: CommitAnswer; head: string | null }) {
   const made = answer.commit;
+  const { t, rich } = useText();
   const list = (paths: string[]) => paths.map(inside).join(', ');
   return (
     <Flex vertical gap="middle">
       {made === null ? (
-        <Alert type="warning" showIcon title={answer.problem ?? 'git committed, but its commit could not be read back'} />
+        <Alert type="warning" showIcon title={answer.problem ?? t('packages.commit.unreadBack')} />
       ) : (
         <>
-          <Typography.Text>
-            Committed <Typography.Text code>{short(made.id)}</Typography.Text> {made.subject}
-          </Typography.Text>
+          <Typography.Text>{rich('packages.commit.made', { code, commit: short(made.id), subject: made.subject })}</Typography.Text>
           {(made.parents[0] ?? null) !== head && (
             <Alert
               type="info"
               showIcon
-              title="A commit was made in a terminal in between"
-              description={`The new commit's parent is ${made.parents[0] === undefined ? 'none' : short(made.parents[0])}, not ${head === null ? 'the empty branch' : short(head)}, which you reviewed. Both commits are on the branch; nothing is lost.`}
+              title={t('packages.commit.between')}
+              description={t('packages.commit.between.description', {
+                parent: made.parents[0] === undefined ? '-' : short(made.parents[0]),
+                head: head === null ? '-' : short(head),
+                parentKind: made.parents[0] === undefined ? 'none' : 'commit',
+                headKind: head === null ? 'empty' : 'commit',
+              })}
             />
           )}
           {made.staged.length > 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              title="A hook added more files to the commit"
-              description={`The commit also changes ${list(made.staged)}, which you did not choose.`}
-            />
+            <Alert type="warning" showIcon title={t('packages.commit.staged')} description={t('packages.commit.staged.description', { paths: list(made.staged) })} />
           )}
           {made.rewritten.length > 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              title="A hook rewrote files you chose"
-              description={`The commit holds the hook's version of ${list(made.rewritten)}, not the one you reviewed.`}
-            />
+            <Alert type="warning" showIcon title={t('packages.commit.rewritten')} description={t('packages.commit.rewritten.description', { paths: list(made.rewritten) })} />
           )}
           {made.changedOnDisk.length > 0 && (
-            <Alert
-              type="warning"
-              showIcon
-              title="A hook changed files you chose on disk"
-              description={`The commit holds the version of ${list(made.changedOnDisk)} you reviewed; the file on disk holds the hook's, which is not committed.`}
-            />
+            <Alert type="warning" showIcon title={t('packages.commit.changedOnDisk')} description={t('packages.commit.changedOnDisk.description', { paths: list(made.changedOnDisk) })} />
           )}
           {(made.staged.length > 0 || made.rewritten.length > 0 || made.changedOnDisk.length > 0) && (
             <Typography.Text type="secondary">
-              Open tabs without unsaved changes show these files as they are now.
-              {(made.staged.length > 0 || made.rewritten.length > 0) &&
-                ' Until they are committed or unstaged in a terminal, the files a hook staged may read as staged in a terminal with other content.'}
+              {made.staged.length > 0 || made.rewritten.length > 0 ? t('packages.commit.reloaded.staged') : t('packages.commit.reloaded')}
             </Typography.Text>
           )}
           {answer.problem !== undefined && <Alert type="warning" showIcon title={answer.problem} />}

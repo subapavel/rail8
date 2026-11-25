@@ -2,6 +2,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Col, Descriptions, Empty, Flex, Row, Statistic, Tag, theme, Tooltip, Typography } from 'antd';
 import { useId, useState, type ReactNode } from 'react';
+import { say, useText, type Texts } from '../language';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
@@ -27,35 +28,41 @@ export interface PackageTabProps {
   writable: boolean;
 }
 
-/** Why Commit… is disabled for the package `state`, read or not, on a server that takes writes when `writable`; null when it is not. */
-function commitRefused(writable: boolean, state: PackageState | null): string | null {
-  if (!writable) return 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).';
-  if (state === null) return 'The package is not read.';
-  if (state.busy !== null) return `The clone is busy (${BUSY[state.busy]}): finish it in a terminal.`;
-  if (state.branch === null) return 'HEAD is detached: switch to a branch in a terminal.';
-  if (state.identity === null) return 'git gives no author identity here: set git config user.name and git config user.email in a terminal.';
-  if (state.changes.length === 0) return 'Nothing to commit: no file differs from the last commit.';
+/**
+ * Why Commit… is disabled for the package `state`, read or not, on a server that takes writes when `writable`, in
+ * `texts`' language; null when it is not.
+ */
+function commitRefused(texts: Texts, writable: boolean, state: PackageState | null): string | null {
+  const { t } = texts;
+  if (!writable) return t('packages.readOnly');
+  if (state === null) return t('packages.notRead');
+  if (state.busy !== null) return t('packages.busy', { operation: say(texts, BUSY[state.busy]) });
+  if (state.branch === null) return t('packages.detached');
+  if (state.identity === null) return t('packages.commit.noIdentity');
+  if (state.changes.length === 0) return t('packages.commit.nothing');
   return null;
 }
 
-/** Why Discard changes… is disabled for the package `state` with `chosen` changes ticked; null when it is not. */
-function discardRefused(writable: boolean, state: PackageState, chosen: number): string | null {
-  if (!writable) return 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).';
-  if (state.busy !== null) return `The clone is busy (${BUSY[state.busy]}): finish it in a terminal.`;
-  if (chosen === 0) return 'Tick the files to discard first.';
+/** Why Discard changes… is disabled for the package `state` with `chosen` changes ticked, in `texts`' language; null when it is not. */
+function discardRefused(texts: Texts, writable: boolean, state: PackageState, chosen: number): string | null {
+  const { t } = texts;
+  if (!writable) return t('packages.readOnly');
+  if (state.busy !== null) return t('packages.busy', { operation: say(texts, BUSY[state.busy]) });
+  if (chosen === 0) return t('packages.discard.noneTicked');
   return null;
 }
 
-/** Why Deploy… is disabled for the package `state`; null when it is not. */
-function deployRefused(state: PackageState | null): string | null {
-  if (state === null) return 'The package is not read.';
-  if (state.head === null) return 'Nothing to deploy: the branch has no commit yet.';
+/** Why Deploy… is disabled for the package `state`, in `texts`' language; null when it is not. */
+function deployRefused({ t }: Texts, state: PackageState | null): string | null {
+  if (state === null) return t('packages.notRead');
+  if (state.head === null) return t('packages.deploy.nothing');
   return null;
 }
 
 /** Discard changes…, disabled with `refused`, its reason, when that is not null. */
 function DiscardButton({ refused, onClick }: { refused: string | null; onClick: () => void }) {
   const reasonId = useId();
+  const { t } = useText();
   return (
     <Flex gap="small" align="center" wrap justify="flex-end">
       {refused !== null && (
@@ -64,7 +71,7 @@ function DiscardButton({ refused, onClick }: { refused: string | null; onClick: 
         </Typography.Text>
       )}
       <Button danger disabled={refused !== null} aria-describedby={refused === null ? undefined : reasonId} onClick={onClick}>
-        Discard changes…
+        {t('packages.discard.open')}
       </Button>
     </Flex>
   );
@@ -73,18 +80,19 @@ function DiscardButton({ refused, onClick }: { refused: string | null; onClick: 
 /** The commits of the branch in a titled card, with the button that reads older ones in the card's corner; each commit offers its deploy. */
 function HistoryCard({ api, repository, state, now, onDeploy }: { api: PackagesApi; repository: string; state: PackageState; now: Date; onDeploy: (commit: Commit) => void }) {
   const { commits, next, failure, read, more, older, retry } = useHistory(api, repository, state.head?.id ?? null);
-  if (failure !== null) return <Alert type="error" showIcon title="The history could not be read" description={failure} action={<Button onClick={retry}>Try again</Button>} />;
+  const { t } = useText();
+  if (failure !== null) return <Alert type="error" showIcon title={t('packages.history.unread')} description={failure} action={<Button onClick={retry}>{t('frame.tryAgain')}</Button>} />;
   return (
     <ProCard
-      title={<h2>Commits on {state.branch ?? 'the detached HEAD'}</h2>}
+      title={<h2>{state.branch === null ? t('packages.history.detached') : t('packages.history.on', { branch: state.branch })}</h2>}
       headerBordered
       extra={next !== null && (
         <Button loading={more} onClick={() => older(next)}>
-          Show older commits
+          {t('packages.history.older')}
         </Button>
       )}
     >
-      {read && commits.length === 0 ? <Empty description="No commit yet." /> : <HistoryTable api={api} repository={repository} commits={commits} loading={!read} host={state.deployed.host} now={now} onDeploy={onDeploy} />}
+      {read && commits.length === 0 ? <Empty description={t('packages.history.none')} /> : <HistoryTable api={api} repository={repository} commits={commits} loading={!read} host={state.deployed.host} now={now} onDeploy={onDeploy} />}
     </ProCard>
   );
 }
@@ -92,14 +100,15 @@ function HistoryCard({ api, repository, state, now, onDeploy }: { api: PackagesA
 /** The artifacts, one titled card for each kind that has some, two cards side by side on a wide screen. */
 function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Screen) => void }) {
   const { token } = theme.useToken();
+  const texts = useText();
   const groups = GROUPS.map((g) => ({ ...g, listed: state.artifacts.filter((a) => g.kinds.includes(a.kind)) })).filter((g) => g.listed.length > 0);
-  if (groups.length === 0) return <ProCard><Empty description="The package holds no flow, endpoint, mapping or test." /></ProCard>;
+  if (groups.length === 0) return <ProCard><Empty description={texts.t('packages.artifacts.none')} /></ProCard>;
   return (
     <Row gutter={[token.marginLG, token.marginLG]}>
       {groups.map((group) => (
         <Col key={group.key} xs={24} xl={12}>
-          <ProCard title={<h2>{group.title}</h2>} subTitle={group.listed.length} headerBordered style={{ height: '100%' }}>
-            <ArtifactsTable artifacts={group.listed} open={open} label={group.title} />
+          <ProCard title={<h2>{say(texts, group.title)}</h2>} subTitle={group.listed.length} headerBordered style={{ height: '100%' }}>
+            <ArtifactsTable artifacts={group.listed} open={open} label={say(texts, group.title)} />
           </ProCard>
         </Col>
       ))}
@@ -136,12 +145,14 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
   const [discarding, setDiscarding] = useState(false);
   const refusedId = useId();
   const { token } = theme.useToken();
+  const texts = useText();
+  const { t } = texts;
   const state = read.kind === 'read' ? read.state : null;
   const at = read.kind === 'read' ? read.at : now();
-  const deployed = state === null ? null : deployedStatus(state);
+  const deployed = state === null ? null : deployedStatus(texts, state);
   const readable = useMay('deployment.read');
-  const refused = commitRefused(writable, state);
-  const undeployable = deployRefused(state);
+  const refused = commitRefused(texts, writable, state);
+  const undeployable = deployRefused(texts, state);
   const onState = (next: PackageState | null) => (next === null ? refresh() : show(next));
   const remote = useRemote(api, repository, state, writable, onState);
   const chosen = state === null ? [] : state.changes.filter((c) => c.index !== 'differs' && picked.includes(c.path));
@@ -155,9 +166,9 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
 
   let body;
   if (read.kind === 'reading') {
-    body = <ReadSpinner label={`Reading the package ${repository}`} />;
+    body = <ReadSpinner label={t('packages.package.reading', { name: repository })} />;
   } else if (read.kind === 'failed') {
-    body = <Alert type="error" showIcon title="The package could not be read" description={read.message} action={<Button onClick={refresh}>Try again</Button>} />;
+    body = <Alert type="error" showIcon title={t('packages.package.unread')} description={read.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   } else {
     const { state } = read;
     body = (
@@ -167,17 +178,17 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
         {paneOf(
           'changes',
           <ProCard
-            title={<h2>Uncommitted changes</h2>}
+            title={<h2>{t('packages.changes.title')}</h2>}
             headerBordered
             extra={
-              state.changes.length > 0 && <DiscardButton refused={discardRefused(writable, state, chosen.length)} onClick={() => setDiscarding(true)} />
+              state.changes.length > 0 && <DiscardButton refused={discardRefused(texts, writable, state, chosen.length)} onClick={() => setDiscarding(true)} />
             }
           >
             {state.changes.length === 0 ? (
-              <Empty description="No file differs from the last commit." />
+              <Empty description={t('packages.changes.none')} />
             ) : (
               <Flex vertical gap="small">
-                {state.deployed.node === 'answered' && state.deployed.relation !== 'none' && <Typography.Text type="secondary">Uncommitted changes are never deployed.</Typography.Text>}
+                {state.deployed.node === 'answered' && state.deployed.relation !== 'none' && <Typography.Text type="secondary">{t('packages.changes.neverDeployed')}</Typography.Text>}
                 <ChangesTable
                   api={api}
                   repository={repository}
@@ -185,7 +196,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
                   before={state.head?.id ?? null}
                   after="work"
                   onStale={refresh}
-                  label="Changes"
+                  label={t('packages.changes')}
                   choice={{ picked: chosen.map((c) => c.path), onPick: setPicked }}
                 />
               </Flex>
@@ -213,30 +224,30 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
               </Typography.Text>
             )}
             <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-              Refresh
+              {t('packages.refresh')}
             </Button>
             {remote.buttons}
             <Button disabled={undeployable !== null} title={undeployable ?? undefined} onClick={() => state?.head && setDeploying(state.head)}>
-              Deploy…
+              {t('packages.deploy.open')}
             </Button>
             <Button type="primary" disabled={refused !== null} aria-describedby={refused !== null && state !== null ? refusedId : undefined} onClick={() => setCommitting(true)}>
-              Commit…
+              {t('packages.commit.open')}
             </Button>
           </Flex>
         }
-        content={state !== null && <Descriptions size="small" column={2} items={factsOf(state, at)} />}
+        content={state !== null && <Descriptions size="small" column={2} items={factsOf(texts, state, at)} />}
         extraContent={
           state !== null &&
           deployed !== null && (
             <Flex gap="large">
               {readable === true ? (
-                <Statistic title="Deployed" value={deployed.text} prefix={<Badge status={deployed.status} />} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+                <Statistic title={t('packages.deployed')} value={deployed.text} prefix={<Badge status={deployed.status} />} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
               ) : (
                 <Tooltip title={readable}>
-                  <Statistic title="Deployed" value="-" styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+                  <Statistic title={t('packages.deployed')} value="-" styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
                 </Tooltip>
               )}
-              <Statistic title="Changed files" value={state.changes.length} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
+              <Statistic title={t('packages.changed')} value={state.changes.length} styles={{ content: { fontSize: token.fontSizeHeading4 } }} />
             </Flex>
           )
         }
@@ -244,11 +255,11 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
           state === null
             ? undefined
             : [
-                { key: 'changes', tab: `Changes (${state.changes.length})` },
-                { key: 'artifacts', tab: `Artifacts (${state.artifacts.length})` },
-                { key: 'history', tab: 'History' },
-                { key: 'dependencies', tab: `Dependencies (${state.dependencies.length})` },
-                { key: 'used-by', tab: state.usedBy.node === 'answered' ? `Used by (${state.usedBy.consumers.length})` : 'Used by' },
+                { key: 'changes', tab: t('packages.tab.changes', { count: state.changes.length }) },
+                { key: 'artifacts', tab: t('packages.tab.artifacts', { count: state.artifacts.length }) },
+                { key: 'history', tab: t('packages.history') },
+                { key: 'dependencies', tab: t('packages.tab.dependencies', { count: state.dependencies.length }) },
+                { key: 'used-by', tab: state.usedBy.node === 'answered' ? t('packages.tab.usedBy', { count: state.usedBy.consumers.length }) : t('packages.usedBy') },
               ]
         }
         tabActiveKey={pane}

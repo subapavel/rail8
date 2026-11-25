@@ -57,7 +57,7 @@ describe('packageFileChanges', () => {
     const text = lock([{ name: 'common', version: '1.2.0', commit: A }]);
 
     expect(packageFileChanges(text, text.replace('# written by rail8 lock\n', '')).status).toBe('formatting');
-    expect(packageFileChanges(text, '- a\n')).toMatchObject({ status: 'unreadable', unreadable: [{ side: 'after', message: 'the file holds no YAML mapping' }] });
+    expect(packageFileChanges(text, '- a\n')).toMatchObject({ status: 'unreadable', unreadable: [{ side: 'after', message: { id: 'packages.file.noMapping' } }] });
     expect(packageFileChanges('a: [', text).unreadable[0]?.side).toBe('before');
   });
 });

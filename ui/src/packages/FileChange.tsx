@@ -1,6 +1,7 @@
 import { Alert, Typography } from 'antd';
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { ArtifactKinds, type Side } from '../artifacts';
+import { useText } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import { PackagesError, type Change, type FileVersion, type PackagesApi } from './api';
 import { LineDiff } from '../LineDiff';
@@ -19,8 +20,6 @@ export interface FileChangeProps {
 }
 
 type Read = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'large' } | { kind: 'read'; before: FileVersion | null; after: FileVersion | null };
-
-const SIZE = new Intl.NumberFormat('en');
 
 /** The version of the file at `path` at `rev`, or null when it has none there. */
 async function versionOf(api: PackagesApi, repository: string, rev: string, path: string): Promise<FileVersion | null> {
@@ -54,6 +53,7 @@ function sideOf(api: PackagesApi, repository: string, rev: string, text: string)
  */
 export function FileChange({ api, repository, change, before, after, onStale }: FileChangeProps) {
   const kinds = useContext(ArtifactKinds);
+  const { t } = useText();
   const [read, setRead] = useState<Read>(change.large ? { kind: 'large' } : { kind: 'reading' });
 
   useEffect(() => {
@@ -86,17 +86,13 @@ export function FileChange({ api, repository, change, before, after, onStale }: 
     return { before: b === null || before === null ? null : sideOf(api, repository, before, b), after: a === null ? null : sideOf(api, repository, after, a) };
   }, [read, api, repository, before, after]);
 
-  if (read.kind === 'large') return <Typography.Text type="secondary">too large to compare</Typography.Text>;
-  if (read.kind === 'reading') return <ReadSpinner label={`Reading ${change.path}`} />;
-  if (read.kind === 'failed') return <Alert type="error" showIcon title="The change could not be read" description={read.message} />;
+  if (read.kind === 'large') return <Typography.Text type="secondary">{t('packages.note.large')}</Typography.Text>;
+  if (read.kind === 'reading') return <ReadSpinner label={t('packages.file.reading', { path: change.path })} />;
+  if (read.kind === 'failed') return <Alert type="error" showIcon title={t('packages.file.unread')} description={read.message} />;
   const { before: b, after: a } = read;
   if ((b !== null && 'binary' in b) || (a !== null && 'binary' in a)) {
-    const size = (v: FileVersion | null) => (v === null ? 'none' : `${SIZE.format('binary' in v ? v.size : new TextEncoder().encode(v.text).length)} bytes`);
-    return (
-      <Typography.Text>
-        Binary file: {size(b)} before, {size(a)} after.
-      </Typography.Text>
-    );
+    const size = (v: FileVersion | null) => (v === null ? t('packages.file.none') : t('packages.file.bytes', { count: 'binary' in v ? v.size : new TextEncoder().encode(v.text).length }));
+    return <Typography.Text>{t('packages.file.binary', { before: size(b), after: size(a) })}</Typography.Text>;
   }
   const kind = kinds.get(change.kind);
   if (kind !== undefined && sides !== null) return <kind.Change path={change.path} before={sides.before} after={sides.after} />;

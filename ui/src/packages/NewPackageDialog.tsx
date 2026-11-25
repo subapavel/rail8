@@ -1,8 +1,10 @@
 import { Alert, Button, Flex, Form, Input, Typography } from 'antd';
 import { useId, useState } from 'react';
+import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { PackagesError, type PackagesApi } from './api';
-import { newPackageBodyOf } from './rules';
+import { NEW_PACKAGE_TEXTS, refusalIn } from './refusals';
+import { NEW_PACKAGE_REFUSALS, newPackageBodyOf } from './rules';
 
 export interface NewPackageDialogProps {
   api: PackagesApi;
@@ -27,6 +29,9 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
   const [name, setName] = useState('');
   const [shown, setShown] = useState<Shown>({ kind: 'asking' });
   const ids = useId();
+  const texts = useText();
+  const { t, rich } = texts;
+  const refusal = (error: string) => refusalIn(texts, NEW_PACKAGE_REFUSALS, NEW_PACKAGE_TEXTS, error);
   const making = shown.kind === 'making';
   // each field's own refusal: the other field is given a name the rule takes, so only this one's is found
   const repositoryError = repository === '' ? null : newPackageBodyOf({ repository, name: 'x' });
@@ -54,56 +59,48 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
   if (shown.kind === 'made') {
     return (
       <MountedModal
-        title={`Made ${shown.repository}`}
+        title={t('packages.new.made', { folder: shown.repository })}
         onCancel={onClose}
         footer={[
           <Button key="close" type="primary" onClick={onClose}>
-            Close
+            {t('packages.close')}
           </Button>,
         ]}
       >
-        <Alert type="warning" showIcon title={`The folder ${shown.repository} holds the new package, but its state could not be read`} description={shown.problem} />
+        <Alert type="warning" showIcon title={t('packages.new.unread', { folder: shown.repository })} description={shown.problem} />
       </MountedModal>
     );
   }
 
   return (
     <MountedModal
-      title="New package"
+      title={t('packages.new')}
       onCancel={making ? undefined : onClose}
       closable={!making}
       width={640}
       footer={[
         <Button key="cancel" disabled={making} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="create" type="primary" loading={making} disabled={!ready && !making} onClick={() => void create()}>
-          Create
+          {t('packages.new.create')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        <Typography.Text>
-          Makes a new folder of the working folder, named as the repository: a git repository of its own on <code>main</code>, whose first commit holds{' '}
-          <code>package.yaml</code> at version 0.1.0, <code>package.lock</code> and <code>.gitattributes</code>, with your git identity.
-        </Typography.Text>
-        <Alert
-          type="info"
-          showIcon
-          title="It adds no remote"
-          description="The node of the local run reads the working folder, so it can deploy the package at once. A deployed environment needs the repository on the git host first: make it there, add it as the remote in a terminal, and push."
-        />
+        <Typography.Text>{rich('packages.new.intro', { code: (chunks) => <code>{chunks}</code> })}</Typography.Text>
+        <Alert type="info" showIcon title={t('packages.new.noRemote')} description={t('packages.new.noRemote.description')} />
         {shown.kind === 'refused' && (
           <Alert
             type="error"
             showIcon
-            title="The package was not made"
+            title={t('packages.new.refused')}
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>
                 {shown.output !== undefined && shown.output !== '' && (
                   <Typography.Paragraph style={{ marginBottom: 0 }}>
-                    <pre aria-label="What git said" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                    <pre aria-label={t('packages.gitSaid')} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                       {shown.output}
                     </pre>
                   </Typography.Paragraph>
@@ -114,11 +111,11 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
         )}
         <Form layout="vertical" requiredMark>
           <Form.Item
-            label="Repository"
+            label={t('packages.repository')}
             htmlFor={`${ids}-repository`}
             required
             validateStatus={repositoryError !== null && 'error' in repositoryError ? 'error' : undefined}
-            help={repositoryError !== null && 'error' in repositoryError ? repositoryError.error : `The repository's name on the git host, and the folder's name: what a deploy and a pin name`}
+            help={repositoryError !== null && 'error' in repositoryError ? refusal(repositoryError.error) : t('packages.new.repository.help')}
           >
             <Input
               id={`${ids}-repository`}
@@ -132,12 +129,12 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
             />
           </Form.Item>
           <Form.Item
-            label="Package name"
+            label={t('packages.new.name')}
             htmlFor={`${ids}-name`}
             required
             style={{ marginBottom: 0 }}
             validateStatus={nameError !== null && 'error' in nameError ? 'error' : undefined}
-            help={nameError !== null && 'error' in nameError ? nameError.error : 'The name in package.yaml, which a flow’s qualified id starts with'}
+            help={nameError !== null && 'error' in nameError ? refusal(nameError.error) : t('packages.new.name.help')}
           >
             <Input
               id={`${ids}-name`}

@@ -1,5 +1,6 @@
 import { Alert, App, Button, Checkbox, Flex, Form, Input, Table, Typography } from 'antd';
 import { useId, useState } from 'react';
+import { msg, say, useText, type Message } from '../language';
 import { MountedModal } from '../MountedModal';
 import { useWorkingFiles } from '../workingFiles';
 import { PackagesError, type Change, type DiscardAnswer, type PackagesApi, type PackageState } from './api';
@@ -23,11 +24,21 @@ export interface DiscardChangesDialogProps {
 /** The path of `path` within its package: the working folder's path without its first segment. */
 const inside = (path: string) => path.slice(path.indexOf('/') + 1);
 
+/** What a discard does to a file: it gets the last commit's version, comes back from the last commit, or is deleted. */
+type Action = 'reverted' | 'restored' | 'deleted';
+
+/** What a discard does to a file, in words, and in words that add that the file is unstaged too. */
+const ACTION: Record<Action, { alone: Message; unstaged: Message }> = {
+  reverted: { alone: msg('packages.discard.reverted'), unstaged: msg('packages.discard.reverted.unstaged') },
+  restored: { alone: msg('packages.discard.restored'), unstaged: msg('packages.discard.restored.unstaged') },
+  deleted: { alone: msg('packages.discard.deleted'), unstaged: msg('packages.discard.deleted.unstaged') },
+};
+
 /** What a discard does to the file of `change`, a row of the package's changes. */
-function actionOf(change: Change): string {
-  if (change.status === 'modified') return 'gets the last commit’s version';
-  if (change.status === 'deleted') return 'comes back from the last commit';
-  return 'is deleted: the last commit lacks it';
+function actionOf(change: Change): Action {
+  if (change.status === 'modified') return 'reverted';
+  if (change.status === 'deleted') return 'restored';
+  return 'deleted';
 }
 
 /**
@@ -36,7 +47,7 @@ function actionOf(change: Change): string {
  */
 interface Listed {
   change: Change;
-  from?: { path: string; action: string };
+  from?: { path: string; action: Exclude<Action, 'deleted'> };
 }
 
 /** The files a discard of `picked` changes, a rename as one file with the path it was renamed from. */
@@ -47,7 +58,7 @@ function listedOf(picked: readonly Change[], changes: readonly Change[]): Listed
     .map((change) => {
       if (change.renamedFrom === undefined) return { change };
       const own = changes.some((c) => c.path === change.renamedFrom);
-      return { change, from: { path: change.renamedFrom, action: own ? 'gets the last commit’s version' : 'comes back from the last commit' } };
+      return { change, from: { path: change.renamedFrom, action: own ? 'reverted' : 'restored' } };
     });
 }
 
@@ -74,6 +85,8 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
   const [shown, setShown] = useState<Shown>({ kind: 'choosing' });
   const { notification } = App.useApp();
   const countId = useId();
+  const texts = useText();
+  const { t } = texts;
 
   const paths = chosenPaths(picked, state.changes);
   const listed = listedOf(picked, state.changes);
@@ -81,7 +94,6 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
   // what the author confirms: a confirmation given for another list, action, tag or set of unsaved tabs is no confirmation
   const key = JSON.stringify([paths, listed.map((l) => [l.change.status, l.change.large === true, l.from?.action]), unsaved]);
   const n = listed.length;
-  const files = n === 1 ? '1 file' : `${n} files`;
   const confirmed = n === 1 ? ticked === key : n > 1 && typed.key === key && typed.text.trim() === String(n);
 
   const discard = async () => {
@@ -100,10 +112,10 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
       if (answer.left.length === 0 && answer.problem === undefined) {
         notification.success({
           key: `discard:${repository}`,
-          title: `Discarded the changes of ${answer.discarded.map(inside).join(', ')}`,
+          title: t('packages.discard.done', { paths: answer.discarded.map(inside).join(', ') }),
           duration: 8,
           role: 'status',
-          closable: { 'aria-label': 'Dismiss discard notification' },
+          closable: { 'aria-label': t('packages.discard.dismiss') },
         });
         onClose();
       } else {
@@ -123,21 +135,21 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
     const { answer } = shown;
     return (
       <MountedModal
-        title={answer.left.length > 0 ? 'Discarded in part' : 'Discarded'}
+        title={answer.left.length > 0 ? t('packages.discard.inPart') : t('packages.discard.discarded')}
         onCancel={onClose}
         width={720}
         footer={[
           <Button key="close" type="primary" onClick={onClose}>
-            Close
+            {t('packages.close')}
           </Button>,
         ]}
       >
         <Flex vertical gap="middle">
           <Typography.Text>
-            {answer.discarded.length === 0 ? 'No chosen file reads as in the last commit yet.' : `Discarded the changes of ${answer.discarded.map(inside).join(', ')}.`}
+            {answer.discarded.length === 0 ? t('packages.discard.noneDone') : t('packages.discard.doneSentence', { paths: answer.discarded.map(inside).join(', ') })}
           </Typography.Text>
           {answer.left.length > 0 && (
-            <Alert type="warning" showIcon title={`Still changed: ${answer.left.map(inside).join(', ')}`} description={answer.problem !== undefined && <Output text={answer.problem} />} />
+            <Alert type="warning" showIcon title={t('packages.discard.left', { paths: answer.left.map(inside).join(', ') })} description={answer.problem !== undefined && <Output text={answer.problem} />} />
           )}
           {answer.left.length === 0 && answer.problem !== undefined && <Alert type="warning" showIcon title={answer.problem} />}
         </Flex>
@@ -147,15 +159,15 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
 
   return (
     <MountedModal
-      title="Discard changes"
+      title={t('frame.discard.discard')}
       onCancel={discarding ? undefined : onClose}
       width={720}
       footer={[
         <Button key="cancel" autoFocus disabled={discarding} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="discard" type="primary" danger loading={discarding} disabled={!confirmed} onClick={() => void discard()}>
-          Discard {files}
+          {t('packages.discard.files', { count: n })}
         </Button>,
       ]}
     >
@@ -164,14 +176,14 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
           <Alert
             type="warning"
             showIcon
-            title={`${dirtied.map(inside).join(', ')} got unsaved edits in an open tab meanwhile: nothing was discarded. Confirm again to discard the version on disk.`}
+            title={t('packages.discard.dirtied', { paths: dirtied.map(inside).join(', ') })}
           />
         )}
         {shown.kind === 'refused' && (
           <Alert
             type="error"
             showIcon
-            title={shown.failed ? 'The discard failed' : 'The discard was refused'}
+            title={shown.failed ? t('packages.discard.failed') : t('packages.discard.refused')}
             description={
               <Flex vertical gap="small">
                 <span>{shown.error}</span>
@@ -185,8 +197,8 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
             key={path}
             type="warning"
             showIcon
-            title={`${inside(path)} is unsaved in an open tab`}
-            description="The tab keeps its unsaved edits. When it saves them after the discard, the editor finds the file changed on disk, unless the discard left its bytes as they were."
+            title={t('packages.discard.unsaved', { path: inside(path) })}
+            description={t('packages.discard.unsaved.description')}
             action={
               <Button
                 size="small"
@@ -195,41 +207,42 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
                   open.get(path)?.show();
                 }}
               >
-                Show tab
+                {t('packages.showTab')}
               </Button>
             }
           />
         ))}
-        <Typography.Text>Each file is put back as it is in the last commit, in the index and on disk:</Typography.Text>
+        <Typography.Text>{t('packages.discard.intro')}</Typography.Text>
         <Table<Listed>
-          aria-label="Files to discard"
+          aria-label={t('packages.discard.list')}
           rowKey={(l) => l.change.path}
           size="small"
           dataSource={listed}
           pagination={false}
           columns={[
             {
-              title: 'File',
+              title: t('packages.file'),
               key: 'file',
               render: (_, { change, from }) => (
                 <Flex vertical>
                   <Typography.Text>{inside(change.path)}</Typography.Text>
-                  {from !== undefined && <Typography.Text type="secondary">from {inside(from.path)}</Typography.Text>}
+                  {from !== undefined && <Typography.Text type="secondary">{t('packages.renamedFrom', { path: inside(from.path) })}</Typography.Text>}
                 </Flex>
               ),
             },
-            { title: 'Change', key: 'change', width: 112, render: (_, { change }) => <ChangeBadge status={change.status} /> },
+            { title: t('packages.change'), key: 'change', width: 112, render: (_, { change }) => <ChangeBadge status={change.status} /> },
             {
-              title: 'What the discard does',
+              title: t('packages.discard.action'),
               key: 'action',
               render: (_, { change, from }) => (
                 <Flex vertical>
-                  <Typography.Text>
-                    {actionOf(change)}
-                    {change.index === 'staged' && ', and unstaged'}
-                  </Typography.Text>
-                  {from !== undefined && <Typography.Text>{inside(from.path)} {from.action}</Typography.Text>}
-                  {change.large === true && <Typography.Text type="warning">too large to compare: you have not seen its change</Typography.Text>}
+                  <Typography.Text>{say(texts, ACTION[actionOf(change)][change.index === 'staged' ? 'unstaged' : 'alone'])}</Typography.Text>
+                  {from !== undefined && (
+                    <Typography.Text>
+                      {from.action === 'reverted' ? t('packages.discard.from.reverted', { path: inside(from.path) }) : t('packages.discard.from.restored', { path: inside(from.path) })}
+                    </Typography.Text>
+                  )}
+                  {change.large === true && <Typography.Text type="warning">{t('packages.discard.large')}</Typography.Text>}
                 </Flex>
               ),
             },
@@ -237,12 +250,12 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
         />
         {n === 1 && (
           <Checkbox checked={ticked === key} onChange={(event) => setTicked(event.target.checked ? key : null)}>
-            Discard this change. It cannot be brought back.
+            {t('packages.discard.confirm.one')}
           </Checkbox>
         )}
         {n > 1 && (
           <Form layout="vertical" onFinish={() => undefined}>
-            <Form.Item label={`Type ${n} to discard ${n} files. They cannot be brought back.`} htmlFor={countId} style={{ marginBottom: 0 }}>
+            <Form.Item label={t('packages.discard.confirm.many', { typed: String(n), count: n })} htmlFor={countId} style={{ marginBottom: 0 }}>
               <Input id={countId} inputMode="numeric" autoComplete="off" value={typed.key === key ? typed.text : ''} onChange={(event) => setTyped({ key, text: event.target.value })} />
             </Form.Item>
           </Form>
@@ -254,9 +267,10 @@ export function DiscardChangesDialog({ api, repository, state, picked, onState, 
 
 /** What git said. */
 function Output({ text }: { text: string }) {
+  const { t } = useText();
   return (
     <Typography.Paragraph style={{ marginBottom: 0 }}>
-      <pre aria-label="What git said" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+      <pre aria-label={t('packages.gitSaid')} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
         {text}
       </pre>
     </Typography.Paragraph>

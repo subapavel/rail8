@@ -1,4 +1,5 @@
 import type { Artifact, ChangeStatus, Kind } from '../artifacts';
+import { currentLanguage, textsIn } from '../language';
 import { uiFetch } from '../session';
 
 export type { Artifact, ChangeStatus, Kind };
@@ -483,7 +484,7 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     try {
       res = await send(url, { ...init, headers: { accept: 'application/json', ...init.headers } });
     } catch (failed) {
-      throw new PackagesError(0, `the server does not answer: ${String(failed)}`);
+      throw new PackagesError(0, textsIn(currentLanguage()).t('packages.server.silent', { error: String(failed) }));
     }
     if (!res.ok) throw await refusal(res);
     return res;
