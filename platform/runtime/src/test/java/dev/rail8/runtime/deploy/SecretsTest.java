@@ -24,15 +24,23 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P2-04 (D-081): {@link Secrets} resolves a reference {@code secret://<name>}, name {@code [a-z0-9][a-z0-9._-]*}, from the env map
- * it was built from — {@code RAIL8_SECRET_<NAME>}, upper case, {@code .} and {@code -} as {@code _} — and its placeholder twin
- * (the CLI's dry build) answers every well-formed reference with one fixed value and no env at all. Both refuse a malformed one.
- *
- * <p>The shape these cases assume (P2-04 test-author): {@code Secrets.fromEnv(Map<String, String>)}, {@code Secrets.placeholder()},
- * {@code Optional<String> resolve(String reference)} — empty when the variable is not set, an {@link IllegalArgumentException}
- * whose message names the reference when it is malformed.
+ * {@link Secrets} resolves a reference {@code secret://<name>}, name {@code [a-z0-9][a-z0-9._-]*}, from the node's secret store
+ * alone, and its placeholder twin (the CLI's dry build) answers every well-formed reference with one fixed value of its kind and
+ * no store at all. Both refuse a malformed one. A {@code RAIL8_SECRET_<NAME>} variable — upper case, {@code .} and {@code -} as
+ * {@code _} — is no source: it is only handed to the store's import, while the store never held its name.
  */
 class SecretsTest {
+
+    static final String KEY = "RAIL8_SECRETS_KEY";
+    static final String KEY_VALUE = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
+    /** {@code env} and the store's key, read by a node whose store is started on it. */
+    private static Secrets onNode(Map<String, String> env) {
+        Map<String, String> keyed = new HashMap<>(env);
+        keyed.put(KEY, KEY_VALUE);
+        FakeRuntime rt = FakeRuntime.create();
+        return Secrets.fromEnv(keyed).withStore(new MemorySecretStores().start("node-1", keyed, rt.clock(), rt.timer()));
+    }
 
     /** A reference's variable is its name upper-cased, {@code .} and {@code -} as {@code _}; decoys hold the unmapped spellings. */
     @ParameterizedTest(name = "{0} -> {1}")
@@ -43,26 +51,54 @@ class SecretsTest {
             "secret://a,             RAIL8_SECRET_A,             a"})
     void nameMapping(String reference, String variable, String name) {
         Map<String, String> env = new HashMap<>();
-        env.put(variable, "the-value-of-" + variable);
         env.put("RAIL8_SECRET_" + name, "decoy: the name as written");
         env.put("RAIL8_SECRET_" + name.toUpperCase(java.util.Locale.ROOT), "decoy: upper case, . and - kept");
         env.put(name, "decoy: the bare name");
         env.put(variable.substring("RAIL8_SECRET_".length()), "decoy: no prefix");
         env.put(variable, "the-value-of-" + variable);   // last: a decoy whose key happens to be the variable is overwritten
 
-        assertEquals(Optional.of("the-value-of-" + variable), Secrets.fromEnv(env).resolve(reference));
+        assertEquals(variable, Secrets.variable(reference));
+        assertEquals(Optional.of("the-value-of-" + variable), onNode(env).importable(reference));
     }
 
-    /** A variable that is not set is an absent value — never an empty string, never another variable's value. */
+    /** A variable is no source: a name the store does not hold is absent, whatever variable is set. */
     @Test
-    void missingIsAbsent() {
-        Map<String, String> env = Map.of(
+    void aVariableAloneIsAbsent() {
+        Secrets secrets = onNode(Map.of("RAIL8_SECRET_PARTNER_TOKEN", "the-variable-value"));
+
+        assertEquals(Optional.empty(), secrets.resolve("secret://partner-token"));
+        assertEquals(Optional.of("secret 'secret://partner-token' is not set: the secret store holds no such secret"),
+                secrets.problem("secret://partner-token", EnumSet.of(Secret.Kind.VALUE)));
+        assertThrows(IllegalArgumentException.class, () -> secrets.handle("secret://partner-token"));
+    }
+
+    /** Nothing is importable that is not set, set empty, or under another name — never another variable's value. */
+    @Test
+    void missingIsNotImportable() {
+        Secrets secrets = onNode(Map.of(
                 "RAIL8_SECRET_OTHER", "other-value",
                 "PARTNER_TOKEN", "unprefixed-value",
-                "RAIL8_SECRET_PARTNER", "prefix-of-the-name");
+                "RAIL8_SECRET_PARTNER", "prefix-of-the-name",
+                "RAIL8_SECRET_EMPTY", ""));
 
-        assertEquals(Optional.empty(), Secrets.fromEnv(env).resolve("secret://partner-token"));
-        assertEquals(Optional.empty(), Secrets.fromEnv(Map.of()).resolve("secret://partner-token"));
+        assertEquals(Optional.empty(), secrets.importable("secret://partner-token"));
+        assertEquals(Optional.empty(), secrets.importable("secret://empty"), "a variable set empty counts as not set");
+        assertEquals(Optional.of("other-value"), secrets.importable("secret://other"), "fixture: the env is read");
+        assertEquals(Optional.empty(), Secrets.placeholder().importable("secret://other"), "the placeholder imports nothing");
+        assertEquals(Optional.empty(), Secrets.fromEnv(Map.of("RAIL8_SECRET_OTHER", "other-value")).importable("secret://other"),
+                "nothing before the store is joined");
+    }
+
+    /**
+     * The variables a node warns of at its start: those set to a value whose name the store holds or held, by name, sorted; not
+     * one set empty, not one of a name the store never held, and none off the node.
+     */
+    @Test
+    void theImportedVariablesAreTheSetOnesOfANameTheStoreEverHeld() {
+        Secrets secrets = Secrets.fromEnv(Map.of("RAIL8_SECRET_DB_MAIN", "x", "RAIL8_SECRET_A", "y", "RAIL8_SECRET_EMPTY", "", "RAIL8_SECRET_NEW", "z"));
+
+        assertEquals(List.of("RAIL8_SECRET_A", "RAIL8_SECRET_DB_MAIN"), secrets.importedVariables(Set.of("db.main", "a", "empty", "gone")));
+        assertEquals(List.of(), Secrets.placeholder().importedVariables(Set.of("a")));
     }
 
     /** {@code secret://} followed by anything that is not a name is a problem naming the reference, env or placeholder. */
@@ -94,31 +130,6 @@ class SecretsTest {
         assertEquals(Optional.of("https://secret.invalid/"), one, "the placeholder is a URL, so a url option validates (D-081)");
     }
 
-    /** A variable that is set but empty counts as not set: absent, as a missing one. */
-    @Test
-    void anEmptyVariableIsAbsent() {
-        Map<String, String> env = Map.of("RAIL8_SECRET_PARTNER_TOKEN", "", "RAIL8_SECRET_OTHER", "other-value");
-
-        assertEquals(Optional.empty(), Secrets.fromEnv(env).resolve("secret://partner-token"));
-        assertEquals(Optional.of("other-value"), Secrets.fromEnv(env).resolve("secret://other"), "fixture: the env is read");
-    }
-
-    /**
-     * Where a missing secret is set: its variable; a variable that ends in {@code _FILE} below the prefix is read by a node as
-     * the file form of another secret, so its value is given as a file, the variable with {@code _FILE} once more.
-     */
-    @ParameterizedTest
-    @CsvSource({
-            "secret://partner-token, RAIL8_SECRET_PARTNER_TOKEN",
-            "secret://file, RAIL8_SECRET_FILE",
-            "secret://profile, RAIL8_SECRET_PROFILE",
-            "secret://db-file, 'RAIL8_SECRET_DB_FILE_FILE, the path of a file that holds it'",
-            "secret://x.file, 'RAIL8_SECRET_X_FILE_FILE, the path of a file that holds it'",
-    })
-    void whereAMissingSecretIsSet(String reference, String where) {
-        assertEquals(where, Secrets.where(reference));
-    }
-
     /** What the node holds for its secrets (D-081: the env map NodeConfig is built from) never shows a value in its text. */
     @Test
     void aValueNeverShowsInTheNodeConfigOrTheResolver() {
@@ -128,16 +139,13 @@ class SecretsTest {
         env.put("RAIL8_NODE_ID", "node-1");
         env.put("RAIL8_DATA_DIR", "/tmp/rail8-secrets-test");
         env.put("RAIL8_SECRET_PARTNER_TOKEN", value);
-        Secrets secrets = Secrets.fromEnv(env);
-        assertEquals(Optional.of(value), secrets.resolve("secret://partner-token"), "the value is there: the checks below are not vacuous");
+        Secrets secrets = onNode(env);
+        assertEquals(Optional.of(value), secrets.importable("secret://partner-token"), "the value is there: the checks below are not vacuous");
 
         assertFalse(String.valueOf(secrets).contains(value), "Secrets' text: " + secrets);
         String config = String.valueOf(NodeConfig.from(env));
         assertFalse(config.contains(value), "NodeConfig's text: " + config);
     }
-
-    static final String KEY = "RAIL8_SECRETS_KEY";
-    static final String KEY_VALUE = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 
     /** A name under {@code rail8.} belongs to the platform: the node's resolver and the placeholder refuse it, naming the reference. */
     @ParameterizedTest
@@ -163,32 +171,36 @@ class SecretsTest {
     }
 
     /**
-     * On a node the store wins over the variable: its row is read, as its kind; after a delete the variable reads again. A handle
-     * follows the sources at each read, and a name of another kind than its place takes is a problem naming both kinds.
+     * On a node the store is the only source: its row is read, as its kind, and a handle follows it at each read until the name is
+     * deleted; a name of another kind than its place takes is a problem naming both kinds. Once imported a name's variable is not
+     * importable any more, and once deleted the store refuses to import it.
      */
     @Test
-    void theStoreWinsAndADeleteBringsBackTheVariable() {
+    void theStoreIsTheOnlySource() {
         FakeRuntime rt = FakeRuntime.create();
         Map<String, String> env = Map.of(KEY, KEY_VALUE, "RAIL8_SECRET_PARTNER_URL", "from-the-variable");
         SecretStore store = new MemorySecretStores().start("node-1", env, rt.clock(), rt.timer());
         Secrets secrets = Secrets.fromEnv(env).withStore(store);
+        assertTrue(MemorySecretStores.importValue(store, "partner-url", "RAIL8_SECRET_PARTNER_URL", secrets.importable("secret://partner-url").orElseThrow()));
         Secret handle = secrets.handle("secret://partner-url");
-        assertEquals("from-the-variable", handle.value());
+        assertEquals("from-the-variable", handle.value(), "imported into the store");
+        assertEquals(Optional.empty(), secrets.importable("secret://partner-url"), "the store holds it now");
 
-        MemorySecretStores.createValue(store, "partner-url", "from-the-store");
+        MemorySecretStores.overwriteValue(store, "partner-url", "from-the-store");
         assertEquals(Optional.of("from-the-store"), secrets.resolve("secret://partner-url"));
         assertEquals("from-the-store", handle.value(), "the handle reads the store now");
         MemorySecretStores.delete(store, "partner-url");
-        assertEquals("from-the-variable", handle.value(), "the variable again");
+        assertThrows(IllegalStateException.class, handle::value, "deleted: no value, and the variable is not read");
+        assertFalse(MemorySecretStores.importValue(store, "partner-url", "RAIL8_SECRET_PARTNER_URL", "from-the-variable"),
+                "a deleted name is not imported again");
+        assertEquals(Optional.empty(), secrets.resolve("secret://partner-url"));
 
         MemorySecretStores.createCredentials(store, "db", "app", "pw-0815");
         assertEquals(new Secret.Credentials("app", "pw-0815"), secrets.handle("secret://db", Set.of(Secret.Kind.CREDENTIALS, Secret.Kind.KEY_PAIR)).credentials());
         assertEquals(Optional.of("secret 'secret://db' is a secret of kind credentials in the secret store, taken here as [value]"),
                 secrets.problem("secret://db", EnumSet.of(Secret.Kind.VALUE)));
         assertEquals(Optional.empty(), secrets.resolve("secret://db"), "no plain value of a name the store holds as credentials");
-        assertEquals(Optional.of("secret 'secret://other' is not set (in the secret store, or RAIL8_SECRET_OTHER)"),
-                secrets.problem("secret://other", EnumSet.of(Secret.Kind.VALUE)));
-        assertEquals(Optional.of("secret 'secret://other' is not set (in the secret store, which alone holds [credentials])"),
+        assertEquals(Optional.of("secret 'secret://other' is not set: the secret store holds no such secret"),
                 secrets.problem("secret://other", EnumSet.of(Secret.Kind.CREDENTIALS)));
     }
 }

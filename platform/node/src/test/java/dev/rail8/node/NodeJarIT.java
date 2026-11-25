@@ -134,6 +134,8 @@ class NodeJarIT {
     Map<String, String> env(int adminPort) {
         byte[] key = new byte[32];
         new SecureRandom().nextBytes(key);
+        byte[] storeKey = new byte[32];
+        new SecureRandom().nextBytes(storeKey);
         return Map.ofEntries(
                 Map.entry("RAIL8_ENV", "ci"),
                 Map.entry("RAIL8_NODE_ID", "node-jar-it"),
@@ -147,7 +149,8 @@ class NodeJarIT {
                 Map.entry("RAIL8_PG_USER", pg.getUsername()),
                 Map.entry("RAIL8_PG_PASSWORD", pg.getPassword()),
                 Map.entry("RAIL8_PG_POOL_SIZE", "4"),
-                Map.entry("RAIL8_JOURNAL_KEY", Base64.getEncoder().encodeToString(key)));   // a node refuses to start without one
+                Map.entry("RAIL8_JOURNAL_KEY", Base64.getEncoder().encodeToString(key)),   // a node refuses to start without one
+                Map.entry("RAIL8_SECRETS_KEY", Base64.getEncoder().encodeToString(storeKey)));   // nor without the secret store's key
     }
 
     /** The module's packaged jar, {@code target/rail8-node-<version>.jar} (not a sources, tests or javadoc jar): exactly one. */

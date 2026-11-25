@@ -262,7 +262,8 @@ The node polls the inbox every 10 seconds, so within about ten seconds the file 
 (`docker compose exec sftp ls /home/demo/inbox` lists nothing) and **Messages**, with the flow `demo/sftp-invoice` chosen, shows
 the invoice as its top row, Completed, with its steps `ingress`, `validate`, `extractKey`, `toPartner` and `partner`. The
 host key of the SFTP server is generated when the stack first starts and the node pins its fingerprint; the password is the
-demo's, or `RAIL8_SFTP_PASSWORD` when it is exported before the first `up`.
+demo's, or `RAIL8_SFTP_PASSWORD` when it is exported before the first `up`. The first deploy imports both into the node's
+secret store, sealed under a key the stack generates once; a later change of `RAIL8_SFTP_PASSWORD` is not read.
 
 The `demo/order-jq` flow turns a JSON order with a jq filter: it keeps the order's id and customer as `orderId` and
 `customer`, adds up the items into `total`, and calls the flow `demo/order-partner` with the result, which sends it to the
@@ -303,7 +304,7 @@ the rows the filters keep as a file.
 
 ```sh
 docker compose down      # keeps the database and the node's git cache in their volumes
-docker compose down -v   # also removes them: the next start is empty, deploy the demo again
+docker compose down -v   # also removes them and the secret store's key: the next start is empty, deploy the demo again
 ```
 
 Ctrl+C stops the UI.

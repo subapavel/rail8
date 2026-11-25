@@ -364,13 +364,13 @@ step modules: `xslt` (Saxon-HE), `xsd`, `jq` and `mapping`. Conditions are XPath
 
 An endpoint names its scheme, direction and options, with an optional overlay per environment
 (`environments.<env>.config`), so one flow file is the same in every environment. An option whose
-whole value is `secret://<name>` is a secret. In an option its component declares a secret field, a node
-reads it from its secret store, else from the environment variable `RAIL8_SECRET_<NAME>`; any other
-option reads its variable only. Tests and validation use a placeholder. A step's option is a secret in
-the same way; its code takes it through the API for custom code (part 5). The store
-(`docs/SECRET-STORE.md`) keeps each secret sealed in Postgres under a key the nodes hold and Postgres
-never does; a change reaches every node without a restart, and a flow whose endpoints resolved it is
-built again.
+whole value is `secret://<name>` is a secret, which a node reads from its secret store only; the first
+deploy that references a name the store never held imports the node's `RAIL8_SECRET_<NAME>` into it,
+once. Tests and validation use a placeholder. A step's option is a secret in the same way; its code
+takes it through the API for custom code (part 5). The store (`docs/SECRET-STORE.md`) keeps each
+secret sealed in Postgres under a key every node holds and Postgres never does; a node without the key
+does not start. A change reaches every node without a restart: a handle reads it at its next use, and
+a flow built from its endpoint files takes it at its next deploy.
 
 ### Step names
 
@@ -850,7 +850,7 @@ script in SAP Integration Suite works with security material.
   `secret://<name>`, while the flow builds, and returns a `Secret`: its reference, and its value,
   read from the node each time the step asks for it and never kept in the flow. A literal value is
   refused without being shown. A secret that is not set refuses the deploy, naming the step, the
-  option and the variable `RAIL8_SECRET_<NAME>`; the deploy also checks every `secret://` value
+  option and the reference; the deploy also checks every `secret://` value
   anywhere in a step's options. `rail8 validate` and `rail8 test` read every secret as
   `https://secret.invalid/`. In a flow whose steps took secrets, a failure of a step that a factory
   built has every one of those values replaced by its reference in what is recorded, parked, logged
@@ -1441,7 +1441,8 @@ orchestrator mounts secrets:
 | `RAIL8_VALKEY_URI` | `RAIL8_VALKEY_URI_FILE` | the Valkey URI, with its user and password |
 | `RAIL8_ADMIN_TOKEN` | `RAIL8_ADMIN_TOKEN_FILE` | the admin API's token |
 | `RAIL8_GIT_TOKEN` | `RAIL8_GIT_TOKEN_FILE` | the token for the package repositories |
-| `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>` |
+| `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>`, imported into the secret store once |
+| `RAIL8_SECRETS_KEY` | `RAIL8_SECRETS_KEY_FILE` | the secret store's key, required (preferred as a file) |
 | `RAIL8_JOURNAL_KEY` | `RAIL8_JOURNAL_KEY_FILE` | the journal's master key (preferred as a file) |
 
 - A value given both ways, or a file that is missing, unreadable, empty, larger than 64 KiB or not

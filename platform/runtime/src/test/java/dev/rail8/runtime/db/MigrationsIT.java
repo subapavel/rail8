@@ -61,8 +61,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 29 to 30, and the table set gained {@code tokens} and {@code token_ceiling}. V31 adds {@code node_packages}, what each node of
  * the pool runs; the counts moved from 30 to 31, and the table set gained {@code node_packages}. V32 adds {@code devices}, the
  * device credentials of the login limit; the counts moved from 31 to 32, and the table set gained {@code devices}. V33 adds the
- * secret store; the counts moved from 32 to 33, and the table set gained {@code secret_store}, {@code secrets} and
- * {@code secret_uses}.
+ * secret store; the counts moved from 32 to 33, and the table set gained {@code secret_store}, {@code secrets},
+ * {@code secret_uses} and {@code secret_names}.
  */
 // the order that failed in P1-04 (FIX-5): the fresh case leaves V3 applied, the empty location then sees it as current and throws nothing
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
@@ -124,7 +124,7 @@ class MigrationsIT {
         assertEquals(33, first.migrationsExecuted(), "V1 to V33, each once");
         assertEquals("33", first.schemaVersion());
         assertEquals(Set.of("admin_bridge", "audit", "body_refs", "bodies", "deploy_pool", "deployments", "devices", "dlq", "flyway_schema_history", "journal_keys", "journal_losses", "journal_nodes", "journal_segments",
-                "login_limits", "message_keys", "messages", "node_packages", "nodes", "retiring", "role_assignments", "secret_store", "secret_uses", "secrets", "sessions", "token_ceiling", "tokens", "users", "work"), tables(), "V11 dropped payloads (D-097); V12 added the journal's four tables (CORE-3 item 5); V13 journal_losses (CORE-4c3); V14 nodes (P2-15a); V16 audit (FIX-141)");
+                "login_limits", "message_keys", "messages", "node_packages", "nodes", "retiring", "role_assignments", "secret_names", "secret_store", "secret_uses", "secrets", "sessions", "token_ceiling", "tokens", "users", "work"), tables(), "V11 dropped payloads (D-097); V12 added the journal's four tables (CORE-3 item 5); V13 journal_losses (CORE-4c3); V14 nodes (P2-15a); V16 audit (FIX-141)");
         Set<String> indexes = new TreeSet<>();
         for (Row r : pool.query("select indexname from pg_indexes where schemaname = 'public'").execute().await()) indexes.add(r.getString(0));
         assertTrue(indexes.containsAll(List.of("message_keys_name_value", "work_flow_seq", "dlq_parked_at", "messages_pkey", "dlq_pkey", "work_pkey")), indexes.toString());
@@ -607,7 +607,7 @@ class MigrationsIT {
         assertEquals(16, r.migrationsExecuted(), "V18, V19, V20, V21, V22, V23, V24, V25, V26, V27, V28, V29, V30, V31, V32 and V33 on top of V17");
         assertEquals("33", r.schemaVersion());
         assertEquals("text", columnsOf("nodes").get("peer_address"), "V18: nodes.peer_address text, nullable: " + columnsOf("nodes"));
-        assertEquals(List.of("node", "epoch", "lease_until", "peer_address", "secret_key", "secret_key_previous", "secret_variables", "secret_epoch"),
+        assertEquals(List.of("node", "epoch", "lease_until", "peer_address", "secret_key", "secret_key_previous", "secret_epoch"),
                 List.copyOf(columnsOf("nodes").keySet()), "V18 added it last, nothing else; V33 the secret store's columns after it");
         Row old = pool.query("select node, epoch, lease_until is not null, peer_address from nodes").execute().await().iterator().next();
         assertEquals(java.util.Arrays.asList("n-old", 3L, true, null),
@@ -647,7 +647,7 @@ class MigrationsIT {
         assertEquals("23505", sqlState(() -> pool.query("insert into messages(id, step, flow, body_hash, attempt) values ('m-old', 1, 'shop/orders', '\\x04', 2)").execute().await()),
                 "a second row of attempt 2");
         assertEquals(Set.of("admin_bridge", "audit", "body_refs", "bodies", "deploy_pool", "deployments", "devices", "dlq", "flyway_schema_history", "journal_keys", "journal_losses", "journal_nodes", "journal_segments",
-                "login_limits", "message_keys", "messages", "node_packages", "nodes", "retiring", "role_assignments", "secret_store", "secret_uses", "secrets", "sessions", "token_ceiling", "tokens", "users", "work"), tables(), "the table set of the latest version: V19 changed none");
+                "login_limits", "message_keys", "messages", "node_packages", "nodes", "retiring", "role_assignments", "secret_names", "secret_store", "secret_uses", "secrets", "sessions", "token_ceiling", "tokens", "users", "work"), tables(), "the table set of the latest version: V19 changed none");
     }
 
     /**

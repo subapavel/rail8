@@ -1,6 +1,8 @@
 package dev.rail8.runtime.node;
 
 import dev.rail8.runtime.deploy.Secrets;
+import dev.rail8.runtime.secret.MemorySecretStores;
+import dev.rail8.testkit.FakeRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -65,11 +67,9 @@ class SecretFilesTest {
                 () -> assertEquals(Optional.of("admin-token"), c.admin().token()),
                 () -> assertEquals("git-token", c.git().orElseThrow().credentials().orElseThrow().token()),
                 () -> assertEquals(Optional.of(URI.create("redis://user:pw@valkey:6379")), c.leases().valkey()),
-                () -> assertEquals(Optional.of("partner-token"), c.secrets().resolve("secret://partner-token")),
-                () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token-file"),
-                        "the file form's own key is gone: no path is held as a secret's value"),
-                () -> assertEquals(java.util.List.of("RAIL8_SECRET_PARTNER_TOKEN"), c.secrets().variableNames(),
-                        "the store is told the effective variable, not its file form"));
+                () -> assertEquals(Optional.of("partner-token"), joined(c.secrets(), env).importable("secret://partner-token")),
+                () -> assertEquals(Optional.empty(), joined(c.secrets(), env).importable("secret://partner-token-file"),
+                        "the file form's own key is gone: no path is held as a secret's value"));
     }
 
     /** One trailing \n or \r\n is dropped, nothing else: a second line end, inner lines and spaces stay. */
@@ -200,8 +200,16 @@ class SecretFilesTest {
                 "RAIL8_SECRET_FILE", "the value of secret://file",
                 "RAIL8_PG_USER_FILE", "/run/secrets/pg-user",
                 "RAIL8_SECRET_DB_FILE", "db-file-value"), resolved);
-        assertEquals(Optional.of("db-file-value"), Secrets.fromEnv(resolved).resolve("secret://db-file"),
+        assertEquals(Optional.of("db-file-value"), joined(Secrets.fromEnv(resolved), Map.of()).importable("secret://db-file"),
                 "a secret whose variable ends in _FILE is given as its file form");
+    }
+
+    /** {@code secrets} joined to a store started with this test's key: what a node imports from. */
+    private static Secrets joined(Secrets secrets, Map<String, String> env) {
+        Map<String, String> keyed = new HashMap<>(env);
+        keyed.put("RAIL8_SECRETS_KEY", "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=");
+        FakeRuntime rt = FakeRuntime.create();
+        return secrets.withStore(new MemorySecretStores().start("node-1", keyed, rt.clock(), rt.timer()));
     }
 
     private static IllegalArgumentException refused(String key, String value) {

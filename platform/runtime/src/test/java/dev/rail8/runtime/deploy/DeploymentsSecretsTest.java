@@ -16,6 +16,7 @@ import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.node.OnVirtualThread;
+import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
@@ -58,12 +59,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * P2-04 (D-081): an endpoint option whose whole string value is {@code secret://<name>} — at any depth of nested maps and lists —
- * reaches the component, as its consumer and as every producer of it, resolved from the env map the node was configured with
- * ({@code RAIL8_SECRET_<NAME>}, through {@link NodeConfig#from}); resolved after the env overlay and the schema check, only in
- * the effective options. A string that merely contains {@code secret://} is left alone, a malformed reference is a problem, and a
- * variable that is not set refuses the deploy (a restore: lists the package FAILED) with a problem naming the endpoint, the
- * reference and the variable. The value lives only in the EndpointConfig handed to the component: what the node shows — the
+ * An endpoint option whose whole string value is {@code secret://<name>} — at any depth of nested maps and lists — reaches the
+ * component, as its consumer and as every producer of it, resolved from the secret store the nodes share; resolved after the env
+ * overlay and the schema check, only in the effective options. A deploy first imports into the store each such name the store
+ * never held whose variable {@code RAIL8_SECRET_<NAME>} the node that takes it has set; after that the variable is not read. A
+ * string that merely contains {@code secret://} is left alone, a malformed reference is a problem, and a name neither in the store
+ * nor imported refuses the deploy with a problem naming the endpoint and the reference. The value lives only in the
+ * EndpointConfig handed to the component: what the node shows — the
  * listing (package, files, artifacts, flows and their effective hash), the record, the unpacked files, problems, logs and the
  * timeline — carries the reference or nothing.
  *
@@ -72,8 +74,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * flow's effective hash must not vary with it ({@link FlowHash}: the same content hashes the same on any node); the unpacked
  * endpoint file holds the reference; the record, problems, logs and the timeline must hold no value.
  *
- * <p>The shape these cases assume (P2-04 test-author): the node's secrets come from the env map given to {@link NodeConfig#from}
- * — no other wiring between that map and {@link Deployments}' existing constructors.
+ * <p>Every node here joins one in-memory store, as the nodes of an installation share one, its variables from the env map given to
+ * {@link NodeConfig#from}.
  */
 class DeploymentsSecretsTest {
 
@@ -88,6 +90,8 @@ class DeploymentsSecretsTest {
     final InMemoryMessageStore messages = new InMemoryMessageStore();
     final InMemoryDlq dlq = new InMemoryDlq();
     final List<Node> nodes = new ArrayList<>();
+    /** The secret store every node joins. */
+    final MemorySecretStores stores = new MemorySecretStores();
     final List<LogRecord> logged = new CopyOnWriteArrayList<>();
     /** Strongly held: JUL keeps loggers weakly, and a collected logger loses its handler. */
     final Logger rail8 = Logger.getLogger("dev.rail8");
@@ -158,6 +162,7 @@ class DeploymentsSecretsTest {
         final Map<String, String> env = new HashMap<>();
         final Doors doors = new Doors();
         final SftpShaped sftp = new SftpShaped(rt);
+        final NodeConfig config;
         final Deployments deployments;
 
         Node(String id, String rail8Env, Map<String, String> secrets, DeploymentStore records) {
@@ -173,7 +178,7 @@ class DeploymentsSecretsTest {
             env.put("RAIL8_GIT_BASE", repos.base().toString());
             Map<String, Component> components = Map.of(Doors.SCHEME, doors, "sftp", sftp);
             Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components);
-            NodeConfig config = NodeConfig.from(env);
+            config = stores.joined(NodeConfig.from(env), rt.clock(), rt.timer());
             deployments = records == null
                     ? new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq,
                             new CountingQueue(rt.clock()), () -> 0L)
@@ -186,6 +191,12 @@ class DeploymentsSecretsTest {
         DeployedPackage deploy(PackageDraft p) throws Exception {
             String commit = repos.commit(p);
             return OnVirtualThread.call(() -> deployments.deploy(name(p), commit, Deployments.ANY, TestActors.named("test"))).pkg();
+        }
+
+        /** The problems this node's validate finds in {@code p}. */
+        List<String> validate(PackageDraft p) throws Exception {
+            Path folder = p.folderIn(tmp.resolve("validated"));
+            return OnVirtualThread.call(() -> deployments.validate(name(p), folder));
         }
 
         DeployRefusedException refused(PackageDraft p) {
@@ -239,10 +250,15 @@ class DeploymentsSecretsTest {
 
     /** {@code name} 1.0.0: one sync flow {@code orders} from {@code orders-in} (config {@code in} plus a path) to {@code partner}. */
     static PackageDraft one(String name, JsonObject in, JsonObject partner) {
-        return PackageDraft.of(name, "1.0.0")
+        return one(name, "1.0.0", in, partner);
+    }
+
+    /** As {@link #one(String, JsonObject, JsonObject)}, at {@code version}. */
+    static PackageDraft one(String name, String version, JsonObject in, JsonObject partner) {
+        return PackageDraft.of(name, version)
                 .endpoint("orders-in", "in", in.copy().put("path", "/orders"))
                 .endpoint("partner", "out", partner)
-                .flow("orders", "1.0.0", "sync", "orders-in", 4096, PackageDraft.toPartner());
+                .flow("orders", version, "sync", "orders-in", 4096, PackageDraft.toPartner());
     }
 
     static JsonObject url(String url) {
@@ -435,11 +451,12 @@ class DeploymentsSecretsTest {
     }
 
     /**
-     * Two variables not set: the deploy is refused (422) with one problem each, naming endpoint, reference and variable; the value
-     * of the reference that is set is in no problem, no error text and no log line; nothing is listed or left open.
+     * Two names neither in the store nor in a variable: the deploy is refused (422) with one problem each, naming endpoint and
+     * reference; the value of the reference that is set is in no problem, no error text and no log line; nothing is listed or left
+     * open.
      */
     @Test
-    void missingVariableRefusesTheDeployNamingTheVariable() {
+    void aNameNeitherInTheStoreNorInAVariableRefusesTheDeploy() {
         String value = "present-value-0815";
         Node n = node(Map.of("RAIL8_SECRET_PRESENT", value));
         JsonObject in = new JsonObject().put("tags", new JsonObject().put("present", "secret://present").put("key", "secret://inbound.key"));
@@ -447,9 +464,9 @@ class DeploymentsSecretsTest {
         DeployRefusedException refused = n.refused(one("missing", in, url("secret://partner-token")));
 
         assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
-        assertTrue(refused.problems().contains("endpoint 'partner': secret 'secret://partner-token' is not set (RAIL8_SECRET_PARTNER_TOKEN)"),
+        assertTrue(refused.problems().contains("endpoint 'partner': secret 'secret://partner-token' is not set: the secret store holds no such secret"),
                 refused.problems().toString());
-        assertTrue(refused.problems().contains("endpoint 'orders-in': secret 'secret://inbound.key' is not set (RAIL8_SECRET_INBOUND_KEY)"),
+        assertTrue(refused.problems().contains("endpoint 'orders-in': secret 'secret://inbound.key' is not set: the secret store holds no such secret"),
                 refused.problems().toString());
         for (String text : List.of(String.valueOf(refused.problems()), String.valueOf(refused.getMessage()), String.valueOf(refused.error()), String.valueOf(refused))) {
             assertFalse(text.contains(value), "no value in the refusal: " + text);
@@ -460,21 +477,6 @@ class DeploymentsSecretsTest {
         assertEquals(List.of(), n.doors.openProducers(), "no producer left open");
     }
 
-    /**
-     * A missing secret whose variable ends in {@code _FILE} is read by a node as the file form of another secret: the problem
-     * names the variable its value is given in, its own file form.
-     */
-    @Test
-    void aMissingSecretWhoseVariableEndsInFileNamesItsFileForm() {
-        Node n = node(Map.of());
-
-        DeployRefusedException refused = n.refused(one("file-name", url("rec://inbound"), url("secret://db-file")));
-
-        assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
-        assertEquals(List.of("endpoint 'partner': secret 'secret://db-file' is not set (RAIL8_SECRET_DB_FILE_FILE, the path of a file that holds it)"),
-                refused.problems());
-    }
-
     /** A variable that is set but empty is refused as a missing one: the same problem line, nothing listed, built or left open. */
     @Test
     void anEmptyVariableRefusesTheDeployAsAMissingOne() {
@@ -483,7 +485,7 @@ class DeploymentsSecretsTest {
         DeployRefusedException refused = n.refused(one("empty", url("rec://inbound"), url("secret://partner-token")));
 
         assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
-        assertTrue(refused.problems().contains("endpoint 'partner': secret 'secret://partner-token' is not set (RAIL8_SECRET_PARTNER_TOKEN)"),
+        assertTrue(refused.problems().contains("endpoint 'partner': secret 'secret://partner-token' is not set: the secret store holds no such secret"),
                 refused.problems().toString());
         assertEquals(List.of(), n.deployments.packages(), "nothing is listed");
         assertEquals(List.of(), n.doors.doors(), "no consumer built");
@@ -536,11 +538,11 @@ class DeploymentsSecretsTest {
     }
 
     /**
-     * A restore reads the variables of the node that restores (D-081: values at each deploy/restore, from the env captured at
-     * start): a node without one lists the package FAILED with the problem naming it, a node with another value runs it with that.
+     * A restore reads the store, never the variables of the node that restores: what the deploy imported runs on a node without
+     * the variable and on a node whose variable holds another value, and nothing is imported again.
      */
     @Test
-    void aRestoreWithoutTheVariableListsThePackageFailedNamingIt() throws Exception {
+    void aRestoreReadsTheStoreNotTheVariablesOfTheNodeThatRestores() throws Exception {
         InMemoryDeploymentStore records = new InMemoryDeploymentStore();
         Node first = new Node("node-1", "dev", Map.of("RAIL8_SECRET_PARTNER_URL", "rec://first-value"), records);
         first.deploy(one("restored", url("rec://inbound"), url("secret://partner-url")));
@@ -551,16 +553,53 @@ class DeploymentsSecretsTest {
         Node other = new Node("node-3", "dev", Map.of("RAIL8_SECRET_PARTNER_URL", "rec://third-value"), records);
         other.restore();
 
-        DeployedPackage failed = without.deployments.packages().stream().filter(p -> p.name().equals("restored")).findFirst()
-                .orElseGet(() -> fail("node-2 lists no package restored: " + without.deployments.packages()));
-        assertEquals(DeployedPackage.State.FAILED, failed.state(), failed.toString());
-        assertTrue(failed.problems().contains("endpoint 'partner': secret 'secret://partner-url' is not set (RAIL8_SECRET_PARTNER_URL)"),
-                failed.problems().toString());
-        assertEquals(List.of(), without.doors.openProducers(), "node-2 left no producer open");
-        DeployedPackage running = other.deployments.packages().stream().filter(p -> p.name().equals("restored")).findFirst()
-                .orElseGet(() -> fail("node-3 lists no package restored: " + other.deployments.packages()));
-        assertEquals(DeployedPackage.State.RUNNING, running.state(), running.toString());
-        for (Map<String, Object> options : other.produced("partner")) assertEquals("rec://third-value", options.get("url"), "node-3's own value");
+        for (Node n : List.of(without, other)) {
+            DeployedPackage running = n.deployments.packages().stream().filter(p -> p.name().equals("restored")).findFirst()
+                    .orElseGet(() -> fail("no package restored: " + n.deployments.packages()));
+            assertEquals(DeployedPackage.State.RUNNING, running.state(), running.toString());
+            for (Map<String, Object> options : n.produced("partner")) assertEquals("rec://first-value", options.get("url"), "the store's value");
+        }
+        assertEquals(1, stores.audit().stream().filter(a -> a.getString("action").equals("secret.imported")).count(), "imported once");
+    }
+
+    /**
+     * A deploy imports a variable whose name the store never held, once: the audit row names the name and the variable, and a
+     * name deleted from the store is never imported again, so the next deploy is refused though the variable is still set. A
+     * validate imports nothing, and reads the value a deploy would import.
+     */
+    @Test
+    void aDeployImportsAVariableOnceAndNeverAfterADelete() throws Exception {
+        Node n = node(Map.of("RAIL8_SECRET_PARTNER_URL", "rec://from-the-variable"));
+        PackageDraft p = one("imported", url("rec://inbound"), url("secret://partner-url"));
+        assertEquals(List.of(), n.validate(p), "a validate reads the variable a deploy would import");
+        assertEquals(List.of(), stores.audit(), "and writes nothing");
+
+        n.deploy(p);
+        for (Map<String, Object> options : n.produced("partner")) assertEquals("rec://from-the-variable", options.get("url"));
+        assertEquals(List.of(new JsonObject().put("actor", "node-1").put("via", "local").put("action", "secret.imported").put("subject", "secret/partner-url")
+                .put("detail", new JsonObject().put("kind", "value").put("variable", "RAIL8_SECRET_PARTNER_URL"))), stores.audit());
+        n.deploy(one("imported", "1.0.1", url("rec://inbound"), url("secret://partner-url")));
+        assertEquals(1, stores.audit().size(), "not imported again");
+
+        MemorySecretStores.delete(n.config.secrets().store().orElseThrow(), "partner-url");
+        DeployRefusedException refused = n.refused(one("imported", "1.0.2", url("rec://inbound"), url("secret://partner-url")));
+        assertEquals(List.of("endpoint 'partner': secret 'secret://partner-url' is not set: the secret store holds no such secret"), refused.problems());
+        assertNotLogged("rec://from-the-variable");
+    }
+
+    /** A refused import is a problem of the deploy naming the reference and the variable, never the value. */
+    @Test
+    void aRefusedImportRefusesTheDeploy() {
+        Node n = node(Map.of("RAIL8_SECRET_PARTNER_URL", "rec://from-the-variable"));
+        stores.auditFails(true);
+
+        DeployRefusedException refused = n.refused(one("unimported", url("rec://inbound"), url("secret://partner-url")));
+
+        assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
+        assertTrue(refused.problems().stream().anyMatch(line -> line.startsWith("endpoint 'partner': secret 'secret://partner-url' is not imported from"
+                + " RAIL8_SECRET_PARTNER_URL: ")), refused.problems().toString());
+        assertFalse(String.valueOf(refused.problems()).contains("from-the-variable"), refused.problems().toString());
+        assertEquals(List.of(), n.deployments.packages(), "nothing is listed");
     }
 
     // --- the value is the component's only
@@ -601,16 +640,19 @@ class DeploymentsSecretsTest {
     }
 
     /**
-     * The effective hash covers the reference, not the value: the same package on two nodes whose variables differ lists the same
-     * hash for every flow (the same content hashes the same on any node), while each node's producers got their own value.
+     * The effective hash covers the reference, not the value: the same package deployed before and after an overwrite of its
+     * secrets lists the same hash for every flow (the same content hashes the same on any node), while each build's producers got
+     * the value of its time.
      */
     @Test
     void theFlowHashIsTheSameWhateverTheValue() throws Exception {
         Node first = node(Map.of("RAIL8_SECRET_PARTNER_URL", "rec://first-value", "RAIL8_SECRET_INBOUND", "first-inbound"));
-        Node second = node(Map.of("RAIL8_SECRET_PARTNER_URL", "rec://second-value", "RAIL8_SECRET_INBOUND", "second-inbound"));
+        Node second = node(Map.of());
         PackageDraft p = shop("hashed", new JsonObject().put("tags", new JsonObject().put("key", "secret://inbound")), url("secret://partner-url"));
 
         first.deploy(p);
+        MemorySecretStores.overwriteValue(first.config.secrets().store().orElseThrow(), "partner-url", "rec://second-value");
+        MemorySecretStores.overwriteValue(first.config.secrets().store().orElseThrow(), "inbound", "second-inbound");
         second.deploy(p);
 
         for (Map<String, Object> options : first.produced("partner")) assertEquals("rec://first-value", options.get("url"));
@@ -620,7 +662,7 @@ class DeploymentsSecretsTest {
         first.deployments.flows().forEach(f -> firstHashes.put(f.id(), f.hash()));
         Map<String, String> secondHashes = new LinkedHashMap<>();
         second.deployments.flows().forEach(f -> secondHashes.put(f.id(), f.hash()));
-        assertEquals(firstHashes, secondHashes, "one hash per flow, whatever the node's values");
+        assertEquals(firstHashes, secondHashes, "one hash per flow, whatever the values");
         assertEquals(Set.of("hashed/orders", "hashed/audit", "hashed/ping"), firstHashes.keySet(), firstHashes.toString());
         assertNotEquals(firstHashes.get("hashed/orders"), firstHashes.get("hashed/ping"), "fixture: the hashes are the flows' own");
     }

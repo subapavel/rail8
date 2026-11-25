@@ -52,6 +52,7 @@ import dev.rail8.runtime.lease.InMemoryPollerLeases;
 import dev.rail8.runtime.lease.PollerLeases;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.refusal.RefusalCode;
+import dev.rail8.runtime.secret.SecretRefused;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.schemas.Package;
 import dev.rail8.schemas.Schemas;
@@ -396,15 +397,8 @@ public final class Deployments {
     private final Map<String, DeploymentRecord> usesToWrite = new HashMap<>();
     /** Why the last write of each package's secret uses failed, by name; under {@link #deploying}. */
     private final Map<String, String> unwrittenUses = new HashMap<>();
-    /** The names of the secrets whose value or source changed in this node's memory since the last tick took them. */
-    private final Set<String> changedSecrets = ConcurrentHashMap.newKeySet();
     /** Every {@code secret://} reference this node resolved for an endpoint or handed to a step: the values {@link #scrubber} replaces. */
     private final Set<String> named = ConcurrentHashMap.newKeySet();
-    /**
-     * The flows to build again because a secret their endpoints' options resolved changed, by qualified id, each with why its
-     * last build failed (empty before its first): every tick tries each ({@link #rebuildForSecrets}). Under {@link #deploying}.
-     */
-    private final Map<String, List<String>> secretRebuilds = new TreeMap<>();
     /**
      * The qualified ids of the at-least-once flows the install running now starts, from its phase B until its listing is written:
      * the work queue admits their messages before a record names them ({@link #unrecorded}).
@@ -570,7 +564,6 @@ public final class Deployments {
         this.fence = Objects.requireNonNull(fence, "fence");
         this.runs = new Runs(clock, timer, WorkerPolicy.DEFAULT.lease());
         this.caches = Objects.requireNonNull(caches, "caches");
-        config.secrets().store().ifPresent(store -> store.onChange(changedSecrets::addAll));
     }
 
     /**
@@ -588,11 +581,10 @@ public final class Deployments {
      * consumer gets it; {@code worker} is null unless the flow is at-least-once, and {@code consumer} is null until one is built for
      * it ({@link #with}). A {@link DeployedFlow.State#FAILED} flow ({@link #failed}) has no delivery, worker or consumer.
      * {@code uses} names the secrets it uses, by name the kinds each use takes: those its steps took and those its endpoints'
-     * options reference; {@code resolved} the names its endpoints' options resolved when it built, which a change of their value
-     * or source builds again.
+     * options reference.
      */
     private record Flow(DeployedFlow flow, String dir, Recipe recipe, Delivery delivery, FlowWorker worker, EndpointConfig from,
-                        RestartingConsumer consumer, Map<String, Set<Secret.Kind>> uses, Set<String> resolved) {
+                        RestartingConsumer consumer, Map<String, Set<Secret.Kind>> uses) {
         String id() {
             return flow.id();
         }
@@ -603,7 +595,7 @@ public final class Deployments {
         }
 
         Flow with(RestartingConsumer built) {
-            return new Flow(flow, dir, recipe, delivery, worker, from, built, uses, resolved);
+            return new Flow(flow, dir, recipe, delivery, worker, from, built, uses);
         }
 
         /** Its record as listed now: {@link DeployedFlow.State#RESTARTING} while its consumer waits for its next attempt. */
@@ -617,7 +609,7 @@ public final class Deployments {
         Flow failed() {
             DeployedFlow f = flow;
             return new Flow(new DeployedFlow(f.id(), f.pkg(), f.packageVersion(), f.commit(), f.flowVersion(), f.delivery(), f.hash(), DeployedFlow.State.FAILED),
-                    dir, recipe, null, null, from, null, uses, resolved);
+                    dir, recipe, null, null, from, null, uses);
         }
 
         /**
@@ -1285,8 +1277,8 @@ public final class Deployments {
         List<Flow> built = new ArrayList<>();
         try {
             Package pkg = load(name, dir);
-            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>());
-            return build(name, Optional.empty(), pkg.manifest().getString("version"), "validate", pkg, dir, checked, built);
+            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>(), Untaken.PREVIEW);
+            return build(name, Optional.empty(), pkg.manifest().getString("version"), "validate", pkg, dir, checked, built, Untaken.PREVIEW);
         } catch (DeployRefusedException refused) {
             if (refused.kind() == Kind.BUSY) throw new IOException(refused.error(), refused);   // a pool refusal lists no problem: the node's failure
             return refused.problems();
@@ -1430,7 +1422,6 @@ public final class Deployments {
                 try {
                     reconcile(read.result());
                     backfill();   // what was installed, and what a busy pool's lock held back at an earlier tick
-                    rebuildForSecrets();
                     unreconciled = null;
                 } catch (IOException | RuntimeException failed) {
                     unreconciled = reason(failed);
@@ -1449,73 +1440,12 @@ public final class Deployments {
         }
     }
 
-    /**
-     * Builds again, through this tick, each flow whose endpoints' options resolved a secret that changed since the last tick
-     * ({@link #changedSecrets}), and each whose earlier such build failed; no other flow. Each is stopped, built from its recipe
-     * with its endpoints' references resolved anew, and started. One that does not build or start is stopped and listed
-     * {@link DeployedFlow.State#FAILED}, never left running on its old value, with an ERROR once per new reason; the next tick
-     * tries it again. A drain that resolved such a secret is stopped and started again the same way ({@link #startDrains}); one that
-     * does not build is not run on its old value. Under {@link #deploying}.
-     */
-    private void rebuildForSecrets() {
-        Set<String> changed = new HashSet<>(changedSecrets);
-        changedSecrets.removeAll(changed);
-        for (Deployed d : deployed.values()) {
-            if (d.pkg().state() == DeployedPackage.State.FAILED) continue;
-            for (Flow f : d.flows()) {
-                if (!Collections.disjoint(f.resolved(), changed)) secretRebuilds.putIfAbsent(f.id(), List.of());
-            }
-        }
-        secretRebuilds.keySet().removeIf(id -> deployed.values().stream().noneMatch(d -> d.flows().stream().anyMatch(f -> f.id().equals(id))));
-        for (Deployed d : List.copyOf(deployed.values())) {
-            List<Flow> again = d.flows().stream().filter(f -> secretRebuilds.containsKey(f.id())).toList();
-            if (again.isEmpty()) continue;
-            retire(again.stream().filter(Flow::runs).toList(), "a secret its endpoints resolved changed");
-            Path packageDir = config.dataDir().resolve("packages").resolve(d.pkg().name());
-            List<Flow> now = new ArrayList<>(d.flows());
-            for (Flow f : again) {
-                Flow built = rebuiltForSecrets(f, packageDir);
-                now.replaceAll(each -> each.id().equals(f.id()) ? built : each);
-            }
-            deployed.put(d.pkg().name(), new Deployed(d.pkg(), List.copyOf(now), d.kept(), d.previous(), d.pins(), d.record()));
-        }
-        List<Flow> drains = draining.values().stream().filter(f -> !Collections.disjoint(f.resolved(), changed)).toList();
-        drains.forEach(f -> draining.remove(f.id()));
-        retire(drains, "a secret its endpoints resolved changed");
-        startDrains(drains);
-    }
-
-    /** {@code f} built again with its endpoints' references resolved anew and started; itself FAILED when that fails. */
-    private Flow rebuiltForSecrets(Flow f, Path packageDir) {
-        List<String> problems = new ArrayList<>();
-        Recipe fresh = resolvedAnew(f.recipe(), problems);
-        if (fresh != null) {
-            Flow built = rebuild(f, fresh, packageDir, problems);
-            List<Flow> consumed = built == null ? List.of() : consumers(List.of(built), problems);
-            if (built != null && consumed.isEmpty()) discard(List.of(), List.of(built));
-            if (problems.isEmpty()) {
-                Start started = start(consumed, false).getFirst();
-                if (started.failure() == null) {
-                    secretRebuilds.remove(f.id());
-                    return consumed.getFirst();
-                }
-                discard(List.of(), consumed);
-                problems.add(problem(started, "did not start"));
-            }
-        }
-        if (!problems.equals(secretRebuilds.put(f.id(), problems))) {
-            log(System.Logger.Level.ERROR, "flow '" + f.id() + "' is built again for a secret its endpoints resolved, and does not run: it is listed "
-                    + "FAILED, and every tick tries it again: " + problems);
-        }
-        return f.runs() ? f.failed() : f;
-    }
-
     /** {@code recipe} with its endpoints' written references resolved anew; null, with each problem added, when one does not resolve. */
     private Recipe resolvedAnew(Recipe recipe, List<String> problems) {
         int before = problems.size();
         Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
         recipe.written().forEach((id, written) -> {
-            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), problems);
+            JsonObject values = resolved(id, new JsonObject(written.options()), problems);
             if (values != null) endpoints.put(id, endpoint(id, written.uri().getScheme(), values));
         });
         if (problems.size() > before) return null;
@@ -1895,11 +1825,11 @@ public final class Deployments {
                 Files.move(folder, dir, StandardCopyOption.ATOMIC_MOVE);
             }
             Package pkg = load(name, dir);
-            Checked checked = check(name, pkg, dir, before, List.of(), commits, written);
+            Checked checked = check(name, pkg, dir, before, List.of(), commits, written, Untaken.IMPORT);
             if (fetching != null) fetching.close();   // every pin is read: the fetches' deadline ends before a flow starts
             String version = pkg.manifest().getString("version");
             Optional<String> commit = origin.map(Origin::commit);
-            List<String> problems = build(name, commit, version, hex, pkg, dir, checked, built);
+            List<String> problems = build(name, commit, version, hex, pkg, dir, checked, built, Untaken.IMPORT);
 
             Map<String, Flow> gone = new LinkedHashMap<>();   // by id: the flows listed that the new version has not classified yet
             before.forEach(f -> gone.put(f.id(), f));
@@ -2144,7 +2074,7 @@ public final class Deployments {
         Path dir = packageDir.resolve(ran.dir());
         try {
             return flow(builder(f.pkg(), f.packageVersion(), f.commit(), recipe.endpoints()), f.pkg(), f.packageVersion(), f.commit(), ran.dir(),
-                    recipe, dir);
+                    recipe, dir, Untaken.NONE);
         } catch (IOException | RuntimeException refused) {
             problems.add("flow '" + local(f) + "' does not build again: " + fromRoot(reason(refused), dir, ran.recipe().dependencies()));
             return null;
@@ -2248,9 +2178,11 @@ public final class Deployments {
      * — removed, or another delivery mode — are the ones leaving: the deploy drains them. Against the flows the node runs, each flow's consumer is asked where it
      * listens ({@link #listeners}), and each flow which node-local addresses it serves and calls ({@link #links}): one flow per address
      * and no cycle of calls ({@link Calls#check}, against {@link #others}). {@code held} holds the versions an off-node validate
-     * holds, empty otherwise; {@code commits} and {@code written} are as {@link #dependencies} takes them.
+     * holds, empty otherwise; {@code commits} and {@code written} are as {@link #dependencies} takes them. {@code untaken} says what
+     * becomes of a reference whose variable the store has not taken yet.
      */
-    private Checked check(String name, Package pkg, Path dir, List<Flow> running, List<Held> held, Commits commits, List<Path> written)
+    private Checked check(String name, Package pkg, Path dir, List<Flow> running, List<Held> held, Commits commits, List<Path> written,
+                          Untaken untaken)
             throws DeployRefusedException, IOException {
         List<String> problems = new ArrayList<>(pkg.problems());
         JsonObject manifest = pkg.manifest();
@@ -2277,7 +2209,8 @@ public final class Deployments {
                 for (String p : refused) problems.add("endpoint '" + id + "' config (environment " + config.env() + ") at " + p);
                 valid = refused.isEmpty();
             }
-            JsonObject values = resolved(id, component, cfg, problems);   // null: a reference did not resolve, its problem is listed
+            if (untaken == Untaken.IMPORT) references(cfg, reference -> imported(reference, "endpoint '" + id + "': ", problems));
+            JsonObject values = resolved(id, cfg, problems, untaken);   // null: a reference did not resolve, its problem is listed
             if (values != null) resolved.put(id, values);
             if ("in".equals(endpoint.getString("direction"))) {
                 for (String key : RESERVED) {
@@ -2733,7 +2666,7 @@ public final class Deployments {
             Component component = components.get(scheme);
             JsonObject cfg = overlaid(endpoint);
             if (component == null || !refusedBy(component, cfg, endpoint.getString("direction")).isEmpty()) return;
-            JsonObject values = resolved(id, component, cfg, dropped);
+            JsonObject values = resolved(id, cfg, dropped);
             if (values != null) ("in".equals(endpoint.getString("direction")) ? ins : outs).put(id, endpoint(id, scheme, values));
         });
         Map<String, FlowDefinition> flows = new HashMap<>();
@@ -2809,74 +2742,50 @@ public final class Deployments {
     }
 
     /**
-     * A copy of {@code cfg}, the options of endpoint {@code id} served by {@code component}, with every string value that starts
-     * with {@code secret://}, at any depth of its objects and arrays, replaced by the node's value of that reference; a string that
-     * merely contains one is kept as written. In an option the component's settings declare a secret field, the value is the
-     * store's, else the variable's ({@link Secrets#resolve}); in any other option, the variable's alone ({@link Secrets#variableOnly}).
-     * Null, with a line added to {@code problems} per reference, when one is malformed ({@code endpoint '<id>': } and the refusal
-     * naming it) or not set ({@code endpoint '<id>': secret '<reference>' is not set (<source>)}, for an option that is no secret
-     * field on a node with a store followed by {@code : the option '<option>' is not a secret field, so it reads its variable only}):
-     * no line carries a value.
+     * A copy of the endpoint config {@code cfg} with every string value that starts with {@code secret://}, at any depth of its
+     * objects and arrays, replaced by the plain value the node's secret store holds of that reference ({@link Secrets#resolve});
+     * a string that merely contains one is kept as written. Null, with a line added to {@code problems} per reference, when one is
+     * malformed ({@code endpoint '<id>': } and the refusal naming it), unreadable or of another kind ({@code endpoint '<id>': } and
+     * {@link Secrets#problem}), or not set ({@code endpoint '<id>': secret '<reference>' is not set: the secret store holds no such
+     * secret}): no line carries a value.
      */
-    private JsonObject resolved(String id, Component component, JsonObject cfg, List<String> problems) {
+    private JsonObject resolved(String id, JsonObject cfg, List<String> problems) {
+        return resolved(id, cfg, problems, Untaken.NONE);
+    }
+
+    /** As {@link #resolved(String, JsonObject, List)}; with {@link Untaken#PREVIEW}, an importable reference reads its variable. */
+    private JsonObject resolved(String id, JsonObject cfg, List<String> problems, Untaken untaken) {
         int before = problems.size();
-        Set<String> fields = secretFields(component);
-        JsonObject values = new JsonObject();
-        cfg.forEach(e -> values.put(e.getKey(), resolved(id, e.getKey(), fields.contains(e.getKey()), e.getValue(), problems)));
+        JsonObject values = (JsonObject) resolved(id, (Object) cfg, problems, untaken);
         return problems.size() == before ? values : null;
     }
 
-    private Object resolved(String id, String option, boolean secretField, Object value, List<String> problems) {
+    private Object resolved(String id, Object value, List<String> problems, Untaken untaken) {
         if (value instanceof JsonObject object) {
             JsonObject copy = new JsonObject();
-            object.forEach(e -> copy.put(e.getKey(), resolved(id, option, secretField, e.getValue(), problems)));
+            object.forEach(e -> copy.put(e.getKey(), resolved(id, e.getValue(), problems, untaken)));
             return copy;
         }
         if (value instanceof JsonArray array) {
             JsonArray copy = new JsonArray();
-            array.forEach(item -> copy.add(resolved(id, option, secretField, item, problems)));
+            array.forEach(item -> copy.add(resolved(id, item, problems, untaken)));
             return copy;
         }
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
         named.add(reference);
         try {
-            if (!secretField) {
-                Optional<String> secret = config.secrets().variableOnly(reference);
-                if (secret.isEmpty()) {
-                    problems.add("endpoint '" + id + "': secret '" + reference + "' is not set (" + Secrets.where(reference) + ")"
-                            + (config.secrets().store().isPresent() ? ": the option '" + option + "' is not a secret field, so it reads its variable only" : ""));
-                }
-                return secret.orElse(null);
-            }
+            Optional<String> previewed = untaken == Untaken.PREVIEW ? config.secrets().importable(reference) : Optional.empty();
+            if (previewed.isPresent()) return previewed.get();
             Optional<String> problem = config.secrets().problem(reference, PLAIN);
             if (problem.isPresent()) {
                 problems.add("endpoint '" + id + "': " + problem.get());
                 return null;
             }
-            Optional<String> secret = config.secrets().resolve(reference);
-            if (secret.isEmpty()) problems.add("endpoint '" + id + "': secret '" + reference + "' is not set (" + Secrets.where(reference) + ")");
-            return secret.orElse(null);
+            return config.secrets().resolve(reference).orElseThrow();
         } catch (IllegalArgumentException malformed) {
             problems.add("endpoint '" + id + "': " + malformed.getMessage());
             return null;
         }
-    }
-
-    /**
-     * The options {@code component}'s settings declare secret fields, which alone the secret store serves; none for a component
-     * that describes nothing, or none on this node.
-     */
-    private static Set<String> secretFields(Component component) {
-        if (component == null) return Set.of();
-        Settings settings = component.settings();
-        if (!settings.described()) return Set.of();
-        Set<String> fields = new HashSet<>();
-        if (settings.toJson().get("fields") instanceof List<?> all) {
-            for (Object f : all) {
-                if (f instanceof Map<?, ?> field && "secret".equals(field.get("type")) && field.get("name") instanceof String name) fields.add(name);
-            }
-        }
-        return Set.copyOf(fields);
     }
 
     /**
@@ -2885,7 +2794,7 @@ public final class Deployments {
      * {@code flows} all the same.
      */
     private List<String> build(String name, Optional<String> commit, String version, String hex, Package pkg, Path dir, Checked checked,
-                               List<Flow> flows) throws IOException {
+                               List<Flow> flows, Untaken untaken) throws IOException {
         Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();   // as the components get them, references resolved
         Map<String, EndpointConfig> written = new LinkedHashMap<>();     // as the package writes them: what the hash covers
         checked.configs().forEach((id, cfg) -> {
@@ -2900,7 +2809,7 @@ public final class Deployments {
                 flows.add(flow(builder, name, version, commit, hex,
                         new Recipe(each.getValue(), pkg.flowFile(id), Map.copyOf(endpoints), Map.copyOf(written),
                                 Optional.ofNullable(checked.listening().get(id)), Optional.ofNullable(checked.paths().get(id)), checked.calls().get(id),
-                                checked.dependencies().visible()), dir));
+                                checked.dependencies().visible()), dir, untaken));
             } catch (RuntimeException refused) {
                 problems.add("flow '" + id + "' does not build: " + fromRoot(reason(refused), dir, checked.dependencies().visible()));
             }
@@ -2932,34 +2841,37 @@ public final class Deployments {
      * its delivery was built stops and closes what it built of itself before the failure leaves, unchecked ones included —
      * its worker has run nothing yet, so its close runs at once; a worker that does not build has closed its own producers.
      * Its steps' secrets are the node's live handles ({@link Secrets#handle}); the plain values its endpoints' options resolved
-     * join its scrubber, and the flow keeps the names it uses.
+     * join its scrubber, and the flow keeps the names it uses. {@code untaken} says what becomes of a step's plain value whose
+     * variable the store has not taken yet.
      *
      * @throws IOException a file the build read cannot be hashed: the node's failure
      */
-    private Flow flow(FlowBuilder builder, String name, String version, Optional<String> commit, String hex, Recipe recipe, Path dir) throws IOException {
+    private Flow flow(FlowBuilder builder, String name, String version, Optional<String> commit, String hex, Recipe recipe, Path dir, Untaken untaken)
+            throws IOException {
         FlowDefinition def = recipe.def();
         Map<String, EndpointConfig> endpoints = recipe.endpoints();
         Set<Path> reads = ConcurrentHashMap.newKeySet();   // the stages keep the sink: thread-safe, each path once
         Map<String, Set<Secret.Kind>> uses = new ConcurrentHashMap<>();
-        Set<String> resolved = new TreeSet<>();
         Map<String, String> held = new HashMap<>();   // the plain values its endpoints hold, which its scrubber replaces too
         for (String endpoint : endpointsOf(def)) {
             EndpointConfig written = recipe.written().get(endpoint);
             if (written == null) continue;
-            Set<String> fields = secretFields(components.get(written.uri().getScheme()));
             written.options().forEach((option, value) -> references(value, reference -> {
-                if (!fields.contains(option)) {   // no use, no rebuild: it reads its variable only
-                    config.secrets().variableOnly(reference).ifPresent(v -> held.put(reference, v));
-                    return;
-                }
-                resolved.add(Secrets.name(reference));
                 use(uses, Secrets.name(reference), PLAIN);
-                config.secrets().resolve(reference).ifPresent(v -> held.put(reference, v));
+                config.secrets().resolve(reference).or(() -> untaken == Untaken.PREVIEW ? config.secrets().importable(reference) : Optional.empty())
+                        .ifPresent(v -> held.put(reference, v));
             }));
         }
         builder.reads(reads::add).dependencies(recipe.dependencies().dirs()).heldSecrets(held).secrets((SecretSource) (reference, kinds) -> {
             named.add(reference);
-            Secret handle = config.secrets().handle(reference, kinds);
+            if (untaken == Untaken.IMPORT && kinds.contains(Secret.Kind.VALUE)) {
+                List<String> refused = new ArrayList<>();
+                imported(reference, "", refused);
+                if (!refused.isEmpty()) throw new IllegalArgumentException(refused.getFirst());
+            }
+            Optional<String> previewed = untaken == Untaken.PREVIEW && kinds.contains(Secret.Kind.VALUE) ? config.secrets().importable(reference)
+                    : Optional.empty();
+            Secret handle = previewed.isPresent() ? Secret.of(reference, previewed::get) : config.secrets().handle(reference, kinds);
             use(uses, Secrets.name(reference), kinds);
             return handle;
         });
@@ -2977,7 +2889,7 @@ public final class Deployments {
             Map<String, Set<Secret.Kind>> taken = new TreeMap<>();
             uses.forEach((secret, kinds) -> taken.put(secret, Set.copyOf(kinds)));
             return new Flow(new DeployedFlow(def.id(), name, version, commit, def.version(), def.deliveryMode(), hash, DeployedFlow.State.RUNNING),
-                    hex, recipe, delivery, worker, consumed, null, Collections.unmodifiableMap(taken), Set.copyOf(resolved));
+                    hex, recipe, delivery, worker, consumed, null, Collections.unmodifiableMap(taken));
         } finally {
             if (!built) {
                 delivery.stop(Duration.ZERO);   // nothing was delivered yet: the stop completes at once, and the close after it
@@ -2988,6 +2900,37 @@ public final class Deployments {
                 }
             }
         }
+    }
+
+    /** What a check and a build do with a reference whose {@code RAIL8_SECRET_*} variable the store has not taken ({@link Secrets#importable}). */
+    private enum Untaken {
+        /** A deploy or a restore: the variable is imported into the store before the reference resolves. */
+        IMPORT,
+        /** A validate on the node, which writes nothing: the reference reads its variable's value, the value a deploy would import. */
+        PREVIEW,
+        /** A flow built again from what it was built with: the store alone. */
+        NONE
+    }
+
+    /**
+     * Imports the variable of {@code reference} into the store, once: when the node's {@code RAIL8_SECRET_<NAME>} is set and the store
+     * never held the name ({@link SecretStore#importValue}). A refused import adds one line to {@code problems}, after {@code where},
+     * naming the reference and the variable, never the value; a malformed reference is left to its resolution, which lists it.
+     */
+    private void imported(String reference, String where, List<String> problems) {
+        Optional<String> value;
+        try {
+            value = config.secrets().importable(reference);
+        } catch (IllegalArgumentException malformed) {
+            return;
+        }
+        if (value.isEmpty()) return;
+        String name = Secrets.name(reference);
+        String variable = SecretStore.variable(name);
+        String refused = config.secrets().store().orElseThrow().importValue(name, variable, value.get()).<String>map(imported -> null)
+                .recover(failed -> Future.succeededFuture(failed instanceof SecretRefused r ? r.getMessage() : "the secret store cannot be written now"))
+                .await();
+        if (refused != null) problems.add(where + "secret '" + reference + "' is not imported from " + variable + ": " + refused);
     }
 
     /** The secrets {@code flows} use, by each flow's local id. */

@@ -2,7 +2,7 @@
 # the demo's partner echo and a one-shot that deploys examples/demo as committed at the checkout's HEAD; a one-shot (sftp-keys) makes the SFTP host key first. A demo stack,
 # not production: the node runs RAIL8_ENV=dev so the manual deploy and the file:// package repository are allowed. Kafka is the optional event-broker add-on, off by default: start it with --profile kafka; ClickHouse (--profile history) is present, not wired.
 # Build the host jars first, from the repository's root: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
-# Then:  RAIL8_ADMIN_TOKEN=$(bin/rail8 key new) docker compose up -d --build        (see README.md)
+# Then:  RAIL8_ADMIN_TOKEN=$(bin/rail8 key new) RAIL8_SECRETS_KEY_HOST_FILE=<the key's file> docker compose up -d --build   (see README.md)
 services:
   postgres:
     image: postgres:18.6
@@ -135,8 +135,12 @@ services:
       # plain HTTP on 0.0.0.0, stated: the admin port is published on the host's loopback only, and the stack's network is this
       # host's own; the node logs a WARNING at its start. A node other hosts reach gets RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY
       RAIL8_ADMIN_TLS: "off"
+      # the secret store's key, which seals every secret in Postgres: a file the operator makes once, `openssl rand -base64 32`, kept
+      # apart from the database and its backups; a node refuses to start without one (README.md, "The secret store")
+      RAIL8_SECRETS_KEY_FILE: /run/rail8/secrets-key
       # the demo's sftp-inbox names both as secret:// references; the host key's fingerprint is a secret given as a file:
-      # the node reads the file `sftp-keys` wrote (public, unknown until the key exists) at its start
+      # the node reads the file `sftp-keys` wrote (public, unknown until the key exists) at its start. The first deploy imports
+      # each into the secret store, once: a later change of a variable is not read, the store's value is
       RAIL8_SECRET_SFTP_PASSWORD: "${RAIL8_SFTP_PASSWORD:-demo}"
       RAIL8_SECRET_SFTP_HOST_KEY_FILE: /sftp-fingerprint/host-key.fingerprint
       # the package repositories: this Rail8 checkout, mounted below as the repository `rail8`, whose package is examples/demo;
@@ -150,6 +154,11 @@ services:
       # with pg-data
       - rail8-data:/var/lib/rail8
       - ../..:/repos/rail8:ro
+      # the secret store's key: the operator's file, readable by the node's user (uid 10001); compose refuses to start without it
+      - type: bind
+        source: "${RAIL8_SECRETS_KEY_HOST_FILE:?set RAIL8_SECRETS_KEY_HOST_FILE to the file of the secret store's key, made once by openssl rand -base64 32}"
+        target: /run/rail8/secrets-key
+        read_only: true
     depends_on:
       netns:
         condition: service_healthy

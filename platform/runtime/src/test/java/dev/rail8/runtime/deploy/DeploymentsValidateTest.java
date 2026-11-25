@@ -14,6 +14,7 @@ import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.runtime.pg.PoolRefusedException;
@@ -98,7 +99,7 @@ class DeploymentsValidateTest {
         env.put("RAIL8_ENV", rail8Env);
         env.put("RAIL8_NODE_ID", NODE);
         env.put("RAIL8_DATA_DIR", data.toString());
-        // the demo's sftp-inbox keeps its password and host key as secret:// references (P2-06): a node that validates it has both set
+        // the demo's sftp-inbox keeps its password and host key as secret:// references: a validate reads the variables a deploy imports
         env.put("RAIL8_SECRET_SFTP_PASSWORD", "demo");
         env.put("RAIL8_SECRET_SFTP_HOST_KEY", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
         return env;
@@ -107,7 +108,7 @@ class DeploymentsValidateTest {
     /** Deployments over {@link Doors} only, its records in memory. */
     Deployments overDoors() {
         Runtime runtime = new Runtime(rt.clock(), timer, rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors));
-        return new Deployments(NodeConfig.from(env("dev")), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), timer, DeploymentsTest.STEPS, List.of(),
+        return new Deployments(new MemorySecretStores().joined(NodeConfig.from(env("dev")), rt.clock(), timer), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), timer, DeploymentsTest.STEPS, List.of(),
                 messages, dlq, queue, () -> 0L, records);
     }
 
@@ -123,7 +124,7 @@ class DeploymentsValidateTest {
         List<Component> built = shipped.components(new ComponentContext(vertx, rt.blobs(), rt.ids(), timer, rt.clock(), HttpIngress.NONE));
         Map<String, Component> byScheme = built.stream().map(replace).collect(Collectors.toMap(Component::scheme, c -> c));
         Runtime runtime = new Runtime(rt.clock(), timer, rt.ids(), rt.blobs(), rt.hasher(), byScheme);
-        return new Deployments(NodeConfig.from(env(rail8Env)), runtime, byScheme, rt.clock(), timer, shipped.steps(), shipped.languages(),
+        return new Deployments(new MemorySecretStores().joined(NodeConfig.from(env(rail8Env)), rt.clock(), timer), runtime, byScheme, rt.clock(), timer, shipped.steps(), shipped.languages(),
                 messages, dlq, queue, () -> 0L, records);
     }
 

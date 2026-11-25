@@ -137,12 +137,12 @@ abstract class SecretStoreContract {
         }
     }
 
-    /** Starts {@code id} with {@code env}: the key's variables and its {@code RAIL8_SECRET_*}. */
+    /** Starts {@code id} with {@code env}: the key's variables. */
     Node start(String id, Map<String, String> env) {
         Node n = new Node(id, env);
         Secrets fromEnv = Secrets.fromEnv(env);
         long epoch = join(id);
-        n.store = new SecretStore(rows(), fromEnv.key(), id, fromEnv.variableNames(), n.clock, n.timer, text -> {
+        n.store = new SecretStore(rows(), fromEnv.key(), id, n.clock, n.timer, text -> {
             n.warnings.add(text);
             captured.add(text);
         });
@@ -174,7 +174,7 @@ abstract class SecretStoreContract {
         if (previous != null) env.put(StoreKey.PREVIOUS, b64(previous));
         Secrets fromEnv = Secrets.fromEnv(env);
         FakeClock clock = FakeClock.at(Instant.parse("2026-11-25T10:00:00Z"));
-        SecretStore store = new SecretStore(rows(), fromEnv.key(), id, List.of(), clock, new FakeTimer(clock), captured::add);
+        SecretStore store = new SecretStore(rows(), fromEnv.key(), id, clock, new FakeTimer(clock), captured::add);
         Throwable failure = awaitFailure(store.start(join(id)));
         if (!(failure instanceof IllegalStateException refused)) throw new AssertionError("the start was not refused as expected", failure);
         captured.add(refused.getMessage());
@@ -316,34 +316,66 @@ abstract class SecretStoreContract {
     // ------------------------------------------------------------------------------------------------- the sources
 
     @Test
-    void aDeleteBringsBackTheVariableAndFailsTheNextRead() {
+    void aVariableIsImportedOnceAndNeverAfterItsNameWasDeleted() {
         Node a = start("a", K1);
-        Node b = start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_DB", "variable-value"));
+        Node b = start("b", K1);
         written.add("variable-value");
-        assertEquals(Optional.of("variable-value"), read(b, "db"));
-        create(a, value("db", "store-value"));
+        assertTrue(await(b.store.importValue("db", "RAIL8_SECRET_DB", "variable-value")), "the store never held db");
         awaitNotices();
+        assertEquals(Optional.of("variable-value"), read(b, "db"), "read back by the node that imported it");
+        assertEquals(Optional.of("variable-value"), read(a, "db"));
+        assertEquals(List.of(new JsonObject().put("kind", "value").put("variable", "RAIL8_SECRET_DB")), audit("secret.imported"));
+        assertEquals("b", list(a).getJsonArray("secrets").getJsonObject(0).getString("changedBy"), "written by the node");
+        assertFalse(await(a.store.importValue("db", "RAIL8_SECRET_DB", "another-value")), "the store holds db: no second import");
         Secret onA = a.secrets.handle("secret://db");
-        Secret onB = b.secrets.handle("secret://db");
-        assertEquals("store-value", onB.value(), "the store wins");
-        assertEquals(List.of("b"), list(a).getJsonArray("secrets").getJsonObject(0).getJsonArray("shadowedOn").getList(), "the list names the shadowed");
-
         await(a.store.delete(ALICE, "db", Optional.empty()));
         awaitNotices();
-        assertEquals("variable-value", onB.value(), "after the delete the variable takes over");
+        assertFalse(await(b.store.importValue("db", "RAIL8_SECRET_DB", "variable-value")), "a deleted name is never imported again");
+        assertEquals(Optional.empty(), read(b, "db"));
         IllegalStateException gone = assertThrows(IllegalStateException.class, onA::value, "a deleted secret fails the next read");
         assertTrue(gone.getMessage().contains("secret://db"));
+        assertEquals(1, audit("secret.imported").size());
+        assertEquals(Set.of("db"), await(a.store.everHeld()));
         assertNoValueCaptured();
     }
 
     @Test
-    void aTamperedRowIsUnreadableAndNeverFallsBack() {
+    void aCreatedNameIsNeverImportedAfterItsDelete() {
+        Node a = start("a", K1);
+        create(a, value("db", "store-value"));
+        await(a.store.delete(ALICE, "db", Optional.empty()));
+        assertFalse(await(a.store.importValue("db", "RAIL8_SECRET_DB", "variable-value")));
+        assertEquals(Optional.empty(), read(a, "db"));
+        assertEquals(Set.of("db"), await(a.store.everHeld()), "the name stays known after its delete");
+    }
+
+    @Test
+    void anImportHasTheRefusalsOfAWrite() {
+        Node a = start("a", K1);
+        use("login", "flow", "pkg/orders", Set.of(Secret.Kind.CREDENTIALS));
+        written.add("variable-value");
+        SecretRefused inUse = refused(a.store.importValue("login", "RAIL8_SECRET_LOGIN", "variable-value"));
+        assertEquals(409, inUse.status());
+        assertEquals("kind-in-use", inUse.code());
+        SecretRefused tooLong = refused(a.store.importValue("big", "RAIL8_SECRET_BIG", "x".repeat(32 * 1024 + 1)));
+        assertEquals(422, tooLong.status());
+        assertEquals("reserved", refused(a.store.importValue("rail8.other", "RAIL8_SECRET_RAIL8_OTHER", "variable-value")).code());
+        assertEquals(Set.of(), await(a.store.everHeld()), "a refused import leaves no name");
+        auditFails(true);
+        assertEquals("unaudited", refused(a.store.importValue("db", "RAIL8_SECRET_DB", "variable-value")).code());
+        auditFails(false);
+        assertEquals(Optional.empty(), read(a, "db"), "rolled back with its audit row");
+        assertTrue(await(a.store.importValue("db", "RAIL8_SECRET_DB", "variable-value")), "the name was not taken by the refused one");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aTamperedRowIsUnreadable() {
         Node a = start("a", K1);
         create(a, value("db", "sealed-value"));
         tamper("db");
-        Node c = start("c", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_DB", "variable-value"));
-        written.add("variable-value");
-        assertEquals(Optional.empty(), read(c, "db"), "no value, and not the variable's");
+        Node c = start("c", K1);
+        assertEquals(Optional.empty(), read(c, "db"));
         assertEquals(Health.Status.DEGRADED, c.store.health().status());
         assertTrue(c.warnings.stream().anyMatch(w -> w.contains("'db'") && w.contains(id(K1))), "one warning names the name and the key");
         assertTrue(c.secrets.problem("secret://db", Set.of(Secret.Kind.VALUE)).orElseThrow().contains("does not open"));
@@ -394,18 +426,14 @@ abstract class SecretStoreContract {
         create(a, value("db", "one-value"));
         IllegalStateException other = refusedStart("c", K2, null);
         assertTrue(other.getMessage().contains(id(K1)) && other.getMessage().contains("1 rows"), other.getMessage());
-        IllegalStateException none = refusedStart("d", null, null);
-        assertTrue(none.getMessage().contains("1 rows") && none.getMessage().contains(id(K1)), none.getMessage());
     }
 
     @Test
-    void withNoKeyAnEmptyStoreStartsAndAWriteIsNoKey() {
-        Node n = start("n", Map.of("RAIL8_SECRET_DB", "variable-value"));
-        written.add("variable-value");
-        assertEquals(Optional.of("variable-value"), read(n, "db"));
-        SecretRefused r = refused(n.store.create(ALICE, value("db", "nope-value")));
-        assertEquals(503, r.status());
-        assertEquals("no-key", r.code());
+    void noStoreIsMadeWithoutAKey() {
+        FakeClock clock = FakeClock.at(Instant.parse("2026-11-25T10:00:00Z"));
+        IllegalArgumentException r = assertThrows(IllegalArgumentException.class,
+                () -> new SecretStore(rows(), StoreKey.NONE, "n", clock, new FakeTimer(clock), captured::add));
+        assertTrue(r.getMessage().contains(StoreKey.VARIABLE), r.getMessage());
     }
 
     // ------------------------------------------------------------------------------------------------- the change of the key
@@ -610,17 +638,6 @@ abstract class SecretStoreContract {
     }
 
     @Test
-    void aNameIsShadowedByTheVariableItShares() {
-        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_A_B", "variable-value"));
-        written.add("variable-value");
-        create(a, value("a.b", "store-value"));
-        JsonObject all = list(a);
-        assertEquals(List.of("a"), all.getJsonArray("secrets").getJsonObject(0).getJsonArray("shadowedOn").getList());
-        assertEquals(0, all.getJsonArray("variablesOnly").size(), "the variable a stored name takes is not listed apart");
-        assertNoValueCaptured();
-    }
-
-    @Test
     void afterALostKeyTheRowsDeletedInSqlLeaveTheNamesMissingWithTheirUsers() {
         Node a = start("a", K1);
         create(a, value("db", "the-value"));
@@ -638,14 +655,11 @@ abstract class SecretStoreContract {
     }
 
     @Test
-    void theListCountsTheVariablesOfJoinedNodesOnly() {
+    void theListMarksANodeNotJoinedYet() {
         Node a = start("a", K1);
-        start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ON_B", "variable-value"));
-        written.add("variable-value");
-        assertEquals("RAIL8_SECRET_ON_B", list(a).getJsonArray("variablesOnly").getJsonObject(0).getString("variable"));
+        start("b", K1);
         join("b");   // b's epoch moves on without its join to the store: a node that left and came back, not joined yet
         JsonObject all = list(a);
-        assertEquals(0, all.getJsonArray("variablesOnly").size(), "a node not joined counts no variable");
         JsonObject b = all.getJsonObject("key").getJsonArray("nodes").stream().map(JsonObject.class::cast)
                 .filter(n -> n.getString("node").equals("b")).findFirst().orElseThrow();
         assertFalse(b.getBoolean("joined"));
@@ -653,8 +667,7 @@ abstract class SecretStoreContract {
 
     @Test
     void theListAnswersNamesKindsUsesAndTheKey() {
-        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ONLY_HERE", "variable-value"));
-        written.add("variable-value");
+        Node a = start("a", K1);
         create(a, value("db", "the-value"));
         use("db", "flow", "pkg/orders", Set.of(Secret.Kind.VALUE));
         use("absent", "flow", "pkg/orders", Set.of(Secret.Kind.CREDENTIALS));
@@ -669,14 +682,12 @@ abstract class SecretStoreContract {
         assertFalse(db.getBoolean("unreadable"));
         List<String> missing = all.getJsonArray("missing").stream().map(o -> ((JsonObject) o).getString("name")).toList();
         assertTrue(missing.contains("absent") && missing.contains(SecretStore.GIT), missing.toString());
-        assertEquals("RAIL8_SECRET_ONLY_HERE", all.getJsonArray("variablesOnly").getJsonObject(0).getString("variable"));
         JsonObject key = all.getJsonObject("key");
         assertEquals(id(K1), key.getString("common"));
         assertEquals(0L, key.getLong("rowsUnderAnotherKey"));
         assertFalse(key.getBoolean("previousSet"));
         assertEquals("a", all.getString("node"));
         assertEquals("db", await(a.store.entry("db")).orElseThrow().getString("name"));
-        assertEquals("RAIL8_SECRET_ONLY_HERE", await(a.store.entry("only-here")).orElseThrow().getString("variable"));
         assertEquals(Optional.empty(), await(a.store.entry("nobody")));
         assertNoValueCaptured();
     }

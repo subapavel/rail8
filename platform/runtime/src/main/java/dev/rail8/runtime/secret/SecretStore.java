@@ -169,7 +169,6 @@ public final class SecretStore {
 
     private final SecretRows rows;
     private final String node;
-    private final List<String> variables;
     private final Clock clock;
     private final Timer timer;
     private final Consumer<String> warn;
@@ -179,7 +178,6 @@ public final class SecretStore {
     /** The previous key was dropped while its variable is still set. */
     private volatile boolean previousSet;
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
-    private final List<Consumer<Set<String>>> listeners = new CopyOnWriteArrayList<>();
     private final List<BoundRows> bound = new CopyOnWriteArrayList<>();
     private final AtomicBoolean maintaining = new AtomicBoolean();
     private volatile Future<Void> ticked = Future.succeededFuture();
@@ -195,23 +193,24 @@ public final class SecretStore {
     private Timer.Cancellable tick;        // guarded by lock
     private boolean closed;                // guarded by lock
 
-    SecretStore(SecretRows rows, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer, Consumer<String> warn) {
+    SecretStore(SecretRows rows, StoreKey key, String node, Clock clock, Timer timer, Consumer<String> warn) {
         this.rows = Objects.requireNonNull(rows, "rows");
         this.key = Objects.requireNonNull(key, "key");
+        if (!key.present()) throw new IllegalArgumentException("the secret store needs its key: " + StoreKey.VARIABLE + " or " + StoreKey.VARIABLE + "_FILE");
         this.node = Objects.requireNonNull(node, "node");
-        this.variables = List.copyOf(new TreeSet<>(variables));
         this.clock = Objects.requireNonNull(clock, "clock");
         this.timer = Objects.requireNonNull(timer, "timer");
         this.warn = Objects.requireNonNull(warn, "warn");
     }
 
     /**
-     * Node {@code node}'s store over Postgres's {@code pool}, under {@code key}, its {@code RAIL8_SECRET_*} variables named by
-     * {@code variables} (names only, as the node reads them after their file forms), its ticks on {@code timer}. Reads nothing
-     * before {@link #start}.
+     * Node {@code node}'s store over Postgres's {@code pool}, under {@code key}, its ticks on {@code timer}. Reads nothing before
+     * {@link #start}.
+     *
+     * @throws IllegalArgumentException {@code key} holds no current key
      */
-    public static SecretStore postgres(Pool pool, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer) {
-        return new SecretStore(new PgSecretRows(pool, PgSecretRows.LOCK_WAIT), key, node, variables, clock, timer,
+    public static SecretStore postgres(Pool pool, StoreKey key, String node, Clock clock, Timer timer) {
+        return new SecretStore(new PgSecretRows(pool, PgSecretRows.LOCK_WAIT), key, node, clock, timer,
                 text -> LOG.log(System.Logger.Level.WARNING, text));
     }
 
@@ -244,17 +243,17 @@ public final class SecretStore {
 
     /**
      * Joins the store with the epoch of this node's join to the pool, reads every row and arms the tick. The join is one
-     * transaction under the store's row lock: it writes this node's key ids, its variables' names and {@code epoch}, then checks
+     * transaction under the store's row lock: it writes this node's key ids and {@code epoch}, then checks
      * every row's key id.
      *
      * @return fails with an {@link IllegalStateException} naming the rows' count and key ids when a row is under a key this node
-     *         does not hold, or the store holds rows and this node no key
+     *         does not hold
      */
     public Future<Void> start(long epoch) {
         StoreKey k = key;
         byte[] current = k.current().map(Seal::keyId).orElse(null);
         byte[] previous = k.previous().map(Seal::keyId).orElse(null);
-        return rows.<Void>write(List.of(), tx -> tx.joined(node, epoch, current, previous, variables).compose(v -> tx.rows()).compose(all -> {
+        return rows.<Void>write(List.of(), tx -> tx.joined(node, epoch, current, previous).compose(v -> tx.rows()).compose(all -> {
             Map<String, Integer> foreign = new TreeMap<>();
             for (SecretRows.Meta m : all) {
                 if (!Arrays.equals(m.keyId(), current) && !Arrays.equals(m.keyId(), previous)) foreign.merge(HEX.formatHex(m.keyId()), 1, Integer::sum);
@@ -262,10 +261,7 @@ public final class SecretStore {
             if (foreign.isEmpty()) return Future.succeededFuture();
             int count = foreign.values().stream().mapToInt(Integer::intValue).sum();
             String under = foreign.entrySet().stream().map(e -> e.getKey() + " (" + e.getValue() + ")").collect(Collectors.joining(", "));
-            return Future.failedFuture(new IllegalStateException(current == null
-                    ? "the secret store holds " + count + " rows, sealed under the keys " + under + ", and this node holds no key: start it with "
-                      + StoreKey.VARIABLE + " (or " + StoreKey.VARIABLE + "_FILE)"
-                    : count + " rows of the secret store are sealed under keys this node does not hold: " + under + "; it holds " + k
+            return Future.failedFuture(new IllegalStateException(count + " rows of the secret store are sealed under keys this node does not hold: " + under + "; it holds " + k
                       + ": give the key they are under as " + StoreKey.VARIABLE + ", or as " + StoreKey.PREVIOUS + " while the key is changed"));
         })).compose(v -> look()).onSuccess(v -> arm());
     }
@@ -384,30 +380,11 @@ public final class SecretStore {
         }
         StoreKey k = key;
         Map<String, Opened> next = new HashMap<>();
-        Set<String> changed = new HashSet<>();
         for (SecretRows.Meta m : snapshot.rows()) {
-            Opened old = before.held().get(m.name());
             Opened opened = open(k, m, snapshot.sealed().get(m.name()));
             next.put(m.name(), opened);
-            if (old == null || !sameValue(old, opened)) changed.add(m.name());
         }
-        for (String name : before.held().keySet()) if (!next.containsKey(name)) changed.add(name);
         state = new State(now, Map.copyOf(next));
-        if (!changed.isEmpty()) {
-            Set<String> names = Set.copyOf(changed);
-            for (Consumer<Set<String>> listener : listeners) {
-                try {
-                    listener.accept(names);
-                } catch (RuntimeException failure) {
-                    LOG.log(System.Logger.Level.WARNING, "a listener of the secrets' changes failed: " + failure.getClass().getName());
-                }
-            }
-        }
-    }
-
-    private static boolean sameValue(Opened a, Opened b) {
-        if (a.value() == null || b.value() == null) return a.value() == b.value();
-        return a.kind() == b.kind() && MessageDigest.isEqual(a.value().plain(), b.value().plain());
     }
 
     /** {@code m} opened under the key its id names, or held unreadable with one WARNING. */
@@ -444,11 +421,6 @@ public final class SecretStore {
         return null;
     }
 
-    /** Runs {@code listener} with the names whose value, kind or readability changed, or that appeared or went, at each change held. */
-    public void onChange(Consumer<Set<String>> listener) {
-        listeners.add(Objects.requireNonNull(listener, "listener"));
-    }
-
     // ---------------------------------------------------------------------------------------------------------------- reads
 
     /**
@@ -476,9 +448,9 @@ public final class SecretStore {
         return o == null ? Optional.empty() : Optional.of(new Held(o.kind(), HEX.formatHex(o.keyId()), o.value() == null ? null : o.value().read()));
     }
 
-    /** The names of this node's {@code RAIL8_SECRET_*} variables. */
-    public List<String> variables() {
-        return variables;
+    /** Every name the store ever held, held now or deleted since: the names no variable is imported into. */
+    public Future<Set<String>> everHeld() {
+        return rows.named();
     }
 
     /**
@@ -505,7 +477,7 @@ public final class SecretStore {
      * Creates the secret of {@code body}: {@code {name, kind:"value", value}}, {@code {name, kind:"credentials", user, password}}
      * or {@code {name, kind:"key-pair", privateKey, certificates}}. Answers its entry of the list.
      *
-     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
+     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code exists}, {@code kind-in-use}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> create(Actor who, JsonObject body) {
@@ -535,14 +507,56 @@ public final class SecretStore {
                 Instant now = clock.instant();
                 return full(all, null, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                         sealed.keyId(), sealed.nonce(), sealed.sealed().length, now, now, who.name()), sealed.sealed())));
-            }).compose(v -> audit(tx, who, "secret.create", name, detail(value))).compose(v -> tx.changed());
+            }).compose(v -> tx.named(name)).compose(v -> audit(tx, who, "secret.create", name, detail(value))).compose(v -> tx.changed());
         })).compose(v -> readBack(name));
+    }
+
+    /**
+     * Imports {@code value}, the value of {@code variable} in this node's environment, as the plain value {@code name}, unless the
+     * store ever held {@code name}: one transaction under the name's lock and the store's row lock, with the checks and limits of a
+     * create, written by this node, way {@code local}, with the audit row {@code secret.imported} naming the name and the variable.
+     * Then this node reads the store back.
+     *
+     * @return true when it imported, false when the store held the name once; fails with a {@link SecretRefused}: {@code invalid},
+     *         {@code reserved}, {@code keys-differ}, {@code kind-in-use}, {@code store-full}, {@code busy}, {@code unaudited},
+     *         {@code written-unread}
+     */
+    public Future<Boolean> importValue(String name, String variable, String value) {
+        SecretValue plain;
+        try {
+            writable(name);
+            plain = value(new JsonObject().put("kind", Secret.Kind.VALUE.id()).put("value", value));
+        } catch (SecretRefused refused) {
+            return Future.failedFuture(refused);
+        }
+        StoreKey k = key;
+        Actor self = new Actor(node, OptionalLong.empty(), "local", Optional.empty(), "");
+        return rows.<Boolean>write(List.of(name), tx -> tx.named(name).compose(fresh -> {
+            if (!fresh) return Future.succeededFuture(false);
+            return keyCheck(tx, k).compose(v -> tx.rows()).compose(all -> {
+                if (all.size() >= MAX_SECRETS) return refuse(409, RefusalCode.STORE_FULL, "the store holds " + MAX_SECRETS + " secrets, its most", name);
+                return tx.uses(name).compose(uses -> {
+                    for (SecretRows.Use use : uses) {
+                        if (!use.kinds().contains(Secret.Kind.VALUE)) {
+                            return Future.failedFuture(new SecretRefused(409, RefusalCode.KIND_IN_USE, use.userKind() + " '" + use.userId() + "' uses '"
+                                    + name + "' as " + ids(use.kinds()) + ", not as value", new JsonObject().put("name", name)
+                                    .put("kind", Secret.Kind.VALUE.id()).put("user", user(use))));
+                        }
+                    }
+                    Seal.Sealed sealed = Seal.seal(k.current().orElseThrow(), SCOPE, name, Secret.Kind.VALUE, plain.plain());
+                    Instant now = clock.instant();
+                    return full(all, null, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, Secret.Kind.VALUE, Seal.FORMAT,
+                            sealed.keyId(), sealed.nonce(), sealed.sealed().length, now, now, node), sealed.sealed())));
+                }).compose(v -> audit(tx, self, "secret.imported", name, new JsonObject().put("kind", Secret.Kind.VALUE.id()).put("variable", variable)))
+                        .compose(v -> tx.changed()).map(true);
+            });
+        })).compose(imported -> imported ? look().recover(SecretStore::writtenUnread).map(true) : Future.succeededFuture(false));
     }
 
     /**
      * Overwrites {@code name} with the value of {@code body}, of its kind; the last writer wins. Answers its entry of the list.
      *
-     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
+     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code no-secret}, {@code kind-differs}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> overwrite(Actor who, String name, JsonObject body) {
@@ -614,18 +628,12 @@ public final class SecretStore {
                 + " within " + TICK_SECONDS + " s; do not send it again", new JsonObject()));
     }
 
-    /** Refuses a write unless this node holds a key and every live node holds it, by its current join. */
+    /** Refuses a write unless every live node holds this node's key, by its current join. */
     private Future<Void> keyCheck(SecretRows.Tx tx, StoreKey k) {
-        if (!k.present()) return noKey();
         return tx.liveNodes().compose(nodes -> keyCheck(nodes, k));
     }
 
-    private static <T> Future<T> noKey() {
-        return Future.failedFuture(new SecretRefused(503, RefusalCode.NO_KEY, "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
-    }
-
     private static Future<Void> keyCheck(List<SecretRows.NodeKeys> nodes, StoreKey k) {
-        if (!k.present()) return noKey();
         byte[] id = Seal.keyId(k.current().orElseThrow());
         List<String> lacking = nodes.stream().filter(n -> !n.holds(id)).map(SecretRows.NodeKeys::node).sorted().toList();
         if (lacking.isEmpty()) return Future.succeededFuture();
@@ -749,28 +757,20 @@ public final class SecretStore {
     // ---------------------------------------------------------------------------------------------------------------- the list
 
     /**
-     * The answer of {@code GET /admin/secrets}: every secret, the missing names, the variables that hold a value no stored secret
-     * takes, the key's state. A node's variables and keys count only while its join is its current one.
+     * The answer of {@code GET /admin/secrets}: every secret, the missing names, the key's state. A node's keys count only while its
+     * join is its current one.
      */
     public Future<JsonObject> list() {
         return rows.listing().map(this::listed);
     }
 
-    /** The entry of {@code name}: a stored secret's, or a name a use or a variable names; empty when none does. */
+    /** The entry of {@code name}: a stored secret's, or a name a use names; empty when none does. */
     public Future<Optional<JsonObject>> entry(String name) {
         return list().map(all -> {
             for (String part : List.of("secrets", "missing")) {
                 for (Object o : all.getJsonArray(part)) {
                     JsonObject e = (JsonObject) o;
                     if (name.equals(e.getString("name"))) return Optional.of(e.put("node", node));
-                }
-            }
-            String variable = variable(name);
-            for (Object o : all.getJsonArray("variablesOnly")) {
-                JsonObject e = (JsonObject) o;
-                if (!name.startsWith(RESERVED) && variable.equals(e.getString("variable"))) {
-                    return Optional.of(new JsonObject().put("name", name).put("stored", false).put("variable", variable)
-                            .put("variableOn", e.getJsonArray("nodes")).put("node", node));
                 }
             }
             return Optional.<JsonObject>empty();
@@ -780,23 +780,17 @@ public final class SecretStore {
     private JsonObject listed(SecretRows.Listing l) {
         Map<String, List<SecretRows.Use>> uses = new TreeMap<>();
         l.uses().forEach(u -> uses.computeIfAbsent(u.name(), n -> new ArrayList<>()).add(u));
-        Map<String, List<String>> variableNodes = new TreeMap<>();
-        l.nodes().stream().filter(SecretRows.NodeKeys::joined)
-                .forEach(n -> n.variables().forEach(v -> variableNodes.computeIfAbsent(v, x -> new ArrayList<>()).add(n.node())));
         State held = state;
         Set<String> stored = new HashSet<>();
-        Set<String> storedVariables = new HashSet<>();
 
         JsonArray secrets = new JsonArray();
         for (SecretRows.Meta m : l.rows().stream().sorted((a, b) -> a.name().compareTo(b.name())).toList()) {
             stored.add(m.name());
-            storedVariables.add(variable(m.name()));
             Opened o = held.held().get(m.name());
             boolean readable = o != null && o.value() != null && Arrays.equals(o.nonce(), m.nonce());
             JsonObject e = new JsonObject().put("name", m.name()).put("kind", m.kind().id()).put("scope", SCOPE).put("stored", true)
                     .put("changedAt", m.changedAt().toString()).put("changedBy", m.changedBy())
                     .put("usedBy", users(uses.get(m.name()))).put("users", uses.getOrDefault(m.name(), List.of()).size())
-                    .put("shadowedOn", new JsonArray(m.name().startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(m.name()), List.of())))
                     .put("unreadable", !readable).put("keyId", HEX.formatHex(m.keyId()));
             if (readable && o.value() instanceof SecretValue.Pair pair) e.put("keyPair", pair.facts());
             secrets.add(e);
@@ -804,18 +798,10 @@ public final class SecretStore {
         JsonArray missing = new JsonArray();
         uses.forEach((name, list) -> {
             if (stored.contains(name)) return;
-            List<String> on = name.startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(name), List.of());
-            boolean value = list.stream().anyMatch(u -> u.kinds().contains(Secret.Kind.VALUE));
-            if (value && !on.isEmpty()) return;
             missing.add(new JsonObject().put("name", name).put("stored", false).put("usedBy", users(list)).put("users", list.size()));
         });
-        JsonArray variablesOnly = new JsonArray();
-        variableNodes.forEach((variable, on) -> {
-            if (storedVariables.contains(variable)) return;
-            variablesOnly.add(new JsonObject().put("variable", variable).put("nodes", new JsonArray(on)));
-        });
         StoreKey k = key;
-        byte[] mine = k.current().map(Seal::keyId).orElse(null);
+        byte[] mine = Seal.keyId(k.current().orElseThrow());
         JsonArray nodes = new JsonArray();
         Set<String> currents = new TreeSet<>();
         boolean previous = false;
@@ -826,11 +812,11 @@ public final class SecretStore {
             previous |= before != null;
             nodes.add(new JsonObject().put("node", n.node()).put("joined", n.joined()).put("key", current).put("previous", before));
         }
-        String common = currents.size() == 1 && !currents.contains("null") ? currents.iterator().next() : mine == null ? null : HEX.formatHex(mine);
+        String common = currents.size() == 1 && !currents.contains("null") ? currents.iterator().next() : HEX.formatHex(mine);
         long other = common == null ? l.rows().size() : l.rows().stream().filter(m -> !HEX.formatHex(m.keyId()).equals(common)).count();
         JsonObject keyState = new JsonObject().put("nodes", nodes).put("common", currents.size() == 1 && !currents.contains("null") ? common : null)
                 .put("rowsUnderAnotherKey", other).put("previousSet", previous);
-        return new JsonObject().put("secrets", secrets).put("missing", missing).put("variablesOnly", variablesOnly).put("key", keyState).put("node", node);
+        return new JsonObject().put("secrets", secrets).put("missing", missing).put("key", keyState).put("node", node);
     }
 
     /** The first {@value #MAX_USERS_NAMED} of {@code uses}, in the order of their kind and id. */
@@ -847,13 +833,12 @@ public final class SecretStore {
      * Replaces the uses of each user of {@code users} with its uses, in the caller's transaction {@code tx}; a user with none has
      * its uses deleted. Called at most once per transaction, with every user it changes: it takes the transaction lock of the
      * union of the names those users use now and used before, each lock key once, in ascending order of the key, then checks each
-     * name against the rows in Postgres: set in the store, or, for a use that takes {@code value}, held by this node's variables,
-     * and of a kind the use takes. With a problem it writes nothing.
+     * name against the rows in Postgres: set in the store, and of a kind the use takes. With a problem it writes nothing.
      *
-     * @return one text per problem, naming the user, the name and its source, never a value; empty when it wrote the uses
+     * @return one text per problem, naming the user and the name, never a value; empty when it wrote the uses
      */
     public Future<List<String>> replaceUses(SqlConnection tx, List<Uses> users) {
-        return PgSecretRows.replaceUses(tx, users, Set.copyOf(variables));
+        return PgSecretRows.replaceUses(tx, users);
     }
 
     /**
@@ -890,7 +875,6 @@ public final class SecretStore {
     /** One tick's work on the key: seal again, bind again, and drop the previous key once nothing needs it. */
     private Future<Void> maintain() {
         StoreKey k = key;
-        if (!k.present()) return Future.succeededFuture();
         byte[] current = Seal.keyId(k.current().orElseThrow());
         byte[] previous = k.previous().map(Seal::keyId).orElse(null);
         return rows.liveNodes().compose(nodes -> {
@@ -990,7 +974,7 @@ public final class SecretStore {
      * the key, info {@code rail8 settings v1 bind}. It takes the store's row lock for share and makes a write's key check, so a
      * change of the key waits for {@code tx}, and a tag is persisted only in the transaction that made it.
      *
-     * @return fails with a {@link SecretRefused}: 503 {@code no-key}, 409 {@code keys-differ}
+     * @return fails with a {@link SecretRefused}: 409 {@code keys-differ}
      */
     public Future<Binding> bind(SqlConnection tx, byte[] bytes) {
         StoreKey k = key;

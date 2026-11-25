@@ -21,6 +21,7 @@ import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepLog;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.runtime.sample.HmacSignPlugin;
 import dev.rail8.runtime.sample.HmacSignPlugin.HmacSign;
@@ -176,7 +177,8 @@ class DeploymentsCustomCodeTest {
         steps.add(REFUSE);
         steps.add(counting("count"));
         steps.add(counting("count-too"));
-        NodeConfig config = placeholders ? NodeConfig.from(env).withSecrets(Secrets.placeholder()) : NodeConfig.from(env);
+        NodeConfig config = placeholders ? NodeConfig.from(env).withSecrets(Secrets.placeholder())
+                : new MemorySecretStores().joined(NodeConfig.from(env), rt.clock(), rt.timer());
         deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), steps, List.of(), messages, dlq,
                 new CountingQueue(rt.clock()), () -> 0L);
         return deployments;
@@ -272,12 +274,12 @@ class DeploymentsCustomCodeTest {
     }
 
     @Test
-    void aSecretThatIsNotSetRefusesTheDeployNamingTheStepTheKeyAndTheVariable() throws Exception {
+    void aSecretThatIsNotSetRefusesTheDeployNamingTheStepTheKeyAndTheReference() throws Exception {
         node(Map.of());
         DeployRefusedException refused = assertThrows(DeployRefusedException.class, () -> deploy(shop("sync", HmacSign.TYPE, REFERENCE)));
         assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
         assertTrue(refused.problems().stream().anyMatch(l -> l.startsWith("flow 'orders' does not build: ") && l.contains("step 'sign'")
-                && l.contains("'key'") && l.contains("RAIL8_SECRET_PARTNER_HMAC")), refused.problems().toString());
+                && l.contains("'key'") && l.contains("secret '" + REFERENCE + "' is not set: the secret store holds no such secret")), refused.problems().toString());
         assertEquals(List.of(), doors.doors(), "no consumer built");
     }
 

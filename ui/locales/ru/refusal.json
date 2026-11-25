@@ -60,7 +60,6 @@
   "refusal.no-folder": "В рабочей папке нет папки {path}.",
   "refusal.no-git-base": "У узла нет RAIL8_GIT_BASE, поэтому он ничего не развёртывает.",
   "refusal.no-held-work": "Нет задержанного элемента работы {seq}.",
-  "refusal.no-key": "У этого узла нет ключа хранилища секретов.",
   "refusal.no-lost-work": "Нет потерянного элемента работы {seq}.",
   "refusal.no-message": "Сообщение {id} не записано.",
   "refusal.no-message-list": "Этот узел не выводит список сообщений и не считает их по времени.",

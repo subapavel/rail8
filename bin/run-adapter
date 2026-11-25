@@ -110,9 +110,11 @@ done
 pg_port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
 
 key=$("$root/bin/rail8" key new) || fail "bin/rail8 made no emergency key: build the platform first (docs/ADAPTERS.md)"
+# the secret store's key, for this run's database only, which goes with it
+(umask 077; head -c 32 /dev/urandom | base64 > "$run/secrets-key") || fail "could not write the secret store's key to $run"
 echo "run-adapter: starting the node with the plugins in $dir/target/plugin (log: $run/node.log)"
 (
-  RAIL8_ADMIN_TOKEN=$key RAIL8_ENV=dev RAIL8_NODE_ID=run-adapter RAIL8_PG_HOST=127.0.0.1 RAIL8_PG_PORT="$pg_port" RAIL8_PG_PASSWORD=rail8 \
+  RAIL8_ADMIN_TOKEN=$key RAIL8_SECRETS_KEY_FILE="$run/secrets-key" RAIL8_ENV=dev RAIL8_NODE_ID=run-adapter RAIL8_PG_HOST=127.0.0.1 RAIL8_PG_PORT="$pg_port" RAIL8_PG_PASSWORD=rail8 \
     RAIL8_ADMIN_PORT=$admin_port RAIL8_HTTP_PORT=$http_port RAIL8_DATA_DIR="$run/node" RAIL8_JOURNAL_KEY_GENERATE=true RAIL8_PLUGINS="$dir/target/plugin" \
     RAIL8_GIT_BASE="$base" RAIL8_GIT_PATH=package exec "$java" -jar "$node"
 ) > "$run/node.log" 2>&1 &

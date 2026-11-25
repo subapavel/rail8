@@ -50,11 +50,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * An endpoint option's {@code secret://} reference on nodes with a secret store. In an option the component declares a secret
- * field, the store's plain value wins over the variable, a name of another kind or under {@code rail8.} refuses the deploy, and in
- * the interim, while endpoint files hold references, a change of a name such a field resolved builds again on every node the flows
- * that hold it, and no other; one whose secret is gone is stopped and listed FAILED until a tick finds it again. Any other option
- * reads its variable only: the store never serves it, it is no use, and a change in the store rebuilds nothing.
+ * An endpoint option's {@code secret://} reference on nodes that share a secret store. Every reference, in a secret field or in
+ * any other option, reads the store's plain value when its flow is built, and is a use; a name of another kind or under
+ * {@code rail8.} refuses the deploy. A built flow, a drain too, keeps the values it was built with: a change in the store reaches
+ * it at its next build (a deploy, a restore, a restart), never in between, and the node's texts about it are scrubbed of the
+ * values it was built with.
  */
 class DeploymentsSecretStoreTest {
 
@@ -227,53 +227,49 @@ class DeploymentsSecretStoreTest {
     }
 
     @Test
-    void theStoresValueWinsOverTheVariable() throws Exception {
+    void aVariableIsNotReadOnceTheStoreHoldsTheName() throws Exception {
         Node a = new Node("node-1", Map.of("RAIL8_SECRET_IN_TOKEN", "from-the-variable"));
         MemorySecretStores.createValue(a.store, "in-token", "from-the-store");
         a.deploy(shop());
         assertEquals("from-the-store", a.option("shop/orders", "token"));
+        assertTrue(stores.audit().stream().noneMatch(r -> r.getString("action").equals("secret.imported")), "nothing imported");
     }
 
     @Test
-    void anOverwriteRebuildsTheFlowThatResolvedItOnEveryNodeAndNoOther() throws Exception {
+    void anOverwriteReachesAFlowAtItsNextBuildOnly() throws Exception {
         Node a = new Node("node-1", Map.of());
-        Node b = new Node("node-2", Map.of());
         MemorySecretStores.createValue(a.store, "in-token", "one");
         a.deploy(shop());
-        b.restore();
-        assertEquals("one", b.option("shop/orders", "token"));
 
-        MemorySecretStores.overwriteValue(b.store, "in-token", "two");
-        for (Node n : List.of(a, b)) {
-            n.follow();
-            assertEquals("two", n.option("shop/orders", "token"), "the flow is built again with the new value");
-            assertEquals(2, n.built("shop/orders"));
-            assertEquals(1, n.built("shop/ping"), "no other flow is built again");
-            assertEquals(DeployedFlow.State.RUNNING, n.state("shop/orders"));
-            n.follow();
-            assertEquals(2, n.built("shop/orders"), "a tick with no change builds nothing");
-        }
+        MemorySecretStores.overwriteValue(a.store, "in-token", "two");
+        a.follow();
+        a.follow();
+        assertEquals("one", a.option("shop/orders", "token"), "the built flow keeps the value it was built with");
+        assertEquals(1, a.built("shop/orders"), "a change builds nothing");
+        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
+
+        Node b = new Node("node-2", Map.of());
+        b.restore();
+        assertEquals("two", b.option("shop/orders", "token"), "a build after the change reads it");
     }
 
     @Test
-    void aDeleteStopsTheFlowAndListsItFailedUntilATickFindsTheSecretAgain() throws Exception {
+    void aDeleteLeavesTheBuiltFlowRunningAndFailsTheNextBuild() throws Exception {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createValue(a.store, "in-token", "one");
         a.deploy(shop());
 
         MemorySecretStores.delete(a.store, "in-token");
         a.follow();
-        assertEquals(DeployedFlow.State.FAILED, a.state("shop/orders"), "never left running on its old value");
-        assertTrue(a.doors.door("shop/orders").stopped(), "its consumer stopped");
-        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/ping"));
-        a.follow();
-        assertEquals(DeployedFlow.State.FAILED, a.state("shop/orders"), "each tick tries again");
+        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"), "it runs on the value it was built with");
+        assertEquals("one", a.option("shop/orders", "token"));
 
-        MemorySecretStores.createValue(a.store, "in-token", "three");
-        rt.clock().advance(Duration.ofSeconds(5));
-        a.follow();
-        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
-        assertEquals("three", a.option("shop/orders", "token"));
+        Node b = new Node("node-2", Map.of());
+        b.restore();
+        DeployedPackage listed = b.deployments.packages().stream().filter(x -> x.name().equals("shop")).findFirst().orElseThrow();
+        assertEquals(DeployedPackage.State.FAILED, listed.state());
+        assertTrue(listed.problems().contains("endpoint 'orders-in': secret 'secret://in-token' is not set: the secret store holds no such secret"),
+                listed.problems().toString());
     }
 
     @Test
@@ -300,40 +296,25 @@ class DeploymentsSecretStoreTest {
     }
 
     @Test
-    void aReferenceOutsideASecretFieldReadsItsVariableOnlyAndAStoreChangeRebuildsNothing() throws Exception {
-        Node a = new Node("node-1", Map.of("RAIL8_SECRET_K", "rec://from-the-variable"));
-        MemorySecretStores.createValue(a.store, "k", "rec://from-the-store");
-        MemorySecretStores.createValue(a.store, "p", "p-1");
-        a.deploy(pointed());
-        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"), "the store never serves an option that is no secret field");
-        assertEquals("p-1", a.option("shop/orders", "token"));
-        assertEquals(Map.of("orders", Map.of("p", Set.of(Secret.Kind.VALUE)), "ping", Map.of()), records.uses.get("shop"),
-                "a reference outside a secret field is no use");
-
-        a.follow();   // the tick after the deploy takes the creates of k and p that came before it
-        long built = a.built("shop/orders");
-
-        MemorySecretStores.overwriteValue(a.store, "k", "rec://elsewhere");
-        a.follow();
-        assertEquals(built, a.built("shop/orders"), "a change of k rebuilds nothing");
-        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"));
-
-        MemorySecretStores.overwriteValue(a.store, "p", "p-2");
-        a.follow();
-        assertEquals(built + 1, a.built("shop/orders"), "a change of p rebuilds its flow");
-        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"));
-        assertEquals("p-2", a.option("shop/orders", "token"));
-    }
-
-    @Test
-    void aReferenceOutsideASecretFieldWithoutItsVariableRefusesTheDeployThoughTheStoreHoldsIt() {
+    void aReferenceOutsideASecretFieldReadsTheStoresPlainValueAndIsAUse() throws Exception {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createValue(a.store, "k", "rec://from-the-store");
         MemorySecretStores.createValue(a.store, "p", "p-1");
+        a.deploy(pointed());
+        assertEquals("rec://from-the-store", a.option("shop/orders", "url"));
+        assertEquals("p-1", a.option("shop/orders", "token"));
+        assertEquals(Map.of("orders", Map.of("k", Set.of(Secret.Kind.VALUE), "p", Set.of(Secret.Kind.VALUE)), "ping", Map.of()), records.uses.get("shop"),
+                "every reference is a use");
+    }
+
+    @Test
+    void aReferenceOutsideASecretFieldOfAnotherKindRefusesTheDeploy() {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "k", "app", "pw-0815");
+        MemorySecretStores.createValue(a.store, "p", "p-1");
         DeployRefusedException refused = a.refused(pointed());
-        assertEquals(List.of("endpoint 'orders-in': secret 'secret://k' is not set (RAIL8_SECRET_K): the option 'url' is not a secret field,"
-                + " so it reads its variable only"), refused.problems());
-        assertFalse(refused.getMessage().contains("rec://from-the-store"));
+        assertEquals(List.of("endpoint 'orders-in': secret 'secret://k' is a secret of kind credentials in the secret store, taken here as [value]"),
+                refused.problems());
     }
 
     @Test
@@ -394,18 +375,16 @@ class DeploymentsSecretStoreTest {
     }
 
     @Test
-    void aStopThatFailsWithTheValueBeforeAnOverwriteLogsItScrubbed() throws Exception {
+    void aStopThatFailsWithTheBuiltValueAfterAnOverwriteLogsItScrubbed() throws Exception {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createValue(a.store, "tok", "v4lue-tok");
         PackageDraft p = shop();
         p.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://tok");
         a.deploy(p);
-        a.follow();
-        a.doors.failStop("shop/orders", "no logout of v4lue-tok");
         MemorySecretStores.overwriteValue(a.store, "tok", "n3w-tok");
         a.follow();
-        a.doors.stopCleanly("shop/orders");
-        assertEquals("n3w-tok", a.option("shop/orders", "token"));
+        a.doors.failStop("shop/orders", "no logout of v4lue-tok");
+        a.undeploy("shop");
         assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://tok")), logged.toString());
         assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
     }
@@ -422,15 +401,14 @@ class DeploymentsSecretStoreTest {
 
     /**
      * relay's partner holds every send, so its two messages stay in the work queue when it is undeployed: its drain is built with
-     * the store's value. An overwrite builds the drain again with the new value; a delete stops it, and it is not built again on its
-     * old value: the node is UNDRAINED until a tick finds the secret again and builds the drain with it.
+     * the store's value, and keeps it: neither an overwrite nor a delete builds it again or stops it.
      */
     @Test
-    void aDrainingFlowFollowsAChangeOfItsSecretAndIsNotRunOnAnOldValue() throws Exception {
+    void aDrainRunsOnTheValueItWasBuiltWith() throws Exception {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createValue(a.store, "out-token", "one");
         a.deploy(relay());
-        a.doors.partner().holdNext(100);
+        java.util.concurrent.CountDownLatch held = a.doors.partner().holdNext(100);
         a.accept("relay/relay");
         a.doors.partner().awaitSent(1);
         a.accept("relay/relay");
@@ -441,71 +419,28 @@ class DeploymentsSecretStoreTest {
 
         MemorySecretStores.overwriteValue(a.store, "out-token", "two");
         a.follow();
-        assertEquals(List.of("one", "one", "two"), a.tokens(), "the drain is built again with the new value");
-        assertTrue(a.deployments.health().detail() == null || !a.deployments.health().detail().contains("UNDRAINED"), "it drains");
-
         MemorySecretStores.delete(a.store, "out-token");
         a.follow();
-        a.follow();
-        assertEquals(List.of("one", "one", "two"), a.tokens(), "never built again on its old value");
-        assertTrue(a.deployments.health().detail().contains("UNDRAINED: flow relay/relay"), a.deployments.health().detail());
-
-        MemorySecretStores.createValue(a.store, "out-token", "three");
-        rt.clock().advance(Duration.ofSeconds(5));
-        a.follow();
-        assertEquals(List.of("one", "one", "two", "three"), a.tokens(), "a tick that finds the secret again builds the drain with it");
+        assertEquals(List.of("one", "one"), a.tokens(), "never built again");
+        assertTrue(a.deployments.health().detail() == null || !a.deployments.health().detail().contains("UNDRAINED"), "it drains");
         assertEquals(2, a.queue.size(), "every message is still to drain");
+        held.countDown();   // the partner answers: the drain ends, and the node closes
     }
 
-    /** A drain whose stop for an overwrite fails with the value it was built with logs the failure with the reference in its place. */
+    /** A producer whose close fails with the value it was built with, after an overwrite, logs the failure with the reference in its place. */
     @Test
-    void aDrainsStopThatFailsWithTheValueBeforeAnOverwriteLogsItScrubbed() throws Exception {
+    void aProducersCloseThatFailsWithTheBuiltValueLogsItScrubbed() throws Exception {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createValue(a.store, "out-token", "v4lue-one");
         a.deploy(relay());
-        a.doors.partner().holdNext(100);
-        a.accept("relay/relay");
-        a.doors.partner().awaitSent(1);
-        a.undeploy("relay");
-        assertEquals(List.of("v4lue-one", "v4lue-one"), a.tokens(), "fixture: the drain runs on the first value");
-        a.doors.failProducerClose(2, "no logout of v4lue-one");
-
+        assertEquals(List.of("v4lue-one"), a.tokens(), "fixture: one producer, on the first value");
         MemorySecretStores.overwriteValue(a.store, "out-token", "n3w-two");
         a.follow();
+        a.doors.failProducerClose(1, "no logout of v4lue-one");
 
-        assertEquals(List.of("v4lue-one", "v4lue-one", "n3w-two"), a.tokens());
+        a.undeploy("relay");
+
         assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://out-token")), logged.toString());
         assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-one")), logged.toString());
-    }
-
-    /**
-     * An overwrite of in-token lands while a deploy of shop holds the node's deploy lock, after the deploy resolved it: the tick
-     * that meets the lock does nothing, and the first tick after the deploy builds orders again with the new value.
-     */
-    @Test
-    void aChangeThatLandsDuringADeployReachesTheFlowItStartedAtTheFirstTickAfterIt() throws Exception {
-        Node a = new Node("node-1", Map.of());
-        MemorySecretStores.createValue(a.store, "in-token", "one");
-        a.follow();
-        Doors.Gate held = a.doors.holdStartOf("shop/orders");
-        CompletableFuture<Void> deployed = CompletableFuture.runAsync(() -> {
-            try {
-                a.deploy(shop());
-            } catch (Exception failed) {
-                throw new IllegalStateException(failed);
-            }
-        });
-        assertTrue(held.reached().await(30, TimeUnit.SECONDS), "fixture: the deploy starts orders");
-
-        MemorySecretStores.overwriteValue(a.store, "in-token", "two");
-        a.follow();
-        held.release();
-        deployed.get(30, TimeUnit.SECONDS);
-        assertEquals("one", a.option("shop/orders", "token"), "fixture: the deploy started orders with the value it resolved");
-
-        a.follow();
-        assertEquals("two", a.option("shop/orders", "token"), "the first tick after the deploy builds orders again with the new value");
-        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
-        assertEquals(1, a.built("shop/ping"), "and no other flow");
     }
 }

@@ -227,6 +227,9 @@ check_stack() {
   key=$("$root"/bin/rail8 key new)
   mask "$key"
   export RAIL8_ADMIN_TOKEN=$key
+  # the secret store's key, made for this run only; the node's user, uid 10001 in the image, reads the file through its mount
+  (umask 022; openssl rand -base64 32 > "$tmp/secrets-key")
+  export RAIL8_SECRETS_KEY_HOST_FILE=$tmp/secrets-key
   on_exit+=(stop_stack)
   docker compose up -d --build
   start=$(date +%s)

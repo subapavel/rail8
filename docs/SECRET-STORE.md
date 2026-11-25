@@ -4,7 +4,7 @@ This document is the agreed design of where Rail8 keeps the secrets that flows a
 - the three kinds of secret and their types in `rail8-api`, and how an adapter and custom code take each;
 - the table in Postgres, the encryption and the key, and how the key is changed;
 - how every node of a pool learns of a change, without a restart;
-- which source wins when the store and the node's environment both hold a name;
+- how a node's environment variables are imported into the store, once;
 - what a deploy and a restore check, and the record of who uses a secret;
 - the pool's git credentials as a secret of the store;
 - the admin routes, the audit and the limits;
@@ -42,6 +42,10 @@ These limits are accepted. They are stated first, and the operator's documentati
   and `deployments`, and whoever deploys reaches every secret. The audit in that database proves nothing after such a
   change. They can also take a secret away or bring an old value back: a node cannot tell a row deleted in SQL from a
   delete through the API, nor an old row put back from a write.
+- **Until connections replace endpoint files, a secret administrator can steer a flow that names its address as a
+  secret.** A flow that writes an address, a host key or a trust as `secret://<name>` in its endpoint file sends its data
+  where that secret says from its next build on. The audit names who changed the secret. An option that holds its value
+  itself is untouched by the store.
 - **A line that installed code logs reaches the node's log as it was logged.** The platform scrubs every text it writes
   about a flow itself (Scrubbing, below), but not the log sink.
 
@@ -58,10 +62,13 @@ These limits are accepted. They are stated first, and the operator's documentati
   when it is made.
 - A developer sees each secret's name, kind, who changed it last and when, and who uses it: the deployed flows, the
   connections and credentials, and the platform.
-- Values are sealed in Postgres under the store's key, which comes from the node's environment or a file.
-- A change reaches every node of the pool at once, without a restart.
-- The node's environment stays a second source for plain values: `RAIL8_SECRET_<NAME>`. The store wins in a secret field
-  and in a step's option; any other option of an endpoint file reads the variable only (below).
+- Values are sealed in Postgres under the store's key, which comes from the node's environment or a file. Every node
+  needs the key: a node without it does not start, in every environment.
+- A change reaches every node's memory at once, without a restart. What reads a secret through a handle at each use holds
+  it at once. A flow built from an endpoint file holds the values it was built with, and takes a new value at its next
+  deploy (below).
+- The store is the only source of a secret, on every node. A node's `RAIL8_SECRET_<NAME>` is imported into the store once,
+  by the first deploy or restore that references the name, and only while the store never held it (Sources, below).
 - The platform's own credentials (Postgres, S3, Valkey, ClickHouse, the admin token, the journal's key and the store's key)
   stay in the node's environment and never enter the store.
 - Names that start with `rail8.` belong to the platform. No flow, endpoint or setting can reference one.
@@ -69,9 +76,9 @@ These limits are accepted. They are stated first, and the operator's documentati
 
 ## Kinds
 
-| Kind | Id | Holds | From the environment |
+| Kind | Id | Holds | Imported from the environment |
 | --- | --- | --- | --- |
-| Plain value | `value` | a text of 1 character to 32 KiB, UTF-8 | yes, `RAIL8_SECRET_<NAME>` |
+| Plain value | `value` | a text of 1 character to 32 KiB, UTF-8 | once, from `RAIL8_SECRET_<NAME>` |
 | Credentials | `credentials` | a user of 1 to 256 characters and a password of 1 to 4,096 | no |
 | Key pair | `key-pair` | a private key, its public key, and 0 to 10 certificates, the leaf first | no |
 
@@ -171,41 +178,46 @@ public final class Secret {
 
 ### Endpoint files, until connections replace them
 
-- The store serves a `secret://<name>` value of an endpoint option only in an option that the component's settings
-  description declares a secret field. It is resolved from the store or the variable when the flow builds. A plain value
-  goes into the endpoint's options, a typed one only through its handle.
-- A reference in any other option reads `RAIL8_SECRET_<NAME>` only, as before the store: an address, a host, a port, a
-  host key, a URL, a proxy, a trust, and every option of a component with no description. So a secret administrator has
-  no say over where a flow sends its data or whom it trusts. Such a reference is not a use, and a change in the store
-  never rebuilds its flow. A deploy whose such reference has no variable is refused; the problem names the endpoint, the
-  option and the variable, and says that the option is not a secret field. A token inside an HTTP `url` stays on a
-  variable, and a restart, until the adapter declares a secret field for it or connections ship.
-- When the value or the source of a name that an endpoint's options resolved changes in a node's memory, the node builds
-  again the flows that hold it. It does so through its local follow, which builds only those flows, with the record it
-  runs. A handle needs no rebuild.
-- One rule of that follow changes for this rebuild. Today a follow that cannot install keeps the old version running,
-  listed behind. A flow rebuilt for a secret whose build fails is stopped and listed `FAILED` instead, so a deleted or
-  changed secret is never used on with its old value. Each tick tries it again.
-- A change that lands while a deploy holds the node's deploy lock is kept, and applied at the first tick after the deploy,
-  to the flows the deploy started and to those a rollback restored. So at most one tick after a deploy that raced a
-  change, every running flow holds the current value or is `FAILED`.
-- A draining flow (an at-least-once flow undeployed with work left) is built with its written references resolved when it
-  is built, and follows a change of a name it resolved the same way: it is stopped and built again, and one that does not
-  build is not run on its old value.
-- This rebuild goes away with endpoint files.
+- Every `secret://<name>` in an endpoint option reads the store when its flow is built: at a deploy, a restore and a
+  node's start. In an option that the component's settings description declares a secret field, a plain value goes into
+  the endpoint's options and a typed one only through its handle. Any other option takes a plain value only: a reference
+  there to a secret of another kind refuses the deploy. Every reference is a use.
+- So a secret administrator who overwrites a secret that a flow names as its address, its host key or its trust points
+  that flow there from its next build on. This is accepted until connections replace endpoint files (What the store
+  protects, above).
+- A flow built from an endpoint file holds the plain values it was built with until its next build. **A flow of this
+  shape takes a changed secret at its next deploy**, or when a node starts and builds it again, as before the store. No
+  flow is rebuilt for a secret. A handle in a secret field sees a change at its next read.
+- After a delete, a built flow runs on its built value. Its next build fails as a missing secret does: at a restore or a
+  node's start, its package is listed `FAILED` with its problems and tried again at each tick.
+- A draining flow (an at-least-once flow undeployed with work left) is built with the values its flow was built with, and
+  follows no change.
+- The scrubber keeps the values a flow was built with for as long as it runs.
 
 ## Sources
 
-- The store wins in a secret field and in a step's option. For a name the store does not hold, the node reads
-  `RAIL8_SECRET_<NAME>` as today, a plain value only.
-- After a delete, the variable takes over on each node that sets it.
-- Each node writes the names of its `RAIL8_SECRET_*` variables, never their values, into its row of `nodes` when it
-  joins: the effective names, after `_FILE`. So the list shows, for each stored secret, the nodes whose variable it
-  shadows, which a delete would bring back. A node's variables and key ids count only while its `secret_epoch` is its
-  `epoch`; otherwise the list shows the node as not joined.
-- Several names can share one variable (`a.b`, `a-b` and `a_b` all read `RAIL8_SECRET_A_B`), so the list shows what only
-  variables hold as variables, not as names.
-- A row that the node cannot open never falls back to the variable: the name counts as set but unreadable.
+- The store is the only source of a secret, on every node and in every environment. No read falls back to the
+  environment.
+- A node reads its `RAIL8_SECRET_<NAME>` variables (or their `_FILE` forms) once at its start, and keeps them only to be
+  imported. A deploy or a restore that references a name of kind `value` that the store never held, on a node that sets
+  its variable, imports the variable's value under that name. The import runs before the build, in a transaction of its
+  own:
+  - under the name's lock and the store's row lock, with every check and limit of a create;
+  - written by the node, way `local`, with the audit row `secret.imported` naming the name and the variable;
+  - then the node reads the store back, and the build reads the store alone.
+- `secret_names` records every name the store ever held: a create or an import writes its row, and a delete leaves it. So
+  a name the store held once is never imported again. After its delete it is missing, whatever a variable holds.
+- An import has the refusals of a write. A refused import is a problem of the deploy, `secret '<reference>' is not
+  imported from <VARIABLE>: <why>`; at a restore, the package is listed `FAILED` and tried again at each tick.
+- An import stays when the deploy is refused later. It is then an ordinary secret with no use, which a delete takes
+  without the confirmation.
+- When the variables of two nodes differ, the store holds the value of the node that took the first deploy.
+- A validate on the node writes nothing. A reference that a deploy would import reads its variable's value there, the
+  value the deploy would import.
+- At each start, the node logs one WARNING naming the variables it sets whose name the store ever held: they are no longer
+  read. It names variables, never values. Nothing of it goes to `nodes`, and `/health` does not change.
+- Several names can share one variable (`a.b`, `a-b` and `a_b` all read `RAIL8_SECRET_A_B`). Each name imports it once.
+- A row that the node cannot open counts as set but unreadable.
 
 ## Storage
 
@@ -230,6 +242,13 @@ create table secrets (
     primary key (scope, name)
 );
 
+create table secret_names (
+    scope    text        not null check (scope = 'installation'),
+    name     text        not null check (name ~ '^[a-z0-9][a-z0-9._-]{0,127}$'),
+    first_at timestamptz not null,     -- when the store first held it
+    primary key (scope, name)
+);
+
 create table secret_uses (
     scope     text   not null,
     name      text   not null,
@@ -239,8 +258,7 @@ create table secret_uses (
     primary key (scope, name, user_kind, user_id)
 );
 
-alter table nodes add column secret_key bytea, add column secret_key_previous bytea,
-    add column secret_variables text[], add column secret_epoch bigint;
+alter table nodes add column secret_key bytea, add column secret_key_previous bytea, add column secret_epoch bigint;
 alter table deployments add column secret_uses_known boolean not null default false;
 ```
 
@@ -258,8 +276,7 @@ alter table deployments add column secret_uses_known boolean not null default fa
   `sealed` is longer than 256 KiB is held unreadable without being read. A delete removes the row.
 - The generation and the stamp together say only that something changed. The stamp tells two states apart that have the
   same generation, such as a database set back one change and then written once.
-- `nodes.secret_key` and `nodes.secret_key_previous` are the ids of the keys a node holds, and `nodes.secret_variables` the
-  names of its variables. A node writes them when it joins, with the epoch of that join in `nodes.secret_epoch`. A write
+- `nodes.secret_key` and `nodes.secret_key_previous` are the ids of the keys a node holds. A node writes them when it joins, with the epoch of that join in `nodes.secret_epoch`. A write
   counts a live node whose `secret_epoch` is not its `epoch` as holding no key.
 - `secret_uses` holds every use (below). `deployments.secret_uses_known` says whether a record's flow rows are there. It is
   false for every record written before the store.
@@ -273,11 +290,11 @@ alter table deployments add column secret_uses_known boolean not null default fa
   shared by all its nodes.
 - It is not the journal's key. A node whose two keys are equal refuses its start.
 - `RAIL8_SECRETS_KEY_PREVIOUS` (or `_FILE`) is set only while the key is changed.
-- With no key and an empty store, the node starts and reads secrets from its environment only. A write is 503 `no-key`.
-- With no key and a store that holds a row, the node refuses its start, naming the number of rows and the ids of their
-  keys.
+- A node without the key refuses its start, in every environment, before any statement to Postgres. So there is one rule
+  everywhere: the quickstart generates a key once into a volume of its own, the gate stack takes a file the operator
+  makes, and CI makes one for each run.
 - The node joins in one transaction under the row lock of `secret_store`, which every write takes too. It writes its key
-  ids and its variables' names, and checks every row's key id. A row sealed under a key the node does not hold refuses
+  ids, and checks every row's key id. A row sealed under a key the node does not hold refuses
   its start, naming the key's id and the number of rows.
 - A row that does not open, or that appears later under a key the node does not hold, is unreadable:
   - the flows and connections that use it fail as a missing secret does;
@@ -348,13 +365,12 @@ Two rolls of the pool's nodes:
 - An edit in SQL that leaves the generation and the stamp alone is seen at the node's next full read: at the next change,
   or at its next start.
 - The values are held in the node's memory. A read of a secret never goes to Postgres.
-- A handle sees the new value at its next read. In the interim, the flows whose endpoint options resolved a changed name
-  are built again, as above.
+- A handle sees the new value at its next read. A flow built from an endpoint file takes it at its next build, as above.
 
 ## The record of uses
 
 - `secret_uses` names every direct user of a secret:
-  - a deployed flow, for a reference in its steps' options or, in the interim, its endpoint files' secret fields;
+  - a deployed flow, for a reference in its steps' options or, in the interim, its endpoint files' options;
   - a draining flow (`drain`): an undeployed at-least-once flow that still processes its queued work;
   - an activated connection or credential;
   - the platform, for `rail8.git`.
@@ -379,8 +395,9 @@ Two rolls of the pool's nodes:
 
 ## Git credentials
 
-- The pool's git credentials are the credentials secret `rail8.git`. The variables `RAIL8_GIT_USER` and
-  `RAIL8_GIT_TOKEN` stay the second source, so a node starts with an empty store.
+- The pool's git credentials are the credentials secret `rail8.git`, and the store is their only source. The first
+  authenticated git operation of a node, while the store never held `rail8.git`, imports `RAIL8_GIT_USER` and
+  `RAIL8_GIT_TOKEN` as its credentials, once, as a variable is imported above.
 - The token rules of the deploy from git keep holding:
   - the token is read-only, for the `https` base, one for the base;
   - it is sent only as the `https` credentials of the base's host;
@@ -393,11 +410,9 @@ Two rolls of the pool's nodes:
   fetch keeps its token to its end; the host refuses a revoked one.
 - An unreadable `rail8.git` sends nothing and never falls back to the variables. The read-only scope of the token is
   enforced at the git host.
-- A node that holds both `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN` advertises `RAIL8_GIT_TOKEN` among its variables, by name
-  only, so `shadowedOn` of `rail8.git` lists the nodes a delete would fall back to.
 - A change of `rail8.git` brings one extra check of the credentials on every node. Changes close together are coalesced
   into one check, and it starts no sooner than 1 minute after the node's last check ended. So overwrites in a loop cannot
-  make the nodes hammer the git host. `GET /admin/git` adds `credentialsFrom`: `store`, `environment` or `none`.
+  make the nodes hammer the git host. `GET /admin/git` adds `credentialsFrom`: `store` or `none`.
 - `rail8.git` always counts as in use (its platform row), so its delete needs the confirmation.
 - The resolver that flows and connections read through refuses every `rail8.` name itself, besides the checks of a
   deploy and `rail8 validate`. A package that references a `rail8.` name today fails its restore after the upgrade, with
@@ -406,13 +421,12 @@ Two rolls of the pool's nodes:
 ## Admin routes
 
 Each route is mounted with its action, and the action is checked before the body is read. A body is JSON of at most
-64 KiB, which the UI server passes. The limit applies after JSON escaping: a value that escapes beyond it is 413, and
-stays in a variable.
+64 KiB, which the UI server passes. The limit applies after JSON escaping: a value that escapes beyond it is 413.
 
 | Route | Action | Does |
 | --- | --- | --- |
 | `GET /admin/secrets` | `secret.list` | every secret, the names used but not stored, and the key's state (below) |
-| `GET /admin/secrets/{name}` | `secret.list` | one of them; 404 `no-secret` when no source holds it and nothing uses it |
+| `GET /admin/secrets/{name}` | `secret.list` | one of them; 404 `no-secret` when the store does not hold it and nothing uses it |
 | `POST /admin/secrets` | `secret.write` | creates `{name, kind, value}`, `{name, kind, user, password}` or `{name, kind, privateKey, certificates}` |
 | `POST /admin/secrets/{name}` | `secret.write` | overwrites it with a value of the same kind; the last writer wins |
 | `DELETE /admin/secrets/{name}` | `secret.delete` | deletes it; 409 `in-use` with its users unless `?confirm=<name>` names it |
@@ -421,13 +435,11 @@ The list answers, for each secret:
 - its name, kind and scope;
 - `changedAt` and `changedBy`;
 - `usedBy`, typed;
-- `shadowedOn`: the nodes whose variable it shadows;
 - `unreadable`;
 - for a key pair, its algorithm and size, the leaf's subject, issuer and end, and the SHA-256 fingerprint of its public key.
 
 It also answers:
-- the names that a use names and no source holds, with their users;
-- the variables that hold a value no stored secret takes, with the nodes;
+- the names that a use names and the store does not hold, with their users;
 - the key's state: each live node's key ids, the rows under another key than the common one, and whether a previous key
   is still set;
 - the node that answered.
@@ -445,7 +457,6 @@ The refusals and their codes:
 | 409 | `store-full` | a create beyond 1,000 secrets, or a write that would take the sealed values beyond 16 MiB |
 | 409 | `reserved` | a name under `rail8.` other than `rail8.git` |
 | 422 | `invalid` | a value of the wrong form or out of its limits; it names the field and never echoes the value |
-| 503 | `no-key` | a write on a node without the store's key |
 | 503 | `busy` | a write that waited 5 s for its locks |
 | 503 | `written-unread` | a write that committed but that its node could not read back: it is in force within one tick, not to be sent again |
 | 503 | `unaudited` | a write whose audit row cannot be written |
@@ -462,26 +473,28 @@ The refusals and their codes:
   it also says whether it was confirmed and names the users, at most 100 with their total count. It never holds a value, a user name of credentials, a
   password or a private key.
 - The actor, the way and the credential come from the check, as for every route.
+- `secret.imported`, subject `secret/<name>`, records an import (Sources, above). Its actor is the node, its way `local`,
+  and its detail the kind and the name of the variable.
 - `secret.key-changed` records the end of sealing again under a new key, as above.
 
 ## Checks
 
 At a deploy, `rail8 validate` and a restore, each reference:
 - is well formed, at most 128 characters, and not under `rail8.`;
-- is set on the node, in the store or in the environment (`rail8 validate` skips this);
+- is set in the store, or is imported into it first (Sources, above); `rail8 validate` skips this, and a validate on the
+  node counts a variable that a deploy would import;
 - has a kind that its place takes: a secret field that names the kind, `Services.secret` with the kind, or a plain value
-  from a variable in any other option of an endpoint file.
+  in any other option of an endpoint file.
 
-A refusal names the flow, the endpoint or step, the option, the name and its source, never a value. A row that does not
+A refusal names the flow, the endpoint or step, the option and the name, never a value. A row that does not
 open is a problem naming its key's id.
 
 - At a deploy, a problem refuses the deploy, as a missing variable does today. The deploy checks again in its record's
   transaction (above).
 - At a restore and a follow, a problem refuses the package whole. It is listed `FAILED` with its problems and tried again
   at each tick, as today, so a secret created later lets the next tick install it.
-- A secret that a running flow uses and that is deleted, or becomes unreadable, fails that flow's next read. In the
-  interim, the flows whose endpoint options held it are built again, fail their build, and are stopped and listed
-  `FAILED`, as above. Each tick tries them again.
+- A secret that a running flow reads through a handle and that is deleted, or becomes unreadable, fails that handle's next
+  read. A flow built from an endpoint file runs on the values it was built with; its next build fails, as above.
 
 ## Scrubbing
 
@@ -492,7 +505,8 @@ open is a problem naming its key's id.
   same three forms and the base64 of `user:password`. For a key pair it scrubs the private key in base64, whole and in each
   64-character line of its PEM.
 - In the interim, the plain values that an endpoint holds in its options join the flow's set, and so do the handles of its
-  secret fields.
+  secret fields. They stay in it for as long as the flow runs on them. A validate on the node scrubs the value of a variable
+  it reads in place of an import.
 - Longer values are replaced first, in one pass over the original text: a reference the scrubber put in is never searched
   again.
 - Every text the platform itself writes about a flow passes through the scrubber of that flow's values: a problem line, a
@@ -552,7 +566,7 @@ It must not:
 | --- | --- |
 | Secrets in the store | 1,000 |
 | All sealed values together | 16 MiB |
-| A plain value | 32 KiB; a larger one stays in a variable, whose file may hold 64 KiB |
+| A plain value | 32 KiB |
 | A user; a password | 256 characters; 4,096 characters |
 | A key pair | RSA 2,048 to 8,192 bits; EC P-256, P-384, P-521; Ed25519; 0 to 10 certificates, 32 KiB together |
 | A name | 1 to 128 characters |
@@ -564,7 +578,6 @@ It must not:
 | A store write's wait for its locks | 5 s, then 503 `busy` |
 | Users named in an `in-use` answer or a delete's audit | 100, with the total count |
 | A row read from the database | 256 KiB of `sealed`; a longer one is unreadable |
-| The time a change that raced a deploy takes to reach its flows | one tick after the deploy |
 
 ## Against an attacker
 
@@ -575,11 +588,11 @@ It must not:
 | forging a value with an old key after a change | the previous key is dropped once no row needs it; `DEGRADED` while it is set |
 | steering writes to a key they hold through `nodes` | a node seals under its own current key; a forged row holds writes back, or lets through one a real node cannot open, which it holds unreadable and is `DEGRADED` |
 | a writer of the live database granting itself a role or a deploy | accepted: inside the trust boundary |
-| a secret administrator pointing an endpoint file's flow at another host | the store serves only secret fields; an address, a host key or a trust reads its variable only |
+| a secret administrator pointing an endpoint file's flow at another host | accepted until connections replace endpoint files, only for a flow that names its address, host key or trust as `secret://`: it holds at that flow's next build, and the audit names who changed the secret; an option that holds its value is untouched |
 | deleting a secret a draining flow still uses | its uses stay as `drain` until its mark ends |
 | a damaged row that a warm node keeps using | every row is opened at each full read |
 | a refresh finishing after a newer one | refreshes run one at a time per node |
-| deleting a row, or putting an old row back | accepted: a variable may take over, or an old value return; the generation behind is a WARNING |
+| deleting a row, or putting an old row back | accepted: the name is missing, or an old value returns; the generation behind is a WARNING |
 | restoring the database to an earlier state | every node reads everything when the generation or the stamp differs |
 | a node rolled back to a version before the store | its join leaves no key ids for its epoch, so writes are 409 while it runs |
 | reading a value back through the API | no route answers one; the audit and the logs never hold one; a refusal never echoes one |
@@ -588,7 +601,8 @@ It must not:
 | a key typed wrong on one node | that node refuses its start, naming the key ids, before it runs a flow |
 | deleting a secret in use, by mistake | 409 `in-use` until the name is written out; unknown uses count |
 | a deploy or an activation racing a delete | the names' locks, and the check again in the record's transaction |
-| a stale variable taking over after a delete | `shadowedOn` in the list, from every node |
+| a stale variable bringing a deleted secret back | a name the store ever held is never imported (`secret_names`) |
+| a node started without the store's key | it refuses its start, in every environment |
 | a flow file reading the git token | `rail8.` names refused by the resolver itself |
 | a secret administrator pointing git elsewhere | the base stays in the environment; the token goes only to the base's host |
 | overwriting `rail8.git` in a loop | one coalesced check per node, at least 1 minute apart |
@@ -607,7 +621,9 @@ It must not:
   - a write on one is read on the other after the notice, and after one tick with the notice dropped;
   - a database set back to an earlier state is read whole by both, with the WARNING, and so is one set back one change
     and then written once;
-  - a delete brings back the variable, and a deleted secret fails the next read of a handle;
+  - a deleted secret fails the next read of a handle, and its variable is never imported again, nor that of a name
+    created and deleted;
+  - an import has the refusals of a write, and no store is made without a key;
   - a row under a key a node does not hold refuses its start; a join that races a write sees the row; a tampered row is
     unreadable and never falls back;
   - the change of the key:
@@ -634,13 +650,15 @@ It must not:
   - each refusal of the codes table gives its code;
   - no answer, log line or audit row of any test holds a value, checked by searching every captured text for each value
     written, in each of its encodings.
-- The interim:
-  - an overwrite of a plain value that an endpoint option resolved rebuilds that flow on both nodes, and no other;
-  - an SFTP endpoint file with `hostKey: secret://k` and `password: secret://p`: the store serves `p`, never `k`; `k`
-    is read from its variable, and the deploy is refused without it;
-  - a change that lands during a deploy reaches the flow the deploy started at the next tick, before its first external
-    operation;
-  - a draining flow whose secret changes is built again or `FAILED`.
+- Endpoint files and the import:
+  - an overwrite reaches a flow built from an endpoint file at its next build only, and a delete leaves the built flow
+    running and fails its next build;
+  - a reference outside a secret field reads the store's plain value and is a use; one of another kind refuses the
+    deploy;
+  - a draining flow runs on the values it was built with;
+  - a deploy imports a variable once, a validate imports nothing, and a deploy after the name's delete imports nothing;
+  - a refused import refuses the deploy; a restore on another node reads the store, not that node's variables;
+  - a node without the store's key refuses its start.
 - `FlowSecrets`: a failure thrown with a value from before an overwrite is scrubbed; the limits drop the oldest earlier
   value and never a current one; the URL-encoded and JSON-escaped forms are scrubbed; a value that contains another's
   reference is replaced in one pass. The deploy answer, the problems, the `FAILED` listing and the node's own log lines
@@ -682,26 +700,29 @@ Each step is one issue, built and merged on its own. 1a comes first. The configu
   - `secret_uses` with its one method and the names' locks, the check again in the record's transaction, and the
     backfill at a restore.
   - The checks of a deploy and a restore. The `rail8.` reservation in the resolver.
-  - `shadowedOn` from the nodes' variables.
-  - The interim rebuild for endpoint options.
+  - The one import of `RAIL8_SECRET_*` with `secret_names`, and the WARNING at the start.
+  - The mandatory key, with the quickstart, the compose stacks and CI giving one.
   - `FlowSecrets` with the earlier values and the encodings.
   - The binding for the configuration.
   - The API's value types `Secret.Kind`, `Secret.Credentials` and `Secret.KeyPair`, and `Services.secret` with kinds for
     custom code, with the testkit's `FakeServices`, its placeholder key pair, and the placeholders of `rail8 validate` and
     `rail8 test` for every kind.
   - The key pair's checks at the write.
-  - The release note: names of more than 128 characters and `rail8.` references are refused at the deploy.
+  - The release note: names of more than 128 characters and `rail8.` references are refused at the deploy; every node
+    needs the store's key before its start, so an upgrade stops every node first; nodes whose variables differ end with
+    the value of the node that took the first deploy; a plain value over 32 KiB has no home; a flow built from an
+    endpoint file takes a changed secret at its next deploy.
 - **1b. Credentials and key pairs in adapters.** `class:C`, after 1a.
   - `Field.secret` with kinds, and `secret(option)` on the config an adapter is built with.
   - The component contract's check that a build reads no handle.
   - The SFTP component by credentials and by key pair, with its mock.
   - It is apart from 1a because it changes public types every adapter builds on, and is reviewed as a contract of its own.
 - **1c. The git credentials from the store.** `class:C`, after 1a. `rail8.git` read once per git operation on a fresh
-  transport, behind the same-origin check; the coalesced check after a change; `credentialsFrom`. The rule of the
-  deploy from git that its credentials live in the node's environment only becomes: in the environment, or sealed in the
-  secret store.
+  transport, behind the same-origin check; its one import from `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN`; the coalesced check
+  after a change; `credentialsFrom`. The rule of the deploy from git that its credentials live in the node's environment
+  only becomes: sealed in the secret store, imported once from the environment.
 - **2. The Secrets screen.** `class:B`, after 1a.
-  - A developer's list with its typed users, and `shadowedOn`.
+  - A developer's list with its typed users.
   - A secret administrator's create, overwrite and delete, with the confirmation, and the key's state.
   - The create form is a component that a connection's form opens as it is, so the Systems screen reuses it.
   - Texts are translated by their codes.

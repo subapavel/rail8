@@ -476,9 +476,9 @@ class ComposeStackTest {
                 "the fingerprint is unknown until the key exists: it is not a fixed value of the compose file");
         List<Mount> mounted = mounts(node);
         // CORE-4c1 r1 (architect): the node's data directory is a named volume too, so a recreated container keeps its journal
-        assertEquals(List.of("sftp-fingerprint", "rail8-data", "../.."), mounted.stream().map(Mount::source).toList(),
-                "the node mounts the fingerprint volume, its data volume and the checkout, no other (in particular none that holds a host key): "
-                        + mounted);
+        assertEquals(List.of("sftp-fingerprint", "rail8-data", "../..", OPERATOR_KEY), mounted.stream().map(Mount::source).toList(),
+                "the node mounts the fingerprint volume, its data volume, the checkout and the secret store's key, no other (in particular none"
+                        + " that holds a host key): " + mounted);
         assertTrue(mounted.get(0).readOnly(), "and only reads the fingerprint: " + mounted);
         assertEquals(new Mount("rail8-data", "/var/lib/rail8", false), mounted.get(1), "the data volume is the node's data directory, written");
         assertEquals(new Mount("../..", "/repos/rail8", true), mounted.get(2), "the checkout is only read");
@@ -525,6 +525,45 @@ class ComposeStackTest {
         assertTrue(script(node).contains("exec java -jar /opt/rail8/rail8-node.jar"), "the wrapper starts the jar the image builds: " + script(node));
         assertTrue(script(sftp).contains("demo:${RAIL8_SFTP_PASSWORD:-demo}:1001:100:inbox"), script(sftp));
         assertFalse(Files.readString(ROOT_FILE).contains("placeholder"), "no placeholder secret is left in the quickstart stack");
+    }
+
+    /** The file of the secret store's key the gate stack's operator names: compose refuses to start while it is not set. */
+    private static final String OPERATOR_KEY =
+            "${RAIL8_SECRETS_KEY_HOST_FILE:?set RAIL8_SECRETS_KEY_HOST_FILE to the file of the secret store's key, made once by openssl rand -base64 32}";
+
+    /** The gate stack's node reads the secret store's key from the operator's file, mounted read-only; the variable holds no key. */
+    @Test
+    void theGateStacksNodeReadsTheSecretStoresKeyFromTheOperatorsFile() throws IOException {
+        JsonNode node = service("rail8");
+        Mount key = mountOf(node, OPERATOR_KEY).orElseThrow(() -> new AssertionError("no mount of the operator's key file: " + mounts(node)));
+        assertTrue(key.readOnly(), "the key is only read: " + key);
+        assertEquals(key.target(), environment(node).get("RAIL8_SECRETS_KEY_FILE"), "the node reads the mounted file as its key: " + environment(node));
+        assertFalse(environment(node).containsKey("RAIL8_SECRETS_KEY"), "no key is written into the compose file");
+    }
+
+    /**
+     * The quickstart's node reads the secret store's key from the volume the one-shot {@code secrets-key} writes once, from random
+     * bits, and waits for it; the variable holds no key.
+     */
+    @Test
+    void theQuickstartsNodeReadsTheSecretStoresKeyTheOneShotGeneratesOnce() throws IOException {
+        JsonNode node = serviceIn(ROOT_FILE, "rail8");
+        JsonNode maker = serviceIn(ROOT_FILE, "secrets-key");
+        assertEquals("service_completed_successfully", node.path("depends_on").path("secrets-key").path("condition").asText(), "the node waits for the key");
+        Mount read = mountOf(node, "rail8-secrets-key").orElseThrow(() -> new AssertionError("the node mounts no key volume: " + mounts(node)));
+        assertTrue(read.readOnly(), "the node only reads the key: " + read);
+        String file = environment(node).get("RAIL8_SECRETS_KEY_FILE");
+        assertTrue(file != null && file.startsWith(read.target() + "/"), "the key file lies below the node's mount " + read.target() + ": " + file);
+        assertFalse(environment(node).containsKey("RAIL8_SECRETS_KEY"), "no key is written into the compose file");
+        Mount written = mountOf(maker, "rail8-secrets-key").orElseThrow(() -> new AssertionError("the one-shot mounts no key volume: " + mounts(maker)));
+        assertFalse(written.readOnly(), "the one-shot writes the key: " + written);
+        String path = written.target() + file.substring(read.target().length());
+        String script = script(maker);
+        assertTrue(script.contains("if [ ! -s " + path + " ]"), "the key is made only when the volume holds none yet: " + script);
+        assertTrue(script.contains("head -c 32 /dev/urandom | base64"), "from 256 random bits, as base64: " + script);
+        assertTrue(script.contains("chown 10001 " + path), "readable by the node's user: " + script);
+        assertTrue(script.strip().endsWith("[ -s " + path + " ]"), "and the one-shot fails when the file is empty: " + script);
+        assertTrue(new ObjectMapper(new YAMLFactory()).readTree(ROOT_FILE.toFile()).path("volumes").has("rail8-secrets-key"), "rail8-secrets-key is a declared volume");
     }
 
     /** The quickstart's node reads the working folder, mounted read-only, as the base of its package repositories. */

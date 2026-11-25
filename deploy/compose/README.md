@@ -9,6 +9,7 @@ A demo stack for GATE checks 1-2 (D-085), not production: the node runs `RAIL8_E
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am   # the jars the node image and `deploy` use, with the engines they need
 cd deploy/compose
 export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency key, required: compose refuses to start without it
+export RAIL8_SECRETS_KEY_HOST_FILE=~/.rail8-stack-secrets-key   # the secret store's key, required too ("The secret store", below)
 docker compose up -d --build                           # returns once the node is healthy
 ../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
 export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token: it deploys, and reads the deployed packages
@@ -70,10 +71,18 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
 
 ## The secret store
 
-The stack starts without the store's key: each node reads its secrets from its `RAIL8_SECRET_*` variables only, and a
-write to `/admin/secrets` is 503 `no-key`. To keep secrets in the store, give every node of the installation the same key,
-the base64 of 256 random bits (`openssl rand -base64 32`), as `RAIL8_SECRETS_KEY_FILE` (preferred) or `RAIL8_SECRETS_KEY`.
-It is never the journal's key. What the store holds is sealed in Postgres under that key, and Postgres never holds the key.
+Every node needs the store's key, and refuses its start without it. Make it once, the base64 of 256 random bits, keep
+the file readable by the node's user (uid 10001 in the image), and name it before `up`:
+
+```sh
+(umask 022; openssl rand -base64 32 > ~/.rail8-stack-secrets-key)
+export RAIL8_SECRETS_KEY_HOST_FILE=~/.rail8-stack-secrets-key   # compose refuses to start without it
+```
+
+The node reads it as `RAIL8_SECRETS_KEY_FILE`; every node of an installation holds the same key. It is never the
+journal's key. The store is the only source of a secret: the first deploy that references a name the store never held
+imports the node's `RAIL8_SECRET_<NAME>` into it, once. A later change of the variable is not read: overwrite the secret
+through `/admin/secrets` instead. What the store holds is sealed in Postgres under that key, and Postgres never holds the key.
 
 - **A lost key loses every secret.** Back the key up apart from the database and its backups: a backup of the database
   without the key holds nothing that can be read.

@@ -31,7 +31,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.Function;
 
-/** The secret store's rows in Postgres: the tables {@code secret_store}, {@code secrets}, {@code secret_uses} and {@code nodes}. */
+/** The secret store's rows in Postgres: the tables {@code secret_store}, {@code secrets}, {@code secret_names}, {@code secret_uses} and {@code nodes}. */
 final class PgSecretRows implements SecretRows {
 
     /** The class of the transaction locks of the names: {@code (297, hashtext(scope || chr(31) || name))}. */
@@ -57,9 +57,11 @@ final class PgSecretRows implements SecretRows {
     private static final String USES_OF = "select name, user_kind, user_id, kinds from secret_uses where scope = " + SCOPE + " and name = $1";
     private static final String USES = "select name, user_kind, user_id, kinds from secret_uses where scope = " + SCOPE + " order by name";
     private static final String UNKNOWN = "select package from deployments where not secret_uses_known order by package";
-    private static final String LIVE = "select node, epoch, secret_epoch, secret_key, secret_key_previous, secret_variables from nodes"
+    private static final String NAME = "insert into secret_names (scope, name, first_at) values (" + SCOPE + ", $1, now()) on conflict do nothing";
+    private static final String NAMES = "select name from secret_names where scope = " + SCOPE;
+    private static final String LIVE = "select node, epoch, secret_epoch, secret_key, secret_key_previous from nodes"
             + " where lease_until >= now() order by node";
-    private static final String JOINED = "update nodes set secret_key = $2, secret_key_previous = $3, secret_variables = $4, secret_epoch = $5"
+    private static final String JOINED = "update nodes set secret_key = $2, secret_key_previous = $3, secret_epoch = $4"
             + " where node = $1";
     private static final String CLEAR_PREVIOUS = "update nodes set secret_key_previous = null where node = $1";
     private static final String AUDIT = "insert into audit (at, actor, action, subject, detail, user_id, via, credential)"
@@ -135,6 +137,15 @@ final class PgSecretRows implements SecretRows {
     }
 
     @Override
+    public Future<Set<String>> named() {
+        return pool.query(NAMES).execute().map(rows -> {
+            Set<String> names = new TreeSet<>();
+            rows.forEach(r -> names.add(r.getString(0)));
+            return names;
+        });
+    }
+
+    @Override
     public Future<Listing> listing() {
         return pool.withTransaction(tx -> tx.query(REPEATABLE).execute()
                 .compose(v -> tx.query(ROWS).execute()).compose(rows -> tx.query(USES).execute()
@@ -191,10 +202,14 @@ final class PgSecretRows implements SecretRows {
             });
         }
 
-        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables) {
+        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous) {
             return tx.preparedQuery(JOINED).execute(Tuple.of(node, key == null ? null : Buffer.buffer(key), previous == null ? null : Buffer.buffer(previous),
-                    variables.toArray(String[]::new), epoch)).compose(rows -> rows.rowCount() == 1 ? Future.<Void>succeededFuture()
+                    epoch)).compose(rows -> rows.rowCount() == 1 ? Future.<Void>succeededFuture()
                     : Future.failedFuture(new IllegalStateException("the node " + node + " has no row of nodes: it joins the store after the pool")));
+        }
+
+        @Override public Future<Boolean> named(String name) {
+            return tx.preparedQuery(NAME).execute(Tuple.of(name)).map(rows -> rows.rowCount() == 1);
         }
 
         @Override public Future<Void> clearPrevious(String node) {
@@ -218,7 +233,7 @@ final class PgSecretRows implements SecretRows {
      * {@link SecretStore#replaceUses}'s rules for every user of {@code users}, in {@code tx}: the names' locks in ascending order of
      * their keys, the checks against the rows, then the rows replaced; nothing written with a problem.
      */
-    static Future<List<String>> replaceUses(SqlConnection tx, List<SecretStore.Uses> users, Set<String> variables) {
+    static Future<List<String>> replaceUses(SqlConnection tx, List<SecretStore.Uses> users) {
         String[] kinds = users.stream().map(SecretStore.Uses::userKind).toArray(String[]::new);
         String[] ids = users.stream().map(SecretStore.Uses::userId).toArray(String[]::new);
         return tx.preparedQuery(USED_BEFORE).execute(Tuple.tuple().addArrayOfString(kinds).addArrayOfString(ids)).compose(before -> {
@@ -240,9 +255,7 @@ final class PgSecretRows implements SecretRows {
                     }
                     Secret.Kind kind = kindOf.get(name);
                     if (kind == null) {
-                        if (takes.contains(Secret.Kind.VALUE) && variables.contains(SecretStore.variable(name))) return;
-                        problems.add(who + " uses secret://" + name + ", which is not set: the secret store holds no such secret"
-                                + (takes.contains(Secret.Kind.VALUE) ? ", nor does this node's " + SecretStore.variable(name) : ""));
+                        problems.add(who + " uses secret://" + name + ", which is not set: the secret store holds no such secret");
                     } else if (!takes.contains(kind)) {
                         problems.add(who + " takes secret://" + name + " as " + takes.stream().sorted().map(Secret.Kind::id).toList()
                                 + ", but the secret store holds it as " + kind.id());
@@ -325,9 +338,8 @@ final class PgSecretRows implements SecretRows {
         for (Row r : rows) {
             Buffer key = r.getBuffer(3);
             Buffer previous = r.getBuffer(4);
-            String[] variables = r.getArrayOfStrings(5);
             nodes.add(new NodeKeys(r.getString(0), r.getLong(1), r.getLong(2), key == null ? null : key.getBytes(),
-                    previous == null ? null : previous.getBytes(), variables == null ? List.of() : List.of(variables)));
+                    previous == null ? null : previous.getBytes()));
         }
         return nodes;
     }

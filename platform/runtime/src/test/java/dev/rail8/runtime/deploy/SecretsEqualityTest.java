@@ -62,8 +62,8 @@ class SecretsEqualityTest {
         Map<String, String> env = new java.util.HashMap<>(node());
         env.put("RAIL8_SECRET_A", "value-a");
         NodeConfig read = NodeConfig.from(env);
-        assertEquals(Optional.of("value-a"), read.secrets().resolve("secret://a"));
         assertEquals(Secrets.fromEnv(env), read.secrets());
+        assertEquals(Optional.empty(), read.secrets().resolve("secret://a"), "a variable is no source: only the store, once joined");
 
         NodeConfig dry = read.withSecrets(Secrets.placeholder());
         assertEquals(Secrets.placeholder(), dry.secrets());

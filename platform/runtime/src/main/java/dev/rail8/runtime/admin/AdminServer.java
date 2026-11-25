@@ -1640,11 +1640,11 @@ public final class AdminServer {
         return role == Role.ADMINISTRATOR ? Action.ADMINISTRATORS_CHANGE : Action.ROLES_CHANGE;
     }
 
-    /** The entry of the secret {@code :name}: 404 {@code no-secret} when no source holds it and nothing uses it. */
+    /** The entry of the secret {@code :name}: 404 {@code no-secret} when the store holds no such secret and nothing uses it. */
     private static Reply secret(RoutingContext ctx, SecretStore store) {
         String name = ctx.pathParam("name");
         return store.entry(name).await().map(entry -> Json.of(200, entry)).orElseGet(() -> Json.of(404, error(RefusalCode.NO_SECRET,
-                "no source holds the secret '" + name + "' and nothing uses it", Map.of("name", name))));
+                "the store holds no secret '" + name + "' and nothing uses it", Map.of("name", name))));
     }
 
     /** 200 {@code {name}}, the user of the route's path. */

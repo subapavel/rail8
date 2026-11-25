@@ -49,7 +49,7 @@ class MemorySecretStoreTest extends SecretStoreContract {
     }
 
     @Override void forge(String node, byte[] keyId) {
-        db.forge(new SecretRows.NodeKeys(node, 1, 1L, keyId, null, List.of()));
+        db.forge(new SecretRows.NodeKeys(node, 1, 1L, keyId, null));
         epochs.put(node, 1L);
     }
 
@@ -121,10 +121,11 @@ class MemorySecretStoreTest extends SecretStoreContract {
             @Override public io.vertx.core.Future<List<NodeKeys>> liveNodes() { return inner.liveNodes(); }
             @Override public io.vertx.core.Future<List<NodeKeys>> sharedNodes(io.vertx.sqlclient.SqlConnection tx) { return inner.sharedNodes(tx); }
             @Override public io.vertx.core.Future<Listing> listing() { return inner.listing(); }
+            @Override public io.vertx.core.Future<java.util.Set<String>> named() { return inner.named(); }
         };
         Node b = start("b", K1);
         dev.rail8.testkit.FakeClock clock = dev.rail8.testkit.FakeClock.at(java.time.Instant.parse("2026-11-25T10:00:00Z"));
-        SecretStore a = new SecretStore(slow, Secrets.fromEnv(Map.of(StoreKey.VARIABLE, b64(K1))).key(), "a", List.of(), clock,
+        SecretStore a = new SecretStore(slow, Secrets.fromEnv(Map.of(StoreKey.VARIABLE, b64(K1))).key(), "a", clock,
                 new dev.rail8.testkit.FakeTimer(clock), captured::add);
         await(a.start(join("a")));
         db.listen(a::notice);

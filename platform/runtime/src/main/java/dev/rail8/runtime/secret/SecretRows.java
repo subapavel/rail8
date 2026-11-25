@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Where the secret store's rows live: the tables {@code secret_store}, {@code secrets}, {@code secret_uses}, the secret columns of
+ * Where the secret store's rows live: the tables {@code secret_store}, {@code secrets}, {@code secret_names}, {@code secret_uses}, the secret columns of
  * {@code nodes} and the audit; {@code secret_uses} is written only by {@link SecretStore#replaceUses}. {@link PgSecretRows} is
  * Postgres; {@link MemorySecretRows} holds them in memory for tests. Only
  * {@link SecretStore} calls it, and it decides everything; this only reads and writes.
@@ -36,9 +36,9 @@ interface SecretRows {
 
     /**
      * A node's row of {@code nodes}: its epoch, the epoch of its last join to the store (null: never), the ids of the keys it
-     * holds (null: none) and the names of its {@code RAIL8_SECRET_*} variables (empty: none written).
+     * holds (null: none).
      */
-    record NodeKeys(String node, long epoch, Long secretEpoch, byte[] key, byte[] previous, List<String> variables) {
+    record NodeKeys(String node, long epoch, Long secretEpoch, byte[] key, byte[] previous) {
 
         /** Whether its row was written by its current join: otherwise it counts as holding no key. */
         boolean joined() {
@@ -94,8 +94,11 @@ interface SecretRows {
         /** The packages whose records' uses are not known yet. */
         Future<List<String>> unknownRecords();
 
-        /** Writes the secret columns of {@code node}'s row: its keys' ids (null: none), its variables' names and its join's epoch. */
-        Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables);
+        /** Writes the secret columns of {@code node}'s row: its keys' ids (null: none) and its join's epoch. */
+        Future<Void> joined(String node, long epoch, byte[] key, byte[] previous);
+
+        /** Writes the row of {@code secret_names} for {@code name} unless it has one: true when it had none. */
+        Future<Boolean> named(String name);
 
         /** Clears the previous key's id of {@code node}'s row. */
         Future<Void> clearPrevious(String node);
@@ -124,6 +127,9 @@ interface SecretRows {
 
     /** In the caller's transaction {@code tx}: the store's row lock for share, then every node's row whose lease holds. */
     Future<List<NodeKeys>> sharedNodes(SqlConnection tx);
+
+    /** Every name of {@code secret_names}: each name the store ever held. */
+    Future<Set<String>> named();
 
     /** The rows, uses, live nodes and unknown records, in one read. */
     Future<Listing> listing();

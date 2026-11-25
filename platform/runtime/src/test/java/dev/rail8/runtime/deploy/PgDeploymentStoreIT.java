@@ -413,19 +413,25 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
                 .iterator().next().getBoolean(0);
     }
 
+    /** The secret store's key of these cases. */
+    static final StoreKey KEY = StoreKey.fromEnv(Map.of(StoreKey.VARIABLE, "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="));
+
     /**
-     * A store whose saves and deletes write the record of uses, checked against a node that holds the variable RAIL8_SECRET_FROM_ENV
-     * and no secret in the store.
+     * A store whose saves and deletes write the record of uses, checked against a secret store that holds the plain value
+     * {@code held} (a row no node opens here: the check reads its name and kind only).
      */
     static PgDeploymentStore storeWithUses() {
         pool.query("delete from secret_uses where user_kind in ('flow', 'drain')").execute().await();
-        return storeOn(List.of("RAIL8_SECRET_FROM_ENV"));
+        pool.query("delete from secrets").execute().await();
+        pool.query("insert into secrets values ('installation', 'held', 'value', 1, '\\x0101010101010101', '\\x010101010101010101010101', '\\x00',"
+                + " now(), now(), 'admin')").execute().await();
+        return storeOn();
     }
 
-    /** A store whose saves and deletes write the record of uses, checked against a node that holds {@code variables}. */
-    static PgDeploymentStore storeOn(List<String> variables) {
+    /** A store whose saves and deletes write the record of uses, checked against the secret store's rows. */
+    static PgDeploymentStore storeOn() {
         FakeClock clock = FakeClock.at(Instant.parse("2026-10-27T09:30:00Z"));
-        SecretStore secrets = SecretStore.postgres(pool, StoreKey.NONE, "node-1", variables, clock, new FakeTimer(clock));
+        SecretStore secrets = SecretStore.postgres(pool, KEY, "node-1", clock, new FakeTimer(clock));
         return new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connect).map(c -> (SqlConnection) c), secrets);
     }
 
@@ -439,8 +445,8 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
     /**
      * A flow left draining keeps its uses as {@code drain} rows: the save that marks it rewrites its flow rows, a save that runs it
-     * at-least-once again deletes them, and so does the end of its mark. A delete marks it on a node that does not hold its
-     * variable: a drain row carries a use checked at its deploy, and is not checked again.
+     * at-least-once again deletes them, and so does the end of its mark. A delete marks it after its secret is gone from the store:
+     * a drain row carries a use checked at its deploy, and is not checked again.
      */
     @Test
     void aFlowLeftDrainingKeepsItsUsesAsDrainUntilItsMarkEnds() {
@@ -448,20 +454,21 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         PgDeploymentStore s = storeWithUses();
         DeploymentStore.PoolLock lock = s.lock().await().orElseThrow();
         try {
-            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
+            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), HELD, BY, new JsonObject()).await();
             DeploymentRecord auditOnly = new DeploymentRecord("shop", "2.0.0", "shop", C_2, SHA_2, AT, List.of(), List.of("shop/audit"));
             lock.save(auditOnly, Map.of(), BY, new JsonObject()).await();
-            assertEquals(List.of("drain shop/orders:from-env:value"), flowAndDrainUses(), "orders leaves draining with its uses");
+            assertEquals(List.of("drain shop/orders:held:value"), flowAndDrainUses(), "orders leaves draining with its uses");
 
-            lock.save(record("shop", "3.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
-            assertEquals(List.of("flow shop/orders:from-env:value"), flowAndDrainUses(), "orders runs at-least-once again: its drain rows go");
+            lock.save(record("shop", "3.0.0", C_1, SHA_1, AT), HELD, BY, new JsonObject()).await();
+            assertEquals(List.of("flow shop/orders:held:value"), flowAndDrainUses(), "orders runs at-least-once again: its drain rows go");
         } finally {
             lock.close().await();
         }
-        DeploymentStore.PoolLock elsewhere = storeOn(List.of()).lock().await().orElseThrow();
+        pool.query("delete from secrets").execute().await();
+        DeploymentStore.PoolLock elsewhere = storeOn().lock().await().orElseThrow();
         try {
             elsewhere.delete("shop", BY, new JsonObject()).await();
-            assertEquals(List.of("drain shop/orders:from-env:value"), flowAndDrainUses(), "the undeploy leaves orders draining with its uses");
+            assertEquals(List.of("drain shop/orders:held:value"), flowAndDrainUses(), "the undeploy leaves orders draining with its uses");
         } finally {
             elsewhere.close().await();
         }
@@ -469,7 +476,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         assertEquals(List.of(), flowAndDrainUses(), "the end of its mark deletes its drain rows");
     }
 
-    static final Map<String, Map<String, java.util.Set<Secret.Kind>>> FROM_ENV = Map.of("orders", Map.of("from-env", Set.of(Secret.Kind.VALUE)));
+    static final Map<String, Map<String, java.util.Set<Secret.Kind>>> HELD = Map.of("orders", Map.of("held", Set.of(Secret.Kind.VALUE)));
 
     /**
      * A save with uses writes them and marks its record's uses known in its transaction; a save whose uses name a secret the
@@ -481,8 +488,8 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         PgDeploymentStore s = storeWithUses();
         DeploymentStore.PoolLock lock = s.lock().await().orElseThrow();
         try {
-            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
-            assertEquals(List.of("shop/orders:from-env:value"), uses());
+            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), HELD, BY, new JsonObject()).await();
+            assertEquals(List.of("shop/orders:held:value"), uses());
             assertTrue(known("shop"), "the record's uses are known");
             DeploymentStore.Snapshot before = s.read().await();
 
@@ -491,7 +498,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
             assertTrue(refused instanceof SecretUsesRefused r && r.problems().size() == 1 && r.problems().getFirst().contains("secret://gone"),
                     "the save fails with the problem: " + refused);
             assertEquals(before, s.read().await(), "nothing written: the record as it was");
-            assertEquals(List.of("shop/orders:from-env:value"), uses(), "and its uses");
+            assertEquals(List.of("shop/orders:held:value"), uses(), "and its uses");
 
             lock.delete("shop", BY, new JsonObject()).await();
             assertEquals(List.of(), uses(), "the delete removes the uses");
@@ -513,18 +520,18 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
         DeploymentStore.PoolLock held = plain.lock().await().orElseThrow();
         try {
-            assertEquals(false, s.backfillUses("shop", SHA_1, FROM_ENV).await(), "the lock is held: nothing written");
+            assertEquals(false, s.backfillUses("shop", SHA_1, HELD).await(), "the lock is held: nothing written");
         } finally {
             held.close().await();
         }
         assertEquals(List.of(), uses());
 
-        assertEquals(true, s.backfillUses("shop", SHA_2, FROM_ENV).await(), "another content: no longer the record restored");
+        assertEquals(true, s.backfillUses("shop", SHA_2, HELD).await(), "another content: no longer the record restored");
         assertEquals(List.of(), uses(), "nothing written for it");
         assertTrue(!known("shop"));
 
-        assertEquals(true, s.backfillUses("shop", SHA_1, FROM_ENV).await());
-        assertEquals(List.of("shop/orders:from-env:value"), uses());
+        assertEquals(true, s.backfillUses("shop", SHA_1, HELD).await());
+        assertEquals(List.of("shop/orders:held:value"), uses());
         assertTrue(known("shop"), "the record's uses are known");
         assertTrue(s.lock().await().map(l -> { l.close().await(); return true; }).orElse(false), "the backfill freed the lock");
     }

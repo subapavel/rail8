@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
@@ -38,6 +39,7 @@ final class MemorySecretRows implements SecretRows {
         private Map<String, Stored> rows = new TreeMap<>();
         private List<Use> uses = new ArrayList<>(List.of(new Use(SecretStore.GIT, "platform", "git", Set.of(dev.rail8.api.Secret.Kind.CREDENTIALS))));
         private Map<String, Node> nodes = new TreeMap<>();
+        private Set<String> names = new TreeSet<>();
         private List<String> unknown = new ArrayList<>();
         private final List<Audit> audit = new CopyOnWriteArrayList<>();
         private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
@@ -67,8 +69,8 @@ final class MemorySecretRows implements SecretRows {
 
         synchronized void node(String node, long epoch, boolean live) {
             Node old = nodes.get(node);
-            SecretRows.NodeKeys k = old == null ? new NodeKeys(node, epoch, null, null, null, List.of())
-                    : new NodeKeys(node, epoch, old.keys().secretEpoch(), old.keys().key(), old.keys().previous(), old.keys().variables());
+            SecretRows.NodeKeys k = old == null ? new NodeKeys(node, epoch, null, null, null)
+                    : new NodeKeys(node, epoch, old.keys().secretEpoch(), old.keys().key(), old.keys().previous());
             nodes.put(node, new Node(k, live));
         }
 
@@ -154,13 +156,14 @@ final class MemorySecretRows implements SecretRows {
         boolean[] changed = new boolean[1];
         Future<T> done;
         synchronized (db) {
-            MemTx tx = new MemTx(db.head, new TreeMap<>(db.rows), new TreeMap<>(db.nodes), new ArrayList<>(), changed);
+            MemTx tx = new MemTx(db.head, new TreeMap<>(db.rows), new TreeMap<>(db.nodes), new TreeSet<>(db.names), new ArrayList<>(), changed);
             done = work.apply(tx);
             if (!done.isComplete()) throw new IllegalStateException("a write of the memory store completes before it returns");
             if (done.succeeded()) {
                 db.head = tx.head;
                 db.rows = tx.rows;
                 db.nodes = tx.nodes;
+                db.names = tx.names;
                 db.audit.addAll(tx.audit);
             }
         }
@@ -172,6 +175,13 @@ final class MemorySecretRows implements SecretRows {
     public Future<List<NodeKeys>> liveNodes() {
         synchronized (db) {
             return Future.succeededFuture(live(db.nodes));
+        }
+    }
+
+    @Override
+    public Future<Set<String>> named() {
+        synchronized (db) {
+            return Future.succeededFuture(Set.copyOf(db.names));
         }
     }
 
@@ -191,13 +201,15 @@ final class MemorySecretRows implements SecretRows {
         private Head head;
         private final Map<String, Stored> rows;
         private final Map<String, Node> nodes;
+        private final Set<String> names;
         private final List<Audit> audit;
         private final boolean[] changed;
 
-        MemTx(Head head, Map<String, Stored> rows, Map<String, Node> nodes, List<Audit> audit, boolean[] changed) {
+        MemTx(Head head, Map<String, Stored> rows, Map<String, Node> nodes, Set<String> names, List<Audit> audit, boolean[] changed) {
             this.head = head;
             this.rows = rows;
             this.nodes = nodes;
+            this.names = names;
             this.audit = audit;
             this.changed = changed;
         }
@@ -228,17 +240,21 @@ final class MemorySecretRows implements SecretRows {
 
         @Override public Future<List<String>> unknownRecords() { return Future.succeededFuture(List.copyOf(db.unknown)); }
 
-        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables) {
+        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous) {
             Node old = nodes.get(node);
             if (old == null) return Future.failedFuture(new IllegalStateException("the node " + node + " has no row of nodes"));
-            nodes.put(node, new Node(new NodeKeys(node, old.keys().epoch(), epoch, key, previous, List.copyOf(variables)), old.live()));
+            nodes.put(node, new Node(new NodeKeys(node, old.keys().epoch(), epoch, key, previous), old.live()));
             return Future.succeededFuture();
         }
 
         @Override public Future<Void> clearPrevious(String node) {
             NodeKeys k = nodes.get(node).keys();
-            nodes.put(node, new Node(new NodeKeys(node, k.epoch(), k.secretEpoch(), k.key(), null, k.variables()), nodes.get(node).live()));
+            nodes.put(node, new Node(new NodeKeys(node, k.epoch(), k.secretEpoch(), k.key(), null), nodes.get(node).live()));
             return Future.succeededFuture();
+        }
+
+        @Override public Future<Boolean> named(String name) {
+            return Future.succeededFuture(names.add(name));
         }
 
         @Override public Future<Void> audit(Actor who, String action, String subject, JsonObject detail) {

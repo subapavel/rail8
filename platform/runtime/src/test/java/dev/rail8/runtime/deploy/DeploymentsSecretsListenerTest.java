@@ -7,6 +7,7 @@ import dev.rail8.core.queue.InMemoryWorkQueue;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.testkit.FakeRuntime;
 import org.junit.jupiter.api.AfterEach;
@@ -53,7 +54,7 @@ class DeploymentsSecretsListenerTest {
         env.put("RAIL8_ADMIN_PORT", "8181");
         if (host) env.put("RAIL8_SECRET_LISTEN_HOST", "10.0.0.5");
         Map<String, Component> components = Map.of(Doors.SCHEME, doors);
-        deployments = new Deployments(NodeConfig.from(env), new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components),
+        deployments = new Deployments(new MemorySecretStores().joined(NodeConfig.from(env), rt.clock(), rt.timer()), new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components),
                 components, rt.clock(), rt.timer(), List.of(), List.of(), new InMemoryMessageStore(), new InMemoryDlq(),
                 new InMemoryWorkQueue(rt.clock()), () -> 0L);
         return deployments;
@@ -83,7 +84,7 @@ class DeploymentsSecretsListenerTest {
 
     /**
      * An in endpoint whose reference is not set is not asked where it listens: its config lacks that value. Here the host would
-     * fall back to 127.0.0.1 on the admin API's port 8181 — the one problem is the missing variable, no overlap is made up.
+     * fall back to 127.0.0.1 on the admin API's port 8181 — the one problem is the missing secret, no overlap is made up.
      */
     @Test
     void anUnresolvedEndpointIsNotAskedWhereItListens() {
@@ -91,7 +92,7 @@ class DeploymentsSecretsListenerTest {
 
         DeployRefusedException refused = refused(node(false), p);
 
-        assertEquals(List.of("endpoint 'a-in': secret 'secret://listen-host' is not set (RAIL8_SECRET_LISTEN_HOST)"), refused.problems());
+        assertEquals(List.of("endpoint 'a-in': secret 'secret://listen-host' is not set: the secret store holds no such secret"), refused.problems());
         assertEquals(List.of(), doors.listensOnAsked(), "the component was not asked");
     }
 }
