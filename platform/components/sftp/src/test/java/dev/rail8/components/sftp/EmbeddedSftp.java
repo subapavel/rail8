@@ -75,6 +75,7 @@ public final class EmbeddedSftp implements AutoCloseable {
 
     final Path root;
     private final SshServer server;
+    private final KeyPair hostKey;
     private final AtomicInteger sessionsCreated = new AtomicInteger();
     private final AtomicInteger sessionsClosed = new AtomicInteger();
     private final AtomicInteger passwordChecks = new AtomicInteger();
@@ -102,6 +103,7 @@ public final class EmbeddedSftp implements AutoCloseable {
 
     private EmbeddedSftp(Path root, int port, KeyPair hostKey) throws IOException {
         this.root = root;
+        this.hostKey = hostKey;
         server = SshServer.setUpDefaultServer();
         server.setHost("127.0.0.1");
         server.setPort(port);
@@ -135,20 +137,23 @@ public final class EmbeddedSftp implements AutoCloseable {
 
     public int port() { return server.getPort(); }
 
+    /** The fingerprint of this server's host key, as an endpoint's {@code hostKey} names it. */
+    public String hostKey() { return fingerprint(hostKey); }
+
     /** The SHA256 fingerprint of {@code key} as OpenSSH prints it ({@code SHA256:<base64, unpadded>}): the endpoint's {@code hostKey}. */
     static String fingerprint(KeyPair key) { return KeyUtils.getFingerPrint(key.getPublic()); }
 
     public int sessionsCreated() { return sessionsCreated.get(); }
 
-    int sessionsClosed() { return sessionsClosed.get(); }
+    public int sessionsClosed() { return sessionsClosed.get(); }
 
     int passwordChecks() { return passwordChecks.get(); }
 
     /** The public keys clients offered to log in with, in order: a key appears when offered and again when signed. */
     List<PublicKey> offeredKeys() { return List.copyOf(offeredKeys); }
 
-    /** From now on a password login takes {@code user} and {@code password} alone. */
-    void login(String user, String password) { login.set(new String[]{user, password}); }
+    /** From now on a password login takes {@code user} and {@code password} alone (public: the runtime's tests use it). */
+    public void login(String user, String password) { login.set(new String[]{user, password}); }
 
     /** From now on a public-key login as {@link #USER} takes {@code key} alone. */
     void authorize(PublicKey key) { authorized.set(key); }
@@ -162,8 +167,8 @@ public final class EmbeddedSftp implements AutoCloseable {
     /** Runs {@code hook} when the client next opens a file for reading, once, before it reads a byte. */
     void onNextOpening(Hook hook) { onOpening.set(hook); }
 
-    /** Runs {@code hook} at the client's next read request, once. */
-    void onNextReading(Hook hook) { onReading.set(hook); }
+    /** Runs {@code hook} at the client's next read request, once (public: the runtime's tests use it). */
+    public void onNextReading(Hook hook) { onReading.set(hook); }
 
     /** The local path behind the remote absolute path {@code remote}. */
     Path local(String remote) { return root.resolve(remote.replaceFirst("^/", "")); }

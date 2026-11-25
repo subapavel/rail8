@@ -152,6 +152,7 @@ class DeploymentsSecretStoreTest {
         final Doors doors = new Doors().describe(DESCRIBED);
         final SecretStore store;
         final CountingQueue queue = new CountingQueue(rt.clock());
+        final InMemoryMessageStore messages = new InMemoryMessageStore();
         final Deployments deployments;
 
         Node(String id, Map<String, String> variables) {
@@ -168,7 +169,7 @@ class DeploymentsSecretStoreTest {
             config = config.withSecrets(config.secrets().withStore(store));
             Map<String, Component> components = Map.of(Doors.SCHEME, doors);
             Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components);
-            deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), new InMemoryMessageStore(),
+            deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages,
                     new InMemoryDlq(), queue, () -> 0L, records);
             nodes.add(this);
         }
@@ -653,5 +654,23 @@ class DeploymentsSecretStoreTest {
         a.undeploy("shop");
         assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of app with secret://in-login")), logged.toString());
         assertTrue(logged.stream().noneMatch(l -> l.contains("pw-first-0815")), logged.toString());
+    }
+
+    @Test
+    void aStepFailureQuotingThePasswordItsConsumerReadBeforeAnOverwriteIsRecordedWithItsReference() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "in-login", "app", "pw-first-0815");
+        a.deploy(logins());
+        Secret login = handle(a, "shop/orders", "login");
+        String password = login.credentials().password();   // the consumer logs in
+        MemorySecretStores.overwriteCredentials(a.store, "in-login", "app", "pw-second-4711");
+        a.follow();
+        a.doors.partner().failNext(1, () -> new IllegalStateException("the partner refused the order of app, logged in with " + password));
+        Envelope e = rt.ingress("shop/orders", Headers.empty(), Buffer.buffer("<order/>"));
+        Doors.Door door = a.doors.door("shop/orders");
+        door.deliver(e).otherwiseEmpty().await(10, TimeUnit.SECONDS);
+        String timeline = String.valueOf(within(a.messages.timeline(e.id()), "the timeline"));
+        assertTrue(timeline.contains("the partner refused the order of app, logged in with secret://in-login"), timeline);
+        assertFalse(timeline.contains("pw-first-0815"), timeline);
     }
 }

@@ -165,6 +165,7 @@ public final class FlowBuilder {
     private Map<String, Path> dependencies = Map.of();
     private SecretSource secrets = NO_SECRETS;
     private Map<String, String> heldSecrets = Map.of();
+    private FlowSecrets consumerSecrets;   // null: none
     private Function<String, Cache> caches = stepType -> Services.NONE.cache();
     private boolean stepEvents;   // false: no step is marked
     private Targets targets;
@@ -299,6 +300,16 @@ public final class FlowBuilder {
      */
     public FlowBuilder heldSecrets(Map<String, String> byReference) {
         this.heldSecrets = Map.copyOf(Objects.requireNonNull(byReference, "byReference"));
+        return this;
+    }
+
+    /**
+     * The handles the consumer of the flows built from now on is given, as {@code consumer}'s {@link FlowSecrets#endpoints} hands
+     * them out: the failures of their steps, and the texts their recorder keeps, leave with each value those handles read, now or
+     * earlier, replaced by its reference as well. It replaces the handles of an earlier call. Without a call there are none.
+     */
+    public FlowBuilder consumerSecrets(FlowSecrets consumer) {
+        this.consumerSecrets = Objects.requireNonNull(consumer, "consumer");
         return this;
     }
 
@@ -551,7 +562,7 @@ public final class FlowBuilder {
         if (parks) requireDlq(flow);
         Parking parker = parks ? new Parking(dlq, runtime.clock(), versions) : null;
         StepResources resources = resources(flow, baseDir, Services.NONE);
-        FlowSecrets flowSecrets = new FlowSecrets(secrets, heldSecrets);
+        FlowSecrets flowSecrets = new FlowSecrets(secrets, heldSecrets, consumerSecrets);
         Recorder recorder = store == null ? null : new Recorder(store, runtime.clock(), meter, versions, flowSecrets::scrubber);
         UnaryOperator<Envelope> forward = forwardHeaders(flow.forwardHeaders());
         List<Stage> stages = new ArrayList<>(flow.steps().size());

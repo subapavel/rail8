@@ -594,7 +594,8 @@ public final class Deployments {
      * it ({@link #with}). A {@link DeployedFlow.State#FAILED} flow ({@link #failed}) has no delivery, worker or consumer.
      * {@code uses} names the secrets it uses, by name the kinds each use takes: those its steps took and those its endpoints'
      * options reference; {@code resolved} the names of plain values its endpoints' secret fields referenced when it built, which a
-     * change of their value or source builds again; {@code secrets} the handles its consumer was built with, null until one is.
+     * change of their value or source builds again; {@code secrets} the handles its consumer is given, whose values its steps'
+     * scrubber replaces too; null for a flow that did not build.
      */
     private record Flow(DeployedFlow flow, String dir, Recipe recipe, Delivery delivery, FlowWorker worker, EndpointConfig from,
                         RestartingConsumer consumer, Map<String, Set<Secret.Kind>> uses, Set<String> resolved, FlowSecrets secrets) {
@@ -607,8 +608,8 @@ public final class Deployments {
             return flow.state() == DeployedFlow.State.RUNNING;
         }
 
-        Flow with(RestartingConsumer built, FlowSecrets handles) {
-            return new Flow(flow, dir, recipe, delivery, worker, from, built, uses, resolved, handles);
+        Flow with(RestartingConsumer built) {
+            return new Flow(flow, dir, recipe, delivery, worker, from, built, uses, resolved, secrets);
         }
 
         /** Its record as listed now: {@link DeployedFlow.State#RESTARTING} while its consumer waits for its next attempt. */
@@ -638,7 +639,7 @@ public final class Deployments {
 
     /**
      * What a flow's build took besides the builder's stamps: its definition, its yaml, the package's endpoints as built — their
-     * {@code secret://} references resolved — and as {@code written}, references kept (what its effective hash covers),
+     * {@code secret://} references resolved, a secret field's kept for its handle — and as {@code written}, references kept (what its effective hash covers),
      * and where its consumer listens as its check asked the component ({@link #listeners}; empty when it accepts no connections):
      * the address it holds against another package's deploy while it runs; the path of the node's HTTP port it takes requests at
      * ({@link #paths}; empty when its component declares no prefix), held the same way; and the node-local addresses it serves and
@@ -677,7 +678,7 @@ public final class Deployments {
 
     /**
      * What the checks hand the build: each valid endpoint's scheme and config (environment laid over) as written and with its
-     * {@code secret://} references resolved ({@code resolved}), each valid flow's definition, the qualified ids of the
+     * {@code secret://} references resolved, a secret field's kept for its handle ({@code resolved}), each valid flow's definition, the qualified ids of the
      * at-least-once flows running that the new version does not run at-least-once, where each flow's consumer listens, by
      * the flow's local id (a flow whose consumer accepts no connections is not in it), the path of the node's HTTP port each flow
      * takes requests at, by its local id (a flow whose component declares no prefix is not in it), the node-local addresses each
@@ -2264,10 +2265,10 @@ public final class Deployments {
         Resolved dependencies = dependencies(name, pkg, dir, held, commits, written, problems);
         Map<String, String> schemes = new LinkedHashMap<>();
         Map<String, JsonObject> configs = new LinkedHashMap<>();
-        Map<String, JsonObject> resolved = new LinkedHashMap<>();   // as the components get them: every secret:// reference resolved
+        Map<String, JsonObject> resolved = new LinkedHashMap<>();   // as the build takes them: references resolved, a secret field's checked and kept
         Set<String> outs = new HashSet<>();
         Set<String> ins = new HashSet<>();   // the in endpoints whose component takes their config: the ones asked where they listen
-        Map<String, EndpointConfig> callable = new HashMap<>();   // the out endpoints whose component takes their config, references resolved
+        Map<String, EndpointConfig> callable = new HashMap<>();   // the out endpoints whose component takes their config, as resolved holds them
         pkg.endpoints().forEach((id, endpoint) -> {
             if (!Schemas.ENDPOINT.validate(endpoint).valid()) return;   // what its schema says is listed already; nothing here relies on its shape
             String scheme = endpoint.getString("scheme");
@@ -2827,14 +2828,14 @@ public final class Deployments {
     }
 
     /**
-     * A copy of {@code cfg}, the options of endpoint {@code id} served by {@code component}, with every string value that starts
-     * with {@code secret://}, at any depth of its objects and arrays, replaced by the node's value of that reference; a string that
-     * merely contains one is kept as written. In an option the component's settings declare a secret field, the value is the
-     * store's, else the variable's ({@link Secrets#resolve}); in any other option, the variable's alone ({@link Secrets#variableOnly}).
-     * Null, with a line added to {@code problems} per reference, when one is malformed ({@code endpoint '<id>': } and the refusal
-     * naming it) or not set ({@code endpoint '<id>': secret '<reference>' is not set (<source>)}, for an option that is no secret
-     * field on a node with a store followed by {@code : the option '<option>' is not a secret field, so it reads its variable only}):
-     * no line carries a value.
+     * A copy of {@code cfg}, the options of endpoint {@code id} served by {@code component}. In an option the component's settings
+     * declare a secret field, a reference is kept once it can be read as one of the field's kinds ({@link #secretField}); the
+     * flow's build makes it a live handle. In any other option, every string value that starts with {@code secret://}, at any
+     * depth of its objects and arrays, is replaced by its variable's value ({@link Secrets#variableOnly}); a string that merely
+     * contains one is kept as written. Null, with a line added to {@code problems} per reference, when one is malformed
+     * ({@code endpoint '<id>': } and the refusal naming it), cannot be read as a kind its field takes, or is not set
+     * ({@code endpoint '<id>': secret '<reference>' is not set (<source>)}, on a node with a store followed by
+     * {@code : the option '<option>' is not a secret field, so it reads its variable only}): no line carries a value.
      */
     private JsonObject resolved(String id, Component component, JsonObject cfg, List<String> problems) {
         int before = problems.size();
@@ -2915,7 +2916,7 @@ public final class Deployments {
      */
     private List<String> build(String name, Optional<String> commit, String version, String hex, Package pkg, Path dir, Checked checked,
                                List<Flow> flows) throws IOException {
-        Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();   // as the components get them, references resolved
+        Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();   // as the build takes them: references resolved, a secret field's kept
         Map<String, EndpointConfig> written = new LinkedHashMap<>();     // as the package writes them: what the hash covers
         checked.configs().forEach((id, cfg) -> {
             endpoints.put(id, endpoint(id, checked.schemes().get(id), checked.resolved().get(id)));
@@ -2988,7 +2989,8 @@ public final class Deployments {
                 if (!typed) resolved.add(secret);   // a plain value's change still builds the flow again
             }));
         }
-        builder.reads(reads::add).dependencies(recipe.dependencies().dirs()).heldSecrets(held).secrets(source(uses));
+        FlowSecrets inbound = new FlowSecrets(source(null), Map.of());   // its consumer's handles: their uses are added here
+        builder.reads(reads::add).dependencies(recipe.dependencies().dirs()).heldSecrets(held).secrets(source(uses)).consumerSecrets(inbound);
         Path baseDir = dir;   // a step's file reference is a path from the package root, wherever the flow file lies
         EndpointConfig consumed = consumed(endpoints.get(def.fromEndpoint()), def);
         Delivery delivery = builder.delivery(def, baseDir);
@@ -3003,7 +3005,7 @@ public final class Deployments {
             Map<String, Set<Secret.Kind>> taken = new TreeMap<>();
             uses.forEach((secret, kinds) -> taken.put(secret, Set.copyOf(kinds)));
             return new Flow(new DeployedFlow(def.id(), name, version, commit, def.version(), def.deliveryMode(), hash, DeployedFlow.State.RUNNING),
-                    hex, recipe, delivery, worker, consumed, null, Collections.unmodifiableMap(taken), Set.copyOf(resolved), null);
+                    hex, recipe, delivery, worker, consumed, null, Collections.unmodifiableMap(taken), Set.copyOf(resolved), inbound);
         } finally {
             if (!built) {
                 delivery.stop(Duration.ZERO);   // nothing was delivered yet: the stop completes at once, and the close after it
@@ -3110,15 +3112,14 @@ public final class Deployments {
             FlowDefinition def = f.recipe().def();
             Component component = components.get(from.scheme());
             try {
-                FlowSecrets secrets = new FlowSecrets(source(null), Map.of());   // its uses were added as the flow built
-                Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes(), secrets.endpoints());
+                Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes(), f.secrets().endpoints());
                 boolean polls = Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null").isPresent();
                 Consumer consumer = component.consumer(in, handler);
                 Supplier<Consumer> build = () -> component.consumer(in, handler);
                 String key = f.id() + "/from";
                 Consumer first = polls ? leased(key, consumer, build) : consumer;
                 Supplier<Consumer> fresh = polls ? () -> leased(key, build.get(), build) : build;
-                with.add(f.with(new RestartingConsumer(f.id(), first, fresh, polls, config.stopDeadline(), timer, clock, t -> scrubber().failure(t)), secrets));
+                with.add(f.with(new RestartingConsumer(f.id(), first, fresh, polls, config.stopDeadline(), timer, clock, t -> scrubber().failure(t))));
             } catch (RuntimeException refused) {
                 problems.add("flow '" + local(f.flow()) + "' does not build: " + reason(refused));
             }
