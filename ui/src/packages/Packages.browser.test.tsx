@@ -1,6 +1,7 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage } from '../language';
 import { Shell } from '../Shell';
 import { fakeStateOf, type Seed } from './contract/seed';
 import type { PackagesApi } from './api';
@@ -33,6 +34,8 @@ afterEach(() => {
   root?.unmount();
   root = undefined;
   document.body.innerHTML = '';
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
 });
 
 describe('the Packages screen', () => {
@@ -359,5 +362,47 @@ describe('New package', () => {
     open({ readOnly: true, clones: [{ folder: 'billing' }] });
 
     await expect.element(newButton()).toBeDisabled();
+  });
+});
+
+describe('the Packages screen in another language', () => {
+  test('shows its texts, its ages and counts with their plurals, the refusals of the address and Ant Design in the language chosen', async () => {
+    chooseLanguage('cs');
+    const pins = [{ name: 'orders', repository: 'orders', commit: 'first', content: `sha256:${'1'.repeat(64)}` }];
+    open({
+      clones: [
+        { folder: 'orders', commits: ['first', 'second'], upstream: { at: 'first', more: ['theirs'] } },
+        { folder: 'billing', commits: ['first', 'second', 'third'] },
+        { folder: 'shipping' },
+      ],
+      node: [
+        { repository: 'orders', commit: 'second' },
+        { repository: 'billing', commit: 'first', dependencies: pins },
+        { repository: 'shipping', commit: 'first', dependencies: pins },
+      ],
+    });
+
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Balíčky' })).toBeVisible();
+    await expect.element(page.getByText('Stav nasazení na uzlu 127.0.0.1:8081')).toBeVisible();
+    const czech = page.getByRole('table', { name: 'Balíčky' });
+    const row = (repository: string) => czech.getByRole('row').filter({ hasText: repository });
+    await expect.element(row('orders')).toMatchTextContent('Seed Author, před 22 dny');
+    await expect.element(row('orders')).toMatchTextContent('1 napřed, 1 pozadu vůči origin/main');
+    await expect.element(row('orders')).toMatchTextContent('podle fetche před 22 dny');
+    await expect.element(row('orders')).toMatchTextContent('nasazení před 3 dny');
+    await expect.element(row('billing').getByText('Pozadu o 2')).toBeVisible();
+    await expect.element(row('billing')).toMatchTextContent('Bez upstreamu');
+    await row('orders').getByText('Připnuto pozadu o 2').hover();
+    await expect
+      .element(page.getByRole('tooltip'))
+      .toHaveTextContent('2 balíčky, které běží na uzlu, připínají jeho commit za tím, který běží: viz Používají ho v jeho kartě.');
+
+    await page.getByRole('button', { name: 'Získat balíček…' }).first().click();
+    const dialog = page.getByRole('dialog', { name: 'Získat balíček' });
+    await dialog.getByLabelText('Adresa', { exact: true }).fill('https://git.example.com/acme/my orders.git');
+    await expect.element(dialog.getByText('vložte jen adresu: obsahuje bílé znaky')).toBeVisible();
+    await expect.element(dialog.getByRole('button', { name: 'Získat', exact: true })).toBeDisabled();
+    await dialog.getByRole('button', { name: 'Zavřít', exact: true }).click();
+    await expect.element(dialog).not.toBeInTheDocument();
   });
 });

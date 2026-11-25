@@ -1,8 +1,9 @@
 import { Alert, Button, Descriptions, Flex, Spin, Typography } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { useText, type Texts } from '../language';
 import { MountedModal } from '../MountedModal';
 import { PackagesError, type Commit, type DeployAnswer, type NodeDeploy, type PackagesApi, type PackageState } from './api';
-import { deployedStatus, short } from './parts';
+import { code, deployedStatus, short } from './parts';
 
 export interface DeployDialogProps {
   api: PackagesApi;
@@ -41,9 +42,10 @@ const refusedOf = (error: unknown): Refused =>
 
 /** The flows a deploy adds, swaps and removes, each list in a row of its own, or that it changes none. */
 function FlowChanges({ deploy, done }: { deploy: NodeDeploy; done: boolean }) {
+  const { t } = useText();
   const list = (flows: string[]) => (flows.length === 0 ? '-' : flows.join(', '));
   if (deploy.added.length + deploy.swapped.length + deploy.removed.length === 0) {
-    return <Typography.Text>{done ? 'No flow changed: every flow runs on as it was.' : 'No flow changes: every flow runs on as it is.'}</Typography.Text>;
+    return <Typography.Text>{done ? t('packages.deploy.flows.unchanged') : t('packages.deploy.flows.none')}</Typography.Text>;
   }
   return (
     <Descriptions
@@ -51,9 +53,9 @@ function FlowChanges({ deploy, done }: { deploy: NodeDeploy; done: boolean }) {
       bordered
       column={1}
       items={[
-        { key: 'added', label: done ? 'Added' : 'Adds', children: list(deploy.added) },
-        { key: 'swapped', label: done ? 'Swapped' : 'Swaps', children: list(deploy.swapped) },
-        { key: 'removed', label: done ? 'Removed' : 'Removes', children: list(deploy.removed) },
+        { key: 'added', label: done ? t('packages.deploy.added') : t('packages.deploy.adds'), children: list(deploy.added) },
+        { key: 'swapped', label: done ? t('packages.deploy.swapped') : t('packages.deploy.swaps'), children: list(deploy.swapped) },
+        { key: 'removed', label: done ? t('packages.deploy.removed') : t('packages.deploy.removes'), children: list(deploy.removed) },
       ]}
     />
   );
@@ -61,6 +63,7 @@ function FlowChanges({ deploy, done }: { deploy: NodeDeploy; done: boolean }) {
 
 /** A refusal: its text, and every problem the node named. */
 function RefusalAlert({ title, refused }: { title: string; refused: Refused }) {
+  const { t } = useText();
   return (
     <Alert
       type="error"
@@ -70,7 +73,7 @@ function RefusalAlert({ title, refused }: { title: string; refused: Refused }) {
         <Flex vertical gap="small">
           <span>{refused.error}</span>
           {refused.problems !== undefined && refused.problems.length > 0 && (
-            <ul aria-label="Problems" style={{ margin: 0 }}>
+            <ul aria-label={t('packages.deploy.problems')} style={{ margin: 0 }}>
               {refused.problems.map((problem, n) => (
                 <li key={n}>{problem}</li>
               ))}
@@ -82,9 +85,9 @@ function RefusalAlert({ title, refused }: { title: string; refused: Refused }) {
   );
 }
 
-/** What the commit the node runs now is, in words. */
-const replacing = (replaces: string, host: string) =>
-  replaces === 'none' ? `${host} runs nothing of this repository yet.` : `It replaces ${short(replaces)}, which ${host} runs now.`;
+/** That the check passed, and what the commit the node runs now is, in `texts`' language. */
+const passed = ({ t }: Texts, replaces: string, host: string) =>
+  replaces === 'none' ? t('packages.deploy.passed.first', { host }) : t('packages.deploy.passed', { commit: short(replaces), host });
 
 /**
  * The deploy dialog of a commit of a package: it checks the commit on the node first, and shows what the deploy would
@@ -98,6 +101,8 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
   const [shown, setShown] = useState<Shown>({ kind: 'checking' });
   const [checks, setChecks] = useState(0);
   const host = state.deployed.host;
+  const texts = useText();
+  const { t, rich } = texts;
   // the tab's latest onState, so that a new one on each of its renders starts no new check
   const latest = useRef(onState);
   useEffect(() => {
@@ -157,8 +162,8 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
     setShown({ kind: 'checking' });
     setChecks((n) => n + 1);
   };
-  const close = <Button key="close" onClick={onClose}>Close</Button>;
-  const title = `Deploy ${short(commit.id)} to ${host}`;
+  const close = <Button key="close" onClick={onClose}>{t('packages.close')}</Button>;
+  const title = t('packages.deploy.title', { commit: short(commit.id), host });
 
   let body;
   let footer;
@@ -167,13 +172,13 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       body = (
         <Flex gap="small" align="center">
           <Spin size="small" />
-          <Typography.Text>Checking the commit on {host}…</Typography.Text>
+          <Typography.Text>{t('packages.deploy.checking', { host })}</Typography.Text>
         </Flex>
       );
       footer = [close];
       break;
     case 'check-refused':
-      body = <RefusalAlert title={shown.refused.problems === undefined ? 'The check was refused: nothing was deployed' : 'The check found problems: nothing was deployed'} refused={shown.refused} />;
+      body = <RefusalAlert title={shown.refused.problems === undefined ? t('packages.deploy.check.refused') : t('packages.deploy.check.problems')} refused={shown.refused} />;
       footer = [close];
       break;
     case 'checked':
@@ -183,23 +188,23 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       body = (
         <Flex vertical gap="middle">
           {shown.kind === 'deploy-refused' && (
-            <RefusalAlert title={shown.refused.status === 412 ? 'The node’s commit changed since the check: nothing was deployed' : 'The deploy was refused: nothing was deployed'} refused={shown.refused} />
+            <RefusalAlert title={shown.refused.status === 412 ? t('packages.deploy.stale') : t('packages.deploy.refused')} refused={shown.refused} />
           )}
-          <Typography.Text>The check passed. {replacing(answer.replaces, host)}</Typography.Text>
+          <Typography.Text>{passed(texts, answer.replaces, host)}</Typography.Text>
           <FlowChanges deploy={answer.deploy} done={false} />
-          {state.changes.length > 0 && <Typography.Text type="secondary">Uncommitted changes are never deployed: the node gets the commit alone.</Typography.Text>}
-          {!writable && <Typography.Text type="secondary">The server shows the working folder read-only (RAIL8_READ_ONLY is true): the check runs, and nothing is deployed.</Typography.Text>}
+          {state.changes.length > 0 && <Typography.Text type="secondary">{t('packages.deploy.uncommitted')}</Typography.Text>}
+          {!writable && <Typography.Text type="secondary">{t('packages.deploy.readOnly')}</Typography.Text>}
         </Flex>
       );
       footer =
         shown.kind === 'deploy-refused'
-          ? [close, <Button key="check" type="primary" onClick={checkAgain}>Check again</Button>]
+          ? [close, <Button key="check" type="primary" onClick={checkAgain}>{t('packages.deploy.checkAgain')}</Button>]
           : [
               <Button key="cancel" disabled={shown.kind === 'deploying'} onClick={onClose}>
-                Cancel
+                {t('frame.cancel')}
               </Button>,
               <Button key="deploy" type="primary" disabled={!writable} loading={shown.kind === 'deploying'} onClick={() => void deploy(answer)}>
-                Deploy
+                {t('packages.deploy')}
               </Button>,
             ];
       break;
@@ -208,28 +213,24 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       const now = shown.now;
       body = (
         <Flex vertical gap="middle">
-          <Alert type="warning" showIcon title="The outcome of the deploy is unknown" description={shown.refused.error} />
+          <Alert type="warning" showIcon title={t('packages.deploy.lost')} description={shown.refused.error} />
           {now === null && shown.problem === undefined && (
             <Flex gap="small" align="center">
               <Spin size="small" />
-              <Typography.Text>Reading what {host} runs…</Typography.Text>
+              <Typography.Text>{t('packages.deploy.lost.reading', { host })}</Typography.Text>
             </Flex>
           )}
-          {shown.problem !== undefined && <Alert type="error" showIcon title={`What ${host} runs could not be read`} description={shown.problem} />}
+          {shown.problem !== undefined && <Alert type="error" showIcon title={t('packages.deploy.lost.unread', { host })} description={shown.problem} />}
           {now !== null && (
             <Typography.Text>
-              {host} now reads: {deployedStatus(now).text}
-              {now.deployed.node === 'answered' && now.deployed.relation !== 'none' && (
-                <>
-                  , running <Typography.Text code>{short(now.deployed.commit)}</Typography.Text>
-                </>
-              )}
-              .
+              {now.deployed.node === 'answered' && now.deployed.relation !== 'none'
+                ? rich('packages.deploy.lost.running', { code, host, status: deployedStatus(texts, now).text, commit: short(now.deployed.commit) })
+                : t('packages.deploy.lost.reads', { host, status: deployedStatus(texts, now).text })}
             </Typography.Text>
           )}
         </Flex>
       );
-      footer = [close, <Button key="check" type="primary" disabled={now === null && shown.problem === undefined} onClick={checkAgain}>Check again</Button>];
+      footer = [close, <Button key="check" type="primary" disabled={now === null && shown.problem === undefined} onClick={checkAgain}>{t('packages.deploy.checkAgain')}</Button>];
       break;
     }
     case 'deployed': {
@@ -237,14 +238,15 @@ export function DeployDialog({ api, repository, commit, state, writable, onState
       body = (
         <Flex vertical gap="middle">
           <Typography.Text>
-            {host} runs <Typography.Text code>{short(commit.id)}</Typography.Text>
-            {answer.replaces === 'none' ? '.' : <>, in place of <Typography.Text code>{short(answer.replaces)}</Typography.Text>.</>}
+            {answer.replaces === 'none'
+              ? rich('packages.deploy.runs', { code, host, commit: short(commit.id) })
+              : rich('packages.deploy.runsInPlace', { code, host, commit: short(commit.id), replaced: short(answer.replaces) })}
           </Typography.Text>
           <FlowChanges deploy={answer.deploy} done />
-          {answer.package === null && <Alert type="warning" showIcon title={answer.problem ?? 'The package could not be read after the deploy'} />}
+          {answer.package === null && <Alert type="warning" showIcon title={answer.problem ?? t('packages.deploy.unreadAfter')} />}
         </Flex>
       );
-      footer = [<Button key="close" type="primary" onClick={onClose}>Close</Button>];
+      footer = [<Button key="close" type="primary" onClick={onClose}>{t('packages.close')}</Button>];
       break;
     }
   }

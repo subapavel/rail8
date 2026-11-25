@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { msg, type Label, type Message } from '../language';
 import type { Change, Commit, Kind, PackagesApi, PackageState } from './api';
 
 /** What reading a package gave: nothing yet, a refusal with its message, or the package and the time it was read at. */
@@ -7,33 +8,33 @@ export type PackageRead = { kind: 'reading' } | { kind: 'failed'; message: strin
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** How a file differs, in words, with the status of the badge that marks it. */
-export const CHANGE: Record<Change['status'], { label: string; status: 'success' | 'warning' | 'error' | 'processing' }> = {
-  added: { label: 'Added', status: 'success' },
-  modified: { label: 'Modified', status: 'warning' },
-  deleted: { label: 'Deleted', status: 'error' },
-  renamed: { label: 'Renamed', status: 'processing' },
+export const CHANGE: Record<Change['status'], { label: Message; status: 'success' | 'warning' | 'error' | 'processing' }> = {
+  added: { label: msg('packages.change.added'), status: 'success' },
+  modified: { label: msg('packages.change.modified'), status: 'warning' },
+  deleted: { label: msg('packages.change.deleted'), status: 'error' },
+  renamed: { label: msg('packages.change.renamed'), status: 'processing' },
 };
 
-/** The name of each kind of file, as a column or a tag shows it. */
-export const KIND: Record<Kind, string> = {
-  flow: 'Flow',
-  endpoint: 'Endpoint',
-  mapping: 'Mapping',
-  test: 'Test',
+/** The name of each kind of file, as a column or a tag shows it: a word, or the file's own name. */
+export const KIND: Record<Kind, Label> = {
+  flow: msg('packages.kind.flow'),
+  endpoint: msg('packages.kind.endpoint'),
+  mapping: msg('packages.kind.mapping'),
+  test: msg('packages.kind.test'),
   package: 'package.yaml',
   lock: 'package.lock',
   folder: 'folder.yaml',
-  file: 'File',
+  file: msg('packages.kind.file'),
 };
 
 /** The kinds the artifacts are grouped by, in their order, each under its title. */
-export const GROUPS: { key: string; title: string; kinds: Kind[] }[] = [
-  { key: 'flows', title: 'Flows', kinds: ['flow'] },
-  { key: 'endpoints', title: 'Endpoints', kinds: ['endpoint'] },
-  { key: 'mappings', title: 'Mappings', kinds: ['mapping'] },
-  { key: 'tests', title: 'Tests', kinds: ['test'] },
-  { key: 'package', title: 'Package files', kinds: ['package', 'lock', 'folder'] },
-  { key: 'files', title: 'Files they use', kinds: ['file'] },
+export const GROUPS: { key: string; title: Message; kinds: Kind[] }[] = [
+  { key: 'flows', title: msg('packages.group.flows'), kinds: ['flow'] },
+  { key: 'endpoints', title: msg('packages.group.endpoints'), kinds: ['endpoint'] },
+  { key: 'mappings', title: msg('packages.group.mappings'), kinds: ['mapping'] },
+  { key: 'tests', title: msg('packages.group.tests'), kinds: ['test'] },
+  { key: 'package', title: msg('packages.group.package'), kinds: ['package', 'lock', 'folder'] },
+  { key: 'files', title: msg('packages.group.files'), kinds: ['file'] },
 ];
 
 /** The path of `path` within its package: the working folder's path without its first segment. */

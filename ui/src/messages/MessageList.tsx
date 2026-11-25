@@ -1,6 +1,7 @@
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Form, Input, Select, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState, type TableHTMLAttributes } from 'react';
+import { msg, say, useText, type Message } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import type { AdminApi, Counts, Listed, ListQuery, Status } from './admin';
 import { duration } from './progress';
@@ -15,17 +16,17 @@ export interface MessageListProps {
 
 /** The time ranges to choose from, each ending now. */
 const RANGES = [
-  { label: 'Last 15 minutes', minutes: 15 },
-  { label: 'Last hour', minutes: 60 },
-  { label: 'Last 24 hours', minutes: 24 * 60 },
-  { label: 'Last 7 days', minutes: 7 * 24 * 60 },
+  { label: msg('messages.range.minutes', { count: 15 }), minutes: 15 },
+  { label: msg('messages.range.hour'), minutes: 60 },
+  { label: msg('messages.range.hours', { count: 24 }), minutes: 24 * 60 },
+  { label: msg('messages.range.days', { count: 7 }), minutes: 7 * 24 * 60 },
 ] as const;
 
-const STATUSES: { value: Status; label: string; color?: 'success' | 'error' | 'processing' }[] = [
-  { value: 'completed', label: 'Completed', color: 'success' },
-  { value: 'failed', label: 'Failed', color: 'error' },
-  { value: 'running', label: 'Running', color: 'processing' },
-  { value: 'cancelled', label: 'Cancelled' },
+const STATUSES: { value: Status; label: Message; color?: 'success' | 'error' | 'processing' }[] = [
+  { value: 'completed', label: msg('messages.status.completed'), color: 'success' },
+  { value: 'failed', label: msg('messages.status.failed'), color: 'error' },
+  { value: 'running', label: msg('messages.status.running'), color: 'processing' },
+  { value: 'cancelled', label: msg('messages.status.cancelled') },
 ];
 
 /** What the filters are set to; an empty text is no filter. */
@@ -86,6 +87,8 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
   const [result, setResult] = useState<Result>({ kind: 'loading' });
   const [counted, setCounted] = useState<Counted>({ kind: 'loading' });
   const [id, setId] = useState('');
+  const texts = useText();
+  const { t } = texts;
   // only the answers to the latest read of the list and of the counts are shown
   const latest = useRef(0);
   const latestCounts = useRef(0);
@@ -161,113 +164,114 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
 
   return (
     <Flex vertical gap="middle">
-      <Typography.Title level={1}>Messages</Typography.Title>
+      <Typography.Title level={1}>{t('messages.screen.title')}</Typography.Title>
       {flows.kind === 'failed' && (
-        <Alert showIcon type="error" title="The deployed flows could not be listed" description={flows.message} />
+        <Alert showIcon type="error" title={t('messages.flows.unread')} description={flows.message} />
       )}
-      <Form aria-label="Filters" className="rail8-filters" onFinish={() => readAgain(filters)}>
+      <Form aria-label={t('messages.filters')} className="rail8-filters" onFinish={() => readAgain(filters)}>
         <Flex gap="small" wrap>
           <Select
-            aria-label="Time range"
+            aria-label={t('messages.range')}
             value={filters.minutes}
             onChange={(minutes) => choose({ minutes })}
-            options={RANGES.map(({ minutes, label }) => ({ value: minutes, label }))}
+            options={RANGES.map(({ minutes, label }) => ({ value: minutes, label: say(texts, label) }))}
             virtual={false}
           />
           <Select
-            aria-label="Flow"
+            aria-label={t('messages.flow')}
             value={filters.flow}
             disabled={flows.kind !== 'loaded'}
             onChange={(flow) => choose({ flow })}
             options={[
-              { label: 'All flows', value: '' },
+              { label: t('messages.flow.all'), value: '' },
               ...(flows.kind === 'loaded' ? flows.ids.map((value) => ({ label: value, value })) : []),
             ]}
             virtual={false}
           />
           <Select
-            aria-label="Status"
+            aria-label={t('messages.status')}
             value={filters.status}
             onChange={(status) => choose({ status })}
-            options={[{ label: 'All statuses', value: '' }, ...STATUSES]}
+            options={[
+              { label: t('messages.status.all'), value: '' },
+              ...STATUSES.map(({ value, label }) => ({ value, label: say(texts, label) })),
+            ]}
             virtual={false}
           />
           <Input
-            aria-label="Key name"
-            placeholder="Key name"
+            aria-label={t('messages.key.name')}
+            placeholder={t('messages.key.name')}
             value={filters.keyName}
             onChange={(e) => setFilters({ ...filters, keyName: e.target.value })}
           />
           <Input
-            aria-label="Key value"
-            placeholder="Key value"
+            aria-label={t('messages.key.value')}
+            placeholder={t('messages.key.value')}
             value={filters.keyValue}
             onChange={(e) => setFilters({ ...filters, keyValue: e.target.value })}
           />
           <Input
-            aria-label="Step name"
-            placeholder="Step name"
+            aria-label={t('messages.step.name')}
+            placeholder={t('messages.step.name')}
             value={filters.step}
             onChange={(e) => setFilters({ ...filters, step: e.target.value })}
           />
           <Button type="primary" htmlType="submit">
-            Search
+            {t('messages.search')}
           </Button>
         </Flex>
       </Form>
       <Form
-        aria-label="Open a message"
+        aria-label={t('messages.open.title')}
         onFinish={() => {
           if (id.trim()) onOpen(id.trim());
         }}
       >
         <Flex gap="small">
           <Input
-            aria-label="Message id"
-            placeholder="Message id"
+            aria-label={t('messages.id')}
+            placeholder={t('messages.id')}
             style={{ maxWidth: 320 }}
             value={id}
             onChange={(e) => setId(e.target.value)}
           />
           <Button htmlType="submit" disabled={!id.trim()}>
-            Open
+            {t('messages.open')}
           </Button>
         </Flex>
       </Form>
-      {counted.kind === 'loading' && <ReadSpinner label="Counting the messages by status" />}
+      {counted.kind === 'loading' && <ReadSpinner label={t('messages.counting')} />}
       {counted.kind === 'failed' && (
-        <Alert
-          showIcon
-          type="error"
-          title="The messages could not be counted by status"
-          description={counted.message}
-        />
+        <Alert showIcon type="error" title={t('messages.counts.unread')} description={counted.message} />
       )}
       {counted.kind === 'counted' && (
-        <Flex role="group" aria-label="Messages by status" gap="small" wrap>
+        <Flex role="group" aria-label={t('messages.byStatus')} gap="small" wrap>
           {STATUSES.map(({ value, label }) => (
             <Button
               key={value}
-              aria-label={`${label} ${counted.counts[value]}`}
+              aria-label={t('messages.byStatus.count', { status: say(texts, label), count: counted.counts[value] })}
               aria-pressed={filters.status === value}
               type={filters.status === value ? 'primary' : 'default'}
               onClick={() => choose({ status: filters.status === value ? '' : value })}
             >
-              {label} <strong>{counted.counts[value]}</strong>
+              {say(texts, label)} <strong>{texts.intl.formatNumber(counted.counts[value])}</strong>
             </Button>
           ))}
         </Flex>
       )}
-      {result.kind === 'loading' && <ReadSpinner label="Reading the messages" />}
+      {result.kind === 'loading' && <ReadSpinner label={t('messages.reading')} />}
       {result.kind === 'failed' && (
-        <Alert showIcon type="error" title="The messages could not be listed" description={result.message} />
+        <Alert showIcon type="error" title={t('messages.list.unread')} description={result.message} />
       )}
       {result.kind === 'shown' && <MessageResults shown={result.shown} onOpen={onOpen} onMore={loadMore} />}
     </Flex>
   );
 }
 
-const MessagesTable = (props: TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Messages" />;
+function MessagesTable(props: TableHTMLAttributes<HTMLTableElement>) {
+  const { t } = useText();
+  return <table {...props} aria-label={t('messages.screen.title')} />;
+}
 
 function MessageResults({
   shown,
@@ -278,17 +282,9 @@ function MessageResults({
   onOpen: (id: string) => void;
   onMore: (shown: Shown) => void;
 }) {
-  if (!shown.items.length)
-    return (
-      <Empty
-        description={
-          <>
-            <h2>No messages found</h2>No message that matches the filters arrived in the time range. A message whose
-            arrival its flow does not record (recording level errors or off) is not listed.
-          </>
-        }
-      />
-    );
+  const texts = useText();
+  const { t, rich } = texts;
+  if (!shown.items.length) return <Empty description={rich('messages.none', { h2: (chunks) => <h2>{chunks}</h2> })} />;
   return (
     <>
       <ProTable<Listed>
@@ -303,26 +299,26 @@ function MessageResults({
         cardBordered={false}
         components={{ table: MessagesTable }}
         columns={[
-          { title: 'Started at', dataIndex: 'startedAt' },
-          { title: 'Flow', dataIndex: 'flow' },
+          { title: t('messages.startedAt'), dataIndex: 'startedAt' },
+          { title: t('messages.flow'), dataIndex: 'flow' },
           {
-            title: 'Status',
+            title: t('messages.status'),
             dataIndex: 'status',
             render: (_, row) => {
               const status = STATUSES.find(({ value }) => value === row.status);
-              return <Tag color={status?.color}>{status?.label ?? row.status}</Tag>;
+              return <Tag color={status?.color}>{status === undefined ? row.status : say(texts, status.label)}</Tag>;
             },
           },
-          { title: 'Duration', render: (_, row) => duration(row.durationNanos) },
+          { title: t('messages.duration'), render: (_, row) => duration(texts, row.durationNanos) },
           {
-            title: 'Business keys',
+            title: t('messages.keys'),
             render: (_, row) =>
               Object.entries(row.keys)
                 .map(([name, value]) => `${name}=${value}`)
                 .join(', '),
           },
           {
-            title: 'Message id',
+            title: t('messages.id'),
             render: (_, row) => (
               <Button type="link" onClick={() => onOpen(row.id)}>
                 {row.id}
@@ -334,7 +330,7 @@ function MessageResults({
       {shown.next !== null && (
         <div>
           <Button loading={shown.more} disabled={shown.more} onClick={() => onMore(shown)}>
-            Load more
+            {t('messages.more')}
           </Button>
         </div>
       )}

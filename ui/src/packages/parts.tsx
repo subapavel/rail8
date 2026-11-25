@@ -1,7 +1,8 @@
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Flex, Tag, Tooltip, Typography, type DescriptionsProps } from 'antd';
-import { useCallback, useContext } from 'react';
+import { useCallback, useContext, type ReactNode } from 'react';
 import { ArtifactKinds } from '../artifacts';
+import { msg, say, useText, type Message, type Texts } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
 import { useMay } from '../SessionGate';
@@ -12,44 +13,51 @@ import { FileChange } from './FileChange';
 import { MAX_LISTED } from './rules';
 
 /** The operation git left open in a clone, in words. */
-export const BUSY: Record<Exclude<Busy, null>, string> = {
-  merge: 'Merge in progress',
-  rebase: 'Rebase in progress',
-  'cherry-pick': 'Cherry-pick in progress',
-  revert: 'Revert in progress',
-  bisect: 'Bisect in progress',
-  conflict: 'Conflict',
+export const BUSY: Record<Exclude<Busy, null>, Message> = {
+  merge: msg('packages.busy.merge'),
+  rebase: msg('packages.busy.rebase'),
+  'cherry-pick': msg('packages.busy.cherryPick'),
+  revert: msg('packages.busy.revert'),
+  bisect: msg('packages.busy.bisect'),
+  conflict: msg('packages.busy.conflict'),
 };
+
+/** The `<code>` tag of a text: what it encloses, shown as code. */
+export const code = (chunks: ReactNode[]) => <Typography.Text code>{chunks}</Typography.Text>;
 
 /** The short form of a commit's id. */
 export const short = (id: string) => id.slice(0, 7);
 
 /** When `at` was, as its age with the time itself on hover. */
 export function Age({ at, now }: { at: string; now: Date }) {
-  return <span title={at}>{ageOf(at, now)}</span>;
+  const texts = useText();
+  return <span title={at}>{ageOf(texts, at, now)}</span>;
 }
 
 /** How a file differs: a coloured dot and its word. */
 export function ChangeBadge({ status }: { status: Change['status'] }) {
-  return <Badge status={CHANGE[status].status} text={CHANGE[status].label} />;
+  const texts = useText();
+  return <Badge status={CHANGE[status].status} text={say(texts, CHANGE[status].label)} />;
 }
 
 /** How the index holds a changed file, when it is not simply unstaged, and whether it is too large to compare. */
 export function StagedNote({ change }: { change: Change }) {
+  const { t } = useText();
   const notes = [
-    ...(change.index === 'staged' ? ['staged'] : []),
-    ...(change.index === 'differs' ? ['staged with other content'] : []),
-    ...(change.large ? ['too large to compare'] : []),
+    ...(change.index === 'staged' ? [t('packages.note.staged')] : []),
+    ...(change.index === 'differs' ? [t('packages.note.differs')] : []),
+    ...(change.large ? [t('packages.note.large')] : []),
   ];
   return notes.length === 0 ? null : <Typography.Text type="secondary">{notes.join(', ')}</Typography.Text>;
 }
 
 /** The path of a changed file within its package, with the path it was renamed from below it. */
 export function ChangedPath({ change }: { change: Change }) {
+  const { t } = useText();
   return (
     <Flex vertical>
       <Typography.Text>{inside(change.path)}</Typography.Text>
-      {change.renamedFrom !== undefined && <Typography.Text type="secondary">from {inside(change.renamedFrom)}</Typography.Text>}
+      {change.renamedFrom !== undefined && <Typography.Text type="secondary">{t('packages.renamedFrom', { path: inside(change.renamedFrom) })}</Typography.Text>}
     </Flex>
   );
 }
@@ -68,21 +76,27 @@ export function ArtifactName({ artifact, open }: { artifact: Artifact; open: (sc
 
 type Status = { status: 'success' | 'warning' | 'error' | 'processing' | 'default'; text: string; hint?: string };
 
-/** What one node runs of a package, as one status with its words: `idle` when it runs nothing of it, `changed` the files that differ from `HEAD`. */
-function runStatus(runs: PoolNode | Exclude<Deployed, { node: 'unreachable' }>, changed: number, idle: string): Status {
+/**
+ * What one node runs of a package, as one status with its words in `texts`' language: `idle` when it runs nothing of it,
+ * `changed` the files that differ from `HEAD`.
+ */
+function runStatus({ t }: Texts, runs: PoolNode | Exclude<Deployed, { node: 'unreachable' }>, changed: number, idle: string): Status {
   if (runs.relation === 'none') return { status: 'default', text: idle };
-  if (runs.state === 'FAILED') return { status: 'error', text: 'Failed' };
-  if (runs.relation === 'deployed') return changed > 0 ? { status: 'warning', text: 'Deployed, with changes since' } : { status: 'success', text: 'Deployed' };
-  if (runs.relation === 'behind') return { status: 'warning', text: `Behind ${runs.commits}` };
-  if (runs.relation === 'ahead') return { status: 'processing', text: `Ahead ${runs.commits}`, hint: 'The node runs commits that HEAD lacks: pull them.' };
-  return { status: 'default', text: 'Other commit' };
+  if (runs.state === 'FAILED') return { status: 'error', text: t('packages.run.failed') };
+  if (runs.relation === 'deployed') return changed > 0 ? { status: 'warning', text: t('packages.run.deployedChanged') } : { status: 'success', text: t('packages.run.deployed') };
+  if (runs.relation === 'behind') return { status: 'warning', text: t('packages.run.behind', { count: runs.commits }) };
+  if (runs.relation === 'ahead') return { status: 'processing', text: t('packages.run.ahead', { count: runs.commits }), hint: t('packages.run.ahead.hint') };
+  return { status: 'default', text: t('packages.run.other') };
 }
 
-/** What the node runs of the package, as one status with its words, and what to do about it where that is not plain: the vocabulary of the deployed state. */
-export function deployedStatus(state: PackageRow): Status {
+/**
+ * What the node runs of the package, as one status with its words in `texts`' language, and what to do about it where
+ * that is not plain: the vocabulary of the deployed state.
+ */
+export function deployedStatus(texts: Texts, state: PackageRow): Status {
   const deployed = state.deployed;
-  if (deployed.node === 'unreachable') return { status: 'default', text: 'Unknown' };
-  return runStatus(deployed, state.changed, `Not running on ${deployed.host}`);
+  if (deployed.node === 'unreachable') return { status: 'default', text: texts.t('packages.run.unknown') };
+  return runStatus(texts, deployed, state.changed, texts.t('packages.run.notRunningOn', { host: deployed.host }));
 }
 
 /**
@@ -93,9 +107,11 @@ export function deployedStatus(state: PackageRow): Status {
 export function PoolFact({ state }: { state: PackageRow }) {
   const deployed = state.deployed;
   const readable = useMay('deployment.read');
+  const texts = useText();
+  const { t, rich } = texts;
   if (readable !== true || deployed.node === 'unreachable' || deployed.pool === undefined) return null;
   const pool = deployed.pool;
-  if ('error' in pool) return <Typography.Text type="secondary">What each node of the pool runs is unknown: {pool.error}</Typography.Text>;
+  if ('error' in pool) return <Typography.Text type="secondary">{t('packages.pool.unknown', { error: pool.error })}</Typography.Text>;
   const groups = new Map<string, PoolNode[]>();
   for (const node of pool.nodes) {
     const key = node.relation === 'none' ? 'none' : `${node.commit} ${node.state}`;
@@ -107,28 +123,25 @@ export function PoolFact({ state }: { state: PackageRow }) {
     <Flex vertical>
       {[...groups.values()].map((nodes) => {
         const first = nodes[0]!;
-        const { status, text, hint } = runStatus(first, state.changed, 'Not running');
+        const { status, text, hint } = runStatus(texts, first, state.changed, t('packages.run.notRunning'));
         return (
           <Flex key={first.node} gap="small" wrap align="center">
             <Tooltip title={hint}>
               <Badge status={status} text={text} />
             </Tooltip>
             <Typography.Text type="secondary">
-              {first.relation !== 'none' && <Typography.Text code>{short(first.commit)}</Typography.Text>} on {nodes.length} of {of} {of === 1 ? 'node' : 'nodes'}
+              {first.relation === 'none'
+                ? t('packages.pool.nodes', { count: nodes.length, total: of })
+                : rich('packages.pool.nodesAt', { code, commit: short(first.commit), count: nodes.length, total: of })}
             </Typography.Text>
           </Flex>
         );
       })}
       {behind.length > 0 && (
         <Typography.Text type="warning">
-          {pool.record === null ? (
-            'Running though the pool records no deploy of it'
-          ) : (
-            <>
-              Behind the pool's commit <Typography.Text code>{short(pool.record)}</Typography.Text>
-            </>
-          )}
-          : {behind.map((n) => n.node).join(', ')}
+          {pool.record === null
+            ? t('packages.pool.unrecorded', { nodes: behind.map((n) => n.node).join(', ') })
+            : rich('packages.pool.behind', { code, commit: short(pool.record), nodes: behind.map((n) => n.node).join(', ') })}
         </Typography.Text>
       )}
       {behind.flatMap((n) =>
@@ -145,7 +158,8 @@ export function PoolFact({ state }: { state: PackageRow }) {
 /** What the node runs: its status, with its hint on hover, unless `withStatus` is false, the commit and when it was deployed, and the problems of a failed deploy. */
 export function DeployedFact({ state, at, withStatus = true }: { state: PackageRow; at: Date; withStatus?: boolean }) {
   const deployed = state.deployed;
-  const { status, text, hint } = deployedStatus(state);
+  const texts = useText();
+  const { status, text, hint } = deployedStatus(texts, state);
   const readable = useMay('deployment.read');
   if (readable !== true) return <Typography.Text type="secondary">{readable}</Typography.Text>;
   return (
@@ -158,7 +172,9 @@ export function DeployedFact({ state, at, withStatus = true }: { state: PackageR
         )}
         {deployed.node === 'answered' && deployed.relation !== 'none' && (
           <Typography.Text type="secondary">
-            <Typography.Text code>{short(deployed.commit)}</Typography.Text> deployed {deployed.deployedAt === '' ? 'at an unknown time' : <Age at={deployed.deployedAt} now={at} />}
+            {deployed.deployedAt === ''
+              ? texts.rich('packages.deployed.unknownTime', { code, commit: short(deployed.commit) })
+              : texts.rich('packages.deployed.at', { code, commit: short(deployed.commit), age: <Age at={deployed.deployedAt} now={at} /> })}
           </Typography.Text>
         )}
       </Flex>
@@ -174,24 +190,26 @@ export function DeployedFact({ state, at, withStatus = true }: { state: PackageR
 
 /** The branch, with the operation git left open in the clone. */
 export function BranchFact({ state }: { state: PackageRow }) {
+  const texts = useText();
   return (
     <Flex gap="small" wrap align="center">
-      {state.branch ?? <Tag>Detached HEAD</Tag>}
-      {state.busy !== null && <Badge status="warning" text={BUSY[state.busy]} />}
+      {state.branch ?? <Tag>{texts.t('packages.branch.detached')}</Tag>}
+      {state.busy !== null && <Badge status="warning" text={say(texts, BUSY[state.busy])} />}
     </Flex>
   );
 }
 
 /** The last commit: its subject, cut to one line with the whole of it on hover, then its id, author and age. */
 export function CommitFact({ state, at }: { state: PackageRow; at: Date }) {
-  if (state.head === null) return <Typography.Text type="secondary">No commit yet</Typography.Text>;
+  const { t, rich } = useText();
+  if (state.head === null) return <Typography.Text type="secondary">{t('packages.commit.none')}</Typography.Text>;
   return (
     <Flex vertical>
       <Typography.Text ellipsis={{ tooltip: state.head.subject }} style={{ maxWidth: 320 }}>
         {state.head.subject}
       </Typography.Text>
       <Typography.Text type="secondary">
-        <Typography.Text code>{short(state.head.id)}</Typography.Text> {state.head.author}, <Age at={state.head.at} now={at} />
+        {rich('packages.commit.by', { code, id: short(state.head.id), author: state.head.author, age: <Age at={state.head.at} now={at} /> })}
       </Typography.Text>
     </Flex>
   );
@@ -199,42 +217,45 @@ export function CommitFact({ state, at }: { state: PackageRow; at: Date }) {
 
 /** The commits ahead of the upstream and behind it, as of the last fetch. */
 export function UpstreamFact({ state, at }: { state: PackageRow; at: Date }) {
+  const { t, rich } = useText();
   const upstream = state.upstream;
-  if (upstream === null) return <Typography.Text type="secondary">No upstream</Typography.Text>;
+  if (upstream === null) return <Typography.Text type="secondary">{t('packages.upstream.none')}</Typography.Text>;
   return (
     <Flex vertical>
       <Typography.Text>
-        {upstream.ahead === 0 && upstream.behind === 0 ? `Up to date with ${upstream.name}` : `${upstream.ahead} ahead, ${upstream.behind} behind ${upstream.name}`}
+        {upstream.ahead === 0 && upstream.behind === 0
+          ? t('packages.upstream.same', { name: upstream.name })
+          : t('packages.upstream.aheadBehind', { ahead: upstream.ahead, behind: upstream.behind, name: upstream.name })}
       </Typography.Text>
       <Typography.Text type="secondary">
-        {upstream.fetchedAt === null ? 'never fetched' : (
-          <>
-            as of the fetch <Age at={upstream.fetchedAt} now={at} />
-          </>
-        )}
+        {upstream.fetchedAt === null ? t('packages.upstream.neverFetched') : rich('packages.upstream.fetched', { age: <Age at={upstream.fetchedAt} now={at} /> })}
       </Typography.Text>
     </Flex>
   );
 }
 
-/** The facts of a package, as the items of a description list; what the node runs without its status, which the page shows apart, and what each node of its pool runs. */
-export function factsOf(state: PackageState, at: Date): NonNullable<DescriptionsProps['items']> {
+/**
+ * The facts of a package, as the items of a description list labelled in `texts`' language; what the node runs without
+ * its status, which the page shows apart, and what each node of its pool runs.
+ */
+export function factsOf({ t }: Texts, state: PackageState, at: Date): NonNullable<DescriptionsProps['items']> {
   return [
-    { key: 'repository', label: 'Repository', children: state.repository },
-    { key: 'branch', label: 'Branch', children: <BranchFact state={state} /> },
-    { key: 'head', label: 'Last commit', children: <CommitFact state={state} at={at} /> },
-    { key: 'upstream', label: 'Upstream', children: <UpstreamFact state={state} at={at} /> },
-    { key: 'deployed', label: `Deployed on ${state.deployed.host}`, children: <DeployedFact state={state} at={at} withStatus={false} /> },
-    ...(state.deployed.node === 'answered' && state.deployed.pool !== undefined ? [{ key: 'pool', label: 'Nodes of the pool', children: <PoolFact state={state} /> }] : []),
+    { key: 'repository', label: t('packages.repository'), children: state.repository },
+    { key: 'branch', label: t('packages.branch'), children: <BranchFact state={state} /> },
+    { key: 'head', label: t('packages.lastCommit'), children: <CommitFact state={state} at={at} /> },
+    { key: 'upstream', label: t('packages.upstream'), children: <UpstreamFact state={state} at={at} /> },
+    { key: 'deployed', label: t('packages.deployedOn', { host: state.deployed.host }), children: <DeployedFact state={state} at={at} withStatus={false} /> },
+    ...(state.deployed.node === 'answered' && state.deployed.pool !== undefined ? [{ key: 'pool', label: t('packages.pool'), children: <PoolFact state={state} /> }] : []),
   ];
 }
 
 /** The warnings a package's state carries: an unreadable package.yaml and lists cut at their limit. */
 export function PackageAlerts({ state }: { state: PackageState }) {
+  const { t } = useText();
   return (
     <>
-      {state.package === null && <Alert type="error" showIcon title="package.yaml cannot be read" description={state.problem} />}
-      {state.truncated && <Alert type="warning" showIcon title={`The package's lists are cut at ${MAX_LISTED} files`} description="It has more changed files or artifacts than are listed; only the first ones are shown." />}
+      {state.package === null && <Alert type="error" showIcon title={t('packages.manifest.unread')} description={state.problem} />}
+      {state.truncated && <Alert type="warning" showIcon title={t('packages.truncated', { max: MAX_LISTED })} description={t('packages.truncated.description')} />}
     </>
   );
 }
@@ -254,6 +275,8 @@ export function ChangesTable({ api, repository, changes, before, after, onStale,
   label: string;
   choice?: { picked: readonly string[]; onPick: (paths: string[]) => void };
 }) {
+  const texts = useText();
+  const { t } = texts;
   return (
     <ProTable<Change>
       aria-label={label}
@@ -269,16 +292,16 @@ export function ChangesTable({ api, repository, changes, before, after, onStale,
       rowSelection={
         choice && {
           selectedRowKeys: [...choice.picked],
-          getCheckboxProps: (change) => ({ disabled: change.index === 'differs', 'aria-label': `Choose ${change.path.slice(change.path.indexOf('/') + 1)}` }),
+          getCheckboxProps: (change) => ({ disabled: change.index === 'differs', 'aria-label': t('packages.choose', { path: inside(change.path) }) }),
           onChange: (keys) => choice.onPick(keys.map(String)),
         }
       }
       expandable={{ expandedRowRender: (change) => <FileChange api={api} repository={repository} change={change} before={before} after={after} onStale={onStale} /> }}
       columns={[
-        { title: 'File', dataIndex: 'path', render: (_, c) => <ChangedPath change={c} /> },
-        { title: 'Kind', dataIndex: 'kind', width: 128, render: (_, c) => KIND[c.kind] },
+        { title: t('packages.file'), dataIndex: 'path', render: (_, c) => <ChangedPath change={c} /> },
+        { title: t('packages.kind'), dataIndex: 'kind', width: 128, render: (_, c) => say(texts, KIND[c.kind]) },
         {
-          title: 'Change',
+          title: t('packages.change'),
           dataIndex: 'status',
           width: 224,
           render: (_, c) => (
@@ -297,23 +320,25 @@ export function ChangesTable({ api, repository, changes, before, after, onStale,
 export function CommitChanges({ api, repository, commit }: { api: PackagesApi; repository: string; commit: Commit }) {
   const { parent, read } = useCommitChanges(api, repository, commit);
   const ignore = useCallback(() => {}, []);
-  if (parent === undefined) return <Typography.Text type="secondary">The first commit of the branch: it adds every file of its tree.</Typography.Text>;
-  if (read.kind === 'reading') return <ReadSpinner label={`Reading the changes of ${short(commit.id)}`} />;
-  if (read.kind === 'failed') return <Alert type="error" showIcon title="The changes of the commit could not be read" description={read.message} />;
+  const { t } = useText();
+  if (parent === undefined) return <Typography.Text type="secondary">{t('packages.commit.first')}</Typography.Text>;
+  if (read.kind === 'reading') return <ReadSpinner label={t('packages.commit.changes.reading', { commit: short(commit.id) })} />;
+  if (read.kind === 'failed') return <Alert type="error" showIcon title={t('packages.commit.changes.unread')} description={read.message} />;
   return (
     <Flex vertical gap="small">
-      {read.truncated && <Alert type="warning" showIcon title={`The commit changes more than ${MAX_LISTED} files; only the first ones are listed.`} />}
-      <ChangesTable api={api} repository={repository} changes={read.changes} before={parent} after={commit.id} onStale={ignore} label={`Files changed by ${short(commit.id)}`} />
+      {read.truncated && <Alert type="warning" showIcon title={t('packages.commit.changes.truncated', { max: MAX_LISTED })} />}
+      <ChangesTable api={api} repository={repository} changes={read.changes} before={parent} after={commit.id} onStale={ignore} label={t('packages.commit.changes', { commit: short(commit.id) })} />
     </Flex>
   );
 }
 
 /** The subject of a commit, marked when the node runs it. */
 export function CommitSubject({ commit, host }: { commit: Commit; host: string }) {
+  const { t } = useText();
   return (
     <Flex gap="small" wrap align="center">
       <Typography.Text>{commit.subject}</Typography.Text>
-      {commit.deployed && <Badge status="success" text={`Runs on ${host}`} />}
+      {commit.deployed && <Badge status="success" text={t('packages.commit.runsOn', { host })} />}
     </Flex>
   );
 }
@@ -321,6 +346,7 @@ export function CommitSubject({ commit, host }: { commit: Commit; host: string }
 /** Artifacts, dense: each one's name, its file, what uses it when they are files, and how it changed. */
 export function ArtifactsTable({ artifacts, open, label }: { artifacts: Artifact[]; open: (screen: Screen) => void; label: string }) {
   const used = artifacts.some((a) => a.kind === 'file');
+  const { t } = useText();
   return (
     <ProTable<Artifact>
       aria-label={label}
@@ -333,10 +359,10 @@ export function ArtifactsTable({ artifacts, open, label }: { artifacts: Artifact
       pagination={false}
       cardProps={false}
       columns={[
-        { title: 'Name', key: 'name', render: (_, a) => <ArtifactName artifact={a} open={open} /> },
-        { title: 'File', key: 'file', render: (_, a) => inside(a.path) },
-        ...(used ? [{ title: 'Used by', key: 'usedBy', render: (_: unknown, a: Artifact) => (a.usedBy ?? []).map(inside).join(', ') || '-' }] : []),
-        { title: 'Change', key: 'change', width: 128, render: (_, a) => (a.change === undefined ? '-' : <ChangeBadge status={a.change} />) },
+        { title: t('packages.name'), key: 'name', render: (_, a) => <ArtifactName artifact={a} open={open} /> },
+        { title: t('packages.file'), key: 'file', render: (_, a) => inside(a.path) },
+        ...(used ? [{ title: t('packages.usedBy'), key: 'usedBy', render: (_: unknown, a: Artifact) => (a.usedBy ?? []).map(inside).join(', ') || '-' }] : []),
+        { title: t('packages.change'), key: 'change', width: 128, render: (_, a) => (a.change === undefined ? '-' : <ChangeBadge status={a.change} />) },
       ]}
     />
   );
@@ -352,9 +378,10 @@ export function HistoryTable({ api, repository, commits, loading, host, now, onD
   now: Date;
   onDeploy: (commit: Commit) => void;
 }) {
+  const { t } = useText();
   return (
     <ProTable<Commit>
-      aria-label="History"
+      aria-label={t('packages.history')}
       rowKey="id"
       size="small"
       loading={loading}
@@ -366,17 +393,17 @@ export function HistoryTable({ api, repository, commits, loading, host, now, onD
       cardProps={false}
       expandable={{ expandedRowRender: (commit) => <CommitChanges api={api} repository={repository} commit={commit} /> }}
       columns={[
-        { title: 'Commit', key: 'subject', render: (_, c) => <CommitSubject commit={c} host={host} /> },
-        { title: 'Id', key: 'id', width: 96, render: (_, c) => <Typography.Text code>{short(c.id)}</Typography.Text> },
-        { title: 'Author', dataIndex: 'author', width: 160, ellipsis: true },
-        { title: 'Date', key: 'at', width: 128, render: (_, c) => <Age at={c.at} now={now} /> },
+        { title: t('packages.commit'), key: 'subject', render: (_, c) => <CommitSubject commit={c} host={host} /> },
+        { title: t('packages.id'), key: 'id', width: 96, render: (_, c) => <Typography.Text code>{short(c.id)}</Typography.Text> },
+        { title: t('packages.author'), dataIndex: 'author', width: 160, ellipsis: true },
+        { title: t('packages.date'), key: 'at', width: 128, render: (_, c) => <Age at={c.at} now={now} /> },
         {
-          title: 'Action',
+          title: t('packages.action'),
           key: 'deploy',
           width: 176,
           render: (_, c) => (
             <Button type="link" size="small" className="rail8-link" onClick={() => onDeploy(c)}>
-              Deploy this commit…
+              {t('packages.deploy.thisCommit')}
             </Button>
           ),
         },

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { textsIn } from '../language';
 import { ageOf } from './age';
 
 const NOW = new Date('2026-11-23T12:00:00Z');
@@ -18,10 +19,20 @@ describe('the age of a time', () => {
     ['2024-11-24T12:00:00Z', '24 months ago'],
     ['2024-11-23T12:00:00Z', '2 years ago'],
   ])('%s is %s', (at, age) => {
-    expect(ageOf(at, NOW)).toBe(age);
+    expect(ageOf(textsIn('en'), at, NOW)).toBe(age);
+  });
+
+  test.each([
+    ['cs', '2026-11-23T12:00:30Z', 'právě teď'],
+    ['cs', '2026-11-20T12:00:00Z', 'před 3 dny'],
+    ['cs', '2026-11-18T12:00:00Z', 'před 5 dny'],
+    ['ru', '2026-11-20T12:00:00Z', '3 дня назад'],
+    ['de', '2026-11-20T12:00:00Z', 'vor 3 Tagen'],
+  ] as const)('in %s, %s is %s', (language, at, age) => {
+    expect(ageOf(textsIn(language), at, NOW)).toBe(age);
   });
 
   test('a time it cannot read is given back as it is', () => {
-    expect(ageOf('yesterday', NOW)).toBe('yesterday');
+    expect(ageOf(textsIn('en'), 'yesterday', NOW)).toBe('yesterday');
   });
 });

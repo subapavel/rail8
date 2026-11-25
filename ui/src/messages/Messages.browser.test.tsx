@@ -1,6 +1,7 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage, currentLanguage } from '../language';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
 import { Shell } from '../Shell';
@@ -128,6 +129,8 @@ function renderAs(api: AdminApi, me: Me) {
 afterEach(() => {
   root?.unmount();
   host?.remove();
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
 });
 
 const tab = (name: string) => page.getByRole('tab', { name });
@@ -387,5 +390,36 @@ describe('Messages', () => {
     render(fakeApi({ list: async () => ({ items: [row('gone')], next: null }) }));
     await page.getByRole('button', { name: 'gone' }).click();
     await expect.element(page.getByRole('heading', { name: 'No such message' })).toBeVisible();
+  });
+});
+
+describe('the Messages screen in another language', () => {
+  test('shows its texts, its ranges with their plurals, its counts and durations, and Ant Design in the language chosen in the header', async () => {
+    render(fakeApi());
+    await expect.element(page.getByRole('button', { name: 'm-1' })).toBeVisible();
+    await page.getByRole('button', { name: 'Language: English' }).click();
+    await page.getByRole('menuitem', { name: 'Русский' }).click();
+    expect(currentLanguage()).toBe('ru');
+
+    const list = page.getByRole('table', { name: 'Сообщения' });
+    await expect.element(list.getByText('Сбой')).toBeVisible();
+    await expect.element(list.getByText('2,5 ms')).toBeVisible();
+    await expect.element(page.getByRole('button', { name: 'Загрузить ещё' })).toBeVisible();
+    await expect.element(page.getByText('Завершено 12')).toBeVisible();
+    await page.getByRole('combobox', { name: 'Период' }).click();
+    await expect.element(page.getByRole('option', { name: 'Последние 15 минут' })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: 'Последние 24 часа' })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: 'Последние 7 дней' })).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+
+    await list.getByRole('button', { name: 'm-1' }).click();
+    await expect.element(page.getByRole('heading', { name: 'Сообщение m-1' })).toBeVisible();
+    await expect.element(page.getByText('Сбой шага 1 (send) в попытке 2', { exact: false })).toBeVisible();
+    await expect.element(page.getByRole('table', { name: 'Шаги попытки 2' }).getByText('4 Б, не хранится')).toBeVisible();
+    await page.getByRole('button', { name: 'Показать содержимое после шага 1 попытки 1' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Содержимое после шага 1 (send), попытка 1' });
+    await expect.element(dialog.getByText('{"order":7}')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Закрыть' }).click();
+    await expect.element(dialog).not.toBeInTheDocument();
   });
 });

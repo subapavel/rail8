@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { textsIn } from '../language';
 import type { Outcome, StepRecord } from './admin';
 import { account, byAttempt, duration, latestState, nanosBetween, type Row } from './progress';
 
@@ -47,11 +48,18 @@ describe('latestState', () => {
 
 describe('duration', () => {
   it('picks the unit that reads best', () => {
-    expect(duration(0)).toBe('0 ns');
-    expect(duration(999)).toBe('999 ns');
-    expect(duration(1_500)).toBe('1.5 µs');
-    expect(duration(2_340_000)).toBe('2.3 ms');
-    expect(duration(3_210_000_000)).toBe('3.21 s');
+    const en = textsIn('en');
+    expect(duration(en, 0)).toBe('0 ns');
+    expect(duration(en, 999)).toBe('999 ns');
+    expect(duration(en, 1_500)).toBe('1.5 µs');
+    expect(duration(en, 2_340_000)).toBe('2.3 ms');
+    expect(duration(en, 3_210_000_000)).toBe('3.21 s');
+    expect(duration(en, 12_345_000_000_000)).toBe('12345.00 s');
+  });
+
+  it('writes the number in the form of the language', () => {
+    expect(duration(textsIn('cs'), 1_500)).toBe('1,5 µs');
+    expect(duration(textsIn('de'), 3_210_000_000)).toBe('3,21 s');
   });
 });
 

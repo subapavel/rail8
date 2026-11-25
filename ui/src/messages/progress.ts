@@ -1,3 +1,4 @@
+import type { Texts } from '../language';
 import type { Outcome, StepRecord } from './admin';
 
 /** The recorded steps of one attempt, in step order. */
@@ -34,12 +35,17 @@ export function latestState(steps: readonly StepRecord[]): State {
   return { attempt: latest.attempt, outcome, failed };
 }
 
-/** A duration in nanoseconds for people: nanoseconds, microseconds, milliseconds or seconds, whichever reads best. */
-export function duration(nanos: number): string {
-  if (nanos < 1_000) return `${nanos} ns`;
-  if (nanos < 1_000_000) return `${(nanos / 1_000).toFixed(1)} µs`;
-  if (nanos < 1_000_000_000) return `${(nanos / 1_000_000).toFixed(1)} ms`;
-  return `${(nanos / 1_000_000_000).toFixed(2)} s`;
+/**
+ * A duration in nanoseconds for people, its number in the form of `texts`' language: nanoseconds, microseconds,
+ * milliseconds or seconds, whichever reads best.
+ */
+export function duration({ intl }: Texts, nanos: number): string {
+  const digits = (value: number, fraction: number) =>
+    intl.formatNumber(value, { minimumFractionDigits: fraction, maximumFractionDigits: fraction, useGrouping: false });
+  if (nanos < 1_000) return `${digits(nanos, 0)} ns`;
+  if (nanos < 1_000_000) return `${digits(nanos / 1_000, 1)} µs`;
+  if (nanos < 1_000_000_000) return `${digits(nanos / 1_000_000, 1)} ms`;
+  return `${digits(nanos / 1_000_000_000, 2)} s`;
 }
 
 /** The name of step 0, which records what arrived: it times nothing, so it has no wall or CPU time to show. */
@@ -49,7 +55,7 @@ const INSTANT = /^(.+T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/;
 
 function instant(iso: string): { millis: number; nanos: number } {
   const parts = INSTANT.exec(iso);
-  if (parts === null) throw new Error(`not an ISO-8601 instant: ${iso}`);
+  if (parts === null) throw new Error(`not an ISO-8601 instant: ${iso}`); // untranslated: a fault of the code, which no screen shows
   return { millis: Date.parse(`${parts[1]}${parts[3]}`), nanos: Number((parts[2] ?? '').padEnd(9, '0')) };
 }
 

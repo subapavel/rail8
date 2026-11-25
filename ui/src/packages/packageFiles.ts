@@ -1,4 +1,5 @@
 import { parse } from 'yaml';
+import { msg, type Message } from '../language';
 import { leaves, same, type SettingChange } from '../leaves';
 
 /** One dependency that differs between two versions, by name: its version and its pin on each side, `none` when absent. */
@@ -21,7 +22,7 @@ export interface DependencyChange {
  */
 export interface PackageFileChanges {
   status: 'added' | 'deleted' | 'modified' | 'formatting' | 'same' | 'unreadable';
-  unreadable: { side: 'before' | 'after'; message: string }[];
+  unreadable: { side: 'before' | 'after'; message: Message }[];
   fields: SettingChange[];
   dependencies: DependencyChange[];
 }
@@ -50,9 +51,9 @@ export function packageFileChanges(before: string | null, after: string | null):
     try {
       const doc: unknown = parse(text);
       if (isRecord(doc)) return doc;
-      out.unreadable.push({ side, message: 'the file holds no YAML mapping' });
+      out.unreadable.push({ side, message: msg('packages.file.noMapping') });
     } catch (error) {
-      out.unreadable.push({ side, message: `the file is no YAML: ${error instanceof Error ? (error.message.split('\n', 1)[0] ?? '') : String(error)}` });
+      out.unreadable.push({ side, message: msg('packages.file.noYaml', { said: error instanceof Error ? (error.message.split('\n', 1)[0] ?? '') : String(error) }) });
     }
     return null;
   };

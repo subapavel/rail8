@@ -1,16 +1,17 @@
 import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, App, Badge, Button, Empty, Flex, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
+import { msg, say, useText, type Message, type Texts } from '../language';
 import { PackagesError, type Dependency, type PackagesApi, type PackageState } from './api';
 import { short } from './parts';
 
 /** A dependency's state as a status with its word, and what it means on hover: the status vocabulary. */
-const STATE: Record<Dependency['state'], { status: 'success' | 'warning' | 'error'; text: string; hint: string }> = {
-  pinned: { status: 'success', text: 'Pinned', hint: 'package.lock pins the candidate at its HEAD.' },
-  unpinned: { status: 'warning', text: 'Unpinned', hint: 'package.lock pins nothing for it yet: Lock pins the candidate.' },
-  moved: { status: 'warning', text: 'Moved', hint: 'The candidate is another folder, or at another commit, than the pin: Lock pins it.' },
-  changed: { status: 'warning', text: 'Changed', hint: 'The candidate’s files differ from its HEAD: commit them first, or Lock refuses it.' },
-  missing: { status: 'error', text: 'Missing', hint: 'No folder of the working folder holds this name and version, or several do.' },
+const STATE: Record<Dependency['state'], { status: 'success' | 'warning' | 'error'; text: Message; hint: Message }> = {
+  pinned: { status: 'success', text: msg('packages.dependency.pinned'), hint: msg('packages.dependency.pinned.hint') },
+  unpinned: { status: 'warning', text: msg('packages.dependency.unpinned'), hint: msg('packages.dependency.unpinned.hint') },
+  moved: { status: 'warning', text: msg('packages.dependency.moved'), hint: msg('packages.dependency.moved.hint') },
+  changed: { status: 'warning', text: msg('packages.dependency.changed'), hint: msg('packages.dependency.changed.hint') },
+  missing: { status: 'error', text: msg('packages.dependency.missing'), hint: msg('packages.dependency.missing.hint') },
 };
 
 /**
@@ -18,18 +19,19 @@ const STATE: Record<Dependency['state'], { status: 'success' | 'warning' | 'erro
  * pinned, or none declared, still writes package.lock anew, which drops the pins of dependencies package.yaml no longer
  * declares.
  */
-function lockRefused(writable: boolean): string | null {
-  if (!writable) return 'The server shows the working folder read-only (RAIL8_READ_ONLY is true).';
+function lockRefused({ t }: Texts, writable: boolean): string | null {
+  if (!writable) return t('packages.readOnly');
   return null;
 }
 
 /** A folder or repository at a commit, the commit short, with the whole id, and the content digest when given, on hover. */
 function At({ name, commit, content }: { name: string; commit: string | null; content?: string }) {
+  const { t } = useText();
   return (
     <Typography.Text>
       {name}{' '}
       {commit === null ? (
-        <Typography.Text type="secondary">with no commit</Typography.Text>
+        <Typography.Text type="secondary">{t('packages.dependency.noCommit')}</Typography.Text>
       ) : (
         <Typography.Text code title={content === undefined ? commit : `${commit}\n${content}`}>
           {short(commit)}
@@ -57,7 +59,9 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
   const { notification } = App.useApp();
   const [locking, setLocking] = useState(false);
   const [refusal, setRefusal] = useState<PackagesError | null>(null);
-  const refused = lockRefused(writable);
+  const texts = useText();
+  const { t } = texts;
+  const refused = lockRefused(texts, writable);
 
   const lock = async () => {
     setRefusal(null);
@@ -71,11 +75,11 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
       onState(answer.package);
       notification.success({
         key: `lock:${repository}`,
-        title: `Locked ${answer.pins.length} ${answer.pins.length === 1 ? 'dependency' : 'dependencies'}: commit package.lock to keep the pins`,
-        description: answer.pins.map((p) => `${p.name} ${p.version}: ${p.repository} at ${short(p.commit)}`).join('; '),
+        title: t('packages.lock.done', { count: answer.pins.length }),
+        description: answer.pins.map((p) => t('packages.lock.pin', { name: p.name, version: p.version, repository: p.repository, commit: short(p.commit) })).join('; '),
         duration: 8,
         role: 'status',
-        closable: { 'aria-label': 'Dismiss lock notification' },
+        closable: { 'aria-label': t('packages.lock.dismiss') },
       });
     } catch (error) {
       const found = error instanceof PackagesError ? error : new PackagesError(0, String(error));
@@ -88,11 +92,11 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
 
   return (
     <ProCard
-      title={<h2>Dependencies</h2>}
+      title={<h2>{t('packages.dependencies')}</h2>}
       headerBordered
       extra={
         <Button loading={locking} disabled={refused !== null} title={refused ?? undefined} onClick={() => void lock()}>
-          Lock
+          {t('packages.lock')}
         </Button>
       }
     >
@@ -101,20 +105,20 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
           <Alert
             type="error"
             showIcon
-            title="The lock was refused"
-            closable={{ 'aria-label': 'Dismiss the refusal', onClose: () => setRefusal(null) }}
+            title={t('packages.lock.refused')}
+            closable={{ 'aria-label': t('packages.refusal.dismiss'), onClose: () => setRefusal(null) }}
             description={
               <>
                 <Typography.Paragraph style={{ marginBottom: 0 }}>{refusal.message}</Typography.Paragraph>
                 {refusal.problems !== undefined && (
-                  <ul aria-label="The problems rail8 lock named" style={{ margin: 0 }}>
+                  <ul aria-label={t('packages.lock.problems')} style={{ margin: 0 }}>
                     {refusal.problems.map((problem, n) => (
                       <li key={n}>{problem}</li>
                     ))}
                   </ul>
                 )}
                 {refusal.output !== undefined && refusal.output !== '' && (
-                  <pre aria-label="What rail8 lock said" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  <pre aria-label={t('packages.lock.output')} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                     {refusal.output}
                   </pre>
                 )}
@@ -123,10 +127,10 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
           />
         )}
         {state.dependencies.length === 0 ? (
-          <Empty description="package.yaml declares no dependency." />
+          <Empty description={t('packages.dependencies.none')} />
         ) : (
           <ProTable<Dependency>
-            aria-label="Dependencies"
+            aria-label={t('packages.dependencies')}
             rowKey="name"
             size="small"
             dataSource={state.dependencies}
@@ -136,22 +140,22 @@ export function DependenciesCard({ api, repository, state, writable, onState }: 
             pagination={false}
             cardProps={false}
             columns={[
-              { title: 'Dependency', dataIndex: 'name' },
-              { title: 'Version', dataIndex: 'version', width: 112 },
-              { title: 'Pin', key: 'pin', render: (_, d) => (d.pin === null ? '-' : <At name={d.pin.repository} commit={d.pin.commit} content={d.pin.content} />) },
-              { title: 'Candidate', key: 'candidate', render: (_, d) => (d.candidate === null ? '-' : <At name={d.candidate.folder} commit={d.candidate.head} />) },
+              { title: t('packages.dependency'), dataIndex: 'name' },
+              { title: t('packages.version'), dataIndex: 'version', width: 112 },
+              { title: t('packages.pin'), key: 'pin', render: (_, d) => (d.pin === null ? '-' : <At name={d.pin.repository} commit={d.pin.commit} content={d.pin.content} />) },
+              { title: t('packages.dependency.candidate'), key: 'candidate', render: (_, d) => (d.candidate === null ? '-' : <At name={d.candidate.folder} commit={d.candidate.head} />) },
               {
-                title: 'State',
+                title: t('packages.dependency.state'),
                 key: 'state',
                 width: 128,
                 render: (_, d) => (
-                  <Tooltip title={STATE[d.state].hint}>
-                    <Badge status={STATE[d.state].status} text={STATE[d.state].text} />
+                  <Tooltip title={say(texts, STATE[d.state].hint)}>
+                    <Badge status={STATE[d.state].status} text={say(texts, STATE[d.state].text)} />
                   </Tooltip>
                 ),
               },
               {
-                title: 'Running',
+                title: t('packages.dependency.running'),
                 key: 'running',
                 width: 112,
                 render: (_, d) =>
