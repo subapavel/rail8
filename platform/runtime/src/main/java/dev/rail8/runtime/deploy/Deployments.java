@@ -1454,7 +1454,8 @@ public final class Deployments {
      * ({@link #changedSecrets}), and each whose earlier such build failed; no other flow. Each is stopped, built from its recipe
      * with its endpoints' references resolved anew, and started. One that does not build or start is stopped and listed
      * {@link DeployedFlow.State#FAILED}, never left running on its old value, with an ERROR once per new reason; the next tick
-     * tries it again. Under {@link #deploying}.
+     * tries it again. A drain that resolved such a secret is stopped and started again the same way ({@link #startDrains}); one that
+     * does not build is not run on its old value. Under {@link #deploying}.
      */
     private void rebuildForSecrets() {
         Set<String> changed = new HashSet<>(changedSecrets);
@@ -1478,20 +1479,17 @@ public final class Deployments {
             }
             deployed.put(d.pkg().name(), new Deployed(d.pkg(), List.copyOf(now), d.kept(), d.previous(), d.pins(), d.record()));
         }
+        List<Flow> drains = draining.values().stream().filter(f -> !Collections.disjoint(f.resolved(), changed)).toList();
+        drains.forEach(f -> draining.remove(f.id()));
+        retire(drains, "a secret its endpoints resolved changed");
+        startDrains(drains);
     }
 
     /** {@code f} built again with its endpoints' references resolved anew and started; itself FAILED when that fails. */
     private Flow rebuiltForSecrets(Flow f, Path packageDir) {
         List<String> problems = new ArrayList<>();
-        Recipe recipe = f.recipe();
-        Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
-        recipe.written().forEach((id, written) -> {
-            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), problems);
-            if (values != null) endpoints.put(id, endpoint(id, written.uri().getScheme(), values));
-        });
-        if (problems.isEmpty()) {
-            Recipe fresh = new Recipe(recipe.def(), recipe.flowFile(), Map.copyOf(endpoints), recipe.written(), recipe.listensOn(), recipe.httpPath(),
-                    recipe.calls(), recipe.dependencies());
+        Recipe fresh = resolvedAnew(f.recipe(), problems);
+        if (fresh != null) {
             Flow built = rebuild(f, fresh, packageDir, problems);
             List<Flow> consumed = built == null ? List.of() : consumers(List.of(built), problems);
             if (built != null && consumed.isEmpty()) discard(List.of(), List.of(built));
@@ -1510,6 +1508,19 @@ public final class Deployments {
                     + "FAILED, and every tick tries it again: " + problems);
         }
         return f.runs() ? f.failed() : f;
+    }
+
+    /** {@code recipe} with its endpoints' written references resolved anew; null, with each problem added, when one does not resolve. */
+    private Recipe resolvedAnew(Recipe recipe, List<String> problems) {
+        int before = problems.size();
+        Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
+        recipe.written().forEach((id, written) -> {
+            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), problems);
+            if (values != null) endpoints.put(id, endpoint(id, written.uri().getScheme(), values));
+        });
+        if (problems.size() > before) return null;
+        return new Recipe(recipe.def(), recipe.flowFile(), Map.copyOf(endpoints), recipe.written(), recipe.listensOn(), recipe.httpPath(),
+                recipe.calls(), recipe.dependencies());
     }
 
     /**
@@ -1595,13 +1606,14 @@ public final class Deployments {
 
     /**
      * Starts a drain for each of {@code retired}, at-least-once flows this node stopped: the flow built again from the directory it
-     * was built from, with its stamps and no consumer ({@link #rebuild}), and its worker started. One that does not build or
-     * start is a WARNING and is tried again at every tick ({@link #undrained}).
+     * was built from, with its stamps, its endpoints' written references resolved anew and no consumer ({@link #rebuild}), and its
+     * worker started. One that does not build or start is a WARNING and is tried again at every tick ({@link #undrained}).
      */
     private void startDrains(List<Flow> retired) {
         for (Flow f : retired) {
             List<String> problems = new ArrayList<>();
-            Flow drain = rebuild(f, config.dataDir().resolve("packages").resolve(f.flow().pkg()), problems);
+            Recipe fresh = resolvedAnew(f.recipe(), problems);
+            Flow drain = fresh == null ? null : rebuild(f, fresh, config.dataDir().resolve("packages").resolve(f.flow().pkg()), problems);
             try {
                 if (drain == null) throw new IllegalStateException(problems.getFirst());
                 drain.worker().start();

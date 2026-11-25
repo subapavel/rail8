@@ -589,9 +589,9 @@ public final class FlowBuilder {
             done = true;
         } finally {
             flowSecrets.built();
-            if (!done) Producers.closeAll(flow.id(), opened);   // the flow does not build: nothing it created is left open
+            if (!done) Producers.closeAll(flow.id(), opened, flowSecrets);   // the flow does not build: nothing it created is left open
         }
-        return new Built(flow, runs.head(flow.timeout()), List.copyOf(stages), recorder, new Producers(flow.id(), opened));
+        return new Built(flow, runs.head(flow.timeout()), List.copyOf(stages), recorder, new Producers(flow.id(), opened, flowSecrets));
     }
 
     /** What a step of {@code flow} is built with; the paths it reads go to the {@link #reads} sink. */
