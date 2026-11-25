@@ -38,11 +38,13 @@ RAIL8_TOKEN=$(cat ~/.rail8-deploy-token) RAIL8_WORKSPACE=$HOME/rail8-workspace n
 The UI runs without a login, as the account `deploy` that `bootstrap` made: its developer role is what the studio's calls
 to the node's mapping module need.
 
-To check that the studio's API answers, print the status code of two GETs in another terminal (each gives `200`):
+To check that the studio's API answers, print the status code of two GETs in another terminal (each gives `200`). The
+server answers only its own pages, which a browser marks with the `Sec-Fetch-Site` header; without it the answer is
+`403`:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/api/mappings
-curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/api/catalogue
+curl -s -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: same-origin' http://localhost:5173/api/mappings
+curl -s -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: same-origin' http://localhost:5173/api/catalogue
 ```
 
 `/api/structures` takes POST only, so a GET gives `405`. The list answers without the node; the catalogue, and opening,
