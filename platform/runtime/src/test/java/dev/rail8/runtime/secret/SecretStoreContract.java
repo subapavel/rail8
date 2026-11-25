@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -808,6 +809,8 @@ abstract class SecretStoreContract {
         JsonObject b = all.getJsonObject("key").getJsonArray("nodes").stream().map(JsonObject.class::cast)
                 .filter(n -> n.getString("node").equals("b")).findFirst().orElseThrow();
         assertFalse(b.getBoolean("joined"));
+        assertNull(b.getValue("key"), "a node that has not joined holds no key the list counts: " + b);
+        assertNull(all.getJsonObject("key").getValue("common"), "with b's key unknown, no key is common: " + all.getJsonObject("key"));
     }
 
     @Test
