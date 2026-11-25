@@ -66,7 +66,13 @@ test('@stack the real node: edit a flow, commit it, deploy the commit, and a mes
 
   // edit the flow: its jq step now says hi
   await page.getByRole('menuitem', { name: 'Flows' }).click();
-  await page.getByRole('button', { name: 'greet', exact: true }).click();
+  // the working folder holds other packages, the demo's own flow greet among them: this one is the row of its file
+  await page
+    .getByRole('table', { name: 'Flow files' })
+    .getByRole('row')
+    .filter({ hasText: `${NAME}/flows/greet.yaml` })
+    .getByRole('button', { name: 'greet', exact: true })
+    .click();
   await expect(page.getByRole('heading', { level: 1, name: 'greet' })).toBeVisible();
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await page.getByTestId('flow-canvas').getByText('greeting', { exact: true }).click();
