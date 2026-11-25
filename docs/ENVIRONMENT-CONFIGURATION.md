@@ -76,8 +76,8 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
   file seeds it from its `mocksAllowed`. After that a connection administrator changes it with
   `POST /admin/config/-/mocks`, which writes an audit row `config.mocks` and a new generation. It is never exported, so
   a file from test never makes production mock. Turning it on or off while a used connection is mocked needs the
-  confirmation of those uses: turned off, their sends wait for their connection; turned on, they complete against the
-  mock.
+  confirmation of those uses: turned off, their sends fail, naming the connection, and are retried by their flow's
+  retry; turned on, they complete against the mock.
 - A **removal** is a draft too: `{removed: true}`, activated like any other change.
 - Each stored body carries its kind's format number, as a file does, and is read through the same chain of upgrades.
 - Whether a connection is **stopped** is not part of its body. It is never drafted and never exported. An operator or
@@ -332,9 +332,9 @@ checked as any save. A save equal to the version in force drops the draft. A sav
 - **mocks**: a mocked body only in an environment that allows mocks (409 `mocks-refused`);
 - **a confirmation**: these changes of a connection that `deployment_connection_uses` names need `confirm`, the digest
   of the uses as the caller saw them (409 `in-use`, with the uses and their digest):
-  - a removal: every send through it then waits for it, and its polling sender is not built;
+  - a removal: every send through it then fails, naming the connection, and its polling sender is not built;
   - a switch to the mock: its sends then complete against the mock;
-  - an emptied `allowedHosts` while a use goes through an address field: those sends then wait for their connection;
+  - an emptied `allowedHosts` while a use goes through an address field: those sends then fail, naming the connection;
   - for a system, a removal of its instance name: the receiver's facts then say it is not set, and sends go on;
 - **the key**: every live node holds the key it binds under (409 `keys-differ`, the secret store's rule).
 
@@ -342,8 +342,9 @@ It then binds the body, writes `version + 1` and a new `activation`, clears the 
 and raises `run` on a removal, sets `seeded_at` when it is empty, and replaces the object's rows of `secret_uses`
 through the store's one method: its secret names, none for a mocked or removed connection.
 
-A **stop** of a connection with nothing in force is 409 `not-set`. A stop holds for every attempt that starts after
-it, which waits for its connection; an attempt already started ends.
+A **stop** of a connection with nothing in force is 409 `not-set`. A stop holds for every attempt that starts after it:
+the attempt fails with an error naming the connection and that it was stopped, by whom and when, and the flow's retry
+tries it again, then parks it as any failed send. An attempt already started ends.
 
 ## Where a secret goes: consent
 
@@ -404,10 +405,10 @@ consent is held on the object and given to the exact draft it covers.
   incarnation, version, activation, format, body]`. A consent is bound over `["rail8 consent v1", kind, key,
   incarnation, draft id, activation in force or null, digest]`.
 - With the store's key, a node refuses a body in force that is unbound or whose tag does not verify, whether it names a
-  secret or not, at its start and at every read: it is absent from the node's snapshot, so sends through it wait for
-  their connection, `/health` is `DEGRADED`, the read shows `binding: fails`, the node's `config_refused` names it, and
-  a WARNING names the key and the key's id once. A connection administrator saves it again and activates, with the
-  secret administrator's consent when it sends a secret.
+  secret or not, at its start and at every read: it is absent from the node's snapshot, so sends through it fail as
+  through a connection not set, `/health` is `DEGRADED`, the read shows `binding: fails`, the node's `config_refused`
+  names it, and a WARNING names the key and the key's id once. A connection administrator saves it again and activates,
+  with the secret administrator's consent when it sends a secret.
 - **Without the store's key.** The secret store then runs on variables only. In `dev` and `ci` nothing is bound, a
   consent is written unbound, and the read shows `binding: none`. In a deployed environment, an activation or a consent
   of a body that sends a secret is 503 `no-key`; a body that sends none is activated unbound.
@@ -415,12 +416,12 @@ consent is held on the object and given to the exact draft it covers.
   An unbound body that sends a secret is not bound: it stays left out until it is activated again with the secret
   administrator's consent, since nothing proves who put it there. A WARNING says how many.
 - **A change of the store's key** binds the rows again, as the secret store asks at its tick: up to 100 rows a batch,
-  `for update skip locked`, so a row being written is skipped and bound by a later batch. Each tag, of a body and of a consent, is
-  verified under the key it names before it is bound under the new one. A tag that does not verify is cleared and its
-  key id kept, which marks it failed: it stays refused and is never bound again, with a WARNING. A batch raises the
-  generation and the stamp and notifies, so every node reads the new tags and leaves out a failed row without anyone
-  activating. It changes no revision, version, activation or history. So the previous key is dropped once no row is
-  bound under it.
+  `for update skip locked`, so a row being written is skipped and bound by a later batch. Each tag, of a body and of a
+  consent, is verified under the key it names before it is bound under the new one. A tag that does not verify is
+  cleared and its key id kept, which marks it failed: it stays refused and is never bound again, with a WARNING. A batch
+  raises the generation and the stamp and notifies, so every node reads the new tags and leaves out a failed row without
+  anyone activating. It changes no revision, version, activation or history. So the previous key is dropped once no row
+  is bound under it.
 - Drafts are not bound. What a draft sends is checked against its bound consent at its test and its activation.
 - A connection's stop and the switch of mocks are not bound. A database writer can start a stopped connection or allow
   mocks, as they can delete a secret's row or a message's work; none of it sends a secret anywhere new. The UI calls a
@@ -464,26 +465,26 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
   tag changes; its tag fails then. Until then the node keeps the body it verified.
 - **Verify.** It verifies each body's tag and upgrades an older format in memory. A body that fails is left out, as
   above.
-- **Swap.** It builds an immutable snapshot (per connection key `Values` or `Mocked` with `stopped` and, as the
-  connection's version, its `activation`; per system key the instance name; whether mocks are allowed; the
-  generation), swaps it in, and calls the listeners. A snapshot may cover several activations, and after a database
+- **Swap.** It builds an immutable snapshot (per connection key `Values` or `Mocked` with `stopped`, who stopped it and
+  when, and, as the connection's version, its `activation`; per system key the instance name; whether mocks are allowed;
+  the generation), swaps it in, and calls the listeners. A snapshot may cover several activations, and after a database
   set back it may carry a lower generation; a listener compares it with the one before. Then it writes
   `config_generation`, `config_stamp`, `config_epoch`, `config_read_at` and what it left out into its row of `nodes`,
   only while that row carries its own epoch. A failed write is a WARNING, and the next tick writes again.
 - **At start**, a node reads the whole store before it restores its packages and takes any work.
 - **Postgres away.** A node that cannot renew its lease fences itself after half a lease, 15 s, as every node does. A
   node that still renews its lease but cannot read the store keeps its snapshot. After 30 s without a successful read,
-  `/health` is `DEGRADED`, naming the time of its last read. After 60 s it starts no new attempt and no poll: an
-  attempt waits for its connection as for a stopped one, and a sync flow answers 503 with `Retry-After: 30`; attempts
-  already started end. The next successful read lets them go on. So a stop committed on another node holds on every
-  node within 60 s.
+  `/health` is `DEGRADED`, naming the time of its last read. After 60 s it starts no new attempt and no poll: an attempt
+  fails with an error naming the connection and that the configuration could not be read, and the flow's retry tries it
+  again; attempts already started end. The next successful read lets them go on. So a stop committed on another node
+  holds on every node within 60 s.
 - **A message in flight.** Each attempt reads one snapshot and keeps it, and the producer it took, until its send
   settles. The next attempt through a connection whose `activation` differs from its producer's builds a new producer;
   since an activation's id is never reused, a restore followed by a new activation never meets an old producer. A stop,
   a start, binding again, or a new value of a secret it names rebuilds nothing. A send on the wire ends with the old
-  values. Every later attempt, a retry waiting in the queue included, reads the newest snapshot, so a message that
-  waited because of a wrong address goes through once the address is corrected. A message already parked waits for an
-  operator's retry, as any parked message does.
+  values. Every later attempt, a retry waiting in the queue included, reads the newest snapshot, so a message whose
+  send failed because of a wrong address goes through at its next retry once the address is corrected. A message
+  already parked waits for an operator's retry, as any parked message does.
 - No read of a send goes to Postgres. A secret stays a reference in the snapshot, read through its handle at each use.
 
 ## The deploy
@@ -499,7 +500,7 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
   read. An activation takes `config_store` `for update`, so a removal waits for the record and sees its uses, and a
   deploy waits for an activation and checks it. The uses of a retiring flow count until its drain ends.
 - **The window before the record.** The flows a deploy starts before its record is saved read the snapshot at every
-  attempt, so each of their sends goes through a connection as it is in force at that attempt, or waits. A deploy whose
+  attempt, so each of their sends goes through a connection as it is in force at that attempt, or fails. A deploy whose
   record is refused then stops them; what they sent meanwhile went where the configuration in force said.
 - **What names the state.** The record names the generation. The history's rows of activations, stops and starts carry
   the generation they made, so the history says which version of each object was in force at that generation, for as
@@ -768,7 +769,7 @@ This is a loop of activations, not a change list.
     used connections confirmed;
   - a removal racing a deploy and a deploy racing an activation, both ways, end in a consistent record or a refusal; a
     deploy through another node right after an activation sees it; a retiring flow's uses count; a deploy refused at
-    its record after it started flows: every send meanwhile went through a connection in force or waited, and the
+    its record after it started flows: every send meanwhile went through a connection in force or failed, and the
     flows are stopped;
   - the history: a secret overwritten between two activations shows between them; a note kept in the history and the
     audit, one over 200 characters refused;
@@ -781,10 +782,10 @@ This is a loop of activations, not a change list.
   - the seed: once from two nodes started together and never after the store is emptied; unbound without the key in
     `dev`; writes refused while a node of the release before reads the file.
 - The send path: a retry waiting in the queue goes out with the corrected values; a send on the wire ends with the old
-  ones; a stop makes the next attempt wait for its connection and a start lets it go; a change of one connection
-  rebuilds no other producer, and a new value of a secret rebuilds none.
-- A node cut off from Postgres keeps its snapshot, is `DEGRADED` after 30 s and starts no attempt after 60 s of the fake
-  clock, and goes on after a read.
+  ones; a stop makes the next attempt fail, naming the connection, who stopped it and when, and after a start the next
+  retry goes out; a change of one connection rebuilds no other producer, and a new value of a secret rebuilds none.
+- A node cut off from Postgres keeps its snapshot, is `DEGRADED` after 30 s, and after 60 s of the fake clock fails
+  every new attempt, naming the connection, and starts no poll; it goes on after a read.
 - The routes: each called as every role, through a session and a token; each refusal of the codes gives its code.
 - No answer, log line, history row, audit row or export of any test holds a secret's value, checked by searching every
   captured text for each value written to the secret store.
@@ -824,7 +825,8 @@ That design is agreed, and this one follows it. It relies on:
   activation's random id, never reused, so "differs from its producer's" holds after a database set back; and a
   snapshot after a set back may carry a lower generation, which a listener compares as any other;
 - producers kept per connection and version, and a secret's handle read at each use;
-- an attempt that waits for a connection that is stopped, not set or left out, every 30 s, and is parked after 72 hours;
+- an attempt through a connection that is stopped, not set, left out, of another adapter or incomplete, which fails with
+  an error naming the connection and the reason, is retried by the flow's retry, and is then parked as any failed send;
 - the connection form's format 2, with the marks `.tuning()`, `.origin()` and `.trust()` and the rule that a form only
   adds fields with a default meaning "as before", which the first step here adds;
 - `deployment_systems`, `deployment_connection_uses` with its directions and its uses through an address field,
