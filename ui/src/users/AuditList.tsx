@@ -11,7 +11,7 @@ import { reasonOf } from './words';
 
 export interface AuditListProps {
   api: AuditApi;
-  /** The time the name of an exported file carries; the browser's clock by default. */
+  /** The time the name of an exported file carries and that paces the count of an export; the browser's clock by default. */
   now?: () => Date;
   /** Hands the exported file to the browser to save; a link the page clicks by default. */
   save?: (name: string, file: Blob) => void;
@@ -22,6 +22,12 @@ type Shown =
   | { kind: 'reading' }
   | { kind: 'failed'; message: string }
   | { kind: 'read'; rows: AuditEntry[]; next: string | null; more: 'idle' | 'reading' | { failed: string } };
+
+/**
+ * The fewest milliseconds between two counts the Export button shows while it reads: each count draws the whole screen
+ * again, and an export reads up to 200 pages.
+ */
+const COUNT_EVERY_MS = 250;
 
 /** Where an export stands: not asked, reading so many rows, too long, or refused. */
 type Export = { kind: 'idle' } | { kind: 'reading'; count: number } | { kind: 'too-many'; max: number } | { kind: 'failed'; message: string };
@@ -131,7 +137,13 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
   const exportCsv = async () => {
     setExported({ kind: 'reading', count: 0 });
     try {
-      const all = await readAll(api, query, (count) => setExported({ kind: 'reading', count }));
+      let countedAt = now().getTime();
+      const all = await readAll(api, query, (count) => {
+        const at = now().getTime();
+        if (at - countedAt < COUNT_EVERY_MS) return;
+        countedAt = at;
+        setExported({ kind: 'reading', count });
+      });
       if (all.kind === 'too-many') {
         setExported(all);
         return;
