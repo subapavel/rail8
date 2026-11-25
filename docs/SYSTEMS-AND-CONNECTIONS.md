@@ -121,9 +121,9 @@ connections:
   same key in another package is accepted only when it defines the same system: the same partner and name, and the same
   connections with the same adapters. Descriptions are not compared; the system shows the description of the package
   deployed last. This is how a system moves from one package to another without stopping the flows that use it: the
-  new package deploys a copy, then the old one drops its file. The deploy that adds a copy says so as a note, naming the
-  other package, and `GET /admin/systems` lists every package that holds a system. A different definition refuses the
-  deploy, naming both packages.
+  new package deploys a copy, then the old one drops its file. While two packages hold a system, every deploy of either
+  warns, naming the other, and `GET /admin/systems` and the Systems screen mark the system until one of them drops it,
+  so whose system it is stays visible. A different definition refuses the deploy, naming both packages.
 - A deploy that drops a system or one of its connections, or changes a connection's adapter, while a deployed flow of
   any package still names it, is refused, naming those flows, unless another package still holds the same definition.
   An undeploy of a package is refused likewise.
@@ -367,11 +367,13 @@ Tab.of(id, label)                         // as today
 - **The polled place.** `polledPlace` names what a polling consumer fetches from, within its connection (for `sftp`, its
   directory and glob). The deploy refuses two flows whose senders poll the same connection and place. The poller's lease
   is keyed by the flow alone, `<package>/<flow>/from`, in both shapes, so the key holds no value of a connection and stays
-  the same across an activation and when a flow moves to the new shape. Today's key holds the endpoint's id; the release
-  of the first step changes it, so every node of a pool is upgraded to it together.
+  the same across an activation and when a flow moves to the new shape. Today's key holds the endpoint's id. So that a
+  pool can run nodes of two releases side by side, a node of the first step's release takes today's lease first and then
+  the new one, and polls only while it holds both; the step that removes the old shape drops today's key.
 - **The limit per target.** `target` names the system a producer calls (`scheme://host:port`) from its connection's
   values. When it is empty, the node limits the sends in flight by the connection's key.
-- **The reply's limit** is the step's `maxReplyBytes`, else the flow's `limits.maxBodyBytes`, handed in each `Call`;
+- **The reply's limit** is the step's `maxReplyBytes`, an integer from 1 to the largest `long`, as `limits.maxBodyBytes`
+  is, else the flow's `limits.maxBodyBytes`, handed in each `Call`;
   `http`'s `maxBodyBytes` field goes. For a flow of `schemaVersion: 1`, an out endpoint's `maxBodyBytes` stays the
   reply's limit.
 - **The plugin API's version** goes up with the step that changes this contract. A plugin built on the earlier version
@@ -412,7 +414,9 @@ How the shipped adapters split:
 
 `http` parses `url` once into a `URI`, joins `path` to that `URI`'s path, and builds the request from the parts of the
 one result (host, port, path, query), never from a string parsed again. A result whose scheme, host or port differ from
-`url`'s, or whose path leaves `url`'s path, is refused as `INVALID`. Without `path` it sends to `url` as it is. `sftp`
+`url`'s, or whose path leaves `url`'s path, is refused as `INVALID`. Without `path` it sends to `url` as it is. A
+connection's `url` holds no user info; a `schemaVersion: 1` endpoint's `url` keeps the user info it may hold today until
+`http` has login fields of its own, a step below. `sftp`
 checks at each login that its `hostKey` is a `SHA256:` fingerprint, and a login with another value fails, naming the
 field.
 
@@ -489,7 +493,7 @@ never from what this node installed, so a package that failed to install here st
    choice of a computed step included. In that transaction it checks the used connections again, under the lock on the
    environment that every activation takes, as the secret store does for secrets. A check that fails there rolls the
    deploy back as a failed save of the record does today, and the earlier rows stay. The flows that phase B started
-   before the save read the snapshot at each send, so a connection removed meanwhile holds their sends.
+   before the save read the snapshot at each send, so a connection removed meanwhile makes their sends wait for it.
 5. **The hash** of a flow covers its file and the files it reads, as today. No system file and no value of the environment
    is in it, so a connection's change restarts no flow and needs no new lock.
 
@@ -511,20 +515,23 @@ Each attempt reads one snapshot and keeps it, and the producer it took, until it
 1. The step picks its connection key: the named one, or the value of `by` among `connections`.
 2. It renders the step's settings, and an address field, into a `Call`; a template or an address that fails, fails the
    send as `INVALID`.
-3. It reads the connection's state from the snapshot. Absent, `stopped`, or set for another adapter than the step's
-   holds the send, below. `Mocked` sends through the platform's mock. `Values` goes on.
+3. It reads the connection's state from the snapshot. Absent, `stopped`, set for another adapter than the step's, or
+   with values incomplete for the step's direction, the send waits for its connection, below. `Mocked` sends through the
+   platform's mock. `Values` goes on.
 4. It takes the connection's producer at its version, building it when there is none, and sends with the deadline under
    the limit of its target.
 5. The send step's entry in the message's history names the connection key and whether it was mocked, never a value. It
    hands the receiver's facts (the connection key, the system key, the partner, the system's instance name, whether it
    was mocked), all from the attempt's snapshot, to the record that the design of who may send to a flow writes on the
-   message, whether the send succeeded or not. An instance name that is not set is recorded as not set; it does not
-   hold the send.
+   message, whether the send succeeded or not. An instance name that is not set (the deploy refuses that, so only a
+   confirmed removal leaves one) is recorded as not set, and the send goes on.
 
-**A held send.** A connection that is stopped, or not set, is not the receiver's fault and does not use up the flow's
-retries. An at-least-once message is scheduled again every 30 s without counting an attempt, for at most 24 hours; then
-it is parked, naming the connection. A sync flow answers 503 at once. An at-most-once flow fails the send. The flow is
-`DEGRADED` in `/health` while it holds sends.
+**Waiting for its connection.** A connection that is stopped or not set is not the receiver's fault and does not use up
+the flow's retries. An at-least-once message is scheduled again every 30 s without counting an attempt, for at most 72
+hours, so a connection stopped on a Friday evening parks nothing over the weekend; then it is parked, naming the
+connection. Its row in `work` names the connection it waits for, and Monitor shows the message as waiting for that
+connection. This is not a held message, which is one that cannot even be parked. A sync flow answers 503 at once, with
+`Retry-After: 30`. An at-most-once flow fails the send. The flow is `DEGRADED` in `/health` while a send of it waits.
 
 ### When the environment changes
 
@@ -542,7 +549,7 @@ use, so a new value reaches the adapter at its next login, session or handshake,
 
 - **From git**: refused while a deployed flow names it, as above.
 - **From the environment**: the configuration of an environment refuses it while `deployment_connection_uses` names it,
-  unless the connection administrator confirms. Once confirmed, every send through it is held, as above. A polling
+  unless the connection administrator confirms. Once confirmed, every send through it waits for it, as above. A polling
   sender whose connection is missing or stopped is not built: its flow runs, takes nothing, and is `DEGRADED` in
   `/health`. Today a sender that cannot be built fails its flow until the next deploy; here, the activation that sets the
   connection again builds the sender and starts it. A node that starts meanwhile does the same.
@@ -602,11 +609,13 @@ or a new flow tried before the partner's side exists.
   faults as a real one, but for the list of allowed hosts: a mocked connection sends nowhere, and the deploy does not ask
   it for one.
 - A mocked polling sender takes nothing; its flow runs, and `/health` says the flow has a mocked sender.
-- An environment allows mocks or not, and one that does not refuses them. The configuration of an environment decides
-  which do, and asks the same confirmation to switch a used connection to the mock as to remove it, since a mocked send
-  completes the message without reaching the partner. The quickstart's environment file allows them.
+- An environment allows mocks only when it says so, and one that does not refuses them; without a setting, it does not.
+  The configuration of an environment decides which do, and asks the same confirmation to switch a used connection to
+  the mock as to remove it, since a mocked send completes the message without reaching the partner, and Rail8 has no
+  replay. The quickstart's environment file allows them.
 - A send through the mock is marked in the send step's record, which the flow's recording keeps as it keeps every
-  record, and in the receiver's facts. `/health` counts the mocked connections; `GET /admin/systems` names them with the
+  record, and in the receiver's facts, which the record of receivers that the design of who may send to a flow writes
+  keeps whatever the flow records. The mock ships after that record, so no mocked send is without a trace. `/health` counts the mocked connections; `GET /admin/systems` names them with the
   flows that use them.
 
 ## Several receivers
@@ -652,7 +661,7 @@ The store of the configuration of an environment is built in its own steps. Unti
 from a file, so the demo and the quickstart work from the second step on:
 
 ```yaml
-# deploy/quickstart/environment.yaml; the quickstart copies it once to ~/rail8-workspace/environment.yaml
+# deploy/quickstart/environment.yaml; the quickstart copies it once to ~/rail8-environment/environment.yaml
 schemaVersion: 1
 mocksAllowed: true
 connections:
@@ -666,10 +675,12 @@ instanceNames:
   billing: BILLING-DEV
 ```
 
-- `RAIL8_ENVIRONMENT_FILE` names it, by its path inside the node's container. The quickstart keeps it beside the packages
-  in `~/rail8-workspace`, the directory `docker-compose.yml` already mounts read-only as `/workspace`, so it is no tracked
-  file of the repository and a new system needs no change there. The stack of `deploy/compose` names its own copy, in the
-  checkout it mounts.
+- `RAIL8_ENVIRONMENT_FILE` names it, by its path inside the node's container. The quickstart keeps it in a directory of
+  its own, `~/rail8-environment`, which `docker-compose.yml` mounts read-only as `/environment`, so it is no tracked file
+  of the repository and a new system needs no change there. It is never inside the packages' working folder: the UI's
+  file routes write any YAML file there, and a save would then change the environment with no commit and no deploy. The
+  node refuses to start when the variable names a path under its git base. The stack of `deploy/compose` mounts a
+  directory of its own the same way.
 - The node reads it at its start and again at each 5 s tick when its size or time changed. A read that parses and passes
   each connection form is an activation: the generation goes up, and so does the version of each connection that
   changed. A read that fails keeps the previous state, with a WARNING naming the line. The file is at most 1 MiB.
@@ -679,6 +690,8 @@ instanceNames:
   consent of the secret administrator, as an endpoint file's pairing is until the store of the configuration exists. A
   secret field holds `secret://<name>`, as in that store; every other field holds its value. The SFTP host key's
   fingerprint stays a secret of the node's environment, as today, so the stacks' wrappers that set it stay.
+- Until the store of the configuration exists, a change of the file has no draft, no history, no record of who made it,
+  and no confirmation when it removes a used connection. The quickstart's text says so.
 - Each node writes the digest of its file into its row of the nodes table, and a deploy is refused while the live nodes'
   digests differ, naming them.
 - The deploy records the secrets that the file's connections name as uses of the flows that reach them, as the secret
@@ -696,14 +709,20 @@ The node reads both shapes while the steps land, and the last step removes the o
   its secrets follow the secret store's rules for endpoint files.
 - A flow of `schemaVersion: 2` names connections as this document says. A package may hold both while it moves; a flow of
   one shape cannot name what belongs to the other.
+- From the step of the flow editor on, a deploy of a package that holds an endpoint file or a flow of `schemaVersion: 1`
+  warns, naming each file and what replaces it.
+- `rail8 migrate` moves a package of one's own: it writes, beside the old files, a system file for each endpoint a flow
+  sends through or polls, flows and tests of `schemaVersion: 2`, and an environment file for each environment the
+  endpoints' overrides name, with the split the node already makes of an endpoint's `config`. A system is named after
+  its endpoint's id unless a map given to the command names its key. Secrets stay `secret://` references. It deletes
+  nothing; its author reviews the result and commits it.
 - Once the demo, the template and the documents are on the new shape, the last step removes `kind: endpoint`,
   `endpoint.schema.json`, flows of `schemaVersion: 1` and the Endpoints screen. A package that still holds them is refused,
-  naming the file and what replaces it. A package of one's own moves by hand, as the demo's change shows: each endpoint
-  file becomes a connection of a system and the connection's values in the environment file.
+  naming the file and what replaces it.
 
 `examples/demo` gets `systems/acme-erp.yaml`, `systems/globex-erp.yaml` and `systems/billing.yaml`; its flows and tests
 move to `schemaVersion: 2` as above; its endpoint files go once the flow editor writes the new shape. The quickstart gets
-`deploy/quickstart/environment.yaml`, copied once into `~/rail8-workspace`, and `docker-compose.yml` sets
+`deploy/quickstart/environment.yaml`, copied once into `~/rail8-environment`, and `docker-compose.yml` sets
 `RAIL8_ENVIRONMENT_FILE`.
 
 ## Importing from SAP
@@ -740,8 +759,9 @@ This design relies on it for:
   `deployment_connection_uses` names, before an activation;
 - refusing, unless confirmed, to remove the values of a connection that `deployment_connection_uses` names, to switch it to
   the mock, to empty its allowed hosts while a use goes through an address field, and to remove the instance name of a
-  system whose connections are used; once confirmed, the sends through it are held, as above;
+  system whose connections are used; once confirmed, the sends through it wait for it, as above, rather than fail;
 - refusing an activation of values that leave a used direction incomplete, or an address use without allowed hosts;
+- allowing mocks only in an environment that says so, none without a setting;
 - a lock that every activation takes and the deploy takes in its record's transaction (its environment's counter, which
   an activation takes for update and the deploy for share), so a deploy's check and an activation never cross;
 - deciding which environments allow mocks, and how the deploy's record names the generation.
@@ -807,7 +827,7 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
 | A template | 1,024 characters, 16 placeholders; 4,096 characters rendered |
 | Receivers a `receivers` step adds | 16 |
 | `allowedHosts` of a connection | 256 entries |
-| A held send | again every 30 s, for at most 24 hours |
+| A send waiting for its connection | again every 30 s, for at most 72 hours |
 | Old producers of one connection closing at once | 4 |
 | The mock's delay | 60 s |
 | A bundle of texts | 256 KiB |
@@ -843,9 +863,14 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
   again; old producers close once their sends settle; two activations in quick succession during a slow send, on the
   fake timer; a version set back; a polling sender restarts with the new values, never polls twice at once, and on two
   nodes holds one lease; a restart made obsolete is cancelled; mock and back.
-- Held sends: a stopped connection holds an at-least-once message without counting attempts and parks it after 24 hours
-  on the fake clock; sync answers 503; a polling sender is `DEGRADED` and recovers at the activation that sets it.
-- The environment file: re-read when changed, a bad read keeping the previous state, two nodes with different files.
+- Waiting for a connection: a stopped connection, and values incomplete for the step's direction, make an at-least-once
+  message wait without counting attempts, shown with the connection's key, and park it after 72 hours on the fake
+  clock; sync answers 503 with `Retry-After: 30`; a polling sender is `DEGRADED` and recovers at the activation that
+  sets it.
+- The lease: a node of the first step's release and one of the release before poll one directory, and only one polls.
+- The environment file: re-read when changed, a bad read keeping the previous state, two nodes with different files, a
+  path under the git base refused.
+- `rail8 migrate` on the demo as it was before the second step: its result deploys and its tests pass.
 - `rail8 validate` offline with a key from a dependency, and the note for an unknown one; `rail8 test` with keyed mocks
   and `expect.sent.<key>.settings`.
 - The contract suite on every shipped adapter, the template and a fake adapter that breaks each rule of `Forms`.
@@ -864,11 +889,11 @@ An adapter's own translations, with their route and the UI laying them over the 
 built at any time after the first: the bundles of `http`, `sftp` and the template in the UI's four languages, and the
 contract suite's checks of them. It changes no file of the demo, the quickstart or the database.
 
-
 1. **The adapter's contract.** `Forms` with its declared reach, labels, text keys and codes, `Connection`, `Inbound`,
    `Outbound`, `Call`, `Producer.send(e, call)`, `polledPlace`, `HttpIngress.mount`, the plugin API's version, the
-   poller's lease key by flow; `http` (with a literal `path`, the request built from one parsed `URI`, and `url`
-   refusing user info), `sftp` (with `hostKey` a secret field), `direct`, `mock`, the Java of the template,
+   poller's lease key by flow, held together with today's; `http` (with a literal `path`, the request built from one
+   parsed `URI`, and a connection's `url` refusing user info), `sftp` (with `hostKey` a secret field), `direct`, `mock`,
+   the Java of the template,
    `ComponentContract`, `PollingConsumerContract` and `RecordingComponent` on it; INVALID final for the step's own retry;
    format 2 with the text keys. Endpoint files are read through it unchanged: an endpoint's `config` with the override
    of `RAIL8_ENV`, its whole `url`, its `maxBodyBytes` as the reply's limit and its hash stay as they are. The endpoint
@@ -879,11 +904,12 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
 2. **Systems and flows by name.** `system.schema.json`, flows and tests of `schemaVersion: 2` with a sender and a send
    step by name, the key rules, `Environment` with the environment file and `InMemoryEnvironment`, the deploy's checks
    against the pool's resulting state, `deployment_systems` and `deployment_connection_uses`, `GET /admin/systems`, the
-   producers per connection and their swap, held sends, the connection key in the history, `rail8 validate`, and
-   `rail8 test` with `expect.sent.<key>.settings`. The Flows screen draws a flow of either shape and edits only the old
-   one. Changes `examples/demo` (its systems; `sftp-invoice` and its test on the new shape, which the quickstart does
-   not edit), the quickstart (`environment.yaml`, copied once into `~/rail8-workspace`; both compose stacks set
-   `RAIL8_ENVIRONMENT_FILE`) and the database (two new tables).
+   producers per connection and their swap, sends waiting for their connection and shown so in Monitor, the connection
+   key in the history, `rail8 validate`, and `rail8 test` with `expect.sent.<key>.settings`. The Flows screen draws a
+   flow of either shape and edits only the old one. Changes `examples/demo` (its systems; `sftp-invoice` and its test on
+   the new shape, which the quickstart does not edit), the quickstart (`environment.yaml`, copied once into
+   `~/rail8-environment`; both compose stacks mount that directory and set `RAIL8_ENVIRONMENT_FILE`) and the database
+   (two new tables, and a column of `work` naming the connection a message waits for).
 3. **Templates and computed receivers.** Expressions in the settings in the flow, `by` with `connections`, the public
    texts of faults, a missing value tried once on a step with `retryable: true`. Changes `examples/demo`
    (`invoice-async` and its test on the new shape; the test checks the path each receiver saw, and both invoice tests
@@ -895,22 +921,31 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    Changes `examples/demo` (`invoice-sync`, `order-jq` and `order-partner` on the new shape, with the call from
    `order-jq` through `direct` to `order-partner` run for real; its endpoint files gone), the template's package with
    an environment file for its partner on port 18091, `rail8 new-adapter` and `bin/run-adapter` with it, the stack check
-   that expects `endpoints/call-audit.yaml`, and the quickstart's text. No change to the database.
+   that expects `endpoints/call-audit.yaml`, and the quickstart's text. From this step a deploy warns of each file of the
+   old shape. No change to the database.
 5. **The Systems screen under Configure.** Every system with the packages that hold it, its connections, their adapters,
    the flows that use each and whether it is set, mocked, stopped or missing in the environment, and the instance names;
    editing the values comes with the environment's admin API, and until then the quickstart's text says how to change
-   `~/rail8-workspace/environment.yaml`, read again within 5 s. Replaces the Endpoints screen's place. No change to the
+   `~/rail8-environment/environment.yaml`, read again within 5 s. Replaces the Endpoints screen's place. No change to the
    demo, the quickstart's files or the database.
-6. **The built-in mock of a connection.** The mocked state and `mocksAllowed` in the environment file, the platform's
-   mock with its `fail`, its mark in the send step's record and in the receiver's facts, its count in `/health`. Changes
-   the quickstart's environment file (the foreign partner mocked). No change to the demo or the database.
+6. **The built-in mock of a connection**, after the record of receivers that the design of who may send to a flow
+   writes. The mocked state and `mocksAllowed` in the environment file, the platform's mock with its `fail`, its mark in
+   the send step's record and in the receiver's facts, its count in `/health`. Changes the quickstart's environment file
+   (the foreign partner mocked). No change to the demo or the database.
 7. **Several receivers.** The `receivers` step and the work items it starts; its own design first. Changes the database;
    `examples/demo` gains a flow that uses it, on connections the quickstart's environment file already sets.
 8. **A whole address from the message.** `Field.address`, `allowedHosts`, the platform's check, `http`'s `absoluteUrl`.
-   No change to the demo, the quickstart or the database.
-9. **The endpoint leaves Rail8.** `kind: endpoint`, `endpoint.schema.json`, flows of `schemaVersion: 1`, the Endpoints
-   screen and the words in the documents go. The quickstart's text tells its reader to copy the demo again into
-   `~/rail8-workspace/demo` and commit before pulling this release, since a package of the old shape is refused at
-   restore; the step is tried on a fresh install and on a restart with the volumes of the day before. Changes
-   `examples/demo` only if anything of the old shape is left; no change to the quickstart's files or the database.
+   Its own design states connect-time enforcement as an accepted limit or closes it. No change to the demo, the
+   quickstart or the database.
+9. **`http`'s login**, after the secret store's step for credentials in adapters. Secret fields for `http`'s login in
+   its connection form, with the kinds the secret store gives. No change to the demo, the quickstart or the database.
+10. **`rail8 migrate`.** The command above, tried on the demo as it was before the second step. No change to the demo,
+    the quickstart or the database.
+11. **The endpoint leaves Rail8**, after the two steps before it. `kind: endpoint`, `endpoint.schema.json`, flows of
+    `schemaVersion: 1`, today's poller lease key, the Endpoints screen and the words in the documents go. The
+    quickstart's text tells its reader to copy the demo again into `~/rail8-workspace/demo` and commit before pulling
+    this release, and to run `rail8 migrate` on a package of their own, since a package of the old shape is refused at
+    restore; the step is tried on a fresh install and on a restart with the volumes of the day before. Changes
+    `examples/demo` only if anything of the old shape is left; no change to the quickstart's files or the database.
+
 
