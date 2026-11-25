@@ -32,7 +32,7 @@ test('@stack a field link by drag and drop, a function and a constant are saved 
   await dropFunction(page, 'Text', 'concat', { x: 60, y: 40 });
   await dropFunction(page, 'Constants', 'constant', { x: 60, y: 160 });
   // three boxes and the target field
-  await expect(page.getByText('4 nodes · 1 connections')).toBeVisible();
+  await expect(page.getByText('4 nodes · 1 connection', { exact: true })).toBeVisible();
   const [source, concat, constant] = [await nodeId(page, /^Source field OrderId/), await nodeId(page, /^Node function concat/), await nodeId(page, /^Node function constant/)];
 
   // the constant's value is its box parameter, set in its parameter dialog
@@ -108,7 +108,7 @@ test('@stack a schema changed on disk: opening the mapping refreshes it, marks t
   await expect(dialog).toBeHidden();
   await expect(node(page, /^Source field OrderNumber\. Complete/)).toBeVisible();
   expect(await nodeId(page, /^Source field OrderNumber/)).toBe('a1');
-  await expect(page.getByText('2 nodes · 1 connections')).toBeVisible();
+  await expect(page.getByText('2 nodes · 1 connection', { exact: true })).toBeVisible();
   await expect(canvas(page).getByRole('img', { name: 'Orphaned reference' })).toHaveCount(0);
   await expect((await fieldRow(page, 'target', ORDER_ID)).getByRole('img', { name: 'Connected' })).toBeVisible();
 
