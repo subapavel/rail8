@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
 import { Shell } from '../Shell';
-import { UsersError, type AuditApi, type AuditEntry } from './api';
+import { UsersError, type AuditApi, type AuditEntry, type AuditQuery } from './api';
 import { AuditList } from './AuditList';
 import { fakeAuditApi } from './fake';
 import { auditScreen } from './screen';
@@ -56,8 +56,8 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-/** The Audit screen of a Shell, behind the session's gate as alice, over `api`; a saved file goes to `save`. */
-function render(api: AuditApi, save: (name: string, file: Blob) => void = () => {}) {
+/** The Audit screen of a Shell, behind the session's gate as alice, over `api`; a saved file goes to `save`, the time comes from `now`. */
+function render(api: AuditApi, save: (name: string, file: Blob) => void = () => {}, now: () => Date = () => NOW) {
   const client = sessionClient({
     send: (async () => new Response(JSON.stringify(ALICE), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
     reload: () => undefined,
@@ -68,7 +68,7 @@ function render(api: AuditApi, save: (name: string, file: Blob) => void = () => 
   root = createRoot(host);
   root.render(
     <SessionGate client={client}>
-      <Shell screens={[{ ...auditScreen(api), render: () => <AuditList api={api} now={() => NOW} save={save} /> }]} start="audit" />
+      <Shell screens={[{ ...auditScreen(api), render: () => <AuditList api={api} now={now} save={save} /> }]} start="audit" />
     </SessionGate>,
   );
 }
@@ -177,6 +177,32 @@ describe('Audit', () => {
     await page.getByRole('button', { name: 'Export CSV', exact: false }).click();
     await expect.element(page.getByText('The audit could not be exported')).toBeVisible();
     await expect.element(page.getByText('The node is stopping.')).toBeVisible();
+  });
+
+  test('shows how many rows an export has read, at most every quarter of a second', async () => {
+    let clock = NOW.getTime();
+    // each page of the export waits until the test lets it through
+    const waiting: (() => void)[] = [];
+    const api: AuditApi = {
+      read: vi.fn(async (_query?: AuditQuery, after?: string, limit?: number) => {
+        if (limit === undefined) return { items: ROWS, next: null };
+        await new Promise<void>((resolve) => waiting.push(resolve));
+        const page = Number(after ?? 0);
+        return { items: ROWS.map((row, i) => ({ ...row, id: page * ROWS.length + i + 1 })), next: String(page + 1) };
+      }),
+    };
+    render(api, () => {}, () => new Date(clock));
+    await expect.element(rows().nth(7)).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Export CSV', exact: false }).click();
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+
+    waiting.shift()?.();
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    await expect.element(page.getByRole('button', { name: /Exporting 0 rows/ })).toBeVisible();
+
+    clock += 250;
+    waiting.shift()?.();
+    await expect.element(page.getByRole('button', { name: /Exporting 14 rows/ })).toBeVisible();
   });
 
   test('says when the audit could not be read, in place of the rows, and reads it again', async () => {
