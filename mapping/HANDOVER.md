@@ -21,6 +21,8 @@ the engine. The node runs in Docker with its admin API published on `127.0.0.1:8
 ```bash
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
 export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)
+[ -s ~/.rail8-secrets-key ] || { t=$(mktemp ~/.rail8-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)   # the secret store's key, made once and kept (docs/QUICKSTART.md)
 docker compose up -d --build
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
 bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once

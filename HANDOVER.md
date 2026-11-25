@@ -15,6 +15,8 @@ measure a virtual thread" since the owner answered ISSUE-3 with option 2 (2026-1
 ```sh
 cd deploy/compose
 export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency key, required
+[ -s ~/.rail8-stack-secrets-key ] || { t=$(mktemp ~/.rail8-stack-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-stack-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-stack-secrets-key)   # the secret store's key, made once and kept: required
 docker compose up -d --build                           # returns once the node is healthy
 ../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
 export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token

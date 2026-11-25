@@ -590,7 +590,7 @@ public final class NodeBenchMain {
      */
     private static NodeConfig nodeConfig(Options o, Path data, Path repos, int echo, int in) {
         return NodeConfig.from(Map.ofEntries(Map.entry("RAIL8_ENV", "dev"), Map.entry("RAIL8_NODE_ID", "node-bench"),
-                Map.entry("RAIL8_JOURNAL_KEY", JOURNAL_KEY), Map.entry("RAIL8_GIT_BASE", gitBase(repos)),
+                Map.entry("RAIL8_JOURNAL_KEY", JOURNAL_KEY), Map.entry("RAIL8_SECRETS_KEY", SECRETS_KEY), Map.entry("RAIL8_GIT_BASE", gitBase(repos)),
                 Map.entry("RAIL8_ADMIN_PORT", "0"), Map.entry("RAIL8_PEER_PORT", "0"), Map.entry("RAIL8_HTTP_PORT", String.valueOf(in)),
                 Map.entry("RAIL8_DATA_DIR", data.toString()),
                 Map.entry("RAIL8_PG_HOST", o.host()),
@@ -687,6 +687,12 @@ public final class NodeBenchMain {
      * with its data directory.
      */
     static final String JOURNAL_KEY = journalKey();
+
+    /**
+     * The secret store's key of every node this bench JVM starts, the ledger's two included (a node needs one): 256 bits made per
+     * run, never stored, never printed. The run keeps no secret: it truncates the store's secrets with every other table.
+     */
+    static final String SECRETS_KEY = journalKey();
 
     /** The bench package's git repository: a folder of the run's package repositories, by this name. */
     static final String REPOSITORY = "bench";

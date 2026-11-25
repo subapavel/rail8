@@ -127,6 +127,21 @@ class NodeTest {
         assertFalse(String.valueOf(cause.getMessage()).contains(key), "the refusal names no key");
     }
 
+    /** A node without the secret store's key refuses its start in every environment, before Postgres, naming the variable. */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"dev", "ci"})
+    void aNodeWithoutTheStoresKeyRefusesToStart(String env) throws Exception {
+        Map<String, String> m = closedPostgres(env, data);
+        m.remove("RAIL8_SECRETS_KEY");
+        NodeConfig config = NodeConfig.from(m);
+        Set<String> before = Set.copyOf(vertx.deploymentIDs());
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> OnVirtualThread.call(() -> Node.start(config, vertx, ctx -> List.of(), List.of(), List.of())));
+        assertTrue(String.valueOf(refused.getMessage()).startsWith("RAIL8_SECRETS_KEY is not set"), refused.getMessage());
+        assertFalse(refusedConnection(refused), "refused before Postgres");
+        assertEquals(before, Set.copyOf(vertx.deploymentIDs()), "nothing left listening");
+    }
+
     static boolean refusedConnection(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) if (c instanceof java.net.ConnectException) return true;
         return false;

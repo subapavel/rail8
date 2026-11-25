@@ -79,15 +79,24 @@ mvnw() { ./mvnw -B -ntp "$@"; }
 # The node's jar and the command line, as the Docker areas start them.
 build_node() { mvnw -q package -DskipTests -pl :rail8-node,:rail8-cli -am; }
 
-# Starts the quickstart's node (docker-compose.yml) afresh with an emergency key of this run, waits for /health and makes
-# its first users with bootstrap: exports RAIL8_ADMIN_TOKEN (the key), RAIL8_TOKEN (the deploy account's token) and
-# admin_password (the administrator's).
+# The secret store's key of this run, exported as RAIL8_SECRETS_KEY: the base64 of 256 random bits, made afresh, as
+# docs/QUICKSTART.md makes the owner's once.
+export_secrets_key() {
+  RAIL8_SECRETS_KEY=$(openssl rand -base64 32)
+  mask "$RAIL8_SECRETS_KEY"
+  export RAIL8_SECRETS_KEY
+}
+
+# Starts the quickstart's node (docker-compose.yml) afresh with an emergency key and a secret store's key of this run, waits
+# for /health and makes its first users with bootstrap: exports RAIL8_ADMIN_TOKEN (the key), RAIL8_SECRETS_KEY, RAIL8_TOKEN
+# (the deploy account's token) and admin_password (the administrator's).
 start_quickstart_node() {
   local admin=$1 deploy=$2 key start
-  docker compose down -v --remove-orphans > /dev/null 2>&1 || true
   key=$(bin/rail8 key new)
   mask "$key"
   export RAIL8_ADMIN_TOKEN=$key
+  export_secrets_key
+  docker compose down -v --remove-orphans > /dev/null
   docker compose up -d --build
   start=$(date +%s)
   until curl -sf localhost:8081/health > /dev/null; do
@@ -103,7 +112,7 @@ start_quickstart_node() {
 
 stop_quickstart_node() {
   if [ "$1" != 0 ]; then docker compose logs --no-color | tail -200 || true; fi
-  docker compose down -v > /dev/null 2>&1 || true
+  docker compose down -v > /dev/null
 }
 
 # Starts a command in the background in a process group of its own, its output in the file <log>; stopped on exit.
@@ -212,7 +221,7 @@ check_jq() {
 
 stop_stack() {
   if [ "$1" != 0 ]; then docker compose logs --no-color | tail -200 || true; fi
-  docker compose --profile history --profile kafka down -v > /dev/null 2>&1 || true
+  docker compose --profile history --profile kafka down -v > /dev/null
 }
 
 check_stack() {
@@ -222,11 +231,12 @@ check_stack() {
   [ "$(git rev-parse --is-shallow-repository)" = false ] || cannot "this checkout is shallow: git fetch --unshallow origin"
   build_node
   cd deploy/compose
-  docker compose --profile history --profile kafka down -v --remove-orphans > /dev/null 2>&1 || true
   local key password start reply
   key=$("$root"/bin/rail8 key new)
   mask "$key"
   export RAIL8_ADMIN_TOKEN=$key
+  export_secrets_key
+  docker compose --profile history --profile kafka down -v --remove-orphans > /dev/null
   on_exit+=(stop_stack)
   docker compose up -d --build
   start=$(date +%s)
@@ -451,17 +461,23 @@ case $area in
   *) [[ $areas == *" $area "* ]] || { usage >&2; exit 2; } ;;
 esac
 
-# What an area registers to run when it ends, passed or not: each function gets the exit status. The background processes
-# started are stopped first, each with its process group.
+# What an area registers to run when it ends, passed or not: each function gets the exit status, and one that fails fails
+# the area. The background processes started are stopped first, each with its process group.
 on_exit=()
 groups=()
 finish() {
   local status=$? f g
   for g in "${groups[@]}"; do kill -TERM -- "-$g" 2> /dev/null || true; done
   for g in "${groups[@]}"; do for _ in $(seq 1 60); do kill -0 "$g" 2> /dev/null || break; sleep 1; done; done
-  for f in "${on_exit[@]}"; do "$f" "$status"; done
+  for f in "${on_exit[@]}"; do
+    if ! "$f" "$status"; then
+      echo "::error::$f failed" >&2
+      if [ "$status" = 0 ]; then status=1; fi
+    fi
+  done
   rm -rf "$tmp"
   if [ "$status" = 0 ]; then echo "ci/check $area: passed"; elif [ "$status" != 3 ]; then echo "ci/check $area: FAILED ($status)" >&2; fi
+  exit "$status"
 }
 
 export TZ=UTC

@@ -6,6 +6,8 @@ import dev.rail8.core.flow.RetryPolicy;
 import dev.rail8.ingress.ServerCertificate;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.deploy.Secrets;
+import dev.rail8.runtime.secret.SecretStore;
+import dev.rail8.runtime.secret.StoreKey;
 import dev.rail8.runtime.git.GitSettings;
 import dev.rail8.runtime.journal.JournalConfig;
 import dev.rail8.runtime.journal.MasterKeySource;
@@ -48,7 +50,8 @@ import java.util.regex.Pattern;
  * @param maxPackageBytes {@code RAIL8_MAX_PACKAGE_BYTES}, 1 byte to 1 GiB (64 MiB)
  * @param pg the {@code RAIL8_PG_*} keys
  * @param blobs the {@code RAIL8_BLOB_*} keys
- * @param secrets what the endpoints' {@code secret://} references resolve to: the {@code RAIL8_SECRET_*} variables
+ * @param secrets the secret store's key {@code RAIL8_SECRETS_KEY}, and the variables the join of a store never written imports:
+ *                every {@code RAIL8_SECRET_*}, {@code RAIL8_GIT_USER} and {@code RAIL8_GIT_TOKEN}, as given
  * @param leases the {@code RAIL8_VALKEY_URI} and {@code RAIL8_POLLER_LEASE_*} keys: where and how long a polling consumer's
  *               lease is held
  * @param retention the retention job's keys: {@code RAIL8_RETENTION_MAX_AGE}, ISO-8601, PT1H to P366D (P7D): rows
@@ -297,7 +300,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
         this(nodeId, env, admin, dataDir, stopDeadline, maxPackageBytes, pg, blobs, secrets, Leases.DEFAULTS);
     }
 
-    /** A node without secrets: every {@code secret://} reference of an endpoint is not set. */
+    /** A node without the secret store's key and without variables to import. */
     public NodeConfig(String nodeId, String env, AdminServer.Config admin, Path dataDir, Duration stopDeadline, long maxPackageBytes, Pg pg,
                       Blobs blobs) {
         this(nodeId, env, admin, dataDir, stopDeadline, maxPackageBytes, pg, blobs, Secrets.fromEnv(Map.of()));
@@ -701,10 +704,11 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
 
     /**
      * Reads {@code variables} only (never {@link System#getenv()}): the node's configuration, or the refusal naming the key; its
-     * {@code RAIL8_SECRET_*} variables are the node's secrets ({@link Secrets#fromEnv}), its {@code RAIL8_JOURNAL_KEY*}
-     * variables its master key source ({@link MasterKeySource#fromEnv}). First each secret given as a file
-     * ({@code RAIL8_PG_PASSWORD_FILE}, {@code RAIL8_ADMIN_TOKEN_FILE}, {@code RAIL8_GIT_TOKEN_FILE}, {@code RAIL8_VALKEY_URI_FILE},
-     * {@code RAIL8_SECRET_<NAME>_FILE}) is read in place of its variable ({@link SecretFiles#resolve}).
+     * {@code RAIL8_SECRET_*} and git variables, as given, are the import of a secret store never written
+     * ({@link SecretStore.Import#fromEnv}), its {@code RAIL8_JOURNAL_KEY*} variables its master key source
+     * ({@link MasterKeySource#fromEnv}). First each platform secret given as a file ({@code RAIL8_PG_PASSWORD_FILE},
+     * {@code RAIL8_ADMIN_TOKEN_FILE}, {@code RAIL8_GIT_TOKEN_FILE}, {@code RAIL8_VALKEY_URI_FILE}, {@code RAIL8_SECRETS_KEY_FILE})
+     * is read in place of its variable ({@link SecretFiles#resolve}).
      */
     public static NodeConfig from(Map<String, String> variables) {
         Map<String, String> env = SecretFiles.resolve(variables);
@@ -739,7 +743,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
                 number(env, "RAIL8_BLOB_DURABLE_MAX", MIB, 1, 64 * MIB));
         Path dataDir = Path.of(env.getOrDefault("RAIL8_DATA_DIR", "/var/lib/rail8"));
         return new NodeConfig(nodeId, name, admin, dataDir, stopDeadline(env), number(env, "RAIL8_MAX_PACKAGE_BYTES", MAX_PACKAGE_BYTES_DEFAULT, 1, GIB), pg, blobs,
-                Secrets.fromEnv(env), leases(env), retention(env), samplingPeriod(env), targets(env), journal(env, dataDir, nodeId, memoryTier),
+                Secrets.of(StoreKey.fromEnv(env), SecretStore.Import.fromEnv(importable(variables, env))), leases(env), retention(env), samplingPeriod(env), targets(env), journal(env, dataDir, nodeId, memoryTier),
                 MasterKeySource.fromEnv(env), journalSweep(env), intakeGroup(env, pg.intakePoolSize()), duration(env, "RAIL8_NODE_LEASE", NODE_LEASE_DEFAULT),
                 duration(env, "RAIL8_NODE_LEASE_RENEW", NODE_LEASE_RENEW_DEFAULT), retries(env), peer(env, nodeId),
                 (int) number(env, "RAIL8_JOURNAL_COPIES", deployed(name) ? COPIES_MAX : 1, 1, COPIES_MAX),
@@ -771,6 +775,18 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
                 span(env, "RAIL8_GIT_CHECK_EVERY", GitSettings.CHECK_EVERY_DEFAULT, GitSettings.CHECK_EVERY_MIN.toString(), GitSettings.CHECK_EVERY_MAX.toString()),
                 span(env, "RAIL8_GIT_CHECK_TIMEOUT", GitSettings.CHECK_TIMEOUT_DEFAULT, GitSettings.CHECK_TIMEOUT_MIN.toString(),
                         GitSettings.CHECK_TIMEOUT_MAX.toString())));
+    }
+
+    /**
+     * The variables the import is given: as set, but the git token as read at start, since the git cache reads its file form
+     * too.
+     */
+    private static Map<String, String> importable(Map<String, String> variables, Map<String, String> env) {
+        if (!variables.containsKey("RAIL8_GIT_TOKEN_FILE")) return variables;
+        Map<String, String> given = new java.util.HashMap<>(variables);
+        given.remove("RAIL8_GIT_TOKEN_FILE");
+        if (env.get("RAIL8_GIT_TOKEN") != null) given.put("RAIL8_GIT_TOKEN", env.get("RAIL8_GIT_TOKEN"));
+        return given;
     }
 
     /** The {@code RAIL8_PEER_*} keys: each range-checked naming its key. */

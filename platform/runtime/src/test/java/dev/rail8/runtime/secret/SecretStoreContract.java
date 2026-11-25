@@ -10,7 +10,10 @@ import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -125,6 +128,7 @@ abstract class SecretStoreContract {
         final FakeClock clock = FakeClock.at(Instant.parse("2026-11-25T10:00:00Z"));
         final FakeTimer timer = new FakeTimer(clock);
         final List<String> warnings = new CopyOnWriteArrayList<>();
+        final List<String> infos = new CopyOnWriteArrayList<>();
         final Map<String, String> env;
         SecretStore store;
         Secrets secrets;
@@ -140,19 +144,34 @@ abstract class SecretStoreContract {
         }
     }
 
-    /** Starts {@code id} with {@code env}: the key's variables and its {@code RAIL8_SECRET_*}. */
+    /** Starts {@code id} with {@code env}: the key's variables, and the variables its join imports into a store never written. */
     Node start(String id, Map<String, String> env) {
+        Node n = joining(id, env);
+        await(n.store.start(join(id), n.secrets.imports()));
+        n.secrets = n.secrets.withStore(n.store);
+        return n;
+    }
+
+    /** The store of {@code id} with {@code env}, its notices heard, not started: {@code n.secrets} is not yet over it. */
+    Node joining(String id, Map<String, String> env) {
         Node n = new Node(id, env);
-        Secrets fromEnv = Secrets.fromEnv(env);
-        long epoch = join(id);
-        n.store = new SecretStore(rows(), fromEnv.key(), id, fromEnv.variableNames(), n.clock, n.timer, text -> {
+        n.secrets = Secrets.fromEnv(env);
+        n.store = new SecretStore(rows(), n.secrets.key().orElseThrow(), id, n.clock, n.timer, text -> {
             n.warnings.add(text);
+            captured.add(text);
+        }, text -> {
+            n.infos.add(text);
             captured.add(text);
         });
         hear(n.store);
-        await(n.store.start(epoch));
-        n.secrets = fromEnv.withStore(n.store);
         return n;
+    }
+
+    /** {@code env} with the key {@code K1}. */
+    static Map<String, String> withK1(Map<String, String> env) {
+        Map<String, String> all = new HashMap<>(env);
+        all.put(StoreKey.VARIABLE, b64(K1));
+        return all;
     }
 
     Node start(String id, byte[] key, byte[] previous) {
@@ -173,12 +192,18 @@ abstract class SecretStoreContract {
 
     IllegalStateException refusedStart(String id, byte[] key, byte[] previous) {
         Map<String, String> env = new HashMap<>();
-        if (key != null) env.put(StoreKey.VARIABLE, b64(key));
+        env.put(StoreKey.VARIABLE, b64(key));
         if (previous != null) env.put(StoreKey.PREVIOUS, b64(previous));
-        Secrets fromEnv = Secrets.fromEnv(env);
-        FakeClock clock = FakeClock.at(Instant.parse("2026-11-25T10:00:00Z"));
-        SecretStore store = new SecretStore(rows(), fromEnv.key(), id, List.of(), clock, new FakeTimer(clock), captured::add);
-        Throwable failure = awaitFailure(store.start(join(id)));
+        return refusedStart(id, env);
+    }
+
+    /** The refusal of the start of {@code id} with {@code env}, at the epoch of a join of its own. */
+    IllegalStateException refusedStart(String id, Map<String, String> env) {
+        return refusedStart(joining(id, env), join(id));
+    }
+
+    IllegalStateException refusedStart(Node n, long epoch) {
+        Throwable failure = awaitFailure(n.store.start(epoch, n.secrets.imports()));
         if (!(failure instanceof IllegalStateException refused)) throw new AssertionError("the start was not refused as expected", failure);
         captured.add(refused.getMessage());
         return refused;
@@ -319,23 +344,23 @@ abstract class SecretStoreContract {
     // ------------------------------------------------------------------------------------------------- the sources
 
     @Test
-    void aDeleteBringsBackTheVariableAndFailsTheNextRead() {
+    void aDeleteFailsTheNextReadAndNoVariableTakesOver() {
         Node a = start("a", K1);
-        Node b = start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_DB", "variable-value"));
+        Node b = start("b", withK1(Map.of("RAIL8_SECRET_DB", "variable-value")));
         written.add("variable-value");
-        assertEquals(Optional.of("variable-value"), read(b, "db"));
+        assertEquals(Optional.empty(), read(b, "db"), "a written store is the only source: the variable is not read");
         create(a, value("db", "store-value"));
         awaitNotices();
         Secret onA = a.secrets.handle("secret://db");
         Secret onB = b.secrets.handle("secret://db");
-        assertEquals("store-value", onB.value(), "the store wins");
-        assertEquals(List.of("b"), list(a).getJsonArray("secrets").getJsonObject(0).getJsonArray("shadowedOn").getList(), "the list names the shadowed");
+        assertEquals("store-value", onB.value());
 
         await(a.store.delete(ALICE, "db", Optional.empty()));
         awaitNotices();
-        assertEquals("variable-value", onB.value(), "after the delete the variable takes over");
-        IllegalStateException gone = assertThrows(IllegalStateException.class, onA::value, "a deleted secret fails the next read");
-        assertTrue(gone.getMessage().contains("secret://db"));
+        for (Secret handle : List.of(onA, onB)) {
+            IllegalStateException gone = assertThrows(IllegalStateException.class, handle::value, "a deleted secret fails the next read");
+            assertTrue(gone.getMessage().contains("secret://db"));
+        }
         assertNoValueCaptured();
     }
 
@@ -344,7 +369,7 @@ abstract class SecretStoreContract {
         Node a = start("a", K1);
         create(a, value("db", "sealed-value"));
         tamper("db");
-        Node c = start("c", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_DB", "variable-value"));
+        Node c = start("c", withK1(Map.of("RAIL8_SECRET_DB", "variable-value")));
         written.add("variable-value");
         assertEquals(Optional.empty(), read(c, "db"), "no value, and not the variable's");
         assertEquals(Health.Status.DEGRADED, c.store.health().status());
@@ -397,18 +422,157 @@ abstract class SecretStoreContract {
         create(a, value("db", "one-value"));
         IllegalStateException other = refusedStart("c", K2, null);
         assertTrue(other.getMessage().contains(id(K1)) && other.getMessage().contains("1 rows"), other.getMessage());
-        IllegalStateException none = refusedStart("d", null, null);
-        assertTrue(none.getMessage().contains("1 rows") && none.getMessage().contains(id(K1)), none.getMessage());
+    }
+
+    // ------------------------------------------------------------------------------------------------- the import
+
+    @TempDir
+    Path files;
+
+    /** A file of {@code content} in {@link #files}: its absolute path. */
+    String file(String name, String content) {
+        try {
+            return Files.writeString(files.resolve(name), content).toAbsolutePath().toString();
+        } catch (java.io.IOException failed) {
+            throw new java.io.UncheckedIOException(failed);
+        }
     }
 
     @Test
-    void withNoKeyAnEmptyStoreStartsAndAWriteIsNoKey() {
-        Node n = start("n", Map.of("RAIL8_SECRET_DB", "variable-value"));
-        written.add("variable-value");
-        assertEquals(Optional.of("variable-value"), read(n, "db"));
-        SecretRefused r = refused(n.store.create(ALICE, value("db", "nope-value")));
-        assertEquals(503, r.status());
-        assertEquals("no-key", r.code());
+    void theFirstJoinImportsEachKindWithItsAuditRowsAndOneInfo() {
+        written.addAll(List.of("plain-db-value", "plain-file-value", "git-token-value"));
+        Node a = start("a", withK1(Map.of("RAIL8_SECRET_DB", "plain-db-value", "RAIL8_SECRET_TLS_PEM_FILE", file("tls", "plain-file-value\n"),
+                "RAIL8_GIT_USER_FILE", file("user", "git-user"), "RAIL8_GIT_TOKEN", "git-token-value", "RAIL8_SECRET_EMPTY", "")));
+        assertEquals(Optional.of("plain-db-value"), read(a, "db"));
+        assertEquals(Optional.of("plain-file-value"), read(a, "tls-pem"), "the file's one line end dropped");
+        assertEquals(Optional.empty(), read(a, "empty"), "a variable set to the empty string is not imported");
+        assertEquals(new Secret.Credentials("git-user", "git-token-value"), a.store.platform(SecretStore.GIT).orElseThrow().value());
+        assertEquals(1, head().generation(), "one raise of the generation");
+        for (String name : List.of("db", "tls-pem", SecretStore.GIT)) assertEquals("environment", stored().get(name).meta().changedBy(), name);
+        assertEquals(List.of("environment/local", "environment/local", "environment/local"), actors("secret.create"));
+        List<JsonObject> created = audit("secret.create");
+        assertEquals(new JsonObject().put("kind", "value").put("variables", new JsonArray().add("RAIL8_SECRET_DB")).put("node", "a"), created.get(0));
+        assertEquals(new JsonObject().put("kind", "credentials").put("variables", new JsonArray().add("RAIL8_GIT_TOKEN").add("RAIL8_GIT_USER_FILE"))
+                .put("node", "a"), created.get(1));
+        assertEquals(new JsonObject().put("kind", "value").put("variables", new JsonArray().add("RAIL8_SECRET_TLS_PEM_FILE")).put("node", "a"), created.get(2));
+        assertEquals(1, a.infos.size(), a.infos.toString());
+        assertTrue(a.infos.getFirst().contains("[db, rail8.git, tls-pem]") && a.infos.getFirst().contains(id(K1)), a.infos.getFirst());
+        assertEquals(List.of(), a.warnings);
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aFirstJoinWithNoVariablesClosesTheImportAndALaterNodeImportsNothing() {
+        Node a = start("a", K1);
+        assertEquals(1, head().generation(), "the generation is raised, also with nothing imported");
+        assertEquals(1, a.infos.size());
+        assertTrue(a.infos.getFirst().contains("nothing imported"), a.infos.getFirst());
+        written.addAll(List.of("late-db-value", "held-value"));
+        create(a, value("held", "held-value"));
+        Node b = start("b", withK1(Map.of("RAIL8_SECRET_DB", "late-db-value", "RAIL8_SECRET_HELD", "held-value",
+                "RAIL8_SECRET_GONE_FILE", files.resolve("no-such-file").toString())));
+        assertEquals(Optional.empty(), read(b, "db"), "never read on a written store");
+        assertEquals(List.of(), b.infos);
+        assertEquals(1, b.warnings.size(), b.warnings.toString());
+        String w = b.warnings.getFirst();
+        assertTrue(w.contains("[RAIL8_SECRET_HELD] not read: remove the variable"), w);
+        assertTrue(w.contains("[RAIL8_SECRET_DB, RAIL8_SECRET_GONE_FILE] not read: enter it in the store, or a flow that names it fails"), w);
+        assertEquals(List.of("alice/session"), actors("secret.create"), "b wrote nothing");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void eachRefusalOfTheImportRefusesTheStartLeavesGenerationZeroAndWritesNoRow() {
+        use("used-as-login", "flow", "pkg/orders", Set.of(Secret.Kind.CREDENTIALS));
+        String big = "b".repeat(SecretStore.MAX_VALUE_BYTES + 1);
+        Map<String, String> many = new HashMap<>();
+        for (int i = 0; i <= SecretStore.MAX_SECRETS; i++) many.put("RAIL8_SECRET_S" + i, "many-value");
+        written.addAll(List.of("refused-value", "git-token-value", "many-value"));
+        Map<Map<String, String>, List<String>> refusals = new java.util.LinkedHashMap<>();
+        refusals.put(Map.of("RAIL8_SECRET_A_B", "refused-value", "RAIL8_SECRET_NOT A NAME", "refused-value"),
+                List.of("RAIL8_SECRET_NOT A NAME", "not a secret's name"));
+        refusals.put(Map.of("RAIL8_SECRET_" + "N".repeat(SecretStore.MAX_NAME + 1), "refused-value"), List.of("RAIL8_SECRET_NNN", "129"));
+        refusals.put(Map.of("RAIL8_SECRET_RAIL8.MINE", "refused-value"), List.of("RAIL8_SECRET_RAIL8.MINE", "rail8."));
+        refusals.put(Map.of("RAIL8_SECRET_DB", "refused-value", "RAIL8_SECRET_DB_FILE", file("db", "refused-value")),
+                List.of("RAIL8_SECRET_DB and RAIL8_SECRET_DB_FILE", "'db'"));
+        refusals.put(Map.of("RAIL8_GIT_TOKEN", "git-token-value"), List.of("RAIL8_GIT_TOKEN is set without RAIL8_GIT_USER"));
+        refusals.put(Map.of("RAIL8_GIT_USER", "git-user", "RAIL8_GIT_TOKEN", ""), List.of("RAIL8_GIT_USER is set without RAIL8_GIT_TOKEN"));
+        refusals.put(Map.of("RAIL8_GIT_USER", "   ", "RAIL8_GIT_TOKEN", "git-token-value"), List.of("RAIL8_GIT_USER is blank"));
+        refusals.put(Map.of("RAIL8_GIT_USER", "git-user", "RAIL8_GIT_TOKEN_FILE", file("token", " \t")), List.of("RAIL8_GIT_TOKEN_FILE is blank"));
+        refusals.put(Map.of("RAIL8_GIT_USER", "u".repeat(SecretStore.MAX_USER + 1), "RAIL8_GIT_TOKEN", "git-token-value"),
+                List.of("RAIL8_GIT_USER takes 257 characters"));
+        refusals.put(Map.of("RAIL8_SECRET_BIG", big), List.of("RAIL8_SECRET_BIG takes " + big.length() + " bytes"));
+        refusals.put(Map.of("RAIL8_SECRET_MISSING_FILE", files.resolve("no-such-file").toString()),
+                List.of("RAIL8_SECRET_MISSING_FILE names a file that does not exist"));
+        refusals.put(Map.of("RAIL8_SECRET_RELATIVE_FILE", "relative/path"), List.of("RAIL8_SECRET_RELATIVE_FILE must be the absolute path"));
+        refusals.put(Map.of("RAIL8_SECRET_USED_AS_LOGIN", "refused-value"), List.of("RAIL8_SECRET_USED_AS_LOGIN", "pkg/orders", "credentials"));
+        refusals.put(many, List.of("1001 secrets"));
+        for (Map.Entry<Map<String, String>, List<String>> each : refusals.entrySet()) {
+            IllegalStateException refused = refusedStart("r", withK1(each.getKey()));
+            for (String part : each.getValue()) {
+                String expected = part.equals("RAIL8_SECRET_NNN") ? "RAIL8_SECRET_" + "N".repeat(SecretStore.MAX_NAME + 1) : part;
+                assertTrue(refused.getMessage().contains(expected), each.getKey().keySet() + ": " + refused.getMessage());
+            }
+            assertFalse(refused.getMessage().contains(files.toString()), "no path: " + refused.getMessage());
+            assertEquals(0, head().generation(), refused.getMessage());
+            assertEquals(Map.of(), stored());
+            assertEquals(List.of(), allAudit());
+        }
+        written.add("imported-later");
+        Node later = start("later", withK1(Map.of("RAIL8_SECRET_DB", "imported-later")));
+        assertEquals(Optional.of("imported-later"), read(later, "db"), "a later node imports");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void ofTwoNodesJoiningAtOnceOneImportsAndTheOtherWarns() {
+        written.add("both-value");
+        Map<String, String> env = withK1(Map.of("RAIL8_SECRET_DB", "both-value"));
+        Node a = joining("a", env);
+        Node b = joining("b", env);
+        long ea = join("a");
+        long eb = join("b");
+        Future<Void> sa = a.store.start(ea, a.secrets.imports());
+        Future<Void> sb = b.store.start(eb, b.secrets.imports());
+        await(sa);
+        await(sb);
+        assertEquals(1, head().generation());
+        assertEquals(1, audit("secret.create").size(), "imported once");
+        List<Node> importing = List.of(a, b).stream().filter(n -> !n.infos.isEmpty()).toList();
+        assertEquals(1, importing.size(), "one imports");
+        Node other = importing.getFirst() == a ? b : a;
+        assertEquals(List.of(), other.infos);
+        assertEquals(1, other.warnings.size(), other.warnings.toString());
+        assertTrue(other.warnings.getFirst().contains("[RAIL8_SECRET_DB] not read: remove the variable"), other.warnings.getFirst());
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aNodeWhoseEpochANewerStartTookImportsNothingAndDoesNotStart() {
+        written.add("stale-value");
+        Node stale = joining("a", withK1(Map.of("RAIL8_SECRET_DB", "stale-value")));
+        long first = join("a");
+        join("a");   // a newer start of the node took its row
+        IllegalStateException refused = refusedStart(stale, first);
+        assertTrue(refused.getMessage().contains("a") && refused.getMessage().contains("epoch " + first), refused.getMessage());
+        assertEquals(0, head().generation());
+        assertEquals(Map.of(), stored());
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aCreateOrOverwriteOfTheGitCredentialsWithABlankUserOrTokenIsInvalid() {
+        Node a = start("a", K1);
+        SecretRefused token = refused(a.store.create(ALICE, credentials(SecretStore.GIT, "git-user", "   ")));
+        assertEquals(422, token.status());
+        assertEquals("invalid", token.code());
+        assertEquals("password", token.values().getString("field"));
+        create(a, credentials(SecretStore.GIT, "git-user", "git-token"));
+        SecretRefused user = refused(a.store.overwrite(ALICE, SecretStore.GIT, credentials(SecretStore.GIT, " ", "git-token")));
+        assertEquals("invalid", user.code());
+        assertEquals("user", user.values().getString("field"));
+        create(a, credentials("other-login", " ", " "));   // another name's credentials may be blank
+        assertNoValueCaptured();
     }
 
     // ------------------------------------------------------------------------------------------------- the change of the key
@@ -614,17 +778,6 @@ abstract class SecretStoreContract {
     }
 
     @Test
-    void aNameIsShadowedByTheVariableItShares() {
-        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_A_B", "variable-value"));
-        written.add("variable-value");
-        create(a, value("a.b", "store-value"));
-        JsonObject all = list(a);
-        assertEquals(List.of("a"), all.getJsonArray("secrets").getJsonObject(0).getJsonArray("shadowedOn").getList());
-        assertEquals(0, all.getJsonArray("variablesOnly").size(), "the variable a stored name takes is not listed apart");
-        assertNoValueCaptured();
-    }
-
-    @Test
     void afterALostKeyTheRowsDeletedInSqlLeaveTheNamesMissingWithTheirUsers() {
         Node a = start("a", K1);
         create(a, value("db", "the-value"));
@@ -642,14 +795,12 @@ abstract class SecretStoreContract {
     }
 
     @Test
-    void theListCountsTheVariablesOfJoinedNodesOnly() {
+    void theListCountsTheKeysOfJoinedNodesOnly() {
         Node a = start("a", K1);
-        start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ON_B", "variable-value"));
-        written.add("variable-value");
-        assertEquals("RAIL8_SECRET_ON_B", list(a).getJsonArray("variablesOnly").getJsonObject(0).getString("variable"));
+        start("b", K1);
         join("b");   // b's epoch moves on without its join to the store: a node that left and came back, not joined yet
         JsonObject all = list(a);
-        assertEquals(0, all.getJsonArray("variablesOnly").size(), "a node not joined counts no variable");
+        assertFalse(all.containsKey("variablesOnly"), "the list names no variable");
         JsonObject b = all.getJsonObject("key").getJsonArray("nodes").stream().map(JsonObject.class::cast)
                 .filter(n -> n.getString("node").equals("b")).findFirst().orElseThrow();
         assertFalse(b.getBoolean("joined"));
@@ -657,8 +808,7 @@ abstract class SecretStoreContract {
 
     @Test
     void theListAnswersNamesKindsUsesAndTheKey() {
-        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ONLY_HERE", "variable-value"));
-        written.add("variable-value");
+        Node a = start("a", K1);
         create(a, value("db", "the-value"));
         use("db", "flow", "pkg/orders", Set.of(Secret.Kind.VALUE));
         use("absent", "flow", "pkg/orders", Set.of(Secret.Kind.CREDENTIALS));
@@ -673,14 +823,14 @@ abstract class SecretStoreContract {
         assertFalse(db.getBoolean("unreadable"));
         List<String> missing = all.getJsonArray("missing").stream().map(o -> ((JsonObject) o).getString("name")).toList();
         assertTrue(missing.contains("absent") && missing.contains(SecretStore.GIT), missing.toString());
-        assertEquals("RAIL8_SECRET_ONLY_HERE", all.getJsonArray("variablesOnly").getJsonObject(0).getString("variable"));
+        assertFalse(db.containsKey("shadowedOn"), "the list names no variable");
         JsonObject key = all.getJsonObject("key");
         assertEquals(id(K1), key.getString("common"));
         assertEquals(0L, key.getLong("rowsUnderAnotherKey"));
         assertFalse(key.getBoolean("previousSet"));
         assertEquals("a", all.getString("node"));
         assertEquals("db", await(a.store.entry("db")).orElseThrow().getString("name"));
-        assertEquals("RAIL8_SECRET_ONLY_HERE", await(a.store.entry("only-here")).orElseThrow().getString("variable"));
+        assertEquals("absent", await(a.store.entry("absent")).orElseThrow().getString("name"), "a missing name a use names has an entry");
         assertEquals(Optional.empty(), await(a.store.entry("nobody")));
         assertNoValueCaptured();
     }

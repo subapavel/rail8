@@ -186,8 +186,6 @@ public enum RefusalCode {
     RESERVED("reserved"),
     /** 422: the secret's {@code field} is of the wrong form or out of its limits; its value is never echoed. */
     INVALID("invalid"),
-    /** 503: this node holds no key of the secret store. */
-    NO_KEY("no-key"),
     /** 503: the change is written, but this node could not read it back: it is in force within one tick. */
     WRITTEN_UNREAD("written-unread"),
 

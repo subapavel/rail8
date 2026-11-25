@@ -12,7 +12,7 @@ repository root.
 | Maven | none | the repository's `./mvnw` wrapper fetches the Maven it needs (3.9.11) and builds everything |
 | Node.js | 22.19 or newer | with npm |
 | Docker | Compose v2 | Docker Engine on Linux, Docker Desktop on macOS and Windows |
-| `curl`, `git` | `git` 2.30 or newer | `git` with your name and email set (`git config --global user.name`, `user.email`): you commit what you deploy |
+| `curl`, `git`, `openssl` | `git` 2.30 or newer | `git` with your name and email set (`git config --global user.name`, `user.email`): you commit what you deploy |
 
 The scripts are shell scripts. On Windows run everything inside WSL 2, with Docker Desktop's WSL integration on and the
 repository cloned inside the WSL file system.
@@ -29,6 +29,8 @@ cp -r mapping/corpus ~/rail8-workspace/mapping-corpus                     # once
 (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')   # once
 
 export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)      # the node's emergency key: it makes the first users and does nothing else
+[ -s ~/.rail8-secrets-key ] || { t=$(mktemp ~/.rail8-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)   # the secret store's key: made once, kept
 docker compose up -d --build                       # the node, its Postgres and the partner echo
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
 bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
@@ -41,6 +43,17 @@ account: it has a token, no password. The token file holds the token alone and o
 days, then an administrator issues `deploy` a new one in **Users** (New token…). Nothing here is a fixed value: the key
 is new each time you start the node, and the password and the token are made by the node. `bootstrap` makes the two
 accounts once: a second run is refused (`the name owner is taken`).
+
+The secret store's key is the one value you keep. The node seals every secret it holds in Postgres under it, and refuses
+to start without it. The first of the two key lines writes 256 random bits to `~/.rail8-secrets-key` once, readable only by
+you, and never replaces a file that holds something; the second exports it. An empty file, left by a failed `openssl`, is
+not replaced either: delete it and run the line again. Without the file the node cannot open the secrets in its database:
+its start is refused with "rows of the secret store are sealed under keys this node does not hold". Then start from
+"First run" after `docker compose down -v`.
+
+The node's first start imports the demo's two secrets, the SFTP password and the SFTP host key's fingerprint, from its
+`RAIL8_SECRET_*` variables into the store, once, and logs one INFO naming them. After that it reads no such variable: a
+value you change later is entered in the store, or the database starts empty again after `docker compose down -v`.
 
 The working folder `~/rail8-workspace` holds the packages as git repositories, each named as its folder: the demo is the
 repository `demo`. The node mounts the folder read-only and deploys a commit of a repository in it, never the files
@@ -160,12 +173,15 @@ git pull
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
 (cd ui && npm ci)
 export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)           # a new key each morning: a new shell has none, and the node refuses to start without one
+[ -s ~/.rail8-secrets-key ] || { t=$(mktemp ~/.rail8-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)   # the secret store's key, the same every morning
 export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)         # the deploy account's token, made once by the first run
 docker compose up -d --build --force-recreate           # the node restores the packages deployed before, from its git cache
 ```
 
 Do not run `bootstrap` again: the database keeps the accounts, and the key only has to start the node. Without a
-database from the first run, such as after `docker compose down -v`, start from "First run".
+database from the first run, such as after `docker compose down -v`, start from "First run". The first of the two key
+lines makes the file only on the morning it is missing; every other morning it leaves the file as it is.
 
 ### Moving from the shared token, once
 
@@ -352,6 +368,8 @@ the rows the filters keep as a file.
 docker compose down      # keeps the database and the node's git cache in their volumes
 docker compose down -v   # also removes them: the next start is empty, deploy the demo again
 ```
+
+Both run without the secret store's key. `~/.rail8-secrets-key` stays: the next empty database takes the same key.
 
 Ctrl+C stops the UI.
 

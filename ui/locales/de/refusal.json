@@ -60,7 +60,6 @@
   "refusal.no-folder": "Kein Ordner {path} im Arbeitsordner.",
   "refusal.no-git-base": "Der Knoten hat keine RAIL8_GIT_BASE und stellt daher nichts bereit.",
   "refusal.no-held-work": "Keine angehaltene Arbeitseinheit {seq}.",
-  "refusal.no-key": "Dieser Knoten hat keinen Schlüssel des Secret-Speichers.",
   "refusal.no-lost-work": "Keine verlorene Arbeitseinheit {seq}.",
   "refusal.no-message": "Es wurde keine Nachricht {id} aufgezeichnet.",
   "refusal.no-message-list": "Dieser Knoten listet und zählt Nachrichten nicht nach Zeit.",

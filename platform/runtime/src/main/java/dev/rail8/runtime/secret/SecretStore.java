@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -51,7 +52,7 @@ import java.util.stream.Collectors;
  * {@value #TICK_SECONDS} s on the injected timer; looks run one at a time, and calls during one share the next. When the
  * generation or the stamp differs from what it holds, it reads every row in one repeatable-read transaction, opens every row and
  * drops the names that are gone. A row that does not open, that is under a key the node does not hold, or whose sealed value is
- * longer than {@value #MAX_ROW_BYTES} bytes is held unreadable: it gives no value, it never falls back to a variable, it makes
+ * longer than {@value #MAX_ROW_BYTES} bytes is held unreadable: it gives no value, it makes
  * {@link #health()} {@code DEGRADED}, and one WARNING names its name and key id. A generation behind the one held, or the same
  * generation with another stamp, is a WARNING: the database went back to an earlier state. After {@value #FAILED_LOOKS} looks in
  * a row that could not read the store, the node is {@code DEGRADED}, naming the time of its last good read, with one WARNING.
@@ -68,6 +69,10 @@ import java.util.stream.Collectors;
  * again up to {@value #BATCH} rows under another key and asks each {@link BoundRows} to bind again, in the store's transactions; the node that seals the last
  * writes the audit row {@code secret.key-changed}. A node drops its previous key once every live node names its current key and
  * no row, nor any bound row, is under the previous one.
+ *
+ * <p><b>The import.</b> The store is the only source of a secret. The join of a store of generation 0, one that was never
+ * written, imports the node's variables ({@link Import}) as the creates a secret administrator would make, all or none, and
+ * raises the generation, also with nothing imported; after it no variable is read.
  *
  * <p>No text of this class, no answer and no audit row holds a value.
  */
@@ -101,6 +106,8 @@ public final class SecretStore {
 
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9._-]*");
     private static final String VARIABLE = "RAIL8_SECRET_";
+    /** Who writes an imported secret, as its row and its audit row name it. */
+    static final String ENVIRONMENT = "environment";
     private static final byte[] BIND_INFO = "rail8 settings v1 bind".getBytes(StandardCharsets.US_ASCII);
     private static final HexFormat HEX = HexFormat.of();
     private static final System.Logger LOG = System.getLogger(SecretStore.class.getName());
@@ -168,10 +175,10 @@ public final class SecretStore {
 
     private final SecretRows rows;
     private final String node;
-    private final List<String> variables;
     private final Clock clock;
     private final Timer timer;
     private final Consumer<String> warn;
+    private final Consumer<String> info;
 
     private volatile StoreKey key;
     private volatile State state = new State(null, Map.of());
@@ -194,24 +201,20 @@ public final class SecretStore {
     private Timer.Cancellable tick;        // guarded by lock
     private boolean closed;                // guarded by lock
 
-    SecretStore(SecretRows rows, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer, Consumer<String> warn) {
+    SecretStore(SecretRows rows, StoreKey key, String node, Clock clock, Timer timer, Consumer<String> warn, Consumer<String> info) {
         this.rows = Objects.requireNonNull(rows, "rows");
         this.key = Objects.requireNonNull(key, "key");
         this.node = Objects.requireNonNull(node, "node");
-        this.variables = List.copyOf(new TreeSet<>(variables));
         this.clock = Objects.requireNonNull(clock, "clock");
         this.timer = Objects.requireNonNull(timer, "timer");
         this.warn = Objects.requireNonNull(warn, "warn");
+        this.info = Objects.requireNonNull(info, "info");
     }
 
-    /**
-     * Node {@code node}'s store over Postgres's {@code pool}, under {@code key}, its {@code RAIL8_SECRET_*} variables named by
-     * {@code variables} (names only, as the node reads them after their file forms), its ticks on {@code timer}. Reads nothing
-     * before {@link #start}.
-     */
-    public static SecretStore postgres(Pool pool, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer) {
-        return new SecretStore(new PgSecretRows(pool, PgSecretRows.LOCK_WAIT), key, node, variables, clock, timer,
-                text -> LOG.log(System.Logger.Level.WARNING, text));
+    /** Node {@code node}'s store over Postgres's {@code pool}, under {@code key}, its ticks on {@code timer}. Reads nothing before {@link #start}. */
+    public static SecretStore postgres(Pool pool, StoreKey key, String node, Clock clock, Timer timer) {
+        return new SecretStore(new PgSecretRows(pool, PgSecretRows.LOCK_WAIT), key, node, clock, timer,
+                text -> LOG.log(System.Logger.Level.WARNING, text), text -> LOG.log(System.Logger.Level.INFO, text));
     }
 
     /** Where the placeholder key pair of {@code rail8 validate} and {@code rail8 test} lies on the class path: the testkit's. */
@@ -234,39 +237,294 @@ public final class SecretStore {
         }
     }
 
-    /** The variable of {@code name}: {@code RAIL8_SECRET_} and the name upper-cased, {@code .} and {@code -} as {@code _}. */
-    public static String variable(String name) {
-        return VARIABLE + name.toUpperCase(Locale.ROOT).replace('.', '_').replace('-', '_');
-    }
-
     // ---------------------------------------------------------------------------------------------------------------- start
 
     /**
-     * Joins the store with the epoch of this node's join to the pool, reads every row and arms the tick. The join is one
-     * transaction under the store's row lock: it writes this node's key ids, its variables' names and {@code epoch}, then checks
-     * every row's key id.
-     *
-     * @return fails with an {@link IllegalStateException} naming the rows' count and key ids when a row is under a key this node
-     *         does not hold, or the store holds rows and this node no key
+     * The node's variables the join of a store of generation 0 imports, as given: every {@code RAIL8_SECRET_<NAME>},
+     * {@code RAIL8_GIT_USER} and {@code RAIL8_GIT_TOKEN}, each also in its file form ({@code _FILE}), set to a non-empty value.
+     * A {@code RAIL8_SECRET_<NAME>} is imported as the plain value {@code <NAME>} in lower case with each {@code _} as {@code -};
+     * its file form ends in {@code _FILE} below the prefix ({@code RAIL8_SECRET_FILE} is the plain variable of {@code file},
+     * {@code RAIL8_SECRET_DB_FILE_FILE} the file form of {@code db-file}), and {@code RAIL8_SECRET_} with an empty name is
+     * ignored. The git pair is imported as the credentials {@code rail8.git}. It holds each variable's value or path, reads no
+     * file and checks nothing; its {@code toString}, {@code equals} and {@code hashCode} hold the variables' names only.
      */
-    public Future<Void> start(long epoch) {
+    public static final class Import {
+        private static final String SECRET = VARIABLE;
+        private static final String FILE = "_FILE";
+        static final String GIT_USER = "RAIL8_GIT_USER";
+        static final String GIT_TOKEN = "RAIL8_GIT_TOKEN";
+
+        /** One variable as given: the name it maps to, whether it is a file form, and its value or its path. */
+        record Given(String variable, String name, boolean file, String raw) {
+            @Override public String toString() {
+                return variable;
+            }
+        }
+
+        private final Map<String, Given> given;   // by variable, sorted
+
+        private Import(Map<String, Given> given) {
+            this.given = given;
+        }
+
+        /** None: a join with it imports nothing. */
+        public static Import none() {
+            return new Import(Map.of());
+        }
+
+        /** The variables of {@code env} the import reads; every other one is left out. */
+        public static Import fromEnv(Map<String, String> env) {
+            Map<String, Given> given = new TreeMap<>();
+            env.forEach((variable, raw) -> {
+                if (raw == null || raw.isEmpty()) return;
+                Given g = given(variable, raw);
+                if (g != null) given.put(variable, g);
+            });
+            return new Import(Collections.unmodifiableMap(given));
+        }
+
+        private static Given given(String variable, String raw) {
+            if (variable.equals(GIT_USER) || variable.equals(GIT_TOKEN)) return new Given(variable, GIT, false, raw);
+            if (variable.equals(GIT_USER + FILE) || variable.equals(GIT_TOKEN + FILE)) return new Given(variable, GIT, true, raw);
+            if (!variable.startsWith(SECRET)) return null;
+            String rest = variable.substring(SECRET.length());
+            boolean file = rest.endsWith(FILE) && rest.length() > FILE.length();
+            if (file) rest = rest.substring(0, rest.length() - FILE.length());
+            if (rest.isEmpty()) return null;
+            return new Given(variable, rest.toLowerCase(Locale.ROOT).replace('_', '-'), file, raw);
+        }
+
+        /** The variables as given, sorted. */
+        public List<String> names() {
+            return List.copyOf(given.keySet());
+        }
+
+        Collection<Given> given() {
+            return given.values();
+        }
+
+        /** Whether it holds no variable. */
+        boolean isEmpty() {
+            return given.isEmpty();
+        }
+
+        @Override public boolean equals(Object other) {
+            return other instanceof Import i && given.keySet().equals(i.given.keySet());
+        }
+
+        @Override public int hashCode() {
+            return given.keySet().hashCode();
+        }
+
+        /** The variables' names, never a value or a path. */
+        @Override public String toString() {
+            return "Import" + names();
+        }
+    }
+
+    /** What a join did: whether it imported, and the names it imported. */
+    private record Joined(boolean imported, List<String> names) { }
+
+    /**
+     * Joins the store with the epoch of this node's join to the pool, reads every row and arms the tick. The join is one
+     * transaction under the store's row lock, and no name's lock: it writes this node's key ids and {@code epoch} while the
+     * node's row still holds that epoch and a lease, checks every row's key id, and at generation 0 imports {@code imports}
+     * ({@link #imported}) and raises the generation, also when it imports nothing. After the commit it reads every row; then
+     * the importing node logs one INFO naming the imported names and the key they are sealed under, and a node that finds a
+     * variable of {@code imports} set on a store already written logs one WARNING naming each {@code RAIL8_SECRET_*} variable as
+     * given, in two lists: those whose name the store holds, and those whose name it does not hold.
+     *
+     * @return fails with an {@link IllegalStateException}: the node's row no longer holds {@code epoch}; a row is under a key
+     *         this node does not hold (naming the rows' count and key ids); a refusal of the import, naming the variable and the
+     *         check, never a value, a file's content or its path
+     */
+    public Future<Void> start(long epoch, Import imports) {
+        Objects.requireNonNull(imports, "imports");
         StoreKey k = key;
-        byte[] current = k.current().map(Seal::keyId).orElse(null);
+        byte[] current = Seal.keyId(k.current());
         byte[] previous = k.previous().map(Seal::keyId).orElse(null);
-        return rows.<Void>write(List.of(), tx -> tx.joined(node, epoch, current, previous, variables).compose(v -> tx.rows()).compose(all -> {
+        return rows.<Joined>write(List.of(), tx -> tx.joined(node, epoch, current, previous).compose(wrote -> {
+            if (!wrote) {
+                return Future.failedFuture(new IllegalStateException("the node " + node + " no longer holds the epoch " + epoch
+                        + " of its join: a newer start of it took its row, so this one does not join the secret store"));
+            }
+            return tx.rows();
+        }).compose(all -> {
             Map<String, Integer> foreign = new TreeMap<>();
             for (SecretRows.Meta m : all) {
                 if (!Arrays.equals(m.keyId(), current) && !Arrays.equals(m.keyId(), previous)) foreign.merge(HEX.formatHex(m.keyId()), 1, Integer::sum);
             }
-            if (foreign.isEmpty()) return Future.succeededFuture();
-            int count = foreign.values().stream().mapToInt(Integer::intValue).sum();
-            String under = foreign.entrySet().stream().map(e -> e.getKey() + " (" + e.getValue() + ")").collect(Collectors.joining(", "));
-            return Future.failedFuture(new IllegalStateException(current == null
-                    ? "the secret store holds " + count + " rows, sealed under the keys " + under + ", and this node holds no key: start it with "
-                      + StoreKey.VARIABLE + " (or " + StoreKey.VARIABLE + "_FILE)"
-                    : count + " rows of the secret store are sealed under keys this node does not hold: " + under + "; it holds " + k
-                      + ": give the key they are under as " + StoreKey.VARIABLE + ", or as " + StoreKey.PREVIOUS + " while the key is changed"));
-        })).compose(v -> look()).onSuccess(v -> arm());
+            if (!foreign.isEmpty()) {
+                int count = foreign.values().stream().mapToInt(Integer::intValue).sum();
+                String under = foreign.entrySet().stream().map(e -> e.getKey() + " (" + e.getValue() + ")").collect(Collectors.joining(", "));
+                return Future.failedFuture(new IllegalStateException(count + " rows of the secret store are sealed under keys this node does not hold: "
+                        + under + "; it holds " + k + ": give the key they are under as " + StoreKey.VARIABLE + ", or as " + StoreKey.PREVIOUS
+                        + " while the key is changed"));
+            }
+            if (tx.head().generation() != 0) return Future.succeededFuture(new Joined(false, List.of()));
+            return imported(tx, k, all, imports).compose(names -> tx.changed().map(new Joined(true, names)));
+        })).compose(joined -> look().map(joined)).onSuccess(joined -> {
+            if (joined.imported()) {
+                info.accept(joined.names().isEmpty() ? "the secret store was never written: its import of this node's environment is closed with nothing imported"
+                        : "the secret store was never written: it imported " + joined.names() + " from this node's environment, sealed under the key "
+                          + HEX.formatHex(current));
+            } else {
+                unread(imports);
+            }
+            arm();
+        }).mapEmpty();
+    }
+
+    /** The WARNING of the variables a store already written does not read, in two lists: their names held, and not held. */
+    private void unread(Import imports) {
+        Map<String, Opened> held = state.held();
+        List<String> heldNames = new ArrayList<>();
+        List<String> notHeld = new ArrayList<>();
+        for (Import.Given g : imports.given()) {
+            if (g.name().equals(GIT)) continue;   // the git cache reads its variables until it reads rail8.git
+            (held.containsKey(g.name()) ? heldNames : notHeld).add(g.variable());
+        }
+        if (heldNames.isEmpty() && notHeld.isEmpty()) return;
+        warn.accept("the secret store is the only source of a secret, and this node's variables are not read: "
+                + (heldNames.isEmpty() ? "" : heldNames + " not read: remove the variable" + (notHeld.isEmpty() ? "" : "; "))
+                + (notHeld.isEmpty() ? "" : notHeld + " not read: enter it in the store, or a flow that names it fails"));
+    }
+
+    /**
+     * The import of {@code imports} into a store of generation 0, in the join's transaction {@code tx}, whose rows are
+     * {@code all}: the creates a secret administrator would make, all or none. First every check that needs no file, over the
+     * variables in sorted order; then the files, in sorted order, read by {@link SecretFile#read} on a virtual thread of their
+     * own; then the creates, in name order, each with the checks of its kind, the store's limits and the uses recorded for its
+     * name, sealed under this node's current key, written by {@code environment} with one audit row {@code secret.create}.
+     *
+     * @return the names imported, sorted; fails with an {@link IllegalStateException} naming the variable as given and the
+     *         check, never a value, a file's content or its path
+     */
+    private Future<List<String>> imported(SecretRows.Tx tx, StoreKey k, List<SecretRows.Meta> all, Import imports) {
+        if (imports.isEmpty()) return Future.succeededFuture(List.of());
+        Map<String, List<Import.Given>> byName = new TreeMap<>();
+        try {
+            for (Import.Given g : imports.given()) {   // sorted by variable: the first refusal is always the same
+                if (!g.name().equals(GIT)) {
+                    if (g.name().length() > MAX_NAME || !NAME.matcher(g.name()).matches()) {
+                        throw unimported(g.variable() + " maps to a name that is not a secret's name: [a-z0-9][a-z0-9._-]*, 1 to " + MAX_NAME
+                                + " characters (its name takes " + g.name().length() + ")");
+                    }
+                    if (g.name().startsWith(RESERVED)) throw unimported(g.variable() + " maps to a name under " + RESERVED + ", which belongs to the platform");
+                }
+                List<Import.Given> same = byName.computeIfAbsent(g.name(), n -> new ArrayList<>());
+                if (!same.isEmpty() && !g.name().equals(GIT)) {
+                    throw unimported(same.getFirst().variable() + " and " + g.variable() + " both give the secret '" + g.name() + "': set one of them");
+                }
+                same.add(g);
+            }
+            List<Import.Given> git = byName.get(GIT);
+            if (git != null) {
+                Set<String> users = new TreeSet<>();
+                Set<String> tokens = new TreeSet<>();
+                for (Import.Given g : git) (g.variable().startsWith(Import.GIT_USER) ? users : tokens).add(g.variable());
+                if (users.size() > 1 || tokens.size() > 1) {
+                    List<String> both = users.size() > 1 ? List.copyOf(users) : List.copyOf(tokens);
+                    throw unimported(both.get(0) + " and " + both.get(1) + " both give the secret '" + GIT + "': set one of them");
+                }
+                if (users.isEmpty() || tokens.isEmpty()) {
+                    throw unimported((users.isEmpty() ? tokens : users).iterator().next() + " is set without " + (users.isEmpty() ? Import.GIT_USER : Import.GIT_TOKEN)
+                            + ": the git credentials are imported as " + GIT + " from both or neither");
+                }
+            }
+            if (all.size() + byName.size() > MAX_SECRETS) {
+                throw unimported("the variables give " + byName.size() + " secrets, more than the store's " + MAX_SECRETS + " secrets");
+            }
+        } catch (IllegalStateException refused) {
+            return Future.failedFuture(refused);
+        }
+        Promise<Map<String, String>> files = Promise.promise();
+        Thread.ofVirtual().name("rail8-secret-import").start(() -> {
+            try {
+                Map<String, String> read = new HashMap<>();
+                for (Import.Given g : imports.given()) {
+                    if (!g.file()) continue;
+                    try {
+                        read.put(g.variable(), SecretFile.read(g.variable(), g.raw()));
+                    } catch (SecretFile.Unread unread) {
+                        throw unimported(g.variable() + " " + unread.check());
+                    }
+                }
+                files.complete(read);
+            } catch (RuntimeException refused) {
+                files.fail(refused);
+            }
+        });
+        return files.future().compose(read -> {
+            Map<String, String> values = new HashMap<>();
+            for (Import.Given g : imports.given()) values.put(g.variable(), g.file() ? read.get(g.variable()) : g.raw());
+            Future<List<String>> chain = Future.succeededFuture(new ArrayList<>());
+            long[] total = {0};
+            for (SecretRows.Meta m : all) total[0] += m.sealedBytes();
+            for (Map.Entry<String, List<Import.Given>> each : byName.entrySet()) {
+                String name = each.getKey();
+                List<Import.Given> given = each.getValue();
+                chain = chain.compose(done -> importOne(tx, k, name, given, values, total).map(v -> {
+                    done.add(name);
+                    return done;
+                }));
+            }
+            return chain.<List<String>>map(List::copyOf);
+        }).recover(failure -> Future.failedFuture(failure instanceof IllegalStateException refused && refused.getMessage().startsWith(IMPORT) ? refused
+                : unimported("the database refused the import's write (" + failure.getClass().getSimpleName() + ")")));
+    }
+
+    /** One create of the import: {@code name} from the variables {@code given}, whose values {@code values} holds by variable. */
+    private Future<Void> importOne(SecretRows.Tx tx, StoreKey k, String name, List<Import.Given> given, Map<String, String> values, long[] total) {
+        SecretValue value;
+        List<String> variables = given.stream().map(Import.Given::variable).sorted().toList();
+        if (name.equals(GIT)) {
+            String userVariable = variables.stream().filter(v -> v.startsWith(Import.GIT_USER)).findFirst().orElseThrow();
+            String tokenVariable = variables.stream().filter(v -> v.startsWith(Import.GIT_TOKEN)).findFirst().orElseThrow();
+            String user = values.get(userVariable);
+            String token = values.get(tokenVariable);
+            if (user.isBlank()) return Future.failedFuture(unimported(userVariable + " is blank: a user of " + GIT + " is not blank"));
+            if (token.isBlank()) return Future.failedFuture(unimported(tokenVariable + " is blank: a token of " + GIT + " is not blank"));
+            if (user.length() > MAX_USER) {
+                return Future.failedFuture(unimported(userVariable + " takes " + user.length() + " characters, more than a user's " + MAX_USER));
+            }
+            if (token.length() > MAX_PASSWORD) {
+                return Future.failedFuture(unimported(tokenVariable + " takes " + token.length() + " characters, more than a password's " + MAX_PASSWORD));
+            }
+            value = new SecretValue.Login(new Secret.Credentials(user, token));
+        } else {
+            String plain = values.get(variables.getFirst());
+            int bytes = plain.getBytes(StandardCharsets.UTF_8).length;
+            if (bytes > MAX_VALUE_BYTES) {
+                return Future.failedFuture(unimported(variables.getFirst() + " takes " + bytes + " bytes, more than a value's " + MAX_VALUE_BYTES));
+            }
+            value = new SecretValue.Plain(plain);
+        }
+        String first = variables.getFirst();
+        return tx.uses(name).compose(uses -> {
+            for (SecretRows.Use use : uses) {
+                if (!use.kinds().contains(value.kind())) {
+                    return Future.failedFuture(unimported(first + " gives the secret '" + name + "' of kind " + value.kind().id() + ", but " + use.userKind()
+                            + " '" + use.userId() + "' uses it as " + ids(use.kinds())));
+                }
+            }
+            Seal.Sealed sealed = Seal.seal(k.current(), SCOPE, name, value.kind(), value.plain());
+            total[0] += sealed.sealed().length;
+            if (total[0] > MAX_SEALED_BYTES) {
+                return Future.failedFuture(unimported(first + ": the sealed values would take more than " + MAX_SEALED_BYTES + " bytes, the store's most"));
+            }
+            Instant now = clock.instant();
+            JsonObject detail = detail(value).put("variables", new JsonArray(variables)).put("node", node);
+            return tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT, sealed.keyId(), sealed.nonce(), sealed.sealed().length,
+                    now, now, ENVIRONMENT), sealed.sealed())).compose(v -> tx.auditLocal(ENVIRONMENT, "secret.create", "secret/" + name, detail));
+        });
+    }
+
+    /** What every refusal of the import starts with. */
+    private static final String IMPORT = "the import of this node's environment into the secret store is refused: ";
+
+    private static IllegalStateException unimported(String text) {
+        return new IllegalStateException(IMPORT + text);
     }
 
     /** Arms no further tick. */
@@ -436,8 +694,8 @@ public final class SecretStore {
     }
 
     private static byte[] keyFor(StoreKey k, byte[] keyId) {
-        Optional<byte[]> current = k.current();
-        if (current.isPresent() && Arrays.equals(Seal.keyId(current.get()), keyId)) return current.get();
+        byte[] current = k.current();
+        if (Arrays.equals(Seal.keyId(current), keyId)) return current;
         Optional<byte[]> previous = k.previous();
         if (previous.isPresent() && Arrays.equals(Seal.keyId(previous.get()), keyId)) return previous.get();
         return null;
@@ -475,11 +733,6 @@ public final class SecretStore {
         return o == null ? Optional.empty() : Optional.of(new Held(o.kind(), HEX.formatHex(o.keyId()), o.value() == null ? null : o.value().read()));
     }
 
-    /** The names of this node's {@code RAIL8_SECRET_*} variables. */
-    public List<String> variables() {
-        return variables;
-    }
-
     /**
      * {@code DEGRADED} while the last {@value #FAILED_LOOKS} looks failed, while a row is unreadable, or while the previous key's
      * variable is set though no row needs it.
@@ -504,7 +757,7 @@ public final class SecretStore {
      * Creates the secret of {@code body}: {@code {name, kind:"value", value}}, {@code {name, kind:"credentials", user, password}}
      * or {@code {name, kind:"key-pair", privateKey, certificates}}. Answers its entry of the list.
      *
-     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
+     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code exists}, {@code kind-in-use}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> create(Actor who, JsonObject body) {
@@ -512,7 +765,7 @@ public final class SecretStore {
         SecretValue value;
         try {
             name = writable(body.getValue("name"));
-            value = value(body);
+            value = value(name, body);
         } catch (SecretRefused refused) {
             return Future.failedFuture(refused);
         }
@@ -530,7 +783,7 @@ public final class SecretStore {
                                 .put("kind", value.kind().id()).put("user", user(use))));
                     }
                 }
-                Seal.Sealed sealed = Seal.seal(k.current().orElseThrow(), SCOPE, name, value.kind(), value.plain());
+                Seal.Sealed sealed = Seal.seal(k.current(), SCOPE, name, value.kind(), value.plain());
                 Instant now = clock.instant();
                 return full(all, null, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                         sealed.keyId(), sealed.nonce(), sealed.sealed().length, now, now, who.name()), sealed.sealed())));
@@ -541,14 +794,14 @@ public final class SecretStore {
     /**
      * Overwrites {@code name} with the value of {@code body}, of its kind; the last writer wins. Answers its entry of the list.
      *
-     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
+     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code no-secret}, {@code kind-differs}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> overwrite(Actor who, String name, JsonObject body) {
         SecretValue value;
         try {
             writable(name);
-            value = value(body);
+            value = value(name, body);
         } catch (SecretRefused refused) {
             return Future.failedFuture(refused);
         }
@@ -561,7 +814,7 @@ public final class SecretStore {
                         + ", not " + value.kind().id() + ": delete it and create it again", new JsonObject().put("name", name)
                         .put("kind", old.kind().id()).put("asked", value.kind().id())));
             }
-            Seal.Sealed sealed = Seal.seal(k.current().orElseThrow(), SCOPE, name, value.kind(), value.plain());
+            Seal.Sealed sealed = Seal.seal(k.current(), SCOPE, name, value.kind(), value.plain());
             return full(all, old, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                     sealed.keyId(), sealed.nonce(), sealed.sealed().length, old.createdAt(), clock.instant(), who.name()), sealed.sealed())))
                     .compose(v -> audit(tx, who, "secret.overwrite", name, detail(value))).compose(v -> tx.changed());
@@ -613,19 +866,13 @@ public final class SecretStore {
                 + " within " + TICK_SECONDS + " s; do not send it again", new JsonObject()));
     }
 
-    /** Refuses a write unless this node holds a key and every live node holds it, by its current join. */
+    /** Refuses a write unless every live node holds this node's current key, by its current join. */
     private Future<Void> keyCheck(SecretRows.Tx tx, StoreKey k) {
-        if (!k.present()) return noKey();
         return tx.liveNodes().compose(nodes -> keyCheck(nodes, k));
     }
 
-    private static <T> Future<T> noKey() {
-        return Future.failedFuture(new SecretRefused(503, RefusalCode.NO_KEY, "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
-    }
-
     private static Future<Void> keyCheck(List<SecretRows.NodeKeys> nodes, StoreKey k) {
-        if (!k.present()) return noKey();
-        byte[] id = Seal.keyId(k.current().orElseThrow());
+        byte[] id = Seal.keyId(k.current());
         List<String> lacking = nodes.stream().filter(n -> !n.holds(id)).map(SecretRows.NodeKeys::node).sorted().toList();
         if (lacking.isEmpty()) return Future.succeededFuture();
         return Future.failedFuture(new SecretRefused(409, RefusalCode.KEYS_DIFFER, "the nodes " + lacking + " do not hold the key " + HEX.formatHex(id)
@@ -697,6 +944,21 @@ public final class SecretStore {
     }
 
     /**
+     * The value of {@code body} for the secret {@code name}, of its {@code kind}, checked against its limits; the user and the
+     * token of {@code rail8.git} are not blank.
+     *
+     * @throws SecretRefused 422 {@code invalid}, naming the field and never echoing the value
+     */
+    static SecretValue value(String name, JsonObject body) throws SecretRefused {
+        SecretValue value = value(body);
+        if (name.equals(GIT) && value instanceof SecretValue.Login login) {
+            if (login.credentials().user().isBlank()) throw SecretRefused.invalid("user", "a user of " + GIT + " is not blank");
+            if (login.credentials().password().isBlank()) throw SecretRefused.invalid("password", "a token of " + GIT + " is not blank");
+        }
+        return value;
+    }
+
+    /**
      * The value of {@code body}, of its {@code kind}, checked against its limits.
      *
      * @throws SecretRefused 422 {@code invalid}, naming the field and never echoing the value
@@ -708,7 +970,7 @@ public final class SecretStore {
             case "value" -> {
                 String value = text(body, "value");
                 if (value.getBytes(StandardCharsets.UTF_8).length > MAX_VALUE_BYTES) {
-                    throw SecretRefused.invalid("value", "a value takes at most " + MAX_VALUE_BYTES + " bytes; a larger one stays in a variable");
+                    throw SecretRefused.invalid("value", "a value takes at most " + MAX_VALUE_BYTES + " bytes");
                 }
                 yield new SecretValue.Plain(value);
             }
@@ -748,28 +1010,20 @@ public final class SecretStore {
     // ---------------------------------------------------------------------------------------------------------------- the list
 
     /**
-     * The answer of {@code GET /admin/secrets}: every secret, the missing names, the variables that hold a value no stored secret
-     * takes, the key's state. A node's variables and keys count only while its join is its current one.
+     * The answer of {@code GET /admin/secrets}: every secret, the names a use names that the store does not hold, the key's
+     * state. A node's keys count only while its join is its current one.
      */
     public Future<JsonObject> list() {
         return rows.listing().map(this::listed);
     }
 
-    /** The entry of {@code name}: a stored secret's, or a name a use or a variable names; empty when none does. */
+    /** The entry of {@code name}: a stored secret's, or a missing name a use names; empty when neither is. */
     public Future<Optional<JsonObject>> entry(String name) {
         return list().map(all -> {
             for (String part : List.of("secrets", "missing")) {
                 for (Object o : all.getJsonArray(part)) {
                     JsonObject e = (JsonObject) o;
                     if (name.equals(e.getString("name"))) return Optional.of(e.put("node", node));
-                }
-            }
-            String variable = variable(name);
-            for (Object o : all.getJsonArray("variablesOnly")) {
-                JsonObject e = (JsonObject) o;
-                if (!name.startsWith(RESERVED) && variable.equals(e.getString("variable"))) {
-                    return Optional.of(new JsonObject().put("name", name).put("stored", false).put("variable", variable)
-                            .put("variableOn", e.getJsonArray("nodes")).put("node", node));
                 }
             }
             return Optional.<JsonObject>empty();
@@ -779,23 +1033,17 @@ public final class SecretStore {
     private JsonObject listed(SecretRows.Listing l) {
         Map<String, List<SecretRows.Use>> uses = new TreeMap<>();
         l.uses().forEach(u -> uses.computeIfAbsent(u.name(), n -> new ArrayList<>()).add(u));
-        Map<String, List<String>> variableNodes = new TreeMap<>();
-        l.nodes().stream().filter(SecretRows.NodeKeys::joined)
-                .forEach(n -> n.variables().forEach(v -> variableNodes.computeIfAbsent(v, x -> new ArrayList<>()).add(n.node())));
         State held = state;
         Set<String> stored = new HashSet<>();
-        Set<String> storedVariables = new HashSet<>();
 
         JsonArray secrets = new JsonArray();
         for (SecretRows.Meta m : l.rows().stream().sorted((a, b) -> a.name().compareTo(b.name())).toList()) {
             stored.add(m.name());
-            storedVariables.add(variable(m.name()));
             Opened o = held.held().get(m.name());
             boolean readable = o != null && o.value() != null && Arrays.equals(o.nonce(), m.nonce());
             JsonObject e = new JsonObject().put("name", m.name()).put("kind", m.kind().id()).put("scope", SCOPE).put("stored", true)
                     .put("changedAt", m.changedAt().toString()).put("changedBy", m.changedBy())
                     .put("usedBy", users(uses.get(m.name()))).put("users", uses.getOrDefault(m.name(), List.of()).size())
-                    .put("shadowedOn", new JsonArray(m.name().startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(m.name()), List.of())))
                     .put("unreadable", !readable).put("keyId", HEX.formatHex(m.keyId()));
             if (readable && o.value() instanceof SecretValue.Pair pair) e.put("keyPair", pair.facts());
             secrets.add(e);
@@ -803,18 +1051,10 @@ public final class SecretStore {
         JsonArray missing = new JsonArray();
         uses.forEach((name, list) -> {
             if (stored.contains(name)) return;
-            List<String> on = name.startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(name), List.of());
-            boolean value = list.stream().anyMatch(u -> u.kinds().contains(Secret.Kind.VALUE));
-            if (value && !on.isEmpty()) return;
             missing.add(new JsonObject().put("name", name).put("stored", false).put("usedBy", users(list)).put("users", list.size()));
         });
-        JsonArray variablesOnly = new JsonArray();
-        variableNodes.forEach((variable, on) -> {
-            if (storedVariables.contains(variable)) return;
-            variablesOnly.add(new JsonObject().put("variable", variable).put("nodes", new JsonArray(on)));
-        });
         StoreKey k = key;
-        byte[] mine = k.current().map(Seal::keyId).orElse(null);
+        byte[] mine = Seal.keyId(k.current());
         JsonArray nodes = new JsonArray();
         Set<String> currents = new TreeSet<>();
         boolean previous = false;
@@ -825,11 +1065,11 @@ public final class SecretStore {
             previous |= before != null;
             nodes.add(new JsonObject().put("node", n.node()).put("joined", n.joined()).put("key", current).put("previous", before));
         }
-        String common = currents.size() == 1 && !currents.contains("null") ? currents.iterator().next() : mine == null ? null : HEX.formatHex(mine);
+        String common = currents.size() == 1 && !currents.contains("null") ? currents.iterator().next() : HEX.formatHex(mine);
         long other = common == null ? l.rows().size() : l.rows().stream().filter(m -> !HEX.formatHex(m.keyId()).equals(common)).count();
         JsonObject keyState = new JsonObject().put("nodes", nodes).put("common", currents.size() == 1 && !currents.contains("null") ? common : null)
                 .put("rowsUnderAnotherKey", other).put("previousSet", previous);
-        return new JsonObject().put("secrets", secrets).put("missing", missing).put("variablesOnly", variablesOnly).put("key", keyState).put("node", node);
+        return new JsonObject().put("secrets", secrets).put("missing", missing).put("key", keyState).put("node", node);
     }
 
     /** The first {@value #MAX_USERS_NAMED} of {@code uses}, in the order of their kind and id. */
@@ -846,13 +1086,12 @@ public final class SecretStore {
      * Replaces the uses of each user of {@code users} with its uses, in the caller's transaction {@code tx}; a user with none has
      * its uses deleted. Called at most once per transaction, with every user it changes: it takes the transaction lock of the
      * union of the names those users use now and used before, each lock key once, in ascending order of the key, then checks each
-     * name against the rows in Postgres: set in the store, or, for a use that takes {@code value}, held by this node's variables,
-     * and of a kind the use takes. With a problem it writes nothing.
+     * name against the rows in Postgres: set in the store, and of a kind the use takes. With a problem it writes nothing.
      *
      * @return one text per problem, naming the user, the name and its source, never a value; empty when it wrote the uses
      */
     public Future<List<String>> replaceUses(SqlConnection tx, List<Uses> users) {
-        return PgSecretRows.replaceUses(tx, users, Set.copyOf(variables));
+        return PgSecretRows.replaceUses(tx, users);
     }
 
     /**
@@ -889,8 +1128,7 @@ public final class SecretStore {
     /** One tick's work on the key: seal again, bind again, and drop the previous key once nothing needs it. */
     private Future<Void> maintain() {
         StoreKey k = key;
-        if (!k.present()) return Future.succeededFuture();
-        byte[] current = Seal.keyId(k.current().orElseThrow());
+        byte[] current = Seal.keyId(k.current());
         byte[] previous = k.previous().map(Seal::keyId).orElse(null);
         return rows.liveNodes().compose(nodes -> {
             if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture();   // the roll has not ended
@@ -915,7 +1153,7 @@ public final class SecretStore {
 
     /** Seals again up to {@value #BATCH} rows under another key, in one transaction; answers the rows left under another key. */
     private Future<Integer> sealAgain(StoreKey k, byte[] current, boolean rebound, long boundLeft) {
-        byte[] currentKey = k.current().orElseThrow();
+        byte[] currentKey = k.current();
         Future<int[]> done = rows.write(List.of(), tx -> tx.liveNodes().compose(nodes -> {
             if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture(new int[]{-1, 0});
             return tx.rows().compose(all -> {
@@ -989,12 +1227,12 @@ public final class SecretStore {
      * the key, info {@code rail8 settings v1 bind}. It takes the store's row lock for share and makes a write's key check, so a
      * change of the key waits for {@code tx}, and a tag is persisted only in the transaction that made it.
      *
-     * @return fails with a {@link SecretRefused}: 503 {@code no-key}, 409 {@code keys-differ}
+     * @return fails with a {@link SecretRefused}: 409 {@code keys-differ}
      */
     public Future<Binding> bind(SqlConnection tx, byte[] bytes) {
         StoreKey k = key;
         return rows.sharedNodes(tx).compose(nodes -> keyCheck(nodes, k)).map(v -> {
-            byte[] current = k.current().orElseThrow();
+            byte[] current = k.current();
             return new Binding(Seal.keyId(current), tag(current, bytes));
         });
     }

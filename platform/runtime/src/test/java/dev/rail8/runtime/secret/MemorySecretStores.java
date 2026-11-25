@@ -26,18 +26,40 @@ public final class MemorySecretStores {
     private final List<String> warnings = new CopyOnWriteArrayList<>();
     private long epochs;
 
+    /** The key of every store whose env gives none. */
+    public static final String KEY = java.util.Base64.getEncoder().encodeToString(new byte[32]);
+
     /**
-     * The started store of node {@code node}: its key and variables from {@code env}, as {@link Secrets#fromEnv} reads them, its
-     * ticks on {@code timer}.
+     * The started store of node {@code node}: its key and the variables its join imports into a store never written from
+     * {@code env}, as {@link Secrets#fromEnv} reads them, the key {@link #KEY} when {@code env} gives none; its ticks on
+     * {@code timer}.
      */
     public SecretStore start(String node, Map<String, String> env, Clock clock, Timer timer) {
-        Secrets secrets = Secrets.fromEnv(env);
+        return start(node, Secrets.fromEnv(env), clock, timer);
+    }
+
+    /** The started store of node {@code node}: the key and the import of {@code secrets}, the key {@link #KEY} when it has none. */
+    public SecretStore start(String node, Secrets secrets, Clock clock, Timer timer) {
         long epoch = ++epochs;
         db.node(node, epoch, true);
-        SecretStore store = new SecretStore(new MemorySecretRows(db), secrets.key(), node, secrets.variableNames(), clock, timer, warnings::add);
+        StoreKey key = secrets.key().orElseGet(() -> StoreKey.fromEnv(Map.of(StoreKey.VARIABLE, KEY)).orElseThrow());
+        SecretStore store = new SecretStore(new MemorySecretRows(db), key, node, clock, timer, warnings::add, text -> { });
         db.listen(store::notice);
-        done(store.start(epoch));
+        done(store.start(epoch, secrets.imports()));
         return store;
+    }
+
+    /**
+     * {@code config} with the resolver of a node whose store, alone in its database, imported {@code env}'s variables at its first
+     * join: what a node started with {@code env} reads.
+     */
+    public static dev.rail8.runtime.node.NodeConfig imported(dev.rail8.runtime.node.NodeConfig config, Map<String, String> env, Clock clock, Timer timer) {
+        return config.withSecrets(config.secrets().withStore(new MemorySecretStores().start(config.nodeId(), env, clock, timer)));
+    }
+
+    /** Records that flow {@code flow}, by qualified id, uses {@code name} as {@code kinds}, as a deploy's save writes it in Postgres. */
+    public void use(String flow, String name, java.util.Set<dev.rail8.api.Secret.Kind> kinds) {
+        db.use(new SecretRows.Use(name, "flow", flow, kinds));
     }
 
     /** The warnings every store logged, in order. */

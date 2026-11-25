@@ -106,10 +106,15 @@ class DeploymentsValidateTest {
         return env;
     }
 
+    /** The node's configuration of {@link #env}, its store having imported the env's variables. */
+    NodeConfig config(String rail8Env) {
+        return dev.rail8.runtime.secret.MemorySecretStores.imported(NodeConfig.from(env(rail8Env)), env(rail8Env), rt.clock(), timer);
+    }
+
     /** Deployments over {@link Doors} only, its records in memory. */
     Deployments overDoors() {
         Runtime runtime = new Runtime(rt.clock(), timer, rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors));
-        return new Deployments(NodeConfig.from(env("dev")), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), timer, DeploymentsTest.STEPS, List.of(),
+        return new Deployments(config("dev"), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), timer, DeploymentsTest.STEPS, List.of(),
                 messages, dlq, queue, () -> 0L, records);
     }
 
@@ -125,7 +130,7 @@ class DeploymentsValidateTest {
         List<Component> built = shipped.components(new ComponentContext(vertx, rt.blobs(), rt.ids(), timer, rt.clock(), HttpIngress.NONE));
         Map<String, Component> byScheme = built.stream().map(replace).collect(Collectors.toMap(Component::scheme, c -> c));
         Runtime runtime = new Runtime(rt.clock(), timer, rt.ids(), rt.blobs(), rt.hasher(), byScheme);
-        return new Deployments(NodeConfig.from(env(rail8Env)), runtime, byScheme, rt.clock(), timer, shipped.steps(), shipped.languages(),
+        return new Deployments(config(rail8Env), runtime, byScheme, rt.clock(), timer, shipped.steps(), shipped.languages(),
                 messages, dlq, queue, () -> 0L, records);
     }
 
