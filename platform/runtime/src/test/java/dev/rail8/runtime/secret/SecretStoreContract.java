@@ -109,6 +109,9 @@ abstract class SecretStoreContract {
     /** The details of the audit rows of {@code action}, oldest first. */
     abstract List<JsonObject> audit(String action);
 
+    /** Who wrote each audit row of {@code action}, in order, as {@code <actor>/<via>}. */
+    abstract List<String> actors(String action);
+
     /** Puts {@code row} as a database writer would, with no change of the head. */
     abstract void put(SecretRows.Stored row);
 
@@ -449,6 +452,7 @@ abstract class SecretStoreContract {
         assertEquals(changed, stored().get("s0").meta().changedAt(), "sealing again keeps who changed it last and when");
         List<JsonObject> changedKey = audit("secret.key-changed");
         assertEquals(1, changedKey.size());
+        assertEquals(List.of("a/local"), actors("secret.key-changed"), "the node that sealed the last row, by the local way");
         assertEquals(new JsonObject().put("oldKey", id(K1)).put("newKey", id(K2)).put("rows", SecretStore.BATCH + 1), changedKey.getFirst());
         b.tick();
         awaitNotices();

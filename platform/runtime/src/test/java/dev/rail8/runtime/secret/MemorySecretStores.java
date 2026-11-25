@@ -47,7 +47,7 @@ public final class MemorySecretStores {
 
     /** The audit rows written, in order: each {@code {actor, via, action, subject, detail}}. */
     public List<JsonObject> audit() {
-        return db.audit().stream().map(a -> new JsonObject().put("actor", a.who().name()).put("via", a.who().via()).put("action", a.action())
+        return db.audit().stream().map(a -> new JsonObject().put("actor", a.name()).put("via", a.via()).put("action", a.action())
                 .put("subject", a.subject()).put("detail", a.detail())).toList();
     }
 

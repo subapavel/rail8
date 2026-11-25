@@ -65,6 +65,10 @@ class MemorySecretStoreTest extends SecretStoreContract {
         return db.audit().stream().filter(a -> a.action().equals(action)).map(MemorySecretRows.Audit::detail).toList();
     }
 
+    @Override List<String> actors(String action) {
+        return db.audit().stream().filter(a -> a.action().equals(action)).map(a -> a.name() + "/" + a.via()).toList();
+    }
+
     @Override void put(SecretRows.Stored row) { db.put(row); }
 
     @Override <T> T inTx(java.util.function.Function<io.vertx.sqlclient.SqlConnection, io.vertx.core.Future<T>> work) {
