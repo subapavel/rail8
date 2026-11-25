@@ -714,10 +714,11 @@ builds on 1a2 and 1b, and the Secrets screen on 1a2.
   - The SFTP component by credentials and by key pair, with its mock.
   - It is apart from 1a because it changes public types every adapter builds on, and is reviewed as a contract of its own.
 - **1c. The git credentials from the store.** `class:C`, after 1a2. The git cache reads `rail8.git` only, once per git
-  operation on a fresh transport, behind the same-origin check, and no longer its variables; the coalesced check after a
-  change; the release note on `rail8.` references and on the git variables, which 1a2's import reads once. The rule of
-  the deploy from git that its credentials live in the node's environment only becomes: sealed in the secret store,
-  imported once from the environment.
+  operation on a fresh transport, behind the same-origin check, and no longer its variables; a base that is not `https`
+  never sends it, with one WARNING, and the node's refusal to start with the variables set on such a base goes; the
+  coalesced check after a change; the release note on `rail8.` references and on the git variables, which 1a2's import
+  reads once. The rule of the deploy from git that its credentials live in the node's environment only becomes: sealed
+  in the secret store, imported once from the environment.
 - **2. The Secrets screen.** `class:B`, after 1a2.
   - A developer's list with its typed users.
   - A secret administrator's create, overwrite and delete, with the confirmation, and the key's state.
