@@ -1466,8 +1466,9 @@ public final class Deployments {
     private Recipe resolvedAnew(Recipe recipe, List<String> problems) {
         int before = problems.size();
         Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
+        Map<String, Optional<SecretStore.Held>> rows = new HashMap<>();
         recipe.written().forEach((id, written) -> {
-            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), problems);
+            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), rows, problems);
             if (values != null) endpoints.put(id, endpoint(id, written.uri().getScheme(), values));
         });
         if (problems.size() > before) return null;
@@ -2212,6 +2213,7 @@ public final class Deployments {
         Map<String, String> schemes = new LinkedHashMap<>();
         Map<String, JsonObject> configs = new LinkedHashMap<>();
         Map<String, JsonObject> resolved = new LinkedHashMap<>();   // as the build takes them: references resolved, a secret field's checked and kept
+        Map<String, Optional<SecretStore.Held>> rows = new HashMap<>();   // each reference's row, read once for the build
         Set<String> outs = new HashSet<>();
         Set<String> ins = new HashSet<>();   // the in endpoints whose component takes their config: the ones asked where they listen
         Map<String, EndpointConfig> callable = new HashMap<>();   // the out endpoints whose component takes their config, as resolved holds them
@@ -2232,7 +2234,7 @@ public final class Deployments {
                 for (String p : refused) problems.add("endpoint '" + id + "' config (environment " + config.env() + ") at " + p);
                 valid = refused.isEmpty();
             }
-            JsonObject values = resolved(id, component, cfg, problems);   // null: a reference did not resolve, its problem is listed
+            JsonObject values = resolved(id, component, cfg, rows, problems);   // null: a reference did not resolve, its problem is listed
             if (values != null) resolved.put(id, values);
             if ("in".equals(endpoint.getString("direction"))) {
                 for (String key : RESERVED) {
@@ -2690,6 +2692,7 @@ public final class Deployments {
     private List<Calls.Node> heldNodes(String pkgName, Path dir) throws IOException {
         Package pkg = Package.load(dir);
         List<String> dropped = new ArrayList<>();
+        Map<String, Optional<SecretStore.Held>> rows = new HashMap<>();   // each reference's row, read once for the package
         Map<String, EndpointConfig> ins = new HashMap<>();
         Map<String, EndpointConfig> outs = new HashMap<>();
         pkg.endpoints().forEach((id, endpoint) -> {
@@ -2698,7 +2701,7 @@ public final class Deployments {
             Component component = components.get(scheme);
             JsonObject cfg = overlaid(endpoint);
             if (component == null || !refusedBy(component, cfg, endpoint.getString("direction")).isEmpty()) return;
-            JsonObject values = resolved(id, component, cfg, dropped);
+            JsonObject values = resolved(id, component, cfg, rows, dropped);
             if (values != null) ("in".equals(endpoint.getString("direction")) ? ins : outs).put(id, endpoint(id, scheme, values));
         });
         Map<String, FlowDefinition> flows = new HashMap<>();
@@ -2783,13 +2786,13 @@ public final class Deployments {
      * when one is malformed ({@code endpoint '<id>': } and the refusal naming it) or cannot be read as a kind its place takes
      * ({@code endpoint '<id>': }, for a secret field its option, and {@link Secrets#problem}): no line carries a value.
      */
-    private JsonObject resolved(String id, Component component, JsonObject cfg, List<String> problems) {
+    private JsonObject resolved(String id, Component component, JsonObject cfg, Map<String, Optional<SecretStore.Held>> rows, List<String> problems) {
         int before = problems.size();
         Set<String> fields = secretFields(component);
         JsonObject values = new JsonObject();
         cfg.forEach(e -> values.put(e.getKey(), fields.contains(e.getKey())
-                ? secretField(id, e.getKey(), fieldKinds(component, e.getKey()), e.getValue(), problems)
-                : resolved(id, e.getValue(), problems)));
+                ? secretField(id, e.getKey(), fieldKinds(component, e.getKey()), e.getValue(), rows, problems)
+                : resolved(id, e.getValue(), rows, problems)));
         return problems.size() == before ? values : null;
     }
 
@@ -2799,50 +2802,68 @@ public final class Deployments {
      * so is every reference off the node, which the build tries with the placeholder of each kind. Null, with a line added to
      * {@code problems}, when it cannot be read as one of {@code kinds}.
      */
-    private Object secretField(String id, String option, Set<Secret.Kind> kinds, Object value, List<String> problems) {
+    private Object secretField(String id, String option, Set<Secret.Kind> kinds, Object value, Map<String, Optional<SecretStore.Held>> rows,
+                               List<String> problems) {
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
         try {
-            Optional<String> problem = config.secrets().problem(reference, kinds);
+            Optional<SecretStore.Held> row = row(reference, rows);
+            Optional<String> problem = config.secrets().problem(reference, kinds, row);
             if (problem.isPresent()) {
                 problems.add("endpoint '" + id + "': the option '" + option + "': " + problem.get());
                 return null;
             }
-            boolean plain = config.secrets().store().flatMap(store -> store.held(Secrets.name(reference))).map(h -> h.kind() == Secret.Kind.VALUE).orElse(false);
-            return plain ? plain(reference) : reference;
+            return row.isPresent() && row.get().kind() == Secret.Kind.VALUE ? plain(reference, row) : reference;
         } catch (IllegalArgumentException malformed) {
             problems.add("endpoint '" + id + "': " + malformed.getMessage());
             return null;
         }
     }
 
-    private Object resolved(String id, Object value, List<String> problems) {
+    private Object resolved(String id, Object value, Map<String, Optional<SecretStore.Held>> rows, List<String> problems) {
         if (value instanceof JsonObject object) {
             JsonObject copy = new JsonObject();
-            object.forEach(e -> copy.put(e.getKey(), resolved(id, e.getValue(), problems)));
+            object.forEach(e -> copy.put(e.getKey(), resolved(id, e.getValue(), rows, problems)));
             return copy;
         }
         if (value instanceof JsonArray array) {
             JsonArray copy = new JsonArray();
-            array.forEach(item -> copy.add(resolved(id, item, problems)));
+            array.forEach(item -> copy.add(resolved(id, item, rows, problems)));
             return copy;
         }
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
         try {
-            Optional<String> problem = config.secrets().problem(reference, PLAIN);
+            Optional<SecretStore.Held> row = row(reference, rows);
+            Optional<String> problem = config.secrets().problem(reference, PLAIN, row);
             if (problem.isPresent()) {
                 problems.add("endpoint '" + id + "': " + problem.get());
                 return null;
             }
-            return plain(reference);
+            return plain(reference, row);
         } catch (IllegalArgumentException malformed) {
             problems.add("endpoint '" + id + "': " + malformed.getMessage());
             return null;
         }
     }
 
-    /** The store's plain value of {@code reference} now, which joins {@link #candidates} while this thread holds {@link #deploying}. */
-    private String plain(String reference) {
-        String secret = config.secrets().resolve(reference).orElseThrow();
+    /**
+     * The row of {@code reference} for the build that shares {@code rows}: read from the store at its first occurrence
+     * ({@link Secrets#held}), the same row at every later one, so each endpoint of one build takes one value of it.
+     */
+    private Optional<SecretStore.Held> row(String reference, Map<String, Optional<SecretStore.Held>> rows) {
+        Optional<SecretStore.Held> row = rows.get(reference);
+        if (row == null) {
+            row = config.secrets().held(reference);
+            rows.put(reference, row);
+        }
+        return row;
+    }
+
+    /**
+     * The plain value of {@code reference}, whose row {@link #row} read is {@code row} and which takes a plain value: the row's
+     * value, the placeholder's off the node. It joins {@link #candidates} while this thread holds {@link #deploying}.
+     */
+    private String plain(String reference, Optional<SecretStore.Held> row) {
+        String secret = row.isPresent() ? (String) row.get().value() : config.secrets().resolve(reference).orElseThrow();
         if (deploying.isHeldByCurrentThread()) candidates.computeIfAbsent(reference, r -> new CopyOnWriteArrayList<>()).add(secret);
         return secret;
     }

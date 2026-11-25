@@ -136,7 +136,7 @@ services:
       # host's own; the node logs a WARNING at its start. A node other hosts reach gets RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY
       RAIL8_ADMIN_TLS: "off"
       # the secret store's key, which seals every secret in Postgres: the base64 of 256 random bits, made once and kept apart from
-      # the database and its backups (README.md, "The secret store"); the node refuses to start without it
+      # the database and its backups; the node refuses to start without it
       RAIL8_SECRETS_KEY: "${RAIL8_SECRETS_KEY:?set RAIL8_SECRETS_KEY to the secret store's key, the content of ~/.rail8-stack-secrets-key (made once as README.md says); to remove the stack without it: RAIL8_SECRETS_KEY=x docker compose down -v}"
       # the demo's sftp-inbox names both as secret:// references; the host key's fingerprint is a secret given as a file, the
       # file `sftp-keys` wrote (public, unknown until the key exists). The node's first start imports both into the secret store,

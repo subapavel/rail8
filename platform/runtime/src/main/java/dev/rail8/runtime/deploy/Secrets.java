@@ -138,9 +138,29 @@ public final class Secrets {
      * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
      */
     public Optional<String> problem(String reference, Set<Secret.Kind> kinds) {
+        return problem(reference, kinds, held(reference));
+    }
+
+    /**
+     * The store's row of {@code reference} as it is now, read once; empty when the store does not hold it, and for the
+     * placeholder.
+     *
+     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
+     */
+    public Optional<SecretStore.Held> held(String reference) {
         String name = name(reference);
+        return placeholder || store == null ? Optional.empty() : store.held(name);
+    }
+
+    /**
+     * Why {@code reference}, whose row read once is {@code held} ({@link #held}), cannot be read as one of {@code kinds}, naming
+     * the reference, never a value; empty when it can.
+     *
+     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
+     */
+    public Optional<String> problem(String reference, Set<Secret.Kind> kinds, Optional<SecretStore.Held> held) {
+        name(reference);
         if (placeholder) return Optional.empty();
-        Optional<SecretStore.Held> held = store == null ? Optional.empty() : store.held(name);
         if (held.isEmpty()) return Optional.of("secret '" + reference + "' is not set: enter it in the secret store");
         SecretStore.Held h = held.get();
         if (!kinds.contains(h.kind())) {
