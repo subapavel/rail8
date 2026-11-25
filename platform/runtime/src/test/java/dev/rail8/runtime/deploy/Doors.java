@@ -210,6 +210,9 @@ public final class Doors implements Component {
     /** The stop() of the door with flow option {@code flow} fails with {@code message} once its answers have completed. */
     public void failStop(String flow, String message) { stopFailures.put(flow, message); }
 
+    /** From now on a stop of a door of {@code flow} succeeds again, as before {@link #failStop}. */
+    public void stopCleanly(String flow) { stopFailures.remove(flow); }
+
     /** Runs inside every door's stop(), on the stopping thread, before the stop returns. */
     public void onStop(java.util.function.Consumer<Door> hook) { this.onStop = Objects.requireNonNull(hook, "hook"); }
 

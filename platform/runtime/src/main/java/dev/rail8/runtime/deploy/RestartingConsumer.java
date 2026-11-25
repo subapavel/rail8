@@ -12,6 +12,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /**
  * The consumer of one flow's in endpoint as the node runs it: an inner consumer the component built, started again after a
@@ -69,6 +70,7 @@ final class RestartingConsumer implements Consumer {
     private final Duration bound;
     private final Timer timer;
     private final Clock clock;
+    private final UnaryOperator<Throwable> scrubbed;
     private final Promise<Void> stopRequested = Promise.promise();
 
     // guarded by this
@@ -100,8 +102,10 @@ final class RestartingConsumer implements Consumer {
      * @param fresh builds the consumer of every later attempt
      * @param polls whether the consumer polls under a lease: the next attempt then waits for the previous stop without a bound
      * @param bound how long an attempt's start may take, and how long the next attempt waits for the previous stop otherwise
+     * @param scrubbed what a failure is logged as: a copy with each secret value replaced by its reference when it holds one
      */
-    RestartingConsumer(String flow, Consumer first, Supplier<Consumer> fresh, boolean polls, Duration bound, Timer timer, Clock clock) {
+    RestartingConsumer(String flow, Consumer first, Supplier<Consumer> fresh, boolean polls, Duration bound, Timer timer, Clock clock,
+                       UnaryOperator<Throwable> scrubbed) {
         this.flow = Objects.requireNonNull(flow, "flow");
         this.first = Objects.requireNonNull(first, "first");
         this.fresh = Objects.requireNonNull(fresh, "fresh");
@@ -109,6 +113,7 @@ final class RestartingConsumer implements Consumer {
         this.bound = Objects.requireNonNull(bound, "bound");
         this.timer = Objects.requireNonNull(timer, "timer");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.scrubbed = Objects.requireNonNull(scrubbed, "scrubbed");
     }
 
     /** The delay before the next attempt after {@code failures} failures in a row (at least 1). */
@@ -340,8 +345,9 @@ final class RestartingConsumer implements Consumer {
             warned = true;
             next = timer.schedule(delay, this::fire);
         }
-        String text = "flow '" + flow + "': its consumer " + what + " (" + cause + "); it starts again in " + delay + " (failure " + n + " in a row)";
-        if (warn) LOG.log(System.Logger.Level.WARNING, text, cause);
+        Throwable shown = scrubbed.apply(cause);
+        String text = "flow '" + flow + "': its consumer " + what + " (" + shown + "); it starts again in " + delay + " (failure " + n + " in a row)";
+        if (warn) LOG.log(System.Logger.Level.WARNING, text, shown);
         else LOG.log(System.Logger.Level.DEBUG, text);
     }
 
@@ -352,6 +358,9 @@ final class RestartingConsumer implements Consumer {
 
     /** {@code call} once settled, never failed: a failure is a WARNING saying {@code what}. */
     private Future<Void> settled(Future<Void> call, String what) {
-        return call.onFailure(failed -> LOG.log(System.Logger.Level.WARNING, "flow '" + flow + "': " + what + ": " + failed, failed)).otherwiseEmpty();
+        return call.onFailure(failed -> {
+            Throwable shown = scrubbed.apply(failed);
+            LOG.log(System.Logger.Level.WARNING, "flow '" + flow + "': " + what + ": " + shown, shown);
+        }).otherwiseEmpty();
     }
 }

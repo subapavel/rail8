@@ -18,6 +18,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -165,7 +166,7 @@ class RestartingConsumerTest {
     void next(Arm... arms) { armed.addAll(List.of(arms)); }
 
     RestartingConsumer restarting(Consumer first, boolean polls) {
-        restarting = new RestartingConsumer(FLOW, first, fresh, polls, BOUND, timer, clock);
+        restarting = new RestartingConsumer(FLOW, first, fresh, polls, BOUND, timer, clock, UnaryOperator.identity());
         return restarting;
     }
 

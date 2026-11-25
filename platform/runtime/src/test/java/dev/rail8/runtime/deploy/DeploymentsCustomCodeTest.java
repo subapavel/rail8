@@ -111,6 +111,16 @@ class DeploymentsCustomCodeTest {
         }
     };
 
+    /** A step that takes the secret its option {@code key} names and refuses to build, quoting its value. */
+    static final StepFactory REFUSE = new StepFactory() {
+        @Override public String type() { return "refuse"; }
+        @Override public String configSchema() { return "{}"; }
+        @Override public Stage create(StepConfig step, StepResources resources) {
+            Secret secret = resources.services().secret(step, "key");
+            throw new IllegalArgumentException("the partner does not take the key " + secret.value());
+        }
+    };
+
     /** How often a {@link #counting} step's loader has run, over every type and package. */
     final AtomicInteger loads = new AtomicInteger();
 
@@ -163,6 +173,7 @@ class DeploymentsCustomCodeTest {
         List<StepFactory> steps = new ArrayList<>(new HmacSignPlugin().steps());
         steps.add(LEAK);
         steps.add(TELL);
+        steps.add(REFUSE);
         steps.add(counting("count"));
         steps.add(counting("count-too"));
         NodeConfig config = placeholders ? NodeConfig.from(env).withSecrets(Secrets.placeholder()) : NodeConfig.from(env);
@@ -268,6 +279,16 @@ class DeploymentsCustomCodeTest {
         assertTrue(refused.problems().stream().anyMatch(l -> l.startsWith("flow 'orders' does not build: ") && l.contains("step 'sign'")
                 && l.contains("'key'") && l.contains("RAIL8_SECRET_PARTNER_HMAC")), refused.problems().toString());
         assertEquals(List.of(), doors.doors(), "no consumer built");
+    }
+
+    @Test
+    void aStepThatRefusesToBuildWithASecretsValueRefusesTheDeployShowingOnlyTheReference() throws Exception {
+        node(Map.of("RAIL8_SECRET_PARTNER_HMAC", VALUE));
+        DeployRefusedException refused = assertThrows(DeployRefusedException.class, () -> deploy(shop("sync", "refuse", REFERENCE)));
+        String answer = refused.getMessage() + refused.error() + refused.problems();
+        assertTrue(answer.contains("does not take the key " + REFERENCE), answer);
+        assertFalse(answer.contains(VALUE), answer);
+        assertNotLogged(VALUE);
     }
 
     @Test
