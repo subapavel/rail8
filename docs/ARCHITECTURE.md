@@ -594,8 +594,8 @@ its drain.
   they are entered in each environment. How a node reads the environment until its store is built,
   how a flow names a system of another package and whether one release reads both shapes are settled
   by #443.
-- The secret store: a secret is entered in the UI by the secret administrator and reaches every node
-  without a restart; today secrets are environment variables (#99).
+- The secret store (`docs/SECRET-STORE.md`): a secret is entered in the UI by the secret administrator
+  and reaches every node without a restart; today secrets are environment variables.
 - Credentials of the callers of a flow and the check at the entry of every message (#445); today
   the HTTP adapter does not check its caller.
 
