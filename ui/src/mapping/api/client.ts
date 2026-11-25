@@ -48,6 +48,11 @@ export class ApiProblem extends Error {
   }
 }
 
+/** Whether a call was refused with 503 `busy`: the node ran as many calls of the mapping module as it takes, and nothing was done. */
+export function isBusy(error: unknown): boolean {
+  return error instanceof ApiProblem && error.problem.type === 'urn:rail8:admin:problem:busy';
+}
+
 /** Whether a failed save is a save conflict: 409 `mapping-changed`, the file changed on disk. */
 export function isSaveConflict(error: unknown): boolean {
   return error instanceof ApiProblem && error.problem.type === 'urn:rail8:mapping:problem:mapping-changed';
