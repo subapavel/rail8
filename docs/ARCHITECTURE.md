@@ -326,8 +326,8 @@ any work row points at that place, so the callee can read the body after the cal
 - What an environment holds outside git, in Postgres: the settings of every connection (or its switch
   to a built-in mock), a system's instance name, credentials, identifiers, partner profiles, API
   products and subscriptions, agreements, number sequences, and whether a connection is stopped. Each
-  object has a draft, the version in force and its history. The tables, the versions kept and how long
-  the history is kept are settled by the design of the configuration of an environment (#444).
+  object has a draft, the version in force and its history, kept for the audit's age and at most 1,000
+  changes an object (`docs/ENVIRONMENT-CONFIGURATION.md`).
 
 ## 4. Packages, flows and deployment
 
@@ -1457,13 +1457,15 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
 - Named tokens at the command line and in the UI, and device credentials for the login
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.
-- Eight roles (`docs/USERS-AND-ROLES.md` lists five): Connection administrator and Partner
-  administrator are added by the configuration of an environment (#444), Message sender, who sends a
-  test message to a flow with a personal token as the password of basic authentication, by the entry
-  (#445). The operator also stops and starts a connection.
+- Eight roles (`docs/USERS-AND-ROLES.md` lists them, five built): Connection administrator and
+  Partner administrator are added by the configuration of an environment
+  (`docs/ENVIRONMENT-CONFIGURATION.md`), Message sender, who sends a test message to a flow with a
+  personal token as the password of basic authentication, by the entry (#445). The operator also
+  stops and starts a connection.
 - The admin API of the configuration of an environment, and one documented, versioned text format of
   one file per object for export and import. An export holds no secret value and no state; an import
-  is a dry run, then drafts, and never deletes; a command of `rail8` does both from files (#444).
+  is a dry run, then drafts, and never deletes; a command of `rail8` does both from files
+  (`docs/ENVIRONMENT-CONFIGURATION.md`).
 - Monitor has three views: Messages and Connections from the start, Interchanges with partner
   communication.
 - Partner communication with EDI and the management of APIs are part of the platform; each design

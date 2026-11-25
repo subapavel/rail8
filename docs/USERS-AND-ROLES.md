@@ -1,7 +1,7 @@
 # Users, roles and the permission check
 
 This document is the agreed design of who uses Rail8 and what they may do:
-- the user model and the five roles;
+- the user model and the roles;
 - the one decision point that every admin route asks, and the list of actions;
 - password storage, the limit of login attempts and the first password;
 - the session of a user logged in to the UI, and the tokens of the command line and of machines;
@@ -21,7 +21,8 @@ from the header `X-Rail8-Actor`.
   password. Rail8 sends no e-mail and has no second factor of its own.
 - An account has a `source`, and roles belong to the account, not to its password, so that sign-in through OIDC can be
   added later. A technical account, such as `ci-deploy`, has no password: it has tokens only.
-- There are five fixed roles. A user may hold several, and they add up. No role implies another.
+- There are eight fixed roles, five of them built. A user may hold several, and they add up. No role implies another.
+  Each role says whether a person, a technical account or both may hold it.
 - A role holds for the whole installation. An environment is an installation of its own, so who may do what in
   production is who holds the role in the production installation. Nothing inside Rail8 decides by environment.
 - Every permission check asks three things: the user, the action and the package. The package is ignored for now.
@@ -41,13 +42,16 @@ from the header `X-Rail8-Actor`.
 
 ## Roles
 
-| Role | Id | Holds |
-| --- | --- | --- |
-| Administrator | `administrator` | users, their roles, technical accounts and their tokens, sessions, the Audit screen |
-| Developer | `developer` | deploys and undeploys a commit, sees the deployed configuration, calls the modules' services (the mapping studio) |
-| Operator | `operator` | monitoring, retry, cancel, release and discard. Sees a message's status, times, error, flow, headers and the lines its steps logged |
-| Message bodies | `message-bodies` | sees and downloads a message's body after each step |
-| Secret administrator | `secret-administrator` | creates, overwrites and deletes secrets (the secret store, designed apart) |
+| Role | Id | Held by | Holds |
+| --- | --- | --- | --- |
+| Administrator | `administrator` | a person | users, their roles, technical accounts and their tokens, sessions, the Audit screen |
+| Developer | `developer` | both | deploys and undeploys a commit, sees the deployed configuration, calls the modules' services (the mapping studio) |
+| Operator | `operator` | both | monitoring, retry, cancel, release and discard. Sees a message's status, times, error, flow, headers and the lines its steps logged. Planned: stops and starts a connection |
+| Message bodies | `message-bodies` | both | sees and downloads a message's body after each step |
+| Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Planned: consents that a secret may go to a destination |
+| Connection administrator | `connection-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): systems in the environment, the values of connections, credentials, instance names, technical identifiers |
+| Partner administrator | `partner-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): partner profiles, business identifiers, agreements, API products, subscriptions, number sequences |
+| Message sender | `message-sender` | both | planned, with the check at a flow's entry: sends a test message to a flow |
 
 An administrator does not hold the message bodies role unless it is assigned. Assigning it to oneself is allowed and is
 in the audit, marked as one's own. Only a person may hold the administrator role.
@@ -56,6 +60,10 @@ in the audit, marked as one's own. Only a person may hold the administrator role
 
 Each action has an id. The `Action` enum in the code is the whole table: an action, the roles that grant it, whether it
 needs a person logged in, and whether the emergency key may do it. A test compares the enum with this table.
+
+The configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`) adds `config.read`, `config.connections`,
+`config.run`, `config.consent` and `config.import`, and grants `secret.list` to the connection administrator and the
+partner administrator too. They join this table, and the enum, when they are built.
 
 | Action | Routes | Granted by |
 | --- | --- | --- |

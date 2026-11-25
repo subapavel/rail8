@@ -19,7 +19,9 @@ earlier one built.
 ## Rules
 
 - The UI edits files in a working folder on the author's machine and never changes a running node by itself. A deploy
-  is the node's own deploy of a commit, `POST /admin/deploy`, sent on the author's request.
+  is the node's own deploy of a commit, `POST /admin/deploy`, sent on the author's request. Two exceptions are planned,
+  each through the admin API: the secret store (`docs/SECRET-STORE.md`) and the configuration of an environment
+  (`docs/ENVIRONMENT-CONFIGURATION.md`).
 - Each package is a clone of its own repository: a folder directly in the working folder, named as its repository. The
   name of the folder is what a deploy and a pin name.
 - The UI runs the author's own git binary. A commit from the UI is therefore the commit a terminal would make, with the
