@@ -224,6 +224,7 @@ Every credential has one form:
 ```
 rail8s_<id>_<secret>     a session
 rail8t_<id>_<secret>     a token
+rail8m_<id>_<secret>     a token for sending test messages, planned with the Message sender
 rail8d_<id>_<secret>     a device: it selects the row of the login limit, and proves nothing else
 rail8k_<secret>          the emergency key
 ```
@@ -430,13 +431,14 @@ A UI server outside development, when it comes, runs in session mode only and ho
 - **Expiring soon.** `GET /admin/tokens?expiringWithin=P14D` lists the live tokens that expire within 14 days; the UI shows
   them to an administrator.
 - **Limits.** At most 20 live tokens per user.
-- **On the node's HTTP port.** A token of a user who holds `message.send`, a person's or a technical account's, is the
-  one credential of this page that the HTTP port takes, as the password of basic authentication, to send a test
-  message (`docs/WHO-MAY-SEND.md`). A session, a device and the emergency key are unknown callers there, and the port
-  never routes to `/admin`.
-- **One use** (planned with the Message sender). A token is issued for `admin`, the default and the use of every token
-  issued before, or for `send`. A `send` token is refused on the admin API, and an `admin` token is an unknown caller
-  on the HTTP port, so a token that leaks from a test tool opens nothing else.
+- **On the node's HTTP port.** A token for sending of a user who holds `message.send`, a person's or a technical
+  account's, is the one credential of this page that the HTTP port takes, as the password of basic authentication, to
+  send a test message (`docs/WHO-MAY-SEND.md`). A session, a device, the emergency key and an `admin` token are
+  unknown callers there, and the port never routes to `/admin`.
+- **One use** (planned with the Message sender). A token is issued for `admin` (`rail8t_`), the default and the use of
+  every token issued before, or for `send` (`rail8m_`), in the same table with the column `use`. The fingerprint
+  covers the prefix, so the admin API, an older node's included, never takes a `send` token, and the HTTP port takes
+  no `admin` token. A token that leaks from a test tool opens nothing else.
 
 The command line sends `Authorization: Bearer $RAIL8_TOKEN`. Only `rail8 user` and `rail8 bootstrap` send
 `RAIL8_ADMIN_TOKEN`, which is how `rail8 user add` makes the first administrator. No other command ever sends a value of
