@@ -67,7 +67,9 @@ class SecretFilesTest {
                 () -> assertEquals(Optional.of(URI.create("redis://user:pw@valkey:6379")), c.leases().valkey()),
                 () -> assertEquals(Optional.of("partner-token"), c.secrets().resolve("secret://partner-token")),
                 () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token-file"),
-                        "the file form's own key is gone: no path is held as a secret's value"));
+                        "the file form's own key is gone: no path is held as a secret's value"),
+                () -> assertEquals(java.util.List.of("RAIL8_SECRET_PARTNER_TOKEN"), c.secrets().variableNames(),
+                        "the store is told the effective variable, not its file form"));
     }
 
     /** One trailing \n or \r\n is dropped, nothing else: a second line end, inner lines and spaces stay. */

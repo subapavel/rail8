@@ -240,6 +240,25 @@ class PgSecretStoreIT extends SecretStoreContract {
     }
 
     @Test
+    void thePreviousKeyIsNotDroppedWhileABindingsTransactionIsOpen() {
+        Node a = start("a", K1);
+        create(a, value("db", "the-value"));
+        a = restart(a, K2, K1);
+        SqlConnection binder = pool.getConnection().await();
+        opened.add(binder);
+        Transaction tx = binder.begin().await();
+        SecretStore.Binding open = await(a.store.bind(binder, "a setting".getBytes()));
+        a.clock.advance(SecretStore.TICK);
+        assertTrue(awaitFailure(a.store.ticked()) instanceof SecretRefused busy && busy.code().equals("busy"), "the tick's work waits on the binding");
+        assertEquals(1L, sql("select count(*) from nodes where node = 'a' and secret_key_previous is not null").getFirst().getLong(0),
+                "the previous key is still held while the binding's transaction is open");
+        tx.commit().await();
+        a.tick();
+        assertEquals(0L, sql("select count(*) from nodes where node = 'a' and secret_key_previous is not null").getFirst().getLong(0));
+        assertTrue(a.store.verify(open, "a setting".getBytes()), "the binding made in the open transaction is under the current key");
+    }
+
+    @Test
     void aDeleteThatRacesADeployEndsConsistent() {
         Node a = start("a", K1);
         create(a, value("db", "the-value"));
