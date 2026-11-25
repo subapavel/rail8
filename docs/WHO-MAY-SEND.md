@@ -39,7 +39,7 @@ The design stands on three others and uses their names:
 - The flow says who may send: Named systems, Subscribers or By agreement. Every listening sender says it. The check is
   off only where the flow says so, with a reason.
 - Rail8 never holds a caller's password or key in a form it could send on. It holds a verifier: a fingerprint of a
-  generated value, or a slow hash of a typed one.
+  generated value, a slow hash of a typed password, or a keyed fingerprint of a typed key.
 - No request reads Postgres to find a system's credential; a Message sender's personal token is the one exception. The
   entry's other contact with Postgres is the count of a limit per caller, a test message's audit row, and the sender's
   row on the message.
@@ -59,9 +59,9 @@ The design stands on three others and uses their names:
 | OAuth2 token (`oauth2`) | `Authorization: Bearer <JWT>` | an issuer and the client's id | none: the issuer's keys are public | the token's issuer and client, after its signature verifies |
 
 - Later kinds: the signature of a webhook, and an AS2 certificate. Each is a proof over the body, so the caller is
-  checked once the body is staged: within the flow's `maxBodyBytes` and the 5 minutes a handler lives, and deleted on
-  a refusal. The step that adds them says the rest, and amends the contract suite's rule that `enter` comes before any
-  byte is stored.
+  checked once the body is staged: within the flow's `maxBodyBytes` and the 5 minutes a handler lives, and left to the
+  retention job on a refusal, as every stored body is. The step that adds them says the rest, and amends the contract
+  suite's rule that `enter` comes before any byte is stored.
 - A system rotates a credential by having two for a while: a second is added and activated, the caller switches, and
   the first is removed. A basic caller that keeps its user has the two credentials share it.
 
@@ -272,19 +272,19 @@ public sealed interface Presented {
     record Certificate(List<X509Certificate> chain, Via via) implements Presented {}
     record Bearer(String token, Via via) implements Presented {}
     record Nothing(Via via) implements Presented {}
-}
 
-/**
- * How one request reached the node.
- *
- * @param remote the caller's address: the peer, or the client a trusted proxy names. Failures are counted by it.
- * @param secure over the listener's own TLS, from a trusted proxy, or from loopback
- * @param browser the request carries Origin, Referer, or Sec-Fetch-Site with any value but none
- * @param senderChoice the one Rail8-Sender header
- */
-public record Via(String remote, boolean secure, boolean browser, Optional<String> senderChoice) {
-    /** For a listener of an adapter's own, which reads no browser and no Rail8-Sender. */
-    public static Via of(String remote, boolean secure) { return new Via(remote, secure, false, Optional.empty()); }
+    /**
+     * How one request reached the node.
+     *
+     * @param remote the caller's address: the peer, or the client a trusted proxy names. Failures are counted by it.
+     * @param secure over the listener's own TLS, from a trusted proxy, or from loopback
+     * @param browser the request carries Origin, Referer, or Sec-Fetch-Site with any value but none
+     * @param senderChoice the one Rail8-Sender header
+     */
+    record Via(String remote, boolean secure, boolean browser, Optional<String> senderChoice) {
+        /** For a listener of an adapter's own, which reads no browser and no Rail8-Sender. */
+        public static Via of(String remote, boolean secure) { return new Via(remote, secure, false, Optional.empty()); }
+    }
 }
 
 /** The entry of one listening sender of a flow. The node makes it; a consumer built with it enters every message. */
@@ -294,7 +294,8 @@ public final class Entry {
 
     /**
      * Hands over what the caller of one message presented, before any of the message's body is read. Completes with the
-     * handler of that one message, or fails with Refused. Never blocks, and may be called on any thread. The handler
+     * handler of that one message, or fails with Refused. Never blocks, and may be called on any thread; called on a
+     * Vert.x context, its future completes on that context, so the caller may touch its request there. The handler
      * takes one envelope of this entry's flow, once.
      */
     public Future<Function<Envelope, Future<Ack>>> enter(Presented presented);
@@ -307,7 +308,8 @@ public final class Refused extends RuntimeException {
     public Reason reason();
     public String code();                              // unknown-caller, not-allowed, sender-needed, too-many, busy, tls-required
     public Optional<Duration> retryAfter();            // TOO_MANY and BUSY
-    public void answer(HttpServerResponse response);   // the whole HTTP answer, ended; the connection closes
+    /** Ends the request with the whole HTTP answer; a request with a body has its connection closed, or its HTTP/2 stream reset. */
+    public void answer(HttpServerRequest request);
 }
 
 public interface Component {
@@ -316,10 +318,11 @@ public interface Component {
     default Set<CredentialKind> reads() { return Set.of(); }
     /** The consumer of one sender, which hands each message over through the entry. */
     default Consumer consumer(Inbound in, Entry entry) {
-        return consumer(in, e -> entry.enter(new Presented.Nothing(Via.of("", false))).compose(h -> h.apply(e)));
+        return consumer(in, e -> entry.enter(new Presented.Nothing(Presented.Via.of("", false))).compose(h -> h.apply(e)));
     }
 }
 
+// in dev.rail8.api.plugin
 public interface HttpIngress {
     // … as today
     /** The kinds the port reads for every adapter on it. */
@@ -329,13 +332,16 @@ public interface HttpIngress {
      * Authorization (Basic, or Bearer), then X-API-Key, then the client certificate. It reads the head and the TLS session
      * only, never the body. The node's port overrides it; the default presents nothing, which a check refuses.
      */
-    default Presented presented(HttpServerRequest request) { return new Presented.Nothing(Via.of("", false)); }
+    default Presented presented(HttpServerRequest request) { return new Presented.Nothing(Presented.Via.of("", false)); }
 }
 ```
 
 - **The node builds every sender's consumer through `consumer(Inbound, Entry)`.** The default keeps an adapter built on
   the contract of systems and connections compiling: it stores the body, then enters with `Nothing`. Such an adapter
-  reads no credential, so a flow can use it as a listening sender only with the check off. The node refuses at
+  reads no credential, so a flow can use it as a listening sender only with the check off, and it answers a refusal as
+  it answers a failed handler.
+- **A sender with a connection, and `direct`,** are never refused at the entry: `enter` completes at once, with the
+  system of the connection or the caller's sender, and the flow's room is taken at delivery as today. The node refuses at
   registration a component whose `reads()` is not empty and that does not override `consumer(Inbound, Entry)`.
 - **An adapter that overrides it holds no handler of its own.** A message reaches the flow only through the handler
   `enter` gave, so an adapter cannot deliver around the check or write a sender. This guards against mistakes, not
@@ -346,8 +352,8 @@ public interface HttpIngress {
 - **Enter first.** A consumer calls `enter` before it reads any byte of the body, and a refusal's message is never
   stored. The HTTP port pauses the request; an adapter keeps it paused until `enter` completes.
 - **A handler lives until its body is received,** and the body must end within 5 minutes of the entry. On that
-  timeout, a disconnect or the end of the mount, the platform drops the handler and deletes the partial body; an
-  upload slower than 5 minutes fails. A handler never applied holds nothing else and needs no release.
+  timeout, a disconnect or the end of the mount, the platform drops the handler; no message refers to the partial
+  body, which the retention job removes by age like every body. An upload slower than 5 minutes fails. A handler never applied holds nothing else and needs no release.
 - **Errors.** `enter` fails only with `Refused`. Any other failure is a fault of the platform; the adapter answers it as
   it answers a failed handler. The handler fails with `IllegalArgumentException` for an envelope of another flow and
   with `IllegalStateException` when applied twice.
@@ -382,7 +388,7 @@ private void handle(HttpServerRequest req) {                      // the event l
     req.pause();
     entry.enter(ctx.http().presented(req)).onComplete(entered -> {
         if (entered.failed()) {
-            if (entered.cause() instanceof Refused r) r.answer(req.response()); else req.response().setStatusCode(500).end();
+            if (entered.cause() instanceof Refused r) r.answer(req); else req.response().setStatusCode(500).end();
             return;
         }
         streamBodyThenRun(req, entered.result());                 // as today, with the handler enter gave
@@ -390,15 +396,30 @@ private void handle(HttpServerRequest req) {                      // the event l
 }
 ```
 
-An adapter with a listener of its own, such as MLLP over TLS, declares `reads()` as `Set.of(CERTIFICATE)` and calls
-`entry.enter(new Presented.Certificate(socket.peerCertificates(), Via.of(remote, true)))` for each message. It answers a
-refusal in its own protocol, from `reason()` and `retryAfter()`. A polling adapter and `direct` present nothing: the
-platform gives a poller's message the system of its connection, and a callee the caller's sender.
+An adapter with a listener of its own, such as MLLP over TLS, declares `reads()` as `Set.of(CERTIFICATE)` and enters
+each message with the peer's chain:
+
+```java
+Presented presented(NetSocket socket, String remote) {
+    Presented.Via via = Presented.Via.of(remote, socket.isSsl());
+    try {
+        List<X509Certificate> chain = socket.peerCertificates().stream().map(X509Certificate.class::cast).toList();
+        return chain.isEmpty() ? new Presented.Nothing(via) : new Presented.Certificate(chain, via);
+    } catch (SSLPeerUnverifiedException none) {                    // the peer sent no certificate
+        return new Presented.Nothing(via);
+    }
+}
+```
+
+It answers a refusal in its own protocol, from `reason()` and `retryAfter()`. A polling adapter and `direct` present
+nothing: the platform gives a poller's message the system of its connection, and a callee the caller's sender.
 
 ## At the entry
 
 The order of one request on the node's HTTP port, all of it platform code. Steps 1 to 3 and 5 to 7 run inside `enter`;
-on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
+on a path no mount holds, the port runs steps 1 to 3 itself before step 4. A path held by a deployed flow whose check is
+off, a version-1 flow among them, but with no mount at the moment is answered 503 `busy` with `Retry-After` to every
+caller, before step 1, as today.
 
 0. The port's own admission: the requests in flight per node and per remote address. It is designed apart; its answer
    is 503.
@@ -422,7 +443,7 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
    limit is 429 `too-many` with `Retry-After`.
 8. **The handler.** The adapter streams the body; its own refusals are its own (405, 413). Delivery takes the flow's
    permit by the body's real size, as today, and a flow that filled meanwhile answers 503. Such a message was counted
-   at step 7, and its stored body is deleted. The port's own admission bounds the uploads in flight; until it is
+   at step 7, and its stored body is left to the retention job. The port's own admission bounds the uploads in flight; until it is
    built, nothing does.
 9. **The sender is written (3)** with the arrival's save (at-least-once), or with the run's first records (`sync`,
    `at-most-once`).
@@ -446,13 +467,14 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
   last 24 hours, in memory on each node, and unknown callers count under one entry. The line names the flow, or
   `unmatched` for a path no mount holds; never the path, the query or what was presented.
 
-With the check off, the entry never refuses on who the caller is and counts no failure. Steps 6 and 8 still hold.
+With the check off, the entry never refuses on who the caller is and counts no failure. A typed password is not
+hashed there: its caller has no sender. Steps 6 and 8 still hold.
 
 | The caller presents | The message's sender | Its proof |
 | --- | --- | --- |
 | a credential found in the index | the credential's system | its kind |
 | a valid personal token | the system `Rail8-Sender` names, any defined system; none without the header | `token` |
-| nothing; an unknown, wrong or waiting credential; a credential in clear text | none | `none` |
+| nothing; an unknown, wrong or waiting credential; a typed password; a credential in clear text | none | `none` |
 
 ## The answers
 
@@ -489,8 +511,9 @@ With the check off, the entry never refuses on who the caller is and counts no f
   (name, address) row. A partner whose row a stranger at the same address holds recovers with a second credential of
   its system, under another id or user.
 - **Typed values across addresses.** The step that adds typed passwords and keys also bounds the guesses against one
-  known user or key across all addresses (100 free failures a day), so that a stranger who knows the name cannot lock
-  the partner out.
+  known user or key across all addresses (100 free failures a day). Its wait holds only for the addresses that never
+  succeeded for that user: each node remembers up to 16 good addresses per credential for 30 days, so that a stranger
+  who knows the name cannot lock the partner out at the addresses it sends from.
 - **Equal answers.** Known and unknown get the same code, the same text and about the same time.
 - **Paths stay hidden.** An unknown caller gets 401 on every path, so it learns no path a flow with the check on
   serves. A flow with the check off is found by anyone.
@@ -558,7 +581,7 @@ Both are objects of the configuration of an environment, written by the partner 
   two systems under its partner.
 - A system is defined in a package, as for every system. A new customer of an API is a commit and a deploy of its
   system file, then its credential and its subscription in the environment.
-- Subscriptions count against the environment's 20,000 objects.
+- An environment holds at most 1,000 API products and 20,000 subscriptions.
 
 ## Test messages
 
@@ -744,6 +767,7 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
 | Failure rows | 100,000 per table a node; dropped 24 hours after the last failure |
 | `perSender` | 999,999,999 a window |
 | Flows of an API product | 256 |
+| Credentials; issuers; API products; subscriptions, in an environment | 20,000; 64; 1,000; 20,000; drafts and removed objects count |
 | An issuer's JWKS | 64 KiB, a 5 s timeout; read every hour, for an unknown key id at most once a minute, one read at a time; unused after 24 hours without a read |
 | Signature checks of OAuth2 tokens | 16 at once a node |
 | A chain to a CA | 10 certificates, 64 KiB |
@@ -815,6 +839,9 @@ A change in any of these is a change here, made in that design's pull request.
 - "A partner that sends messages is not a user: that is the security of an adapter" (`docs/USERS-AND-ROLES.md`) stays
   true, and this is that security.
 - "Five fixed roles": Message sender is the sixth of the eight roles.
+- The secret store's three kinds, its rule that no answer holds a value and no digest of one is stored, and its open
+  point on a verifier (`docs/SECRET-STORE.md`): the `verifier` is a fourth kind, a digest by its nature, whose generated
+  value is answered once when it is made.
 - The order in `docs/ADAPTERS.md` (pause, store the body, run the flow) becomes pause, enter, store, run. The first
   step rewrites that guide with the contract it changes.
 
@@ -839,8 +866,9 @@ Each step is one issue. Every step needs the steps of systems and connections th
    the headers removed and the platform's cookies kept out of replies; `senders` as Named systems and `{check: off,
    reason}`, held with the mount; version-1 flows listed, and new ones refused in a deployed environment;
    `message_parties` with its primary key only, written for the sender, the receivers at each attempt, pollers and
-   calls between flows; `GET /admin/messages/{id}` with `sender` and `receivers`; the contract suite and `FakeEntry`;
-   `http`, the `webhook` sample, the template and `docs/ADAPTERS.md`. `class:C`.
+   calls between flows; `GET /admin/messages/{id}` with `sender` and `receivers`; what `GET /admin/flows`,
+   `GET /admin/components` and `/health` gain; `rail8 test`'s `sender` and `expect.refused`; the contract suite and
+   `FakeEntry`; `http`, the `webhook` sample, the template and `docs/ADAPTERS.md`. `class:C`.
 2. **The sender and receivers in the Messages view**, the search parameters of `GET /admin/messages` with the indexes
    they read, and the status `unrecorded`. `class:B`.
 3. **The Message sender role and test sending:** `message.send`, the token's use `send` and its form `rail8m_`, the
