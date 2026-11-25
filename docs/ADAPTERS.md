@@ -89,9 +89,12 @@ bin/run-adapter ~/acme-adapter
 ```
 
 It builds the adapter's jar, starts an empty Postgres of its own in Docker, starts a node with the adapter's
-`target/plugin` as its plugins (admin API on `127.0.0.1:18081`), deploys `package/` as the adapter's `HEAD` commit holds it
+`target/plugin` as its plugins (admin API on `127.0.0.1:18081`, with an emergency key made for the run), makes the node's
+first users with `rail8 bootstrap`, deploys `package/` as the adapter's `HEAD` commit holds it
 (the node reads the folder's repository, with `RAIL8_GIT_PATH=package`), starts a partner that answers every
-request with the body it was sent on `127.0.0.1:18091`, and runs the UI on **http://localhost:5173**. The node's HTTP
+request with the body it was sent on `127.0.0.1:18091`, and runs the UI on **http://localhost:5173**. The UI needs no
+login: it runs as the technical account `deploy`, which the script gives the roles `operator` and `message-bodies` so that
+Messages reads what the node stored. Its token is in `target/run-adapter/token`. The node's HTTP
 port, where the adapter's in endpoints are served, is `127.0.0.1:18090`. The ports 18081, 18090, 18091 and 5173 must be
 free; the quickstart's node may keep running, its UI may not.
 

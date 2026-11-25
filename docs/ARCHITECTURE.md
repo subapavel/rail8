@@ -765,11 +765,12 @@ Two tools start a new adapter and run it (`docs/ADAPTERS.md`):
   folder that is not empty are refused.
 - **Local run.** `bin/run-adapter <dir>`, in a checkout with the platform built, builds the
   adapter's jar, starts an empty Postgres in Docker on a free port and a node of environment `dev`
-  with the adapter's `target/plugin` as its plugins (admin API on `127.0.0.1:18081`, no token, its
-  HTTP port on `127.0.0.1:18090`),
-  deploys `package/` as the adapter's `HEAD` commit holds it (one line says so when the folder differs
-  from `HEAD`), starts a partner that echoes on `127.0.0.1:18091`, and runs the
-  UI with the adapter's folder as its working folder, until Ctrl+C. A taken port or a missing tool
+  with the adapter's `target/plugin` as its plugins (admin API on `127.0.0.1:18081` with an emergency
+  key made for the run, its HTTP port on `127.0.0.1:18090`), makes its first users with
+  `rail8 bootstrap` and gives the technical account `deploy` the roles `operator` and `message-bodies`,
+  deploys `package/` with that account's token as the adapter's `HEAD` commit holds it (one line says so
+  when the folder differs from `HEAD`), starts a partner that echoes on `127.0.0.1:18091`, and runs the
+  UI with the adapter's folder as its working folder, without a login, as `deploy`, until Ctrl+C. A taken port or a missing tool
   stops it before it starts anything.
 
 ### The API for custom code
