@@ -50,12 +50,12 @@ class CheckTest(unittest.TestCase):
     def node(self, version: str):
         self.stub("node", f"echo {version}")
 
-    def run_check(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+    def run_check(self, *args: str, command: str = str(CHECK), cwd: Path = REPO, **extra: str) -> subprocess.CompletedProcess:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("JAVA_", "_JAVA_", "GIT_", "TZ", "MAVEN", "GITHUB_"))}
         env.update(extra)
         env["PATH"] = f"{self.bin}:{env.get('PATH', '/usr/bin:/bin')}"
         env["HOME"] = str(self.dir)
-        return subprocess.run([str(CHECK), *args], cwd=REPO, env=env, capture_output=True, text=True, timeout=TIMEOUT)
+        return subprocess.run([command, *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=TIMEOUT)
 
     def test_an_unknown_area_is_a_usage_error(self):
         result = self.run_check("nope")
@@ -73,6 +73,21 @@ class CheckTest(unittest.TestCase):
         result = self.run_check("jq")
         self.assertEqual(3, result.returncode, result.stderr)
         self.assertIn("ci/check jq: NOT RUN: Java 25 is needed (.java-version), java on the PATH is 21", result.stderr)
+
+    def test_a_java_that_cannot_start_stops_the_area_before_it_starts(self):
+        # what a shell answers for a command it cannot find: exit 127 and nothing on stdout
+        self.stub("java", "exit 127")
+        result = self.run_check("jq")
+        self.assertEqual(3, result.returncode, result.stderr)
+        self.assertIn("ci/check jq: NOT RUN: Java 25 is needed (.java-version), java on the PATH is missing", result.stderr)
+
+    def test_several_areas_from_a_subfolder_by_a_relative_path(self):
+        self.java("21")
+        self.node("v20.11.0")
+        result = self.run_check("jq", "ui", command="../ci/check", cwd=REPO / "ui")
+        self.assertEqual(3, result.returncode, result.stderr)
+        self.assertIn("ci/check jq: NOT RUN", result.stderr)
+        self.assertIn("ci/check ui: NOT RUN", result.stderr)
 
     def test_several_areas_each_run_and_a_failure_outweighs_an_area_not_run(self):
         # mapping fails at its first script test, the java stub refusing to run it; ui cannot run on node 20

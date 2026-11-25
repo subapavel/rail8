@@ -45,7 +45,7 @@ mask() { if [ "${GITHUB_ACTIONS:-}" = true ]; then echo "::add-mask::$1"; fi; }
 need_java() {
   local want have
   want=$(tr -d '[:space:]' < .java-version)
-  have=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p')
+  have=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p') || true
   [ "$have" = "$want" ] || cannot "Java $want is needed (.java-version), java on the PATH is ${have:-missing}"
 }
 
@@ -431,7 +431,7 @@ if [ "$#" -gt 1 ]; then
     failed=0 not_run=0
     for a in "$@"; do
       status=0
-      "$0" "$a" || status=$?
+      "$root/ci/check" "$a" || status=$?
       case $status in 0) ;; 3) not_run=1 ;; *) failed=1 ;; esac
     done
     if [ "$failed" = 1 ]; then exit 1; elif [ "$not_run" = 1 ]; then exit 3; fi
