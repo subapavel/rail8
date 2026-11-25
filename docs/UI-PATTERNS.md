@@ -45,7 +45,8 @@ A page uses PageContainer's own slots and nothing beside them:
 
 ## A list page
 
-Reference: Pro's Search Table; in Rail8, Packages (`packages-*.png`).
+Reference: Pro's Search Table; in Rail8, Packages (`packages-*.png`), and Messages (`messages-*.png`) for a list with a
+search form.
 
 - `Page` with the title and one line of `content`.
 - One card per list: a ProTable with `headerTitle` (a heading of level 2), the list's actions in `toolBarRender`
@@ -160,9 +161,11 @@ into `docs/ui/frame/`; `npm run pictures -- --pro` also takes the matching pages
 | --- | --- | --- |
 | Home | ![](ui/frame/home-1440x900-light.png) | ![](ui/frame/pro/workplace-1440x900-light.png) |
 | List page | ![](ui/frame/packages-1440x900-light.png) | ![](ui/frame/pro/table-list-1440x900-light.png) |
+| List page with a search form | ![](ui/frame/messages-1440x900-light.png) | ![](ui/frame/pro/table-list-1440x900-light.png) |
 | Detail page | ![](ui/frame/package-changes-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-1440x900-light.png) |
+| Detail page with cards only | ![](ui/frame/message-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-1440x900-light.png) |
 | Detail page, dark | ![](ui/frame/package-artifacts-1440x900-dark.png) | ![](ui/frame/pro/profile-advanced-1440x900-dark.png) |
 | Collapsed menu | ![](ui/frame/menu-collapsed-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-collapsed-1440x900-light.png) |
 | Canvas | ![](ui/frame/canvas-1440x900-light.png) | none |
 
-Messages, Endpoints, Flows and Mappings keep their own layout inside `Page` until each is rebuilt to these patterns.
+Endpoints, Flows and Mappings keep their own layout inside `Page` until each is rebuilt to these patterns.

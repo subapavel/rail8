@@ -169,6 +169,44 @@ describe('Messages', () => {
     expect(page.getByRole('tab').elements()).toHaveLength(3);
   });
 
+  test('shows each status as a dot with its word, and its counts each with its dot', async () => {
+    render(fakeApi());
+    const failed = page.getByRole('table', { name: 'Messages' }).getByText('Failed', { exact: true });
+    await expect.element(failed).toBeVisible();
+    expect(failed.element().closest('.ant-badge-status')?.querySelector('.ant-badge-status-error')).not.toBeNull();
+    const running = page.getByRole('group', { name: 'Messages by status' }).getByRole('button', { name: 'Running 1' });
+    await expect.element(running).toBeVisible();
+    expect(running.element().querySelector('.ant-badge-status-processing')).not.toBeNull();
+  });
+
+  test('Reset goes back to the last hour of every flow, and Refresh reads the list again up to now', async () => {
+    const api = fakeApi();
+    let now = NOW;
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    root.render(<Shell screens={[messagesScreen(api, () => now)]} start="messages" />);
+    await expect.element(page.getByRole('button', { name: 'm-1' })).toBeVisible();
+    await page.getByRole('combobox', { name: 'Status' }).click();
+    await page.getByRole('option', { name: 'Failed', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Step name' }).fill('send');
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, status: 'failed', step: 'send' }));
+
+    now = new Date('2026-11-19T08:30:00Z');
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    const later = { from: '2026-11-19T07:30:00.000Z', to: '2026-11-19T08:30:00.000Z' };
+    await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...later, status: 'failed', step: 'send' }));
+    await vi.waitFor(() => expect(api.counts).toHaveBeenLastCalledWith(later));
+
+    const calls = vi.mocked(api.list).mock.calls.length;
+    await page.getByRole('button', { name: 'Reset', exact: true }).click();
+    await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith(later));
+    expect(api.list).toHaveBeenCalledTimes(calls + 1);
+    await expect.element(page.getByRole('textbox', { name: 'Step name' })).toHaveValue('');
+    await expect.element(page.getByRole('form', { name: 'Filters' }).getByText('All statuses', { exact: true })).toBeVisible();
+  });
+
   test('narrows the list with each filter: time range, flow and status when chosen, business key and step with Search', async () => {
     const api = fakeApi();
     render(api);
@@ -291,14 +329,15 @@ describe('Messages', () => {
     const steps = page.getByRole('table', { name: 'Steps of attempt 1' });
     const rows = steps.getByRole('row');
     await expect.element(rows.nth(2)).toHaveTextContent('Saved, waiting for a worker19.6 ms');
-    expect(rows.elements().slice(1).map((r, index) => r.querySelectorAll('td')[index === 1 ? 2 : 4]?.textContent)).toEqual(['', '19.6 ms', '2.2 ms', '4.3 ms']);
-    expect(rows.nth(1).getByRole('cell').nth(5).element().textContent).toBe('');
+    expect(rows.elements().slice(1).map((r, index) => r.querySelectorAll('td')[index === 1 ? 2 : 4]?.textContent)).toEqual(['-', '19.6 ms', '2.2 ms', '4.3 ms']);
+    expect(rows.nth(1).getByRole('cell').nth(5).element().textContent).toBe('-');
     expect(steps.getByText('Between steps').elements()).toHaveLength(0);
 
-    const total = page.getByRole('tabpanel', { name: 'm-3' }).getByLabelText('Duration');
-    await expect.element(total.getByText('Other time between steps')).toBeVisible();
-    await expect.element(total.getByText('100.0 µs')).toBeVisible();
-    await expect.element(total.getByText('26.2 ms')).toBeVisible();
+    const header = page.getByRole('tabpanel', { name: 'm-3' });
+    await expect.element(header.getByText('Other time between steps')).toBeVisible();
+    await expect.element(header.getByText('100.0 µs')).toBeVisible();
+    await expect.element(header.getByText('Duration')).toBeVisible();
+    await expect.element(header.getByText('26.2 ms')).toBeVisible();
   });
 
   test('restarts a message whose latest attempt failed, and shows a refusal with its reason', async () => {
@@ -325,6 +364,7 @@ describe('Messages', () => {
     await page.getByRole('button', { name: 'm-1' }).click();
     await expect.element(page.getByRole('button', { name: 'Restart' })).toBeDisabled();
     await expect.element(page.getByRole('button', { name: 'Show the payload after step 1 of attempt 1' })).toBeDisabled();
+    expect(page.getByRole('table', { name: 'Payloads' }).getByRole('button', { name: /expand row/i }).elements()).toHaveLength(0);
   });
 
   test('offers no restart when the latest attempt went through', async () => {
@@ -370,20 +410,55 @@ describe('Messages', () => {
     await expect.element(page.getByRole('table', { name: 'Audit of the message' }).getByText('Retried')).toBeVisible();
   });
 
-  test('shows the payload after a step in a dialog', async () => {
+  test('lists the payload after every step, and opens a kept one in its row when it is chosen there or in its step', async () => {
     const api = fakeApi();
     render(api);
     await page.getByRole('button', { name: 'm-1' }).click();
+
+    const payloads = page.getByRole('table', { name: 'Payloads' });
+    const rows = payloads.getByRole('row');
+    await expect.element(rows.nth(1)).toHaveTextContent('10arrival11 B');
+    await expect.element(rows.nth(4)).toHaveTextContent('21send4 B, not kept');
+    expect(rows.nth(4).getByRole('button', { name: /expand row/i }).elements()).toHaveLength(0);
+    expect(api.payload).not.toHaveBeenCalled();
+
     await page.getByRole('button', { name: 'Show the payload after step 1 of attempt 1' }).click();
+    const shown = page.getByRole('region', { name: 'Payload after step 1 (send), attempt 1' });
+    await expect.element(shown.getByText('{"order":7}')).toBeVisible();
+    await expect.element(shown.getByText('application/json, 11 B, sha256:11')).toBeVisible();
+    expect(api.payload).toHaveBeenCalledExactlyOnceWith('m-1', 1, 1);
 
-    const dialog = page.getByRole('dialog', { name: 'Payload after step 1 (send), attempt 1' });
-    await expect.element(dialog.getByText('{"order":7}')).toBeVisible();
-    await expect.element(dialog.getByText('application/json, 11 B, sha256:11')).toBeVisible();
-    expect(api.payload).toHaveBeenCalledWith('m-1', 1, 1);
+    await rows.nth(1).getByRole('button', { name: /expand row/i }).click();
+    await expect.element(page.getByRole('region', { name: 'Payload after step 0 (arrival), attempt 1' }).getByText('{"order":7}')).toBeVisible();
+    expect(api.payload).toHaveBeenLastCalledWith('m-1', 0, 1);
 
-    await dialog.getByRole('button', { name: 'Close' }).click();
-    await expect.element(dialog).not.toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Show the payload after step 1 of attempt 1' })).toHaveFocus();
+    await rows.nth(3).getByRole('button', { name: /collapse row/i }).click();
+    await expect.element(shown).not.toBeInTheDocument();
+  });
+
+  test('shows the facts of a message in its header, the state of its latest attempt with its dot, and its outcomes as dots', async () => {
+    render(fakeApi());
+    await page.getByRole('button', { name: 'm-1' }).click();
+    const header = page.getByRole('tabpanel', { name: 'm-1' });
+    await expect.element(header.getByRole('heading', { level: 1, name: 'Message m-1' })).toBeVisible();
+    await expect.element(header.getByText('Attempts')).toBeVisible();
+    const facts = header.element().querySelector('.ant-page-header .ant-descriptions');
+    expect(facts?.textContent).toBe('Flowdemo/ordersStarted at2026-11-17T10:01:00ZAttempts2');
+    const state = header.getByText('State').element().closest('.ant-statistic');
+    expect(state?.textContent).toBe('StateFailed');
+    expect(state?.querySelector('.ant-badge-status-error')).not.toBeNull();
+
+    const failed = page.getByRole('table', { name: 'Steps of attempt 1' }).getByText('Failed', { exact: true });
+    expect(failed.element().closest('.ant-badge-status')?.querySelector('.ant-badge-status-error')).not.toBeNull();
+    const ok = page.getByRole('table', { name: 'Steps of attempt 1' }).getByText('OK', { exact: true });
+    expect(ok.element().closest('.ant-badge-status')?.querySelector('.ant-badge-status-success')).not.toBeNull();
+  });
+
+  test('marks Messages in the menu while a message is shown', async () => {
+    render(fakeApi());
+    await page.getByRole('button', { name: 'm-1' }).click();
+    await expect.element(tab('m-1')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Messages' })).toHaveAttribute('aria-current', 'page');
   });
 
   test('says when the node recorded no message with the id of a tab', async () => {
@@ -417,9 +492,7 @@ describe('the Messages screen in another language', () => {
     await expect.element(page.getByText('Сбой шага 1 (send) в попытке 2', { exact: false })).toBeVisible();
     await expect.element(page.getByRole('table', { name: 'Шаги попытки 2' }).getByText('4 Б, не хранится')).toBeVisible();
     await page.getByRole('button', { name: 'Показать содержимое после шага 1 попытки 1' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Содержимое после шага 1 (send), попытка 1' });
-    await expect.element(dialog.getByText('{"order":7}')).toBeVisible();
-    await dialog.getByRole('button', { name: 'Закрыть' }).click();
-    await expect.element(dialog).not.toBeInTheDocument();
+    const shown = page.getByRole('region', { name: 'Содержимое после шага 1 (send), попытка 1' });
+    await expect.element(shown.getByText('{"order":7}')).toBeVisible();
   });
 });

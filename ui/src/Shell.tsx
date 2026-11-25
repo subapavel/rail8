@@ -194,6 +194,16 @@ export function Shell({ screens, start }: ShellProps) {
     ];
   };
 
+  /**
+   * The id of the menu's screen the tab `id` belongs to: its own screen when the menu lists it, else the last screen of
+   * the menu among those that led to it, where its breadcrumb starts; undefined when none of them is in the menu.
+   */
+  const menuScreenOf = (id: string | null) => {
+    if (id === null || byId.has(id)) return id ?? undefined;
+    return (opened.get(id)?.trail ?? []).findLast((step) => byId.has(step.id))?.id;
+  };
+  const marked = menuScreenOf(tabs.active);
+
   const menuOf = (id: string): MenuProps => {
     const pinned = isPinned(tabs, id);
     return {
@@ -291,7 +301,7 @@ export function Shell({ screens, start }: ShellProps) {
             }}
             location={{ pathname: '/' }}
             menuProps={{
-              selectedKeys: tabs.active ? [tabs.active] : [],
+              selectedKeys: marked === undefined ? [] : [marked],
               onClick: ({ key }) => {
                 const screen = byId.get(key);
                 if (screen && refusedOf(screen) === undefined) open(screen);
@@ -304,7 +314,7 @@ export function Shell({ screens, start }: ShellProps) {
                 ref={(span) => {
                   const entry = span?.closest('li');
                   if (item.name) entry?.setAttribute('aria-label', item.name);
-                  if (item.key === tabs.active) entry?.setAttribute('aria-current', 'page');
+                  if (item.key === marked) entry?.setAttribute('aria-current', 'page');
                   else entry?.removeAttribute('aria-current');
                 }}
               >
