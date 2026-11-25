@@ -102,12 +102,12 @@ class SftpAtmozIT {
 
     /**
      * The sender of {@code inbox} through a new relay (which tells when the client closed its session), logging in by
-     * {@code login}, closing a session idle for 500 ms; the fake clock moved past the files' real mtimes.
+     * {@code login}, which may also set {@code ioTimeoutMs}; the fake clock moved past the files' real mtimes.
      */
     Inbound endpoint(TcpRelay relay, Map<String, Object> login) {
         rt.clock().advance(Duration.between(rt.clock().instant(), Instant.now()).plusHours(1));
         Map<String, Object> all = new HashMap<>(Map.of("host", "127.0.0.1", "port", relay.port(), "hostKey", hostKey,
-                "ioTimeoutMs", 500, "maxBodyBytes", 1_000_000L, "flow", "contract", "dir", "/inbox"));
+                "maxBodyBytes", 1_000_000L, "flow", "contract", "dir", "/inbox"));
         all.putAll(login);
         return EmbeddedSftp.inbound("sftp-in", all);
     }
@@ -135,9 +135,9 @@ class SftpAtmozIT {
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         SftpComponent component = started(endpoint(relay(), login), seen);
         SftpComponentTest.round(rt);
+        assertEquals(Health.Status.UP, component.health().await().status(), "the round connected and listed: " + login.keySet());
         assertEquals(List.of(file), SftpComponentTest.files(seen), "logged in and delivered: " + login.keySet());
         assertEquals("", run("ls /home/demo/inbox"), "and deleted it");
-        assertEquals(Health.Status.UP, component.health().await().status());
     }
 
     @Test
@@ -167,7 +167,8 @@ class SftpAtmozIT {
         drop("a.xml");
         TcpRelay relay = relay();
         List<Envelope> seen = new CopyOnWriteArrayList<>();
-        SftpComponent component = started(endpoint(relay, Map.of("user", "demo", "privateKey", pair)), seen);
+        // a session idle for 2 s is closed, so the next round opens a second one
+        SftpComponent component = started(endpoint(relay, Map.of("user", "demo", "privateKey", pair, "ioTimeoutMs", 2_000)), seen);
         SftpComponentTest.round(rt);
         assertEquals(List.of("a.xml"), SftpComponentTest.files(seen), "the first session logged in by the first key");
         assertTrue(SftpComponentTest.soon(() -> relay.clientsClosed() == 1), "the client closed its session idle for ioTimeoutMs");
