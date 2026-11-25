@@ -254,8 +254,9 @@ literal, and a `${` in it is refused at load, since it is a template written whe
 The faults these checks raise carry two texts. The caller of a sync flow gets the public one only ("the message is
 invalid", "the receiver cannot be reached now"). The detail (the step, the field, the placeholder, the connection key, a
 host, the environment) goes to the message's history, which only the admin API shows. Every refusal of the deploy and
-every fault here carries a stable code, so the UI words it in the user's language. The detail never holds a value of a
-connection: the secret store's scrubbing covers these faults, their causes and their suppressed failures.
+every fault here carries a stable code and the values it names beside its English text, as the node's other refusals do,
+so the UI words it in the user's language. The detail never holds a value of a connection: the secret store's scrubbing
+covers these faults, their causes and their suppressed failures.
 
 ## A whole address from the message
 
@@ -380,9 +381,13 @@ Tab.of(id, label)                         // as today
 - **Text keys.** Every field, choice and tab has a label, and every field a help text, in English in the code. Their
   keys are derived and never written: `<scheme>.field.<name>.label`, `<scheme>.field.<name>.help`,
   `<scheme>.field.<name>.choice.<value>`, `<scheme>.tab.<id>`; the platform's own fields use `rail8.` in place of the
-  scheme. An adapter's jar may carry `META-INF/rail8/texts/<scheme>/<locale>.properties` with those keys, at most
-  256 KiB each, served at `GET /admin/components/<scheme>/texts/<locale>` for a locale matching
-  `^[a-z]{2,3}(-[A-Z]{2})?$` (404 for one it lacks; the UI then shows the English).
+  scheme. Two adapters never clash, since a scheme is unique on a node.
+- **An adapter's own translations.** An adapter's jar may carry `META-INF/rail8/texts/<scheme>/<language>.json`: one
+  flat JSON object of those keys to ICU messages, the form of the UI's own texts, at most 256 KiB each. The node serves
+  it at `GET /admin/components/<scheme>/texts/<language>` for a language matching `^[a-z]{2,3}(-[A-Z]{2})?$`, and 404
+  for one the jar lacks. The UI lays it over the adapter's English, which stays the text of every key a language lacks,
+  as for the UI's own texts. The contract suite checks that every declared text has its key and its English text, and
+  that a translation holds only declared keys, each with the same ICU arguments as its English.
 - **Problems carry codes.** A problem of `Settings.check` carries a stable code (`required`, `unknown`, `min`, `max`,
   `pattern`, `choice`) besides its English text.
 - **The description** served at `GET /admin/components` becomes format 2: `{ "format": 2, "reach": { "in": …, "out": … },
@@ -460,11 +465,11 @@ and activates by hand, lives in the tests of `rail8-runtime`; the published test
 
 ### At a deploy
 
-Under the pool's deploy lock, with the checks of today, every problem a line of one 422 with its code. The checks run
-against the pool as it would be after this deploy: the package's earlier system files and uses are replaced by the
-candidate's first, so a package that drops its last flow of a connection together with the connection is not refused.
-What the other packages define is read from the committed records of the pool, `deployment_systems` below, never from
-what this node installed, so a package that failed to install here still counts.
+Under the pool's deploy lock, with the checks of today, every problem a line of one 422 with its code and values. The
+checks run against the pool as it would be after this deploy: the package's earlier system files and uses are replaced
+by the candidate's first, so a package that drops its last flow of a connection together with the connection is not
+refused. What the other packages define is read from the committed records of the pool, `deployment_systems` below,
+never from what this node installed, so a package that failed to install here still counts.
 
 1. **Systems**: each file against its schema; the key rules above; every adapter known to the node and declaring a
    connection for some direction; a drop or a change of a used system or connection, as above.
@@ -855,12 +860,17 @@ on the new model, and from the second on the owner sees a flow of the new shape 
 Windows with WSL. Each says whether it changes `examples/demo`, the quickstart or the database; a step that changes
 `examples/demo` says which files to copy again into `~/rail8-workspace/demo` and commit there.
 
+An adapter's own translations, with their route and the UI laying them over the English, are a step of their own,
+built at any time after the first: the bundles of `http`, `sftp` and the template in the UI's four languages, and the
+contract suite's checks of them. It changes no file of the demo, the quickstart or the database.
+
+
 1. **The adapter's contract.** `Forms` with its declared reach, labels, text keys and codes, `Connection`, `Inbound`,
    `Outbound`, `Call`, `Producer.send(e, call)`, `polledPlace`, `HttpIngress.mount`, the plugin API's version, the
    poller's lease key by flow; `http` (with a literal `path`, the request built from one parsed `URI`, and `url`
    refusing user info), `sftp` (with `hostKey` a secret field), `direct`, `mock`, the Java of the template,
    `ComponentContract`, `PollingConsumerContract` and `RecordingComponent` on it; INVALID final for the step's own retry;
-   format 2 and the texts route. Endpoint files are read through it unchanged: an endpoint's `config` with the override
+   format 2 with the text keys. Endpoint files are read through it unchanged: an endpoint's `config` with the override
    of `RAIL8_ENV`, its whole `url`, its `maxBodyBytes` as the reply's limit and its hash stay as they are. The endpoint
    form shows the connection's fields and the flow's in two groups. The secret store's step for credentials and key
    pairs in adapters changes `Field` and the adapter's config too: the two never run at once, and whichever starts
