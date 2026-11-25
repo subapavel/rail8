@@ -34,7 +34,7 @@ public final class MemorySecretStores {
         Secrets secrets = Secrets.fromEnv(env);
         long epoch = ++epochs;
         db.node(node, epoch, true);
-        SecretStore store = new SecretStore(new MemorySecretRows(db), secrets.key(), node, secrets.variableNames(), clock, timer, Runnable::run, warnings::add);
+        SecretStore store = new SecretStore(new MemorySecretRows(db), secrets.key(), node, secrets.variableNames(), clock, timer, warnings::add);
         db.listen(store::notice);
         done(store.start(epoch));
         return store;

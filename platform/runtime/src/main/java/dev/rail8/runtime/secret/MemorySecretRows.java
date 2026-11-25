@@ -3,8 +3,8 @@ package dev.rail8.runtime.secret;
 import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
+import io.vertx.sqlclient.SqlConnection;
 
-import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -43,6 +43,7 @@ final class MemorySecretRows implements SecretRows {
         private final List<Runnable> listeners = new CopyOnWriteArrayList<>();
         private volatile boolean dropNotices;
         private volatile boolean auditFails;
+        private volatile boolean readsFail;
 
         /** Runs {@code look} after each commit that changed the store, unless notices are dropped. */
         void listen(Runnable look) {
@@ -57,6 +58,11 @@ final class MemorySecretRows implements SecretRows {
         /** Whether every audit row fails from now on. */
         void auditFails(boolean fails) {
             auditFails = fails;
+        }
+
+        /** Whether every read of the head and the rows outside a write fails from now on. */
+        void readsFail(boolean fail) {
+            readsFail = fail;
         }
 
         synchronized void node(String node, long epoch, boolean live) {
@@ -120,20 +126,27 @@ final class MemorySecretRows implements SecretRows {
 
     @Override
     public Future<Head> head() {
+        if (db.readsFail) return Future.failedFuture(new IllegalStateException("the database cannot be read"));
         return Future.succeededFuture(db.head());
     }
 
     @Override
-    public Future<Snapshot> snapshot(Set<ByteBuffer> held) {
+    public Future<Snapshot> snapshot(int maxRow) {
+        if (db.readsFail) return Future.failedFuture(new IllegalStateException("the database cannot be read"));
         synchronized (db) {
             List<Meta> metas = new ArrayList<>();
             Map<String, byte[]> sealed = new HashMap<>();
             for (Stored row : db.rows.values()) {
                 metas.add(row.meta());
-                if (!held.contains(ByteBuffer.wrap(row.meta().nonce()))) sealed.put(row.meta().name(), row.sealed().clone());
+                if (row.sealed().length <= maxRow) sealed.put(row.meta().name(), row.sealed().clone());
             }
             return Future.succeededFuture(new Snapshot(db.head, metas, sealed));
         }
+    }
+
+    @Override
+    public Future<List<NodeKeys>> sharedNodes(SqlConnection tx) {
+        return liveNodes();
     }
 
     @Override
@@ -190,6 +203,8 @@ final class MemorySecretRows implements SecretRows {
         }
 
         @Override public Head head() { return head; }
+
+        @Override public SqlConnection connection() { return null; }
 
         @Override public Future<List<NodeKeys>> liveNodes() { return Future.succeededFuture(live(nodes)); }
 
