@@ -396,8 +396,8 @@ class RestoreIT {
 
     /**
      * A package that cannot be restored does not make the node unhealthy. Node 1 runs two copies of the demo, {@code demo} and
-     * {@code other}, at two in paths. The demo's domestic partner is the secret {@code secret://demo-partner}, which node 1 sets and
-     * node 2 does not, so node 2 cannot restore the demo. Node 2 starts all the same: the demo is listed FAILED with its reason,
+     * {@code other}, at two in paths. The demo's domestic partner is the secret {@code secret://demo-partner}, which node 1's first
+     * start imports into the store; it is gone from the store before node 2 starts, so node 2 cannot restore the demo. Node 2 starts all the same: the demo is listed FAILED with its reason,
      * naming the secret, and {@code other} runs and serves. {@code /health} answers 200 with the status UP and the
      * {@code deployments} check DEGRADED, and {@code /ready} answers 200. A deploy of the demo naming its partner's URL replaces it,
      * and then the check is UP.
@@ -423,8 +423,12 @@ class RestoreIT {
             assertEquals(200, deploy(client, one.adminPort(), "other", commit("other", otherFiles)).statusCode(), "fixture: node 1 deploys other");
         }
         close(one);
+        try (Connection c = DriverManager.getConnection(url, pg.getUsername(), pg.getPassword());
+             Statement gone = c.createStatement()) {
+            assertEquals(1, gone.executeUpdate("delete from secrets where name = 'demo-partner'"), "fixture: the store held the secret");
+        }
 
-        Node two = start(env("node-2", tmp.resolve("node-2")));   // no secret demo-partner
+        Node two = start(env("node-2", tmp.resolve("node-2")));   // the store holds no secret demo-partner
 
         Map<String, JsonObject> packages = listed(two.adminPort(), "packages", "name");
         Map<String, JsonObject> flows = listed(two.adminPort(), "flows", "id");
