@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * {@code .} and {@code -} as {@code _}, a plain value only; a variable set to the empty string counts as not set. Nothing here
  * asks Postgres: the store answers from the node's memory. Off the node ({@link #placeholder}: {@code rail8 validate},
  * {@code rail8 test}) every well-formed reference reads a placeholder of its kind: a plain value {@code https://secret.invalid/},
- * credentials user {@code rail8} and password {@code invalid}, and a key pair the testkit's EC P-256 pair named invalid.
+ * credentials user {@code rail8} and password {@code invalid}, and a key pair the testkit's EC secp256r1 pair named invalid.
  *
  * <p>Every method refuses a malformed reference, and one under {@code rail8.}, which belongs to the platform, with an
  * {@link IllegalArgumentException} naming the reference. No text of this class carries a value.

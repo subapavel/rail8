@@ -44,8 +44,8 @@ import java.util.regex.Pattern;
 /**
  * A key pair as a secret administrator writes it, checked: the private key in PEM, PKCS#8 ({@code BEGIN PRIVATE KEY}) or
  * unencrypted OpenSSH ({@code BEGIN OPENSSH PRIVATE KEY}), and 0 to {@value #MAX_CERTIFICATES} certificates in PEM, the leaf
- * first, {@value #MAX_CERTIFICATE_BYTES} bytes together. The keys taken are RSA of 2,048 to 8,192 bits, EC on P-256, P-384 or
- * P-521, and Ed25519, for the pair and for each certificate's key. bcprov only unpacks the OpenSSH container; every key object
+ * first, {@value #MAX_CERTIFICATE_BYTES} bytes together. The keys taken are RSA of 2,048 to 8,192 bits, EC on secp256r1, secp384r1 or
+ * secp521r1, and Ed25519, for the pair and for each certificate's key. bcprov only unpacks the OpenSSH container; every key object
  * comes from the JDK's {@link KeyFactory} and every certificate from its {@link CertificateFactory}. The public key is derived
  * from the private key, and a test signature made with the private key must verify with it. The leaf's key is the pair's
  * public key, and each further certificate signed the one before it. Neither trust nor dates are checked. Every refusal is 422
@@ -208,7 +208,7 @@ final class KeyPairs {
         };
     }
 
-    /** Refuses a key that is not RSA of 2,048 to 8,192 bits, EC on P-256, P-384 or P-521, or Ed25519. */
+    /** Refuses a key that is not RSA of 2,048 to 8,192 bits, EC on secp256r1, secp384r1 or secp521r1, or Ed25519. */
     private static void algorithmTaken(java.security.Key key, String field) throws SecretRefused {
         switch (key) {
             case RSAPrivateCrtKey rsa -> rsaSize(rsa.getModulus(), field);
@@ -226,7 +226,7 @@ final class KeyPairs {
         if (bits < 2048 || bits > 8192) throw SecretRefused.invalid(field, "an RSA key of " + bits + " bits is not taken: 2,048 to 8,192");
     }
 
-    /** The name of the curve {@code params} is, of P-256, P-384 and P-521; refused otherwise. */
+    /** The name of the curve {@code params} is, of secp256r1, secp384r1 and secp521r1; refused otherwise. */
     private static String curve(ECParameterSpec params, String field) throws SecretRefused {
         for (Map.Entry<String, String> c : CURVES.entrySet()) {
             ECNamedCurveParameterSpec named = ECNamedCurveTable.getParameterSpec(c.getValue());

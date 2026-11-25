@@ -44,7 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class FakeServices implements Services {
 
-    /** Where the placeholder key pair lies on the class path: a PKCS#8 EC P-256 key, then its self-signed certificate. */
+    /** Where the placeholder key pair lies on the class path: a PKCS#8 EC secp256r1 key, then its self-signed certificate. */
     private static final String PLACEHOLDER = "/dev/rail8/testkit/invalid.pem";
 
     private final Map<String, Object> values = new ConcurrentHashMap<>();
@@ -89,7 +89,7 @@ public final class FakeServices implements Services {
     }
 
     /**
-     * The placeholder key pair, named invalid: a fixed EC P-256 key and its self-signed certificate, {@code CN=invalid}. It is
+     * The placeholder key pair, named invalid: a fixed EC secp256r1 key and its self-signed certificate, {@code CN=invalid}. It is
      * what {@code rail8 validate} and {@code rail8 test} read a key pair as. It is no secret: anyone may read it here.
      *
      * @since 0.4

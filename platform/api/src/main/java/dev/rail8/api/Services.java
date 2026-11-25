@@ -37,7 +37,7 @@ public interface Services {
      * {@code kinds}: the deploy refuses a secret of another kind, naming the step, the key, the secret's kind and the kinds
      * asked. The handle's {@link Secret#kind()} is the secret's own kind. A secret from the node's environment is a plain value
      * only. {@code rail8 validate} and {@code rail8 test} read credentials as user {@code rail8}, password {@code invalid}, and
-     * a key pair as a fixed EC P-256 pair with a self-signed certificate.
+     * a key pair as a fixed EC secp256r1 pair with a self-signed certificate.
      *
      * @throws IllegalArgumentException as {@link #secret(StepConfig, String)}, when {@code kinds} is empty, or when the secret
      *                                  is of a kind {@code kinds} does not name

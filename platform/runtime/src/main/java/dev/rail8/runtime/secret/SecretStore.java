@@ -219,7 +219,7 @@ public final class SecretStore {
     static final String PLACEHOLDER_PAIR = "/dev/rail8/testkit/invalid.pem";
 
     /**
-     * The placeholder key pair, a fixed EC P-256 pair with a self-signed certificate named invalid, read from the testkit on the
+     * The placeholder key pair, a fixed EC secp256r1 pair with a self-signed certificate named invalid, read from the testkit on the
      * class path.
      *
      * @throws IllegalStateException the testkit is not on the class path
