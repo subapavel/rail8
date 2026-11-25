@@ -87,3 +87,18 @@ steps:
     }
   });
 });
+
+describe('the flow canvas graph in another language', () => {
+  it('names the edge to a receiver that ends the flow in the language of the view', () => {
+    const ending = (language: 'en' | 'cs') => canvasGraph(view(`schemaVersion: 1
+kind: flow
+id: orders
+from: { endpoint: incoming }
+steps:
+  - type: to
+    endpoint: erp
+`, { endpoints: [], flows: [], steps: [] }, textsIn(language)), false, false).edges.flatMap(e => e.label ? [e.label] : []);
+    expect(ending('en')).toEqual(['end']);
+    expect(ending('cs')).toEqual(['konec']);
+  });
+});

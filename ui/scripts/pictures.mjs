@@ -116,6 +116,12 @@ const SCENES = {
   'users-de': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Deutsch')],
   'users-cs': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Čeština')],
   'users-ru': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Русский')],
+  endpoints: [menu('Endpoints')],
+  'endpoints-cs': [menu('Endpoints'), speak('Čeština')],
+  flow: [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click()],
+  'flow-de': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Deutsch')],
+  'flow-cs': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Čeština')],
+  'flow-ru': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Русский')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
 };
