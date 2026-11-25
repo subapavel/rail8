@@ -63,7 +63,7 @@ From the words of SAP PO and SAP Integration Suite to these. Rail8 supports movi
 | Integration flow, integrated configuration | Flow |
 | Trading Partner Management agreement | Agreement, with its transactions |
 | API artifact, product, application, subscription | The rules of an API are part of the flow; API product and Subscription are composed in the environment. Whether a caller and an application are one object is open (`docs/DECISIONS.md`, D-174) |
-| `SAP_Sender` and `SAP_Receiver`, the sender and receiver searched by party, component and interface | The sender and every receiver on every message, from the credential and the connection, never from the flow's author |
+| `SAP_Sender` and `SAP_Receiver`, the sender and receiver searched by party, component and interface | The sender and every receiver on every message |
 
 Every step and stage runs on the message's own virtual thread and may block (wait for a database,
 for a partner) without holding a platform thread. Vert.x verticles own sockets and timers and never
