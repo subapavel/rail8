@@ -100,8 +100,11 @@ interface SecretRows {
         /** Clears the previous key's id of {@code node}'s row. */
         Future<Void> clearPrevious(String node);
 
-        /** Writes an audit row; its failure fails the write. */
+        /** Writes an audit row of an act a caller was allowed; its failure fails the write. */
         Future<Void> audit(Actor who, String action, String subject, JsonObject detail);
+
+        /** Writes an audit row of an act of the node {@code node} itself, by the way {@code local}; its failure fails the write. */
+        Future<Void> auditByNode(String node, String action, String subject, JsonObject detail);
 
         /** Raises the generation, writes a new stamp and notifies every node: the head after. */
         Future<Head> changed();

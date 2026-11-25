@@ -32,7 +32,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -945,7 +944,7 @@ public final class SecretStore {
                     Future<Void> audited = Future.succeededFuture();
                     if ((sealedAgain > 0 || rebound) && remaining == 0 && boundLeft == 0) {
                         String old = HEX.formatHex(from.isEmpty() ? k.previous().map(Seal::keyId).orElse(current) : from.getFirst());
-                        audited = tx.audit(new Actor(node, OptionalLong.empty(), "local", Optional.empty(), ""), "secret.key-changed", "secret-store",
+                        audited = tx.auditByNode(node, "secret.key-changed", "secret-store",
                                 new JsonObject().put("oldKey", old).put("newKey", HEX.formatHex(current)).put("rows", all.size()));
                     }
                     int[] result = {remaining, sealedAgain};

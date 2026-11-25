@@ -28,7 +28,8 @@ final class MemorySecretRows implements SecretRows {
     record Node(SecretRows.NodeKeys keys, boolean live) { }
 
     /** The audit rows written. */
-    record Audit(Actor who, String action, String subject, JsonObject detail) { }
+    /** An audit row: who acted ({@code name}), by which way ({@code via}), what, on what, and its detail. */
+    record Audit(String name, String via, String action, String subject, JsonObject detail) { }
 
     /** The database: the store's head, the rows, the uses, the nodes, the records whose uses are not known, the audit. */
     static final class Db {
@@ -243,7 +244,13 @@ final class MemorySecretRows implements SecretRows {
 
         @Override public Future<Void> audit(Actor who, String action, String subject, JsonObject detail) {
             if (db.auditFails) return Future.failedFuture(new IllegalStateException("the audit is not available"));
-            audit.add(new Audit(who, action, subject, detail.copy()));
+            audit.add(new Audit(who.name(), who.via(), action, subject, detail.copy()));
+            return Future.succeededFuture();
+        }
+
+        @Override public Future<Void> auditByNode(String node, String action, String subject, JsonObject detail) {
+            if (db.auditFails) return Future.failedFuture(new IllegalStateException("the audit is not available"));
+            audit.add(new Audit(node, PgSecretRows.LOCAL, action, subject, detail.copy()));
             return Future.succeededFuture();
         }
 

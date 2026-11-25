@@ -190,6 +190,10 @@ class PgSecretStoreIT extends SecretStoreContract {
         return sql("select detail from audit where action = $1 order by id", action).stream().map(r -> (JsonObject) r.getValue(0)).toList();
     }
 
+    @Override List<String> actors(String action) {
+        return sql("select actor || '/' || via from audit where action = $1 order by id", action).stream().map(r -> r.getString(0)).toList();
+    }
+
     // ------------------------------------------------------------------------------------------------- only in Postgres
 
     @Test

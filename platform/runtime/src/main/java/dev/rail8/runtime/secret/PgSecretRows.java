@@ -62,6 +62,9 @@ final class PgSecretRows implements SecretRows {
     private static final String JOINED = "update nodes set secret_key = $2, secret_key_previous = $3, secret_variables = $4, secret_epoch = $5"
             + " where node = $1";
     private static final String CLEAR_PREVIOUS = "update nodes set secret_key_previous = null where node = $1";
+    /** The way of an act of the node itself, as the audit names it. */
+    static final String LOCAL = "local";
+
     private static final String AUDIT = "insert into audit (at, actor, action, subject, detail, user_id, via, credential)"
             + " values (now(), $1, $2, $3, $4, $5, $6, $7)";
     private static final String CHANGED = "update secret_store set generation = generation + 1, stamp = floor(random() * 9.2e18)::bigint"
@@ -204,6 +207,10 @@ final class PgSecretRows implements SecretRows {
         @Override public Future<Void> audit(Actor who, String action, String subject, JsonObject detail) {
             return tx.preparedQuery(AUDIT).execute(Tuple.of(who.name(), action, subject, detail, who.userOrNull(), who.via(), who.credential().orElse(null)))
                     .mapEmpty();
+        }
+
+        @Override public Future<Void> auditByNode(String node, String action, String subject, JsonObject detail) {
+            return tx.preparedQuery(AUDIT).execute(Tuple.of(node, action, subject, detail, null, LOCAL, null)).mapEmpty();
         }
 
         @Override public Future<Head> changed() {
