@@ -99,7 +99,7 @@ public interface Component {
     /**
      * The system a producer of {@code out} calls, the key its sends are limited by: {@code scheme://host:port}, lower-cased,
      * the scheme's default port filled in, never userinfo, path, query or fragment. Answered from the connection's values
-     * alone: nothing is opened and no name is resolved. Empty: the node limits the sends in flight by the connection's key.
+     * alone: nothing is opened and no name is resolved. Empty: the producer's sends get a limit of their own, shared with no other.
      * The node calls it when it builds a producer; a throw fails that build.
      *
      * @since 0.4
