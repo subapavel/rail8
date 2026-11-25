@@ -96,12 +96,16 @@ The tab has five tabs of its own:
 
 The tab reads its package again when it is shown, when the window gets the focus, and from the answer of every write.
 
-### The lists of flows, endpoints and mappings
+### Finding an artifact
 
-The Flows, Endpoints and Mappings screens stay as they are: lists across the whole working folder, so that an artifact
-is found fast without knowing its package. Each list gains a Package column and a filter on it. The package is the
-first segment of the file's path. The column links nowhere: the lists belong to the endpoints and mapping modules,
-which do not import the packages module, so a package's tab opens from the Packages screen.
+There is no list of flows, endpoints or mappings across the working folder. An artifact opens from the Artifacts tab of
+its package, where New flow and New mapping write new ones, or from Quick open (Ctrl+K), which finds a flow, an endpoint,
+a mapping or a test of any package by its name or its path without knowing its package. Quick open opens an artifact
+under the breadcrumb Packages › its package, and a test, which has no editor, as its package's tab on Artifacts.
+
+A folder of the working folder that is no package but holds artifacts, such as the mapping corpus or the package folder
+of an adapter, is a link in the list of folders that are no package. Its tab lists the cards of the kinds it holds, each
+with its New, and Quick open finds its artifacts under Packages › the folder.
 
 ## Which folders are packages
 

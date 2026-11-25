@@ -411,7 +411,7 @@ Every step also has the tab "Step":
 
 A key no field describes keeps its own raw field and its own lines.
 
-**Endpoints** are shown through their component's settings description, as on the Endpoints screen. A
+**Endpoints** are shown through their component's settings description, as in the endpoint form. A
 click on `from` or on a `to`'s endpoint or destination shows the endpoint file's form read-only in the
 panel, with "Open endpoint", which opens its own tab, where it is edited.
 
@@ -445,7 +445,7 @@ The flow's own settings cannot be edited before the stage "the rest", whose form
 way. The browser repeats no other rule of the node: the 1,024 steps of an expanded flow and the rules of
 `delivery`, `limits` and `retry` are left to `rail8 validate` and the deploy.
 
-Check lists every problem in one place. Save stays possible with problems, as on the Endpoints screen,
+Check lists every problem in one place. Save stays possible with problems, as in the endpoint form,
 since a file may have them when it opens: Save is refused only while a field holds text it cannot turn
 into a value. `rail8 validate` and the deploy stay the authority.
 
@@ -470,8 +470,8 @@ into a value. `rail8 validate` and the deploy stay the authority.
   not be read, a reference that is not found is a warning ("not found in the working folder"), not a
   problem.
 - **A `direct` address that two flows serve, or that an environment's overlay changes.** It links to no
-  flow, and says why. The picture draws an endpoint's own `config`; its form shows the overlays, as on
-  the Endpoints screen.
+  flow, and says why. The picture draws an endpoint's own `config`; its form shows the overlays, as in
+  the endpoint form.
 
 Only what `edit` cannot splice locks a part of the file: the forms under "What `edit` supports", a plain
 value the two readers read differently, and a key used twice. Every other finding is a problem shown
@@ -516,8 +516,8 @@ listed. It is behind the same browser rule and token as every other `/admin` rou
 
 ## Where it lives
 
-- **The screen.** The flow screen sits with the Endpoints screen in the UI, and both screens edit files
-  of the working folder. A flow's tab is the canvas (React Flow, with Ant Design tokens, as the mapping
+- **The screen.** The flow's tab sits with the endpoint form in the UI, and both edit files of the
+  working folder, each opening from its package's tab or from Quick open. A flow's tab is the canvas (React Flow, with Ant Design tokens, as the mapping
   studio's) with a drawer for the settings. It opens read-only: Edit, then Cancel, Check and Save, as
   the endpoint form does. Save sends the text with `If-Match`; a refusal with 412 opens the dialog that
   says the file changed on disk. Closing a tab with unsaved changes asks first. The canvas's keys

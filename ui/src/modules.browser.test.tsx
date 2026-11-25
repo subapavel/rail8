@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { artifactKinds } from './artifacts';
 
@@ -46,5 +46,22 @@ describe('the artifact kinds the modules register', () => {
     await expect.element(page.getByText('Only comments or formatting changed.')).toBeVisible();
     root.unmount();
     host.remove();
+  });
+
+  test('each lists its files of the working folder, leaving out one that cannot be read; the flow and the mapping write new ones', async () => {
+    const answers: Record<string, unknown> = {
+      '/files/flows': { configured: true, editable: true, truncated: false, items: [{ path: 'orders/flows/orders.yaml', id: 'orders' }, { path: 'orders/flows/bad.yaml', problem: 'not YAML' }] },
+      '/files/endpoints': { configured: true, editable: true, truncated: false, items: [{ path: 'package/endpoints/in.yaml', id: 'in', scheme: 'http', direction: 'in' }] },
+      '/api/mappings': [{ id: 'mappings/order-id-copy' }],
+    };
+    vi.stubGlobal('fetch', async (url: string) => new Response(JSON.stringify(answers[url]), { headers: { 'content-type': 'application/json' } }));
+    try {
+      expect(await kinds.get('flow')!.list!()).toEqual([{ path: 'orders/flows/orders.yaml', kind: 'flow', id: 'orders' }]);
+      expect(await kinds.get('endpoint')!.list!()).toEqual([{ path: 'package/endpoints/in.yaml', kind: 'endpoint', id: 'in' }]);
+      expect(await kinds.get('mapping')!.list!()).toEqual([{ path: 'mappings/order-id-copy.mapping.json', kind: 'mapping', id: 'order-id-copy' }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect([...kinds.values()].filter((kind) => kind.New !== undefined).map((kind) => kind.kind).sort()).toEqual(['flow', 'mapping']);
   });
 });

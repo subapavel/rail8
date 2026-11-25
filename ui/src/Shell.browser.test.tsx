@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { home } from './Home';
 import { Page } from './Page';
-import { screenList, type Screen } from './screens';
+import { screenList, type Find, type Found, type Screen } from './screens';
 import { Shell } from './Shell';
 
 // the screens the application lists, found as main.tsx finds them
@@ -18,11 +18,11 @@ const two: readonly Screen[] = [
 let root: Root | undefined;
 let host: HTMLElement | undefined;
 
-function render(list: readonly Screen[], start?: string) {
+function render(list: readonly Screen[], start?: string, find?: Find) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={list} start={start} />);
+  root.render(<Shell screens={list} start={start} find={find} />);
 }
 
 afterEach(async () => {
@@ -107,7 +107,7 @@ describe('Shell', () => {
   test('lists Home, then the screens of the modules in their order', async () => {
     render(screens, screens[0]?.id);
     await expect.element(menuItem('Home')).toBeVisible();
-    expect(nav().getByRole('menuitem').elements().map((button) => button.textContent)).toEqual(['Home', 'Messages', 'Packages', 'Endpoints', 'Flows', 'Mappings', 'Users', 'Tokens', 'Audit', 'My tokens']);
+    expect(nav().getByRole('menuitem').elements().map((button) => button.textContent)).toEqual(['Home', 'Messages', 'Packages', 'Users', 'Tokens', 'Audit', 'My tokens']);
   });
 
   test('opens a screen chosen in the navigation in a new tab, and shows the tab it already has', async () => {
@@ -316,10 +316,10 @@ describe('Shell', () => {
     await page.getByRole('button', { name: 'Open orders' }).click();
     await tab('First').click();
     await userEvent.keyboard('{Control>}k{/Control}');
-    const search = page.getByRole('textbox', { name: 'Find a screen or open tab' });
+    const search = page.getByRole('textbox', { name: 'Find a screen, a tab or an artifact' });
     await expect.element(search).toHaveFocus();
     await search.fill('missing');
-    await expect.element(page.getByText('No matching screens or tabs')).toBeVisible();
+    await expect.element(page.getByText('Nothing matches')).toBeVisible();
     await search.fill('Orders');
     await userEvent.keyboard('{ArrowDown}{Enter}');
     await expect.element(tab('Orders')).toHaveAttribute('aria-selected', 'true');
@@ -329,6 +329,71 @@ describe('Shell', () => {
     await search.fill('Second');
     await userEvent.keyboard('{Enter}');
     await expect.element(tab('Second')).toHaveAttribute('aria-selected', 'true');
+  });
+
+  describe('quick open over the artifacts', () => {
+    const packages: Screen = { id: 'packages', title: 'Packages', render: () => <p>Packages screen</p> };
+    const demo: Screen = { id: 'package:demo', title: 'demo', render: () => <p>The package demo</p> };
+    const artifact = (name: string, path: string, kind = 'Flow', screen: Screen = { id: `flow:${path}`, title: name, render: () => <Page title={name}>{`The flow ${name}`}</Page> }): Found =>
+      ({ name, path, kind, screen, trail: [packages, demo] });
+    const invoice = artifact('invoice', 'demo/flows/invoice.yaml');
+    const search = () => page.getByRole('textbox', { name: 'Find a screen, a tab or an artifact' });
+    const choice = (name: string) => page.getByRole('dialog', { name: 'Quick open' }).getByRole('button', { name: new RegExp(`^${name}`) });
+    const quickOpen = async () => {
+      await userEvent.keyboard('{Control>}k{/Control}');
+      await expect.element(search()).toHaveFocus();
+    };
+
+    test('finds an artifact by its path once something is typed and opens it under its trail, the menu marking where the trail starts', async () => {
+      render([...plain('Home'), packages], 'home', async () => [invoice, artifact('order', 'demo/flows/order.yaml')]);
+      await quickOpen();
+      await expect.element(choice('invoice')).not.toBeInTheDocument();
+      await search().fill('flows/inv');
+      await expect.element(choice('invoice')).toHaveTextContent('invoiceFlow · demo/flows/invoice.yaml');
+      await expect.element(choice('order')).not.toBeInTheDocument();
+      await userEvent.keyboard('{Enter}');
+      await expect.element(tab('invoice')).toHaveAttribute('aria-selected', 'true');
+      await expect.element(page.getByText('The flow invoice')).toBeVisible();
+      const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('listitem');
+      await expect.poll(() => crumbs.elements().map((crumb) => crumb.textContent)).toEqual(['Workspace', 'Packages', 'demo', 'invoice']);
+      await expect.element(menuItem('Packages')).toHaveAttribute('aria-current', 'page');
+    });
+
+    test('finds an artifact by its name and lists it once while its tab is open, and a test while its package is open', async () => {
+      const test = artifact('order-test', 'demo/tests/order-test.yaml', 'Test', demo);
+      render([...plain('Home'), packages], 'home', async () => [invoice, test]);
+      await quickOpen();
+      await search().fill('order-test');
+      await choice('order-test').click();
+      await expect.element(tab('demo')).toHaveAttribute('aria-selected', 'true');
+      await quickOpen();
+      await search().fill('order-test');
+      await expect.element(choice('order-test')).toHaveTextContent('order-testTest · demo/tests/order-test.yaml');
+      await search().fill('invoice');
+      await choice('invoice').click();
+      await quickOpen();
+      await search().fill('invoice');
+      await expect.poll(() => page.getByRole('dialog', { name: 'Quick open' }).getByRole('button', { name: /invoice/ }).elements()).toHaveLength(1);
+    });
+
+    test('says while it reads the artifacts, and why it could not, still finding screens', async () => {
+      let fail!: (why: Error) => void;
+      render([...plain('Home', 'Audit'), packages], 'home', () => new Promise((_, reject) => { fail = reject; }));
+      await quickOpen();
+      await search().fill('a');
+      await expect.element(page.getByRole('status')).toHaveTextContent('Reading the artifacts of the working folder');
+      fail(new Error('the node does not answer'));
+      await expect.element(page.getByRole('alert')).toHaveTextContent('The artifacts could not be read: the node does not answer');
+      await expect.element(choice('Audit')).toBeVisible();
+    });
+
+    test('lists at most twenty artifacts and says how many more match', async () => {
+      render(plain('Home'), 'home', async () => Array.from({ length: 23 }, (_, n) => artifact(`flow-${n}`, `demo/flows/flow-${n}.yaml`)));
+      await quickOpen();
+      await search().fill('flow-');
+      await expect.element(page.getByText('3 more artifacts match: type more of the name or the path.')).toBeVisible();
+      expect(page.getByRole('dialog', { name: 'Quick open' }).getByRole('button', { name: /^flow-/ }).elements()).toHaveLength(20);
+    });
   });
 
   test('a dismissed editor dialog allows Quick open, while a visible one keeps its shortcut', async () => {
@@ -342,7 +407,7 @@ describe('Shell', () => {
     expect(page.getByRole('textbox').elements()).toHaveLength(0);
     dialog.hidden = true;
     await userEvent.keyboard('{Meta>}k{/Meta}');
-    await expect.element(page.getByRole('textbox', { name: 'Find a screen or open tab' })).toHaveFocus();
+    await expect.element(page.getByRole('textbox', { name: 'Find a screen, a tab or an artifact' })).toHaveFocus();
     await userEvent.keyboard('{Escape}');
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
   });

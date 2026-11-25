@@ -7,8 +7,10 @@ import type { Screen } from '../../screens';
 import { Shell } from '../../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../../workingFiles';
 import type { EndpointFile, EndpointsApi } from '../api';
-import { flowsScreen } from '../screen';
+import { filesScreen } from '../fake/files';
+import { flowTab } from '../screen';
 import { FlowsError, type FlowFile, type FlowsApi } from './api';
+import { NewFlow } from './NewFlow';
 
 const invoice = `schemaVersion: 1
 kind: flow
@@ -156,11 +158,17 @@ function Probe() {
 /** `screen` with the probe of the working files beside what it shows. */
 const probed = (screen: Screen): Screen => ({ ...screen, render: (open) => <><Probe />{screen.render(open)}</> });
 
-function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints()) {
+function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints(), beside = 'demo/flows/invoice.yaml') {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[probed(flowsScreen(flows, endpoints))]} start="flows" />);
+  const tab = (path: string, id: string) => flowTab(flows, endpoints, path, id);
+  const files = filesScreen(
+    () => flows.list(),
+    tab,
+    (open) => <NewFlow api={flows} folder="demo" beside={beside} onCreated={() => {}} openFlow={(path, id) => open(tab(path, id))} />,
+  );
+  root.render(<Shell screens={[probed(files)]} start="files" />);
 }
 
 afterEach(() => {
@@ -196,27 +204,6 @@ describe('Flows', () => {
     await expect.element(button('Edit')).toBeDisabled();
     finishSteps([]);
     await expect.element(button('Edit')).toBeEnabled();
-  });
-
-  test('lists the flow files of the working folder, and a file that cannot be read says why', async () => {
-    render(fakeFlows());
-    await expect.element(button('invoice')).toBeVisible();
-    await expect.element(text('demo/flows/order.yaml')).toBeVisible();
-    await expect.element(text('the file is not YAML: unclosed')).toBeVisible();
-  });
-
-  test('names the package of each flow file, and its filter keeps the files of one package', async () => {
-    render(fakeFlows({ 'demo/flows/invoice.yaml': invoice, 'billing/flows/order.yaml': order }));
-    const table = page.getByRole('table', { name: 'Flow files' });
-    const rows = () => table.getByRole('row').filter({ hasText: /\.yaml/ });
-    await expect.element(rows()).toHaveLength(3);
-    await expect.element(rows().filter({ hasText: 'billing/flows/order.yaml' })).toMatchTextContent('billing');
-
-    await table.getByRole('columnheader', { name: /Package/ }).getByRole('button').click();
-    await page.getByRole('menuitem', { name: 'demo' }).click();
-    await page.getByRole('button', { name: 'OK' }).click();
-    await expect.element(rows()).toHaveLength(2);
-    await expect.element(rows().filter({ hasText: 'billing' })).not.toBeInTheDocument();
   });
 
   test("draws the flow's steps and opens its properties below the canvas", async () => {
@@ -829,7 +816,8 @@ describe('Editing the rest of a flow', () => {
     await page.getByRole('textbox', { name: 'Id' }).fill('order');
     await page.getByRole('textbox', { name: 'Arrives at' }).fill('http-in');
     await page.getByRole('textbox', { name: 'Sends to' }).fill('partner-domestic');
-    await expect.element(page.getByRole('textbox', { name: 'File' })).toHaveValue('demo/flows/order.yaml');
+    await expect.element(page.getByRole('textbox', { name: 'File' })).toHaveValue('flows/order.yaml');
+    await expect.element(page.getByRole('dialog', { name: 'New flow' }).getByText('demo/', { exact: true })).toBeVisible();
     await button('Create').click();
     await expect.element(text('demo/flows/order.yaml exists already; nothing was written.')).toBeVisible();
     await page.getByRole('textbox', { name: 'Id' }).fill('payment');
@@ -853,6 +841,27 @@ steps:
       null,
     );
     await expect.element(page.getByRole('heading', { name: 'payment', level: 1 })).toBeVisible();
+  });
+
+  test('New flow starts beside the flow it is given, keeps a typed path, and refuses one that leaves its folder', async () => {
+    const flows = fakeFlows();
+    render(flows, undefined, 'demo/orders/inbound/invoice.yaml');
+    await button('New flow').click();
+    const file = page.getByRole('textbox', { name: 'File' });
+    await page.getByRole('textbox', { name: 'Id' }).fill('refund');
+    await expect.element(file).toHaveValue('orders/inbound/refund.yaml');
+    await file.fill('../billing/refund.yaml');
+    await expect.element(file).toHaveAttribute('aria-invalid', 'true');
+    await file.fill('/refund.yaml');
+    await expect.element(file).toHaveAttribute('aria-invalid', 'true');
+    await expect.element(button('Create')).toBeDisabled();
+    await file.fill('refunds/refund.yaml');
+    await page.getByRole('textbox', { name: 'Id' }).fill('refund-two');
+    await expect.element(file).toHaveValue('refunds/refund.yaml');
+    await page.getByRole('textbox', { name: 'Arrives at' }).fill('http-in');
+    await page.getByRole('textbox', { name: 'Sends to' }).fill('partner-domestic');
+    await button('Create').click();
+    expect(vi.mocked(flows.save).mock.lastCall?.[0]).toBe('demo/refunds/refund.yaml');
   });
 
   test("shows where messages arrive: a preview of the URL senders call, from the node's origin and prefix", async () => {
@@ -882,7 +891,7 @@ steps:
     const body = preview.getByRole('textbox', { name: 'Message body' });
     await body.fill('Sample invoice');
     await userEvent.keyboard('{Escape}');
-    await page.getByRole('tab', { name: 'Flows', exact: true }).click();
+    await page.getByRole('tab', { name: 'Files', exact: true }).click();
     await button('order').click();
     await expect.element(simulate).toBeDisabled();
     await mark('to', 'Set simulation start here');
@@ -900,23 +909,18 @@ steps:
   });
 });
 
-describe('the Flows screen in another language', () => {
+describe('the flow editor in another language', () => {
   afterEach(() => {
     chooseLanguage('en');
     localStorage.removeItem('rail8.language');
   });
 
-  test('shows its list, the flow editor, its counts and Ant Design in the language chosen in the header', async () => {
+  test('shows the flow editor and its counts in the language chosen in the header', async () => {
     render(fakeFlows());
     await expect.element(button('invoice')).toBeVisible();
     await page.getByRole('button', { name: 'Language: English' }).click();
     await page.getByRole('menuitem', { name: 'Čeština' }).click();
     expect(currentLanguage()).toBe('cs');
-
-    const table = page.getByRole('table', { name: 'Soubory toků' });
-    await table.getByRole('columnheader', { name: /Balíček/ }).getByRole('button').click();
-    await expect.element(page.getByRole('button', { name: 'Potvrdit', exact: true })).toBeVisible();
-    await userEvent.keyboard('{Escape}');
 
     await button('invoice').click();
     await expect.element(page.getByRole('heading', { name: 'invoice', level: 1 })).toBeVisible();

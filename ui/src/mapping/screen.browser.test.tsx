@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { Button, Flex } from 'antd';
+import { useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -8,7 +9,7 @@ import { Shell } from '../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
 import type { ApiClient } from './api/client';
 import { fakeApiClient } from './api/fake/fake-api';
-import { mappingsScreen } from './screen';
+import { mappingKind } from './screen';
 import type { BrowserStateStore } from './studio/browser-state/browser-state';
 
 let root: Root | undefined;
@@ -34,26 +35,45 @@ function memoryBrowserState(): BrowserStateStore {
   return { read: (key) => values.get(key), write: (key, value) => void values.set(key, value) };
 }
 
-function render(api: ApiClient) {
+/** The buttons of the mappings of the working folder, each opening its studio, and New mapping in `folder` beside `beside`. */
+function Mappings({ api, open, folder, beside }: { api: ApiClient; open: (screen: Screen) => void; folder: string; beside?: string }) {
+  const [kind] = useState(() => mappingKind(api, memoryBrowserState()));
+  const [ids, setIds] = useState<string[]>([]);
+  useEffect(() => void api.listMappings().then(({ mappings }) => setIds(mappings.map(({ id }) => id))), [api]);
+  const New = kind.New!;
+  return (
+    <Flex gap="small" wrap>
+      {ids.map((id) => (
+        <Button key={id} onClick={() => open(kind.open(`${id}.mapping.json`))}>
+          {id.slice(id.lastIndexOf('/') + 1)}
+        </Button>
+      ))}
+      <New folder={folder} beside={beside} open={open} onCreated={() => {}} />
+    </Flex>
+  );
+}
+
+function render(api: ApiClient, folder = 'mappings', beside = 'mappings/order-id-copy.mapping.json') {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[probed(mappingsScreen(api, memoryBrowserState()))]} start="mappings" />);
+  // the screen the tests open mappings from, as a folder's tab opens them
+  const files: Screen = { id: 'files', title: 'Files', render: (open) => <Mappings api={api} open={open} folder={folder} beside={beside} /> };
+  root.render(<Shell screens={[probed(files)]} start="files" />);
 }
 
 // the shell's tabs; the studio's own tabs are named Overview and Signature
 const shellTab = (name: string) => page.getByRole('tab', { name, exact: true });
 const shellTabs = () => page.getByRole('tab').filter({ hasNotText: /^(Overview|Definition|Test|Signature|Functions)$/ });
-const row = (name: string) => page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
 // a role query finds what is shown only: the tabs not shown are hidden
 const description = () => page.getByRole('textbox', { name: 'Description' });
 const button = (name: string) => page.getByRole('button', { name, exact: true });
 const saveQuestion = (name: string) => page.getByRole('dialog', { name: `Save changes to ${name}?` });
 
-/** Opens the mapping `name` from the Mappings tab and waits for its studio. */
+/** Opens the mapping `name` from the Files tab and waits for its studio. */
 async function openMapping(name: string) {
-  await shellTab('Mappings').click();
-  await row(name).getByRole('button', { name: 'Open in studio' }).click();
+  await shellTab('Files').click();
+  await button(name).click();
   await expect.element(shellTab(name)).toHaveAttribute('aria-selected', 'true');
   await expect.element(page.getByRole('heading', { level: 1, name })).toBeVisible();
 }
@@ -74,7 +94,7 @@ afterEach(() => {
   consoleError.mockRestore();
 });
 
-describe('the Mappings screen in the shell', () => {
+describe('mappings in the shell', () => {
   test('opens each mapping in a tab of its own, several at once, each keeping its own edits', async () => {
     render(fakeApiClient());
     await openMapping('order-id-copy');
@@ -107,6 +127,28 @@ describe('the Mappings screen in the shell', () => {
     await expect.element(button('Add source message')).toBeEnabled();
   });
 
+  test('New mapping starts in the folder of the mapping beside it, below the folder it shows, and makes the id of them', async () => {
+    const fake = fakeApiClient();
+    const createMapping = vi.fn(fake.createMapping);
+    render({ ...fake, createMapping }, 'orders', 'orders/mappings/in/order.mapping.json');
+    await page.getByRole('button', { name: 'New mapping' }).click();
+    const dialog = page.getByRole('dialog', { name: 'New mapping' });
+    await expect.element(dialog.getByRole('textbox', { name: 'Folder' })).toHaveValue('mappings/in');
+    await expect.element(dialog.getByText('orders/', { exact: true })).toBeVisible();
+    await dialog.getByRole('textbox', { name: 'Name' }).fill('fresh');
+    await page.getByRole('button', { name: 'Create' }).click();
+    await expect.element(shellTab('fresh')).toHaveAttribute('aria-selected', 'true');
+    expect(createMapping).toHaveBeenLastCalledWith({ id: 'orders/mappings/in/fresh' });
+
+    await shellTab('Files').click();
+    await page.getByRole('button', { name: 'New mapping' }).click();
+    await dialog.getByRole('textbox', { name: 'Folder' }).fill('');
+    await dialog.getByRole('textbox', { name: 'Name' }).fill('top');
+    await page.getByRole('button', { name: 'Create' }).click();
+    await expect.element(shellTab('top')).toHaveAttribute('aria-selected', 'true');
+    expect(createMapping).toHaveBeenLastCalledWith({ id: 'orders/top' });
+  });
+
   test('closing the tab of a mapping with unsaved changes asks; Cancel keeps it, Close without saving closes it', async () => {
     const fake = fakeApiClient();
     const saveMapping = vi.fn(fake.saveMapping);
@@ -125,7 +167,7 @@ describe('the Mappings screen in the shell', () => {
     await saveQuestion('order-id-copy').getByRole('button', { name: 'Close without saving' }).click();
 
     await expect.element(shellTab('order-id-copy')).not.toBeInTheDocument();
-    await expect.element(shellTab('Mappings')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(shellTab('Files')).toHaveAttribute('aria-selected', 'true');
     expect(saveMapping).not.toHaveBeenCalled();
   });
 
@@ -144,7 +186,6 @@ describe('the Mappings screen in the shell', () => {
     await expect.element(shellTab('order-id-copy')).not.toBeInTheDocument();
     expect(saveMapping).toHaveBeenCalledOnce();
     expect(saveMapping.mock.calls[0]?.[1].description).toBe('Copies the order id.');
-    await expect.element(row('order-id-copy').getByRole('cell', { name: 'Copies the order id.' })).toBeVisible();
   });
 
   test('a mapping whose save fails keeps its tab open and says why', async () => {
@@ -153,7 +194,7 @@ describe('the Mappings screen in the shell', () => {
     await openMapping('order-id-copy');
     await button('Edit').click();
     await description().fill('Copies the order id.');
-    await shellTab('Mappings').click();
+    await shellTab('Files').click();
 
     await page.getByRole('button', { name: 'Close order-id-copy' }).click();
     await saveQuestion('order-id-copy').getByRole('button', { name: 'Save and close' }).click();
@@ -196,7 +237,7 @@ describe('the Mappings screen in the shell', () => {
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
   });
 
-  test('Ctrl+S saves the mapping of the tab shown and no other, and a save brings the table up to date', async () => {
+  test('Ctrl+S saves the mapping of the tab shown and no other', async () => {
     const fake = fakeApiClient();
     const saveMapping = vi.fn(fake.saveMapping);
     render({ ...fake, saveMapping });
@@ -211,22 +252,15 @@ describe('the Mappings screen in the shell', () => {
 
     await expect.element(page.getByRole('heading', { name: /Mapping order-id-copy saved/ })).toBeVisible();
     expect(saveMapping.mock.calls.map(([id]) => id)).toEqual(['mappings/order-id-copy']);
-    await shellTab('Mappings').click();
-    await expect.element(row('order-id-copy').getByRole('cell', { name: 'Copies the order id.' })).toBeVisible();
   });
 });
 
-describe('the Mappings screen and the studio in another language', () => {
-  test('show their texts, a count in its plural form and Ant Design in the language chosen', async () => {
+describe('New mapping and the studio in another language', () => {
+  test('show their texts and Ant Design in the language chosen', async () => {
     render(fakeApiClient());
-    await expect.element(page.getByRole('heading', { level: 1, name: 'Mappings' })).toBeVisible();
+    await expect.element(button('order-id-copy')).toBeVisible();
 
     chooseLanguage('cs');
-
-    await expect.element(page.getByRole('heading', { level: 1, name: 'Mapování' })).toBeVisible();
-    const table = page.getByRole('table', { name: 'Mapování' });
-    await expect.element(table.getByRole('columnheader', { name: 'Složka' })).toBeVisible();
-    await expect.element(page.getByRole('textbox', { name: 'Najít mapování' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Nové mapování' }).click();
     const dialog = page.getByRole('dialog', { name: 'Nové mapování' });
@@ -237,7 +271,7 @@ describe('the Mappings screen and the studio in another language', () => {
     await dialog.getByRole('button', { name: 'Zavřít', exact: true }).click();
     await expect.element(dialog).not.toBeInTheDocument();
 
-    await row('order-id-copy').getByRole('button', { name: 'Otevřít ve studiu' }).click();
+    await button('order-id-copy').click();
     await expect.element(page.getByRole('heading', { level: 1, name: 'order-id-copy' })).toBeVisible();
     await expect.element(page.getByRole('heading', { name: 'Podrobnosti mapování' })).toBeVisible();
     await expect.element(page.getByRole('tab', { name: 'Přehled', exact: true })).toHaveAttribute('aria-selected', 'true');

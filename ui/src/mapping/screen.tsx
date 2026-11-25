@@ -1,18 +1,15 @@
-import { PartitionOutlined } from '@ant-design/icons';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Page } from '../Page';
+import type { ArtifactKind, NewArtifactProps } from '../artifacts';
 import type { Screen, UnsavedChanges } from '../screens';
 import { msg } from '../language';
 import type { ApiClient } from './api/client';
-import { MappingList } from './list/MappingList';
+import { MappingChange } from './changes/MappingChange';
+import { NewMapping } from './NewMapping';
 import { Studio } from './studio/Studio';
 import type { BrowserStateStore } from './studio/browser-state/browser-state';
 
 export interface MappingTabOptions {
   /** Opens the mapping in edit mode on the Signature tab, as Create does. */
   editing?: boolean;
-  /** Told after each save of the mapping. */
-  onSaved?: () => void;
 }
 
 /**
@@ -36,7 +33,6 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
         browserState={browserState}
         openOn={options.editing ? 'signature' : undefined}
         startEditing={options.editing}
-        onSaved={options.onSaved}
         guardClose={guardClose}
       />
     ),
@@ -44,31 +40,24 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
   };
 }
 
+/** The id of the mapping in the file at `path`: the path without `.mapping.json`. */
+const idOf = (path: string) => path.replace(/\.mapping\.json$/, '');
+
 /**
- * The Mappings screen over `api`: the workspace's mappings, each one opening in a tab of its own, and a mapping just
- * created opening in edit mode on its Signature tab. The viewer's preferences are kept in `browserState`. A save in
- * any mapping's tab brings the table up to date.
+ * The kind of artifact mapping over the studio's API, keeping the viewer's preferences in `browserState`: a mapping
+ * opens in the studio's tab by its id, and its change is read by its target fields; New mapping creates one and opens
+ * it in edit mode on its Signature tab; the list is every mapping file of the working folder, as the service lists it.
  */
-export function mappingsScreen(api: ApiClient, browserState: BrowserStateStore): Screen {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const onSaved = () => void queryClient.invalidateQueries({ queryKey: ['mappings'] });
+export function mappingKind(api: ApiClient, browserState: BrowserStateStore): ArtifactKind {
+  function NewMappingFile({ open, ...props }: NewArtifactProps) {
+    return <NewMapping api={api} {...props} openMapping={(id) => open(mappingTab(api, browserState, id, { editing: true }))} />;
+  }
   return {
-    id: 'mappings',
-    group: msg('frame.group.design'),
-    icon: <PartitionOutlined />,
-    description: msg('mapping.screen.description'),
-    title: msg('mapping.screen.title'),
-    action: 'module.call',
-    render: (open) => (
-      <QueryClientProvider client={queryClient}>
-        <Page title={false}>
-          <MappingList
-            api={api}
-            onOpen={(id) => open(mappingTab(api, browserState, id, { onSaved }))}
-            onCreated={(id) => open(mappingTab(api, browserState, id, { editing: true, onSaved }))}
-          />
-        </Page>
-      </QueryClientProvider>
-    ),
+    kind: 'mapping',
+    open: (path) => mappingTab(api, browserState, idOf(path)),
+    Change: MappingChange,
+    New: NewMappingFile,
+    list: async (signal) =>
+      (await api.listMappings(signal)).mappings.map(({ id }) => ({ path: `${id}.mapping.json`, kind: 'mapping', id: id.slice(id.lastIndexOf('/') + 1) })),
   };
 }

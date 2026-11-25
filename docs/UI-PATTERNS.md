@@ -11,7 +11,9 @@ compact size and in both themes.
 `ui/src/Shell.tsx` draws the frame with ProLayout; screens never draw it.
 
 - **Header**, 48 px high: the mark and the name at the left; at the right Quick open (Ctrl+K or ⌘K), the language
-  switch, the theme switch, and room for the user.
+  switch, the theme switch, and room for the user. Quick open finds a screen, an open tab, and, once something is
+  typed, an artifact of the working folder by its name or its path: a flow, an endpoint, a mapping or a test, each
+  opening in its tab under the breadcrumb it has when it is opened from its package.
 - **Side menu**, fixed under the header: the screens of the registry in their groups (Overview, Monitor, Design), each
   with its icon. Its control at the edge, or Ctrl+B or ⌘B, collapses it to the icons, each with its name as a tooltip.
   Below 1280 px wide it collapses by itself; from 1280 px the frame keeps its shape.
@@ -21,7 +23,9 @@ compact size and in both themes.
 - **Content**, the rest: the shown tab's page on the layout background.
 
 A module adds screens through its `module.tsx` and opens tabs with the `open` its screen's `render` gets; the frame does
-the rest.
+the rest. The menu lists the screens of whole lists, such as Packages, never one per kind of artifact: an artifact's
+editor opens from its package's tab or from Quick open, its breadcrumb starts from Packages and its package, and the
+menu marks Packages while it is shown.
 
 ## A page
 
@@ -60,6 +64,8 @@ search form.
 Reference: Pro's Advanced Profile; in Rail8, a package's tab (`package-*.png`).
 
 - `Page` with the object's name as `title` and its version in `tags`.
+- A card of a kind of object that can be created has its New in `extra`, and shows on a server that takes writes even
+  while it is empty.
 - The actions in `extra`.
 - The facts in `content` as `Descriptions size="small" column={2}`.
 - The key state in `extraContent` as Statistics, a status with its dot.
@@ -167,5 +173,4 @@ into `docs/ui/frame/`; `npm run pictures -- --pro` also takes the matching pages
 | Detail page, dark | ![](ui/frame/package-artifacts-1440x900-dark.png) | ![](ui/frame/pro/profile-advanced-1440x900-dark.png) |
 | Collapsed menu | ![](ui/frame/menu-collapsed-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-collapsed-1440x900-light.png) |
 | Canvas | ![](ui/frame/canvas-1440x900-light.png) | none |
-
-Endpoints, Flows and Mappings keep their own layout inside `Page` until each is rebuilt to these patterns.
+| Quick open | ![](ui/frame/quick-open-1440x900-light.png) | none |

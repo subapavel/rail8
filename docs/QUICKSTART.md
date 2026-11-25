@@ -61,18 +61,21 @@ add `RAIL8_UI_PORT=5175` before `npm run dev` and open **http://localhost:5175**
 no other role, so, once: open **Users**, choose Roles… on `owner` and give it `developer` and `operator`, so the other
 screens open; and on `deploy` give `operator` and `message-bodies`, so that its token reads the messages below.
 The menu at the left lists the screens; each opens in a tab of its own in the row under the header, Ctrl+K (⌘K on a
-Mac) finds a screen or an open tab, and Ctrl+B (⌘B) folds the menu to its icons.
-The UI has **Messages**, the list of the messages the node recorded, **Packages**, each package of `RAIL8_WORKSPACE`
+Mac) finds a screen, an open tab or an artifact of any package, a flow, an endpoint, a mapping or a test, by its name or
+its path, and Ctrl+B (⌘B) folds the menu to its icons.
+The UI has **Messages**, the list of the messages the node recorded, and **Packages**, each package of `RAIL8_WORKSPACE`
 with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
-artifacts and history, **Endpoints**, the
-settings form of each endpoint file in `RAIL8_WORKSPACE`, **Flows**, the picture of each flow file in it, and
-**Mappings**, the mapping studio. The UI sends its
+artifacts and history. A package's **Artifacts** tab lists its flows, endpoints, mappings and tests: a flow opens in its
+picture, an endpoint in its settings form, a mapping in the mapping studio, and **New flow** and **New mapping** in the
+corners of their cards write a new one into the package. The UI sends its
 `/admin` requests to the node on `localhost:8081` with your session, which the browser never sees.
 
 The studio's mappings are the `*.mapping.json` files in `RAIL8_WORKSPACE`, such as
-`mapping-corpus/mappings/order-id-copy`, and the schemas a mapping reads are the files its bundles name, relative to its
-file. **Mappings** lists them without the node; opening, saving, compiling and testing a mapping ask the node, so they
-need it running. With `RAIL8_READ_ONLY=true` the studio saves and creates nothing.
+`demo/mappings/greeting`, and the schemas a mapping reads are the files its bundles name, relative to its
+file. A folder of `RAIL8_WORKSPACE` that is no package but holds mappings, such as `mapping-corpus`, is a link under
+**Folders that are no package** on **Packages**: its tab lists its mappings, with **New mapping**. Listing them needs no
+node; opening, saving, compiling and testing a mapping ask the node, so they need it running. With
+`RAIL8_READ_ONLY=true` the studio saves and creates nothing.
 
 An endpoint's form is drawn from its component's settings description, which the node serves, so it needs the node
 running. It opens read-only; Edit, change a setting, Check, and Save writes the file in the working folder, changing only
@@ -109,7 +112,8 @@ Changes tab, pin by pin, and is committed like any other change.
 
 With `RAIL8_READ_ONLY=true` the forms only show the files, as on a server.
 
-To see the demo flows as pictures, open **Flows** and choose a flow, such as `invoice-sync`. Its tab draws the flow from
+To see the demo flows as pictures, open `demo` on **Packages**, choose its **Artifacts** tab and, in the Flows card, a
+flow, such as `invoice-sync`, or find it with Ctrl+K. Its tab draws the flow from
 left to right inside a labelled frame: the system that calls it arrives on the left, then each step, the fork of a `to`
 by prop into its endpoints, a call of another flow beside the step that makes it, and the receiving systems outside the
 frame. The frame can be resized and collapsed; collapsed, the connections to the outside stay visible. **Find step**
@@ -137,9 +141,9 @@ offered by Insert step here or Add step also include Call a flow: choose `order-
 endpoint whose address that flow serves. A flow whose address no endpoint of the package names gets one,
 `call-<flow id>.yaml`, written before the step is added; Cancel leaves it in place. The connection's menu also marks where a
 simulation starts and ends: with both marked in one list of steps, the start before the end, Open simulation takes a body, attachments, properties
-and headers, and runs nothing. New flow, on the Flows screen, writes a new flow file with one step,
-such as `demo/flows/audit.yaml` arriving at `http-in` and sending to `partner-domestic`, and opens it; it never writes
-over an existing file.
+and headers, and runs nothing. **New flow**, in the corner of the Flows card of `demo`'s **Artifacts**, writes a new
+flow file with one step, such as `demo/flows/audit.yaml` arriving at `http-in` and sending to `partner-domestic`, and
+opens it; it never writes over an existing file.
 
 The node migrates its database itself and serves `/health` on `localhost:8081`. Postgres is published on the host's
 loopback port 5432; if that is taken, prefix the `up` with `RAIL8_PG_HOST_PORT=55432`. Without the key the node exits
@@ -301,7 +305,7 @@ The reply is the greeting:
 The node's data port, 8080, checks no caller yet: whoever reaches it can send to every flow.
 
 1. Open the mapping. In **Packages** open `demo`, choose its **Artifacts** tab and, in the Mappings card, `greeting`
-   (or find `greeting` on the **Mappings** screen). It opens in the mapping studio.
+   (or press Ctrl+K, ⌘K on a Mac, type `greeting` and choose it). It opens in the mapping studio.
 2. Change it. Choose the **Definition** tab and **Edit**, then the field `Text` in the target message on the right. The
    canvas below shows how `Text` is made: the constant `Hello, ` and the source field `name`, joined by `concat`. Choose
    the gear on the `constant` box, change **Value** to `Hi, ` (with the space at its end) and **Apply**. **Save**.

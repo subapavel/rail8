@@ -1,13 +1,14 @@
 import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { page, userEvent } from 'vitest/browser';
+import { page } from 'vitest/browser';
 import { chooseLanguage, currentLanguage } from '../language';
 import type { Screen } from '../screens';
 import { Shell } from '../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
 import { EndpointsError, type EndpointFile, type EndpointsApi, type NodeComponents } from './api';
-import { endpointsScreen } from './screen';
+import { filesScreen } from './fake/files';
+import { endpointTab } from './screen';
 import { HTTP_FORMS, SFTP_FORMS } from './fake/forms';
 import type { ComponentForms } from './settings';
 
@@ -132,7 +133,7 @@ function render(api: EndpointsApi) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<Shell screens={[probed(endpointsScreen(api))]} start="endpoints" />);
+  root.render(<Shell screens={[probed(filesScreen(() => api.list(), (path, id) => endpointTab(api, path, id)))]} start="files" />);
 }
 
 afterEach(() => {
@@ -153,32 +154,6 @@ async function open(api: EndpointsApi, id = 'inbox') {
 }
 
 describe('Endpoints', () => {
-  test('lists the endpoint files of the working folder, and a file that cannot be read says why', async () => {
-    render(fakeApi());
-    await expect.element(button('inbox')).toBeVisible();
-    await expect.element(text('demo/endpoints/inbox.yaml')).toBeVisible();
-    await expect.element(text('an endpoint file names its id and scheme')).toBeVisible();
-  });
-
-  test('names the package of each endpoint file, and its filter keeps the files of one package', async () => {
-    render(fakeApi([inbox, { ...httpIn, path: 'billing/endpoints/http-in.yaml' }]));
-    const table = page.getByRole('table', { name: 'Endpoint files' });
-    const rows = () => table.getByRole('row').filter({ hasText: /\.yaml/ });
-    await expect.element(rows()).toHaveLength(3);
-    await expect.element(rows().filter({ hasText: 'billing/endpoints/http-in.yaml' })).toMatchTextContent('billing');
-
-    await table.getByRole('columnheader', { name: /Package/ }).getByRole('button').click();
-    await page.getByRole('menuitem', { name: 'billing' }).click();
-    await page.getByRole('button', { name: 'OK' }).click();
-    await expect.element(rows()).toHaveLength(1);
-    await expect.element(rows().nth(0)).toMatchTextContent('billing/endpoints/http-in.yaml');
-  });
-
-  test('says how to set a working folder when none is set', async () => {
-    render(fakeApi([], { list: vi.fn(async () => ({ configured: false, editable: false, truncated: false, items: [] })) }));
-    await expect.element(text('No working folder')).toBeVisible();
-  });
-
   test("opens read-only, with the platform's tabs around the adapter's own and the fields of the endpoint's direction", async () => {
     await open(fakeApi());
     for (const name of ['General', 'Polling', 'Retry', 'Recording', 'Security']) await expect.element(settingsTab(name)).toBeVisible();
@@ -199,7 +174,7 @@ describe('Endpoints', () => {
   test('two forms open at once each keep their own labelled fields', async () => {
     const outbox: EndpointFile = { ...inbox, id: 'outbox', path: 'demo/endpoints/outbox.yaml', direction: 'out', config: { host: 'partner' }, environments: [] };
     await open(fakeApi([inbox, outbox]));
-    await page.getByRole('tab', { name: 'Endpoints', exact: true }).click();
+    await page.getByRole('tab', { name: 'Files', exact: true }).click();
     await button('outbox').click();
     const panel = page.getByRole('tabpanel', { name: 'outbox' });
     await expect.element(panel.getByLabelText('Host', { exact: false })).toHaveValue('partner');
@@ -459,24 +434,18 @@ describe('Endpoints', () => {
   });
 });
 
-describe('the Endpoints screen in another language', () => {
+describe('the endpoint editor in another language', () => {
   afterEach(() => {
     chooseLanguage('en');
     localStorage.removeItem('rail8.language');
   });
 
-  test('shows its list, its form, the check and Ant Design in the language chosen in the header', async () => {
+  test('shows its form and the check in the language chosen in the header', async () => {
     render(fakeApi());
     await expect.element(button('inbox')).toBeVisible();
     await page.getByRole('button', { name: 'Language: English' }).click();
     await page.getByRole('menuitem', { name: 'Čeština' }).click();
     expect(currentLanguage()).toBe('cs');
-
-    const table = page.getByRole('table', { name: 'Soubory koncových bodů' });
-    await expect.element(table.getByRole('columnheader', { name: 'Schéma' })).toBeVisible();
-    await table.getByRole('columnheader', { name: /Balíček/ }).getByRole('button').click();
-    await expect.element(page.getByRole('button', { name: 'Potvrdit', exact: true })).toBeVisible();
-    await userEvent.keyboard('{Escape}');
 
     await button('inbox').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).toBeVisible();

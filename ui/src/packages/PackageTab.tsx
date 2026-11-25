@@ -1,13 +1,14 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Col, Descriptions, Empty, Flex, Row, Statistic, Tag, theme, Tooltip, Typography } from 'antd';
-import { useId, useState, type ReactNode } from 'react';
+import { useContext, useId, useState, type ReactNode } from 'react';
+import { ArtifactKinds } from '../artifacts';
 import { say, useText, type Texts } from '../language';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
 import { useMay } from '../SessionGate';
-import type { Commit, PackagesApi, PackageState } from './api';
+import type { Artifact, Commit, PackagesApi, PackageState } from './api';
 import { CommitDialog } from './CommitDialog';
 import { DependenciesCard } from './Dependencies';
 import { DeployDialog } from './DeployDialog';
@@ -26,6 +27,8 @@ export interface PackageTabProps {
   open: (screen: Screen) => void;
   /** Whether the server takes writes; false under RAIL8_READ_ONLY=true. */
   writable: boolean;
+  /** The page's own tab shown first: `changes` (the default), `artifacts`, `history`, `dependencies` or `used-by`. */
+  pane?: string;
 }
 
 /**
@@ -97,18 +100,41 @@ function HistoryCard({ api, repository, state, now, onDeploy }: { api: PackagesA
   );
 }
 
-/** The artifacts, one titled card for each kind that has some, two cards side by side on a wide screen. */
-function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Screen) => void }) {
+/**
+ * The artifacts of the folder `folder`, one titled card for each kind that has some, two cards side by side on a wide
+ * screen. On a server that takes writes, the card of a kind whose module can write a new one, among `creates` when it is
+ * given, shows even when it is empty, with that New action in its corner, which writes into `folder` beside the first
+ * artifact of the card; `onCreated` is told once it wrote one.
+ */
+export function ArtifactCards({ artifacts, folder, writable, open, onCreated, creates }: {
+  artifacts: Artifact[];
+  folder: string;
+  writable: boolean;
+  open: (screen: Screen) => void;
+  onCreated: () => void;
+  creates?: readonly string[];
+}) {
   const { token } = theme.useToken();
   const texts = useText();
-  const groups = GROUPS.map((g) => ({ ...g, listed: state.artifacts.filter((a) => g.kinds.includes(a.kind)) })).filter((g) => g.listed.length > 0);
+  const kinds = useContext(ArtifactKinds);
+  const groups = GROUPS.map((g) => {
+    const only = g.kinds.length === 1 ? g.kinds[0]! : undefined;
+    const New = writable && only !== undefined && (creates === undefined || creates.includes(only)) ? kinds.get(only)?.New : undefined;
+    return { ...g, New, listed: artifacts.filter((a) => g.kinds.includes(a.kind)) };
+  }).filter((g) => g.listed.length > 0 || g.New !== undefined);
   if (groups.length === 0) return <ProCard><Empty description={texts.t('packages.artifacts.none')} /></ProCard>;
   return (
     <Row gutter={[token.marginLG, token.marginLG]}>
-      {groups.map((group) => (
-        <Col key={group.key} xs={24} xl={12}>
-          <ProCard title={<h2>{say(texts, group.title)}</h2>} subTitle={group.listed.length} headerBordered style={{ height: '100%' }}>
-            <ArtifactsTable artifacts={group.listed} open={open} label={say(texts, group.title)} />
+      {groups.map(({ key, title, listed, New }) => (
+        <Col key={key} xs={24} xl={12}>
+          <ProCard
+            title={<h2>{say(texts, title)}</h2>}
+            subTitle={listed.length}
+            headerBordered
+            extra={New && <New folder={folder} beside={listed[0]?.path} open={open} onCreated={onCreated} />}
+            style={{ height: '100%' }}
+          >
+            <ArtifactsTable artifacts={listed} open={open} label={say(texts, title)} />
           </ProCard>
         </Col>
       ))}
@@ -123,7 +149,8 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
  * chosen tab's sections, each in a titled card: Changes lists every file that differs from the last commit, each with
  * its kind and its readable change and a tick box, and Discard changes… in its corner opens the discard dialog of the
  * ticked files (see {@link DiscardChangesDialog}); Artifacts lists the package's flows, endpoints, mappings and tests and the files
- * they use, each opening in its own screen's tab when a module owns its kind; History lists the commits of the
+ * they use, each opening in its editor's tab when a module owns its kind, with New flow and New mapping in their cards
+ * (see {@link ArtifactCards}); History lists the commits of the
  * branch, each opening the files it changed, and each with Deploy this commit…, which is how the author goes back;
  * Dependencies lists what `package.yaml` declares, with its pin, its candidate and Lock (see {@link DependenciesCard});
  * Used by lists the packages the node runs that pin this one, and how each pin relates to what runs (see {@link UsedByCard}).
@@ -131,13 +158,14 @@ function ArtifactCards({ state, open }: { state: PackageState; open: (screen: Sc
  * opens the commit dialog, and says why when the commit route would refuse it; its Commit and deploy goes on to the
  * deploy dialog of the new commit. Deploy… opens the deploy dialog of `HEAD`. Fetch, Pull and Push share the branch
  * with its upstream (see {@link useRemote}). The package is read again when the tab is shown again, when the window gets
- * the focus, on Refresh, and when a file changed after its change was listed; a commit's answer redraws it.
+ * the focus, on Refresh, when a file changed after its change was listed, and once a New action wrote a file; a
+ * commit's answer redraws it. `pane` names the page's own tab shown first.
  */
-export function PackageTab({ api, repository, now, open, writable }: PackageTabProps) {
+export function PackageTab({ api, repository, now, open, writable, pane: first = 'changes' }: PackageTabProps) {
   const { read, refresh, show, root } = usePackage(api, repository, now);
-  const [pane, setPane] = useState('changes');
+  const [pane, setPane] = useState(first);
   // the page's own tabs shown so far: each stays mounted once shown, so it keeps its open rows and the pages it read
-  const [shown, setShown] = useState<readonly string[]>(['changes']);
+  const [shown, setShown] = useState<readonly string[]>([first]);
   const [committing, setCommitting] = useState(false);
   const [deploying, setDeploying] = useState<Pick<Commit, 'id' | 'subject'> | null>(null);
   // the paths ticked in the Changes table; a path no longer among the changes, or staged with other content, is not chosen
@@ -203,7 +231,7 @@ export function PackageTab({ api, repository, now, open, writable }: PackageTabP
             )}
           </ProCard>,
         )}
-        {paneOf('artifacts', <ArtifactCards state={state} open={open} />)}
+        {paneOf('artifacts', <ArtifactCards artifacts={state.artifacts} folder={repository} writable={writable} open={open} onCreated={refresh} />)}
         {paneOf('history', <HistoryCard api={api} repository={repository} state={state} now={at} onDeploy={setDeploying} />)}
         {paneOf('dependencies', <DependenciesCard api={api} repository={repository} state={state} writable={writable} onState={onState} />)}
         {paneOf('used-by', <UsedByCard usedBy={state.usedBy} now={at} />)}

@@ -60,8 +60,22 @@ const pick = (file) => (page) => shown(page).getByRole('table', { name: 'Changes
 const end = (page) => page.evaluate(() => window.endSession());
 /** Opens the message `id` from its row on the Messages screen. */
 const message = (id) => (page) => shown(page).getByRole('table', { name: 'Messages' }).getByRole('button', { name: id, exact: true }).click();
-/** Opens the first mapping of the Mappings screen in its studio. */
-const studio = (page) => shown(page).getByRole('button', { name: 'Open in studio' }).first().click();
+/** Opens the artifact `name` from the table `table` of the shown tab, such as a package's Flows. */
+const artifact = (table, name) => (page) => shown(page).getByRole('table', { name: table }).getByRole('button', { name, exact: true }).click();
+/** Opens the folder `name`, which is no package, from its row on the Packages screen. */
+const folder = (name) => (page) => shown(page).getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name, exact: true }).click();
+/** Opens Quick open with Ctrl+K and types `text` into it. */
+const quick = (text) => async (page) => {
+  await page.keyboard.press('Control+k');
+  // the dialog's one field, named in the language shown
+  await page.getByRole('dialog').getByRole('textbox').fill(text);
+};
+/** Opens the mapping order-id-copy of the folder mappings, which is no package, in its studio. */
+const studio = [menu('Packages'), folder('mappings'), artifact('Mappings', 'order-id-copy')];
+/** Opens the flow orders of the package orders. */
+const orders = [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('Flows', 'orders')];
+/** Opens the endpoint `name` of the package orders. */
+const endpointOf = (name) => [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('Endpoints', name)];
 /** Selects the target field `name` on the studio's Definition tab, which shows its expression on the canvas. */
 const target = (name) => (page) =>
   shown(page).getByRole('region', { name: 'target message' }).getByRole('table', { name: 'target fields' }).getByRole('button', { name, exact: true }).click();
@@ -87,14 +101,14 @@ const SCENES = {
   'packages-new': [menu('Packages'), press('New package'), fill('Repository', 'invoices'), fill('Package name', 'Invoices')],
   'packages-new-refused': [menu('Packages'), press('New package'), fill('Repository', 'orders'), fill('Package name', 'orders'), press('Create')],
   'menu-collapsed': [menu('Packages'), pkg('orders'), collapse],
-  canvas: [menu('Mappings'), studio, tab('Definition')],
+  canvas: [...studio, tab('Definition')],
   login: [visit('out')],
   'login-refused': [visit('out'), fill('Name', 'anna'), fill('Password', 'not the password'), press('Log in')],
   'first-password': [visit('first')],
   'session-home': [visit('in')],
   'session-asking': [visit('in'), menu('Packages'), end],
   'session-failed': [visit('failed')],
-  'session-refused-tab': [visit('in&start=mappings')],
+  'session-refused-tab': [visit('in'), ...studio],
   messages: [menu('Messages')],
   'messages-failed': [menu('Messages'), press('Failed 1')],
   message: [menu('Messages'), message('m-7f3a')],
@@ -130,28 +144,27 @@ const SCENES = {
   'users-de': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Deutsch')],
   'users-cs': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Čeština')],
   'users-ru': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Русский')],
-  endpoints: [menu('Endpoints')],
-  'endpoint-http-out': [menu('Endpoints'), (page) => shown(page).getByRole('button', { name: 'erp-out', exact: true }).click()],
-  'endpoint-sftp-in': [menu('Endpoints'), (page) => shown(page).getByRole('button', { name: 'invoice-files', exact: true }).click()],
-  'endpoint-sftp-in-polling': [menu('Endpoints'), (page) => shown(page).getByRole('button', { name: 'invoice-files', exact: true }).click(), tab('Polling')],
-  'endpoints-cs': [menu('Endpoints'), speak('Čeština')],
-  flow: [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click()],
-  'flow-de': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Deutsch')],
-  'flow-cs': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Čeština')],
-  'flow-ru': [menu('Flows'), (page) => shown(page).getByRole('button', { name: 'orders', exact: true }).click(), speak('Русский')],
+  'endpoint-http-out': endpointOf('erp-out'),
+  'endpoint-sftp-in': endpointOf('invoice-files'),
+  'endpoint-sftp-in-polling': [...endpointOf('invoice-files'), tab('Polling')],
+  flow: orders,
+  'flow-de': [...orders, speak('Deutsch')],
+  'flow-cs': [...orders, speak('Čeština')],
+  'flow-ru': [...orders, speak('Русский')],
   'package-de': [menu('Packages'), pkg('orders'), speak('Deutsch')],
   'package-cs': [menu('Packages'), pkg('orders'), speak('Čeština')],
   'package-ru': [menu('Packages'), pkg('orders'), speak('Русский')],
   'message-de': [visit('in'), menu('Messages'), message('m-7f39'), speak('Deutsch')],
   'message-cs': [visit('in'), menu('Messages'), message('m-7f39'), speak('Čeština')],
   'message-ru': [visit('in'), menu('Messages'), message('m-7f39'), speak('Русский')],
-  mappings: [menu('Mappings')],
-  'mappings-de': [menu('Mappings'), speak('Deutsch')],
-  'mappings-cs': [menu('Mappings'), speak('Čeština')],
-  'mappings-ru': [menu('Mappings'), speak('Русский')],
-  'canvas-de': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Deutsch')],
-  'canvas-cs': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Čeština')],
-  'canvas-ru': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Русский')],
+  'quick-open': [quick('order')],
+  'quick-open-cs': [speak('Čeština'), quick('order')],
+  folder: [menu('Packages'), folder('mappings')],
+  'folder-new-mapping': [menu('Packages'), folder('mappings'), press('New mapping')],
+  'package-new-flow': [menu('Packages'), pkg('orders'), tab('Artifacts'), press('New flow'), fill('Id', 'returns')],
+  'canvas-de': [...studio, tab('Definition'), target('OrderId'), speak('Deutsch')],
+  'canvas-cs': [...studio, tab('Definition'), target('OrderId'), speak('Čeština')],
+  'canvas-ru': [...studio, tab('Definition'), target('OrderId'), speak('Русский')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
 };

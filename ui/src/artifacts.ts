@@ -34,13 +34,32 @@ export interface Side {
   read(path: string): Promise<string | null>;
 }
 
-/** What a module of the UI draws of the kind of artifact it owns, for the tab of a package. */
+/** What the New action of a kind of artifact is given: where the new file goes, and what to do once it is written. */
+export interface NewArtifactProps {
+  /** The folder directly in the working folder the new file goes in: a package's, or a folder that is no package. */
+  folder: string;
+  /** The path of a file of the kind already in `folder`, relative to the working folder, beside which the new one goes; undefined when there is none. */
+  beside?: string;
+  /** Opens a screen in a tab of its own: the new file's editor. */
+  open: (screen: Screen) => void;
+  /** Told once the file is written, before its editor opens. */
+  onCreated: () => void;
+}
+
+/** What a module of the UI draws of the kind of artifact it owns, for the tab of a package and for Quick open. */
 export interface ArtifactKind {
   kind: 'flow' | 'endpoint' | 'mapping';
-  /** The tab the module's own list opens for the file at `path`, relative to the working folder. */
+  /** The editor's tab of the file at `path`, relative to the working folder. */
   open(path: string): Screen;
   /** The readable change between two versions of the file at `path`; a side is null when the file has no version there. */
   Change: ComponentType<{ path: string; before: Side | null; after: Side | null }>;
+  /** The button that writes a new file of the kind, with the dialog it opens; absent when the kind has none. */
+  New?: ComponentType<NewArtifactProps>;
+  /**
+   * Every file of the kind in the working folder, packages or not, sorted by path; absent when the kind is only ever
+   * read through a package. It lists the files of the folders that are no package.
+   */
+  list?(signal?: AbortSignal): Promise<Artifact[]>;
 }
 
 /** The kinds of artifact the modules register, by kind. */
