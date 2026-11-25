@@ -591,9 +591,9 @@ its drain.
   the names of its connections; git holds nothing else of a connection. A flow names a system and a
   connection, and a deploy refuses a flow whose connections are not set, or not complete, in the
   environment it is deployed to. Differences between environments are no longer overrides in files:
-  they are entered in each environment. How a node reads the environment until its store is built,
-  how a flow names a system of another package and whether one release reads both shapes are settled
-  by #443.
+  they are entered in each environment, whose store (`docs/ENVIRONMENT-CONFIGURATION.md`) is built
+  before a node reads it, with no file of the environment in between. How a flow names a system of
+  another package and whether one release reads both shapes are settled by #443.
 - The secret store (`docs/SECRET-STORE.md`): a secret is entered in the UI by the secret administrator
   and reaches every node without a restart; today secrets are environment variables.
 - Credentials of the callers of a flow and the check at the entry of every message

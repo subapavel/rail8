@@ -49,7 +49,7 @@ from the header `X-Rail8-Actor`.
 | Developer | `developer` | both | deploys and undeploys a commit, sees the deployed configuration, calls the modules' services (the mapping studio) |
 | Operator | `operator` | both | monitoring, retry, cancel, release and discard. Sees a message's status, times, error, flow, headers and the lines its steps logged. Planned: stops and starts a connection |
 | Message bodies | `message-bodies` | both | sees and downloads a message's body after each step |
-| Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Planned: consents that a secret may go to a destination |
+| Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Planned: consents that a secret may be sent to a server |
 | Connection administrator | `connection-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): systems in the environment, the values of connections, credentials, instance names, technical identifiers |
 | Partner administrator | `partner-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): partner profiles, business identifiers, agreements, API products, subscriptions, number sequences |
 | Message sender | `message-sender` | both | planned (`docs/WHO-MAY-SEND.md`): sends a test message to a flow on the node's HTTP port, with the user's name and a personal token as the password of basic authentication |
@@ -483,6 +483,11 @@ unset and the node restarted.
 1. creates the administrator with the key;
 2. logs in with the first password and sets a new one that it generates and prints once;
 3. in that session, creates the technical account with the developer role, issues its token and writes it to the file.
+
+Planned with the configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`): `--role <role>`, repeated, gives
+the technical account more roles beside the developer's. The quickstart gives it the connection administrator's and the
+secret administrator's, so that its script activates the demo's connections; outside the quickstart an administrator
+gives those roles to an account on purpose.
 
 No password or key is a fixed value in a file of the repository.
 

@@ -550,7 +550,7 @@ The owner chose:
 - A command that names the commit; a node that follows its ref by itself may come later as a timer
   calling the same deploy.
 - The token in the node's environment now; the secret store (`docs/SECRET-STORE.md`) takes it later as the
-  credentials secret `rail8.git`, with the variables as the second source.
+  credentials secret `rail8.git`, imported once from the variables, which no node reads after.
 - Every deploy names the state it expects, from the UI, the command line and CI alike, and is refused when the pool holds
   another: on a shared server one author's deploy must never replace another's, or CI's, unseen. Overwriting blind takes a
   switch the caller writes out, and the audit row records it. A pipeline reads the state first and sends it.
