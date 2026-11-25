@@ -16,7 +16,7 @@ Today everything a flow needs is in files of its package. A difference between e
 endpoint file, and the UI changes a running system only through a deploy of a commit, the secret store being the one
 planned exception. The design of systems and connections takes the values of a connection out of git: a package names
 a system and its connections, and each environment holds the values. Until this store is built, a node reads those
-values from a file at its start.
+values from a file.
 
 **What this replaces:**
 - Differences between environments as overrides in files, for connections: a connection's values are entered in each
@@ -57,7 +57,7 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
 
 | Kind | Key | Body | Complete when |
 | --- | --- | --- | --- |
-| `connection` | a connection key, two or three segments | `{adapter, values, mock?}` | mocked; or `values` pass the adapter's connection form for the directions it is used in, and every secret it names is set, of a kind its field takes |
+| `connection` | a connection key, two or three segments | `{adapter, values, mock?}` | mocked, in an environment that allows mocks; or `values` pass the adapter's connection form for the directions it is used in, every secret it names is set, of a kind its field takes, and a use through an address field has allowed hosts |
 | `system` | a system key, one or two segments | `{instanceName}`, 1 to 128 printable characters | always, once its shape is right |
 
 - `values` are the fields of the adapter's connection form, the format 2 description at `GET /admin/components`. A
@@ -66,6 +66,12 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
 - `mock` is the platform's built-in mock: `{reply: echo | empty, delay?, fail?: retryable | invalid}`, the delay at most
   60 s. While it is set the connection is mocked, and `values` are kept as they were, unchecked, so switching the mock
   off brings them back. A mocked connection sends no secret.
+- **Whether the environment allows mocks** is one switch of the environment, `config_store.mocks_allowed`, off unless
+  set, since a mocked send completes a message without reaching the partner and Rail8 has no replay. The environment
+  file seeds it from its `mocksAllowed`. After that a connection administrator changes it with
+  `POST /admin/config/-/mocks`, which writes an audit row `config.mocks` and a new generation. It is never exported, so
+  a file from test never makes production mock. Turning it off while a used connection is mocked needs `confirm`
+  listing those connections; their sends then wait for their connection.
 - A **removal** is a draft too: `{removed: true}`, activated like any other change.
 - Each stored body carries its kind's format number, as a file does, and is read through the same chain of upgrades.
 - Whether a connection is **stopped** is not part of its body. It is never drafted and never exported. An operator or
@@ -84,7 +90,7 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
 | --- | --- | --- | --- |
 | `revision` | one object | a save, a discard, an activation | every save, discard, consent and activation, as `expect` |
 | `version` | one object | an activation: 1, 2, 3 … | going back, as `fromVersion` |
-| `generation` | the environment | an activation, a stop, a start | the deploy's record; each node's report |
+| `generation` | the environment | an activation, a stop, a start, the switch of mocks | the deploy's record; each node's report |
 
 - A stop or a start states the state it saw (`expect: "running"` or `"stopped"`), not the revision. So an operator who
   stops a connection never refuses an administrator's pending activation, nor the other way round.
@@ -97,7 +103,8 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
 create table config_store (
     one        boolean primary key default true check (one),
     generation bigint  not null check (generation >= 0),
-    stamp      bigint  not null
+    stamp      bigint  not null,
+    mocks_allowed boolean not null default false
 );
 
 -- One row per object: its version in force, its draft with the consent to it, and a connection's state.
@@ -151,10 +158,11 @@ create index config_history_object on config_history (kind, key, id);
 
 alter table nodes add column config_generation bigint, add column config_stamp bigint, add column config_epoch bigint,
     add column config_refused text[];              -- the objects it left out, at most 100
-alter table deployments add column config_generation bigint;   -- null: written before the store
 ```
 
-- The migration inserts the one row of `config_store`: generation 0 and a random stamp.
+- The migration inserts the one row of `config_store`: generation 0, a random stamp, mocks not allowed.
+- `deployments.config_generation` exists already, filled with the environment file's generation. The seed (below)
+  starts the store's generation above the highest one recorded, so one generation never names two states.
 - **The versions kept** are the activation rows of the history. Going back copies one of them into a draft.
 - **Retention.** The node's retention job deletes history rows older than `RAIL8_AUDIT_MAX_AGE` (P30D to P3660D, P365D by
   default), in its batches. A write that would give an object more than 1,000 history rows deletes its oldest rows that
@@ -183,7 +191,7 @@ One list of roles. Each says who may hold it: a person, a technical account, or 
 | Action | Routes | Granted by |
 | --- | --- | --- |
 | `config.read` | every `GET /admin/config…` | developer, operator, connection-administrator, partner-administrator, secret-administrator |
-| `config.connections` | save, discard and activate of connections and systems; a test of a draft | connection-administrator |
+| `config.connections` | save, discard and activate of connections and systems; a test of a draft; the switch of mocks | connection-administrator |
 | `config.run` | stop, start, and a test of the version in force | operator, connection-administrator |
 | `config.consent` | a consent and its withdrawal | secret-administrator |
 | `config.import` | the import's door; each file is then checked by its kind's write action | connection-administrator, partner-administrator |
@@ -204,6 +212,8 @@ an import's at most 4 MiB.
 
 | Route | Action | Body | Does |
 | --- | --- | --- | --- |
+| `GET /admin/config` | `config.read` | | the environment: its generation, whether it allows mocks, each live node's generation and what it left out |
+| `POST /admin/config/-/mocks` | `config.connections` | `{expect: true \| false, allowed, confirm?}` | allows or refuses mocks in the environment |
 | `GET /admin/config/connections?prefix&needs&after&limit` | `config.read` | | the list: key, adapter, state, version, whether a draft waits, whether it needs consent, the nodes behind; `needs=consent` or `needs=activation` narrows it |
 | `GET /admin/config/connections/{key}` | `config.read` | | one connection, as the screen shows it (below) |
 | `POST /admin/config/connections/{key}/-/save` | `config.connections` | `{expect, adapter, values, mock?}`, `{expect, removed: true}` or `{expect, fromVersion}` | writes the draft; creates the row when there is none |
@@ -256,7 +266,7 @@ stopped, missing, or a draft waiting.
 1. The action at the door (403), then the body (400, 413).
 2. One transaction. Locks in this order, which every writer keeps:
    1. the secret store's row, by an activation and a consent, which bind under the store's key as every seal does;
-   2. `config_store` `for update`, by an activation, a stop and a start;
+   2. `config_store` `for update`, by an activation, a stop, a start and the switch of mocks;
    3. the object's row `for update`, inserted at revision 0 when absent;
    4. the names' advisory locks, through the secret store's one method of uses.
 3. `expect` is compared: 412 `changed`, answering the object as it is now. Then the verb's own checks (409, 422).
@@ -283,17 +293,20 @@ version in force drops the draft. A save over a draft replaces it, and drops its
   it is used. Else 422 `incomplete`, one line per field and direction, never a value;
 - **consented**: when the draft needs consent, its consent equals the digest of what the draft sends now and its tag
   verifies (409 `consent-needed`, with the sends and the destination fields);
-- **a removal** of a connection that `deployment_connection_uses` names, or of a system with such a connection, needs
-  `confirm` to list exactly the flows that use it now (409 `in-use`, naming them). Once confirmed, every send through it
-  fails retryably and a polling sender is `DEGRADED`, as the design of systems and connections says;
+- **mocks**: a mocked body only in an environment that allows mocks (409 `mocks-refused`);
+- **a confirmation**: a removal or a switch to the mock of a connection that `deployment_connection_uses` names, an
+  emptied `allowedHosts` while a use goes through an address field, and a removal of the instance name of a system with
+  such a connection, each need `confirm` to list exactly the flows that use it now (409 `in-use`, naming them). Once a
+  removal is confirmed, every send through the connection waits for it and its polling sender is not built, as the
+  design of systems and connections says;
 - **the key**: every live node holds the key it binds under (409 `keys-differ`, the secret store's rule).
 
 It then binds the body, writes `version + 1` and `changed_generation`, clears the draft and its consent, clears the stop
 on a removal, and replaces the object's rows of `secret_uses` through the store's one method: its secret names, none for
 a mocked or removed connection.
 
-A **stop** of a connection with nothing in force is 409 `not-set`. A stop holds for every send that starts after it;
-a send already started ends.
+A **stop** of a connection with nothing in force is 409 `not-set`. A stop holds for every attempt that starts after
+it, which waits for its connection; an attempt already started ends.
 
 ## Where a secret goes: consent
 
@@ -339,7 +352,7 @@ consent is held on the object and given to the exact draft it covers.
   info `rail8 settings v1 bind`, named by the key's id) over the RFC 8785 JSON array `["rail8 config v1", kind, key,
   version, format, body]`. A consent is bound over `["rail8 consent v1", kind, key, digest]`.
 - With the store's key, a node refuses a body in force that is unbound or whose tag does not verify, whether it names a
-  secret or not: it is absent from the node's snapshot, so sends through it fail retryably, `/health` is `DEGRADED`, the
+  secret or not: it is absent from the node's snapshot, so sends through it wait for their connection, `/health` is `DEGRADED`, the
   read shows `binding: fails`, the node's `config_refused` names it, and a WARNING names the key and the key's id once. A
   connection administrator saves it again and activates.
 - **Without the store's key.** The secret store then runs on variables only. In `dev` and `ci` nothing is bound, a
@@ -392,29 +405,30 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
 - **Verify.** It verifies each body's tag and upgrades an older format in memory. A body that fails is left out, as
   above.
 - **Swap.** It builds an immutable snapshot (per connection key `Values` or `Mocked` with the connection's version and
-  `stopped`; per system key the instance name; the generation), swaps it in, and calls the listeners. A snapshot may
+  `stopped`; per system key the instance name; whether mocks are allowed; the generation), swaps it in, and calls the
+  listeners. A snapshot may
   cover several activations; a listener compares it with the one before. Then it writes `config_generation`,
   `config_stamp`, `config_epoch` and `config_refused` into its row of `nodes`, only while that row carries its own
   epoch. A failed write is a WARNING, and the next tick writes again.
 - **At start**, a node reads the whole store before it restores its packages.
 - **Postgres away.** A node that cannot read keeps its snapshot. When it has not read `config_store` for 30 s,
   `/health` is `DEGRADED`, naming the time of its last read. A change, a stop included, reaches it at its next read.
-- **A message in flight.** Each send reads `current()` once, when it starts. It uses the producer built for that
-  connection's version, and the producer is rebuilt only when that connection's version, or a plain secret value it
-  holds, changes; a stop or a start rebuilds nothing. A send on the wire ends with the old values. Every later send, a
-  retry waiting in the queue included, reads the newest snapshot, so a message that waited because of a wrong address
-  goes through once the address is corrected. A message already parked waits for an operator's retry, as any parked
-  message does.
-- No read of a send goes to Postgres. A secret stays a reference in the snapshot; the producer resolves it as the design
-  of systems and connections says.
+- **A message in flight.** Each attempt reads one snapshot and keeps it, and the producer it took, until its send
+  settles. The next attempt through a connection whose version differs from its producer's builds a new producer; a
+  stop, a start, or a new value of a secret it names rebuilds nothing. A send on the wire ends with the old values.
+  Every later attempt, a retry waiting in the queue included, reads the newest snapshot, so a message that waited
+  because of a wrong address goes through once the address is corrected. A message already parked waits for an
+  operator's retry, as any parked message does.
+- No read of a send goes to Postgres. A secret stays a reference in the snapshot, read through its handle at each use.
 
 ## The deploy
 
 - The deploy reads the store first, as a write does, so a change activated through another node a moment earlier is
   seen.
 - The check of the design of systems and connections then reads `current()`: every connection a flow can reach is set
-  and complete for its adapter and directions, or mocked; every system with a used connection has an instance name; a
-  connection the node left out counts as not set.
+  and complete for its adapter and directions, or mocked where the environment allows mocks; every system with a used
+  connection has an instance name; a step that uses an address field has allowed hosts; a connection the node left out
+  counts as not set.
 - In its record's transaction, the deploy takes `config_store` `for share` before the names' locks, reads again from
   Postgres the objects it reaches, checks them again, and writes `deployments.config_generation`, the generation it
   read. An activation takes `config_store` `for update`, so a removal waits for the record and sees its uses, and a
@@ -432,9 +446,12 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
 The design of systems and connections reads the environment from `RAIL8_ENVIRONMENT_FILE` until this store exists. With
 the store:
 - When the store holds no row, a node started with the variable seeds it. In one transaction under `config_store`
-  `for update`, it checks again that no row exists, then activates each connection and each instance name of the file,
-  each with its consent. The actor is `environment-file`, the way `local`, and each activation is an audit row. Whoever
-  sets a node's environment holds its secrets and the store's key already. Two nodes that start together seed once.
+  `for update`, it checks again that no row exists, sets the generation above the highest `deployments.config_generation`
+  and the switch of mocks from `mocksAllowed`, then activates each connection and each instance name of the file, each
+  with its consent. The actor is `environment-file`, the way `local`, and each activation is an audit row. Whoever sets
+  a node's environment holds its secrets and the store's key already. Two nodes that start together seed once.
+- From then on a connection's activation, not the deploy, records the uses of its secrets, and a deploy no longer
+  compares the nodes' digests of their files.
 - In a deployed environment without the store's key, a file that sends a secret refuses the node's start, naming the
   first connection that does; in `dev` and `ci` the seed is unbound.
 - When the store holds a row, the file is not read, and the node logs once, at INFO, that it is ignored.
@@ -499,7 +516,7 @@ instanceName: ACME-ERP-TEST
     draft waits that differs from the file, and the import would replace it; `inForce` says whether the file equals the
     version in force;
   - `missing` is every secret the files name that the target does not hold, with the kinds its field takes;
-  - `notes` are keys that no deployed system defines yet;
+  - `notes` are keys that no deployed system defines yet, and mocked files in an environment that does not allow mocks;
   - `unnamed` are the target's objects of the kinds and keys the files cover that no file names. The import leaves
     them alone;
   - `problems` are the schema's and the save's refusals, and they refuse the write;
@@ -555,6 +572,7 @@ loop of activations, not a change list.
 | an activation, a removal | `activate`, with the body put in force | `config.activate`: the version, the changed fields, the confirmation |
 | a consent, a withdrawal | none | `config.consent`: the sends and the destination fields, or the withdrawal |
 | a stop, a start | `stop`, `start` | `config.stop`, `config.start` |
+| the switch of mocks | none | `config.mocks`: the new state and the confirmation |
 | a test | none | `config.test`: the version or draft tested, the outcome (the step that builds the test) |
 
 - An audit row is written in the transaction of its change: a change whose row cannot be written does not happen (503
@@ -605,8 +623,6 @@ loop of activations, not a change list.
 - **A scope of the two roles by partner or by package.** The decision point already takes a scope with each action:
   each route asks it with its object's key. A partner scope matches the keys of that partner's systems, a package scope
   the systems the package defines. `role_assignments.scope` gains values; no table of this design changes.
-- **A mock refused per environment.** The built-in mock is allowed in every environment, and `/health` lists every
-  mocked connection with the flows that use it. Refusing it in one environment is a node setting, added when asked.
 
 ## Moving from SAP
 
@@ -651,7 +667,9 @@ loop of activations, not a change list.
     added at its default and a secret taken away do not; two secret fields swapped need it; a draft changed in SQL after
     the read is refused at the consent, and after the consent at the activation; a withdrawal;
   - activation: complete per direction `deployment_connection_uses` names; a secret of a kind its field does not take;
-    a removal refused without `confirm`, and refused again when a deploy added a flow after the refusal;
+    a removal or a switch to the mock refused without `confirm`, and refused again when a deploy added a flow after the
+    refusal; a mocked body refused where mocks are not allowed, and mocks turned off only with the mocked used
+    connections confirmed;
   - a removal racing a deploy and a deploy racing an activation, both ways, end in a consistent record or a refusal; a
     deploy through another node right after an activation sees it;
   - retention by age and by count, the 100 newest activations kept through 1,000 stops and starts; going back from a
@@ -661,8 +679,8 @@ loop of activations, not a change list.
   - the environment file seeds an empty store once from two nodes started together, unbound without the key in `dev`,
     and is ignored after.
 - The send path: a retry waiting in the queue goes out with the corrected values; a send on the wire ends with the old
-  ones; a stop fails the next send retryably and a start lets it go; a change of one connection rebuilds no other
-  producer.
+  ones; a stop makes the next attempt wait for its connection and a start lets it go; a change of one connection
+  rebuilds no other producer, and a new value of a secret rebuilds none.
 - A node cut off from Postgres keeps its snapshot and is `DEGRADED` after 30 s of the fake clock.
 - The routes: each called as every role, through a session and a token; each refusal of the codes gives its code.
 - No answer, log line, history row, audit row or export of any test holds a secret's value, checked by searching every
@@ -678,7 +696,8 @@ loop of activations, not a change list.
 | 409 | `no-draft`, `nothing-to-consent` | a discard or activation without a draft; a consent with no draft, or to one that needs none |
 | 409 | `not-set` | a stop or start of a connection with nothing in force |
 | 409 | `consent-needed` | an activation or a test of a draft whose consent is missing or does not match; names the sends |
-| 409 | `in-use` | a removal whose `confirm` does not list exactly the flows that use it |
+| 409 | `in-use` | a removal, a switch to the mock, an emptied `allowedHosts` or mocks turned off, whose `confirm` does not list exactly what is used |
+| 409 | `mocks-refused` | an activation of a mocked body in an environment that does not allow mocks |
 | 409 | `adapter-differs` | a connection's adapter other than its deployed system file names |
 | 409 | `keys-differ` | an activation or a consent while a live node lacks the key it binds under |
 | 409 | `config-full` | beyond a limit |
@@ -689,20 +708,19 @@ loop of activations, not a change list.
 | 503 | `no-key` | in a deployed environment without the store's key, an activation or consent of a body that sends a secret |
 | 503 | `audit-unavailable` | an audit row not written |
 
-## What depends on the design of systems and connections
+## What it relies on from the design of systems and connections
 
-That design is agreed separately and may still move. This one relies on, and asks of it:
-- the keys, and `Environment` with its snapshot; `onActivation` called once per snapshot, not once per activation;
-- each connection's state carrying the connection's version, and a producer kept per connection and version, rebuilt
-  only when that connection changes, not at every new generation;
-- the connection form's format 2, two marks on its fields, `.tuning()` and `.origin()`, and the rule that a form only
-  adds fields with a default that means "as before", checked by the component contract suite against the form recorded
-  in the adapter's tests;
-- `deployment_connection_uses` with its directions, and its rule that a connection it names cannot be removed without a
-  confirmation;
-- the mock's fields, and `GET /admin/systems` reading each connection's state from here;
-- `secret://` references resolved by the producer, a plain value rebuilding the producer when it changes;
-- the environment file, which becomes a seed of an empty store.
+That design is agreed, and this one follows it. It relies on:
+- the keys, and `Environment` with its snapshot: `onActivation` once per new snapshot, a version per connection that
+  changes only when its values or its mock change, `stopped`, and `mocksAllowed`;
+- producers kept per connection and version, and a secret's handle read at each use;
+- an attempt that waits for a connection that is stopped, not set or left out, every 30 s, and is parked after 72 hours;
+- the connection form's format 2, with the marks `.tuning()` and `.origin()` and the rule that a form only adds fields
+  with a default meaning "as before", which the first step here adds;
+- `deployment_connection_uses` with its directions and its uses through an address field, `deployments.config_generation`,
+  and the confirmation before a used connection is removed, switched to the mock, or loses its allowed hosts;
+- the built-in mock, and `GET /admin/systems` reading each connection's state from here;
+- the environment file, which becomes the seed of an empty store.
 
 ## Steps
 
@@ -720,8 +738,8 @@ Each step is one issue, built and merged on its own.
    - Stop and start; the routes with their actions; the roles connection administrator and partner administrator, and
      who may hold each role; `secret.list` for them; the audit and the history with its retention.
    - The environment file as the seed of an empty store; `GET /admin/systems` reading from it.
-   - A mocked body is accepted once the built-in mock of systems and connections is in, and `allowedHosts` counts as a
-     destination once a whole address from the message is.
+   - The switch of mocks; a mocked body is accepted once the built-in mock of systems and connections is in, and
+     `allowedHosts` counts as a destination once a whole address from the message is.
    - Changes the database; the quickstart's text says how a change of its environment file takes effect.
 3. **Export, import and `rail8 config`.** `class:C`, after 2: a file format that is a contract, with its JSON Schemas.
    The format with its chain of upgrades, the dry run and the write, and the command. No change to the database.
