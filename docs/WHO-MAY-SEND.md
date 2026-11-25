@@ -15,9 +15,9 @@ Today the HTTP adapter checks no caller: whoever reaches the node's HTTP port ma
 roles and tokens exist for the admin API only (`docs/USERS-AND-ROLES.md`), and a message records no sender.
 
 The design stands on three others and uses their names:
-- **Systems and connections.** A system's key is a partner and a system, the partner optional: `eshop`, `acme/erp`.
-  That design defines a flow's sender, the `Inbound` a consumer is built for, and the facts each send hands over
-  about its receiver.
+- **Systems and connections** (`docs/SYSTEMS-AND-CONNECTIONS.md`). A system's key is a partner and a system, the
+  partner optional: `eshop`, `acme/erp`. That design defines a flow's sender, the `Inbound` a consumer is built for,
+  and the facts each send hands over about its receiver.
 - **The configuration of an environment.** Objects with a draft, an activation, a history and a binding under the
   secret store's key; an immutable snapshot on each node, so that no message reads Postgres for it. Credentials, API
   products and subscriptions are kinds of its objects.
