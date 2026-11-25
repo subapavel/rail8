@@ -3,6 +3,12 @@ import { expect, type Locator, type Page } from '@playwright/test';
 /** The helpers of the studio scenarios: the shell's Mappings screen, the studio's panes, its canvas and its Test tab. */
 export type Side = 'source' | 'target';
 
+/**
+ * The header a browser puts on a request from one of the development server's own pages. The server answers `/api` only
+ * when it is there, so a scenario that calls the studio's API outside the page sends it.
+ */
+export const ownPage = { 'sec-fetch-site': 'same-origin' };
+
 /** The table of the Mappings screen. */
 export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Mappings' });
 

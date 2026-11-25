@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectProblems } from './problems';
 import { stackWorkspace } from './stack-workspace';
-import { canvas, dropFunction, edit, fieldRow, link, node, nodeId, nodeMenu, openStudio, result, runTest, saveThroughApi, selectTarget, setParameters } from './studio';
+import { canvas, dropFunction, edit, fieldRow, link, node, nodeId, nodeMenu, openStudio, ownPage, result, runTest, saveThroughApi, selectTarget, setParameters } from './studio';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -53,7 +53,7 @@ test('@stack a field link by drag and drop, a function and a constant are saved 
   const saved = readFileSync(file);
   expect(answer.status()).toBe(200);
   expect(Buffer.from(await answer.body()).equals(saved)).toBe(true);
-  expect(Buffer.from(await (await request.get(`/api/mappings/${mapping}`)).body()).equals(saved)).toBe(true);
+  expect(Buffer.from(await (await request.get(`/api/mappings/${mapping}`, { headers: ownPage })).body()).equals(saved)).toBe(true);
   const boxes = JSON.parse(saved.toString('utf8')).targetFieldMappings[ORDER_ID].boxes;
   expect(boxes[concat]).toEqual({ kind: 'function', fn: 'concat', inputs: [source, constant] });
   expect(boxes[constant]).toEqual({ kind: 'function', fn: 'constant', params: { value: '-X' } });

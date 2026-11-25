@@ -11,7 +11,7 @@ check "HANDOVER.md exists" "$([ -f "$doc" ] && echo yes || echo no)" yes
 # start the stack from a clean clone (JDK 25, Node 22)
 has "JDK 25" "JDK 25"
 has "Node 22" "Node 22"
-has "the node's build" "./mvnw -B -ntp -q package -DskipTests -pl :rail8-node -am"   # the repository's wrapper, from its root
+has "the node's build" "./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am"   # the repository's wrapper, from its root
 has "the node started" "docker compose up -d --build"
 has "dev UI" "npm run dev"
 has "the working folder" "RAIL8_WORKSPACE="

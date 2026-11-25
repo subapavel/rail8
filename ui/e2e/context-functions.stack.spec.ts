@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { collectProblems } from './problems';
 import { stackWorkspace } from './stack-workspace';
-import { edit, fields, openStudio, result, runTest } from './studio';
+import { edit, fields, openStudio, ownPage, result, runTest } from './studio';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -26,13 +26,13 @@ test('@stack a mapping with a context function opens, saves through the API byte
   await edit(page);
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
 
-  const loaded = await request.get(`/api/mappings/${MAPPING}`);
+  const loaded = await request.get(`/api/mappings/${MAPPING}`, { headers: ownPage });
   expect(loaded.ok()).toBe(true);
-  // The development server takes a write only from its own pages, as a browser marks them.
-  const saved = await request.put(`/api/mappings/${MAPPING}`, { data: await loaded.json(), headers: { 'sec-fetch-site': 'same-origin' } });
+  // The development server answers its API only for its own pages, as a browser marks them.
+  const saved = await request.put(`/api/mappings/${MAPPING}`, { data: await loaded.json(), headers: ownPage });
   expect(saved.ok()).toBe(true);
   expect(readFileSync(file).equals(original)).toBe(true);
-  expect(Buffer.from(await (await request.get(`/api/mappings/${MAPPING}`)).body()).equals(original)).toBe(true);
+  expect(Buffer.from(await (await request.get(`/api/mappings/${MAPPING}`, { headers: ownPage })).body()).equals(original)).toBe(true);
 
   await runTest(page, input);
   for (const line of expected.split('\n').filter((l) => l.includes('<All>'))) {

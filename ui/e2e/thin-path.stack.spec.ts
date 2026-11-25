@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { collectProblems } from './problems';
 import { stackWorkspace } from './stack-workspace';
-import { edit, fields, link, node, openStudio, result, runTest, saveThroughApi } from './studio';
+import { edit, fields, link, node, openStudio, ownPage, result, runTest, saveThroughApi } from './studio';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -28,7 +28,7 @@ test('@stack the real node: open, link, save, run a test, and the saved file is 
 
   const saved = readFileSync(join(stackWorkspace, 'mappings', 'order-id-copy.mapping.json'));
   expect(saved.toString('utf8')).toContain('"result"');
-  const response = await request.get('/api/mappings/mappings/order-id-copy');
+  const response = await request.get('/api/mappings/mappings/order-id-copy', { headers: ownPage });
   expect(response.ok()).toBe(true);
   expect(Buffer.from(await response.body()).equals(saved)).toBe(true);
 });
