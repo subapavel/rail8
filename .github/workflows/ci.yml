@@ -20,6 +20,8 @@ on:
 env:
   JAVA_VERSION: '25'
   MAVEN_OPTS: -Xmx3g
+  # Central rate-limits shared IPs; the Google mirror of Central serves the same artefacts.
+  MVNW_REPOURL: https://maven-central.storage-download.googleapis.com/maven2
 
 jobs:
   dco:
