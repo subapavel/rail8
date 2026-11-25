@@ -106,7 +106,16 @@ class PgSecretStoreIT extends SecretStoreContract {
         return rows;
     }
 
-    @Override SecretRows rows() { return new PgSecretRows(pool); }
+    /** Short, so the test of a write that waits on a lock is quick. */
+    static final java.time.Duration LOCK_WAIT = java.time.Duration.ofSeconds(1);
+
+    @Override SecretRows rows() { return new PgSecretRows(pool, LOCK_WAIT); }
+
+    @Override void put(SecretRows.Stored row) { insert(row); }
+
+    @Override <T> T inTx(java.util.function.Function<SqlConnection, Future<T>> work) {
+        return await(pool.withTransaction(work::apply));
+    }
 
     @Override long join(String node) {
         return sql("insert into nodes (node, epoch, lease_until) values ($1, 1, now() + interval '1 hour') on conflict (node) do update"
@@ -159,7 +168,9 @@ class PgSecretStoreIT extends SecretStoreContract {
     @Override void tamper(String name) { sql("update secrets set sealed = set_byte(sealed, 0, get_byte(sealed, 0) # 1) where name = $1", name); }
 
     @Override void forge(String node, byte[] keyId) {
-        sql("insert into nodes (node, epoch, lease_until, secret_key, secret_epoch) values ($1, 1, now() + interval '1 hour', $2, 1)", node, Buffer.buffer(keyId));
+        sql("insert into nodes (node, epoch, lease_until, secret_key, secret_epoch) values ($1, 1, now() + interval '1 hour', $2, 1)"
+                + " on conflict (node) do update set secret_key = excluded.secret_key, secret_key_previous = null, secret_epoch = nodes.epoch,"
+                + " lease_until = excluded.lease_until", node, Buffer.buffer(keyId));
     }
 
     @Override void use(String name, String userKind, String userId, Set<Secret.Kind> kinds) {
@@ -206,11 +217,26 @@ class PgSecretStoreIT extends SecretStoreContract {
         SqlConnection conn = pool.getConnection().await();
         opened.add(conn);
         Transaction tx = conn.begin().await();
-        return new Open(conn, tx, store.replaceUses(conn, "flow", user, uses));
+        return new Open(conn, tx, store.replaceUses(conn, List.of(new SecretStore.Uses("flow", user, uses))));
     }
 
     static void end(Open open) {
         open.tx().commit().await();
+    }
+
+    @Test
+    void aWriteThatWaitsOnABindingsOpenTransactionIsBusy() {
+        Node a = start("a", K1);
+        SqlConnection binder = pool.getConnection().await();
+        opened.add(binder);
+        Transaction tx = binder.begin().await();
+        await(a.store.bind(binder, "a setting".getBytes()));
+        SecretRefused r = refused(a.store.create(ALICE, value("db", "the-value")));
+        assertEquals(503, r.status());
+        assertEquals("busy", r.code(), "the binding holds the store's row for share until its transaction ends");
+        tx.commit().await();
+        create(a, value("db", "the-value"));
+        assertNoValueCaptured();
     }
 
     @Test

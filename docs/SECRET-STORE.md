@@ -624,7 +624,7 @@ It must not:
   - a restore writes the uses of a record that had none;
   - `rail8.git` needs the confirmation;
   - a flow left draining keeps its uses as `drain`: a delete of its secret is 409 `in-use` until its mark ends;
-  - a write that waits on a held lock answers 503 `busy` after 5 s of the fake clock;
+  - a write that waits on a lock held by a binding's open transaction answers 503 `busy` once its wait runs out;
   - an `in-use` answer over more than 100 users names 100 and the total.
 - The routes:
   - each route is called as every role, through a session and a token;

@@ -109,6 +109,12 @@ abstract class SecretStoreContract {
     /** The details of the audit rows of {@code action}, oldest first. */
     abstract List<JsonObject> audit(String action);
 
+    /** Puts {@code row} as a database writer would, with no change of the head. */
+    abstract void put(SecretRows.Stored row);
+
+    /** {@code work} in a transaction of its own, committed when it succeeds: its result. */
+    abstract <T> T inTx(java.util.function.Function<io.vertx.sqlclient.SqlConnection, Future<T>> work);
+
     // ------------------------------------------------------------------------------------------------- nodes
 
     final class Node {
@@ -136,7 +142,7 @@ abstract class SecretStoreContract {
         Node n = new Node(id, env);
         Secrets fromEnv = Secrets.fromEnv(env);
         long epoch = join(id);
-        n.store = new SecretStore(rows(), fromEnv.key(), id, fromEnv.variableNames(), n.clock, n.timer, Runnable::run, text -> {
+        n.store = new SecretStore(rows(), fromEnv.key(), id, fromEnv.variableNames(), n.clock, n.timer, text -> {
             n.warnings.add(text);
             captured.add(text);
         });
@@ -168,7 +174,7 @@ abstract class SecretStoreContract {
         if (previous != null) env.put(StoreKey.PREVIOUS, b64(previous));
         Secrets fromEnv = Secrets.fromEnv(env);
         FakeClock clock = FakeClock.at(Instant.parse("2026-11-25T10:00:00Z"));
-        SecretStore store = new SecretStore(rows(), fromEnv.key(), id, List.of(), clock, new FakeTimer(clock), Runnable::run, captured::add);
+        SecretStore store = new SecretStore(rows(), fromEnv.key(), id, List.of(), clock, new FakeTimer(clock), captured::add);
         Throwable failure = awaitFailure(store.start(join(id)));
         if (!(failure instanceof IllegalStateException refused)) throw new AssertionError("the start was not refused as expected", failure);
         captured.add(refused.getMessage());
@@ -231,6 +237,10 @@ abstract class SecretStoreContract {
 
     static Optional<String> read(Node n, String name) {
         return n.secrets.resolve("secret://" + name);
+    }
+
+    SecretStore.Binding bind(Node n, String bytes) {
+        return inTx(tx -> n.store.bind(tx, bytes.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 
     // ------------------------------------------------------------------------------------------------- the notices
@@ -343,6 +353,39 @@ abstract class SecretStoreContract {
         assertNoValueCaptured();
     }
 
+    @Test
+    void aRowDamagedWithoutAChangeIsUnreadableAtTheNextFullReadOfAWarmNode() {
+        Node a = start("a", K1);
+        Node b = start("b", K1);
+        create(a, value("db", "sealed-value"));
+        awaitNotices();
+        assertEquals(Optional.of("sealed-value"), read(b, "db"));
+        tamper("db");
+        b.tick();
+        assertEquals(Optional.of("sealed-value"), read(b, "db"), "no change of the generation: not read again");
+        create(a, value("other", "other-value"));
+        awaitNotices();
+        b.tick();
+        assertEquals(Optional.empty(), read(b, "db"), "the next full read opens every row");
+        assertEquals(Health.Status.DEGRADED, b.store.health().status());
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aRowLongerThan256KiBIsUnreadableWithoutBeingRead() {
+        Node a = start("a", K1);
+        create(a, value("db", "sealed-value"));
+        SecretRows.Meta m = stored().get("db").meta();
+        byte[] sealed = new byte[SecretStore.MAX_ROW_BYTES + 1];
+        put(new SecretRows.Stored(new SecretRows.Meta("long", m.kind(), m.format(), m.keyId(), new byte[12], sealed.length, m.createdAt(),
+                m.changedAt(), m.changedBy()), sealed));
+        Node c = start("c", K1);
+        assertEquals(Optional.of("sealed-value"), read(c, "db"));
+        assertEquals(Optional.empty(), read(c, "long"));
+        assertTrue(c.warnings.stream().anyMatch(w -> w.contains("'long'") && w.contains(String.valueOf(SecretStore.MAX_ROW_BYTES))), c.warnings.toString());
+        assertEquals(Health.Status.DEGRADED, c.store.health().status());
+    }
+
     // ------------------------------------------------------------------------------------------------- the start
 
     @Test
@@ -429,13 +472,15 @@ abstract class SecretStoreContract {
         Node a = start("a", K1);
         Node b = start("b", K1);
         create(a, value("db", "the-value"));
-        SecretStore.Binding old = a.store.bind("a setting".getBytes());
+        SecretStore.Binding old = bind(a, "a setting");
         a = restart(a, K2, K1);
         b = restart(b, K2, K1);
         long[] boundUnderOld = {1};
         a.store.register(new SecretStore.BoundRows() {
-            @Override public long countUnder(byte[] keyId) { return Arrays.equals(keyId, Seal.keyId(K1)) ? boundUnderOld[0] : 0; }
-            @Override public int bindAgain(int max) { return 0; }
+            @Override public Future<Long> countUnder(io.vertx.sqlclient.SqlConnection tx, byte[] keyId) {
+                return Future.succeededFuture(Arrays.equals(keyId, Seal.keyId(K1)) ? boundUnderOld[0] : 0);
+            }
+            @Override public Future<Integer> bindAgain(io.vertx.sqlclient.SqlConnection tx, int max) { return Future.succeededFuture(0); }
         });
         a.tick();
         a.tick();
@@ -448,8 +493,8 @@ abstract class SecretStoreContract {
         assertTrue(a.warnings.stream().anyMatch(w -> w.contains(StoreKey.PREVIOUS)));
         b.tick();
         assertFalse(b.store.verify(old, "a setting".getBytes()), "the other node drops it too");
-        assertTrue(a.store.verify(a.store.bind("a setting".getBytes()), "a setting".getBytes()));
-        assertFalse(a.store.verify(a.store.bind("a setting".getBytes()), "another setting".getBytes()));
+        assertTrue(a.store.verify(bind(a, "a setting"), "a setting".getBytes()));
+        assertFalse(a.store.verify(bind(a, "a setting"), "another setting".getBytes()));
     }
 
     @Test
@@ -460,9 +505,27 @@ abstract class SecretStoreContract {
         assertEquals("keys-differ", refused(a.store.create(ALICE, value("other", "other-value"))).code());
         a.tick();
         assertTrue(stored().values().stream().allMatch(r -> Arrays.equals(r.meta().keyId(), Seal.keyId(K1))), "every row stays under the node's key");
+        Throwable bound = assertThrows(AssertionError.class, () -> bind(a, "a setting")).getCause();
+        assertTrue(bound instanceof SecretRefused, String.valueOf(bound));
+        assertEquals("keys-differ", ((SecretRefused) bound).code(), "a binding makes a write's key check");
         leave("forged");
         create(a, value("other", "other-value"));
         assertTrue(Arrays.equals(stored().get("other").meta().keyId(), Seal.keyId(K1)), "a node seals under its own key");
+    }
+
+    @Test
+    void aForgedNodesRowCanLetThroughAWriteARealNodeHoldsUnreadable() {
+        Node a = start("a", K1);
+        Node b = start("b", K2);
+        assertEquals("keys-differ", refused(a.store.create(ALICE, value("db", "the-value"))).code(), "b does not hold a's key");
+        forge("b", Seal.keyId(K1));
+        create(a, value("db", "the-value"));
+        awaitNotices();
+        b.tick();
+        assertEquals(Optional.empty(), read(b, "db"), "b cannot open it");
+        assertEquals(Health.Status.DEGRADED, b.store.health().status());
+        assertTrue(b.warnings.stream().anyMatch(w -> w.contains("'db'") && w.contains(id(K1))), b.warnings.toString());
+        assertNoValueCaptured();
     }
 
     // ------------------------------------------------------------------------------------------------- the writes' codes
@@ -514,9 +577,37 @@ abstract class SecretStoreContract {
         assertEquals(List.of("old-package"), may.values().getJsonArray("mayUse").getList(), "a record whose uses are not known may use it");
         await(a.store.delete(ALICE, "db", Optional.of("db")));
         JsonObject deleted = audit("secret.delete").getLast();
-        assertEquals(new JsonObject().put("kind", "value").put("confirmed", true).put("users", new JsonArray()), deleted);
+        assertEquals(new JsonObject().put("kind", "value").put("confirmed", true).put("users", new JsonArray()).put("userCount", 0), deleted);
         assertEquals(new JsonObject().put("kind", "credentials"), audit("secret.create").getFirst(), "the detail names the kind, never the user");
         assertNoValueCaptured();
+    }
+
+    @Test
+    void anInUseAnswerAndADeletesAuditNameAHundredUsersAndTheirCount() {
+        Node a = start("a", K1);
+        create(a, value("db", "the-value"));
+        for (int i = 0; i <= SecretStore.MAX_USERS_NAMED; i++) use("db", "flow", "pkg/f" + String.format("%03d", i), Set.of(Secret.Kind.VALUE));
+        SecretRefused r = refused(a.store.delete(ALICE, "db", Optional.empty()));
+        assertEquals(SecretStore.MAX_USERS_NAMED, r.values().getJsonArray("usedBy").size());
+        assertEquals(SecretStore.MAX_USERS_NAMED + 1, r.values().getInteger("users"));
+        await(a.store.delete(ALICE, "db", Optional.of("db")));
+        JsonObject deleted = audit("secret.delete").getLast();
+        assertEquals(SecretStore.MAX_USERS_NAMED, deleted.getJsonArray("users").size());
+        assertEquals(SecretStore.MAX_USERS_NAMED + 1, deleted.getInteger("userCount"));
+    }
+
+    @Test
+    void theListCountsTheVariablesOfJoinedNodesOnly() {
+        Node a = start("a", K1);
+        start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ON_B", "variable-value"));
+        written.add("variable-value");
+        assertEquals("RAIL8_SECRET_ON_B", list(a).getJsonArray("variablesOnly").getJsonObject(0).getString("variable"));
+        join("b");   // b's epoch moves on without its join to the store: a node that left and came back, not joined yet
+        JsonObject all = list(a);
+        assertEquals(0, all.getJsonArray("variablesOnly").size(), "a node not joined counts no variable");
+        JsonObject b = all.getJsonObject("key").getJsonArray("nodes").stream().map(JsonObject.class::cast)
+                .filter(n -> n.getString("node").equals("b")).findFirst().orElseThrow();
+        assertFalse(b.getBoolean("joined"));
     }
 
     @Test

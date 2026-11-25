@@ -4,8 +4,8 @@ import dev.rail8.api.Secret;
 import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
+import io.vertx.sqlclient.SqlConnection;
 
-import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -16,7 +16,8 @@ import java.util.function.Function;
 
 /**
  * Where the secret store's rows live: the tables {@code secret_store}, {@code secrets}, {@code secret_uses}, the secret columns of
- * {@code nodes} and the audit; {@code secret_uses} is written only by {@link SecretStore#replaceUses}. {@link PgSecretRows} is Postgres; {@link MemorySecretRows} holds them in memory for tests. Only
+ * {@code nodes} and the audit; {@code secret_uses} is written only by {@link SecretStore#replaceUses}. {@link PgSecretRows} is
+ * Postgres; {@link MemorySecretRows} holds them in memory for tests. Only
  * {@link SecretStore} calls it, and it decides everything; this only reads and writes.
  */
 interface SecretRows {
@@ -30,7 +31,7 @@ interface SecretRows {
     /** A whole row of {@code secrets}. */
     record Stored(Meta meta, byte[] sealed) { }
 
-    /** One read of every row: the head, every row's meta, and the sealed value of each row whose nonce was not held. */
+    /** One read of every row: the head, every row's meta, and each row's sealed value, absent for a row too long to read. */
     record Snapshot(Head head, List<Meta> rows, Map<String, byte[]> sealed) { }
 
     /**
@@ -55,7 +56,10 @@ interface SecretRows {
         }
     }
 
-    /** A use of a secret: who ({@code flow}, {@code connection}, {@code credential} or {@code platform}, and its id) and the kinds it takes. */
+    /**
+     * A use of a secret: who ({@code flow}, {@code drain}, {@code connection}, {@code credential} or {@code platform}, and its id)
+     * and the kinds it takes.
+     */
     record Use(String name, String userKind, String userId, Set<Secret.Kind> kinds) { }
 
     /** What the list reads, in one read: every row's meta, every use, every node and the records whose uses are not known. */
@@ -65,6 +69,9 @@ interface SecretRows {
     interface Tx {
         /** The head as the lock read it. */
         Head head();
+
+        /** The transaction's connection, for the {@link SecretStore.BoundRows}; null in memory. */
+        SqlConnection connection();
 
         /** Every node's row whose lease holds. */
         Future<List<NodeKeys>> liveNodes();
@@ -103,8 +110,8 @@ interface SecretRows {
     /** The head now. */
     Future<Head> head();
 
-    /** One read at repeatable read: the head, every row's meta, and the sealed value of each row whose nonce {@code held} does not hold. */
-    Future<Snapshot> snapshot(Set<ByteBuffer> held);
+    /** One read at repeatable read: the head, every row's meta, and the sealed value of each row no longer than {@code maxRow} bytes. */
+    Future<Snapshot> snapshot(int maxRow);
 
     /**
      * One transaction: the transaction lock of each of {@code names} in ascending order of its key, then the store's row lock,
@@ -114,6 +121,9 @@ interface SecretRows {
 
     /** Every node's row whose lease holds. */
     Future<List<NodeKeys>> liveNodes();
+
+    /** In the caller's transaction {@code tx}: the store's row lock for share, then every node's row whose lease holds. */
+    Future<List<NodeKeys>> sharedNodes(SqlConnection tx);
 
     /** The rows, uses, live nodes and unknown records, in one read. */
     Future<Listing> listing();

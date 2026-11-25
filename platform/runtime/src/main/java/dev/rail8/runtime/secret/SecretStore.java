@@ -13,7 +13,6 @@ import io.vertx.sqlclient.SqlConnection;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -37,10 +36,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -48,23 +45,26 @@ import java.util.stream.Collectors;
  * The node's secret store: the secrets sealed in Postgres, opened and held in the node's memory, and the writes, the list and
  * the record of uses.
  *
- * <p><b>Reading.</b> A read ({@link #held}) never goes to Postgres: it answers from what the node holds. The node holds each row
- * with the nonce it opened. It looks at the store's generation and stamp at each {@link #notice()}, after each {@code LISTEN}
- * acknowledged, and at each tick of {@value #TICK_SECONDS} s on the injected timer; when they differ from what it holds, it reads
- * every row's name, kind, key id and nonce in one repeatable-read transaction, opens the rows whose nonce it does not hold and
- * drops the names that are gone. A row that does not open, or that is under a key the node does not hold, is held unreadable:
- * it gives no value, it never falls back to a variable, it makes {@link #health()} {@code DEGRADED}, and one WARNING names its
- * name and key id. A generation behind the one held, or the same generation with another stamp, is a WARNING: the database went
- * back to an earlier state.
+ * <p><b>Reading.</b> A read ({@link #held}) never goes to Postgres: it answers from what the node holds. It looks at the store's
+ * generation and stamp at each {@link #notice()}, after each {@code LISTEN} acknowledged, and at each tick of
+ * {@value #TICK_SECONDS} s on the injected timer; looks run one at a time, and calls during one share the next. When the
+ * generation or the stamp differs from what it holds, it reads every row in one repeatable-read transaction, opens every row and
+ * drops the names that are gone. A row that does not open, that is under a key the node does not hold, or whose sealed value is
+ * longer than {@value #MAX_ROW_BYTES} bytes is held unreadable: it gives no value, it never falls back to a variable, it makes
+ * {@link #health()} {@code DEGRADED}, and one WARNING names its name and key id. A generation behind the one held, or the same
+ * generation with another stamp, is a WARNING: the database went back to an earlier state. After {@value #FAILED_LOOKS} looks in
+ * a row that could not read the store, the node is {@code DEGRADED}, naming the time of its last good read, with one WARNING.
  *
  * <p><b>Writing.</b> {@link #create}, {@link #overwrite} and {@link #delete} each check the body, the name and the value outside
  * any transaction, then in one transaction: the name's lock (a create or a delete), the store's row lock, the key check, the
- * row checks, the seal and the upsert or the delete, the audit row, the generation and stamp, and the notice. After the commit
- * this node looks again, so a write is in force here when it is answered. A refusal is a {@link SecretRefused}.
+ * row checks, the seal and the upsert or the delete, the audit row, the generation and stamp, and the notice. A write that waits
+ * longer than 5 s for its locks is 503 {@code busy}. After the commit this node looks again, so a write is in force here when it
+ * is answered; when that look fails, the write is 503 {@code written-unread}: it is in force within one tick. A refusal is a
+ * {@link SecretRefused}.
  *
  * <p><b>The key.</b> A node seals under its own current key only. A write is 409 {@code keys-differ} unless every live node
  * holds that key, current or previous, by its current join. Once every live node names the same current key, each tick seals
- * again up to {@value #BATCH} rows under another key and asks each {@link BoundRows} to bind again; the node that seals the last
+ * again up to {@value #BATCH} rows under another key and asks each {@link BoundRows} to bind again, in the store's transactions; the node that seals the last
  * writes the audit row {@code secret.key-changed}. A node drops its previous key once every live node names its current key and
  * no row, nor any bound row, is under the previous one.
  *
@@ -87,6 +87,12 @@ public final class SecretStore {
     static final int MAX_USER = 256;
     static final int MAX_PASSWORD = 4_096;
     static final int MAX_NAME = 128;
+    /** The longest sealed value a read opens; a longer row is unreadable without being read. */
+    static final int MAX_ROW_BYTES = 256 * 1024;
+    /** The users an {@code in-use} answer and a delete's audit name; beyond them, their count. */
+    static final int MAX_USERS_NAMED = 100;
+    /** The looks in a row that failed before the node is {@code DEGRADED}. */
+    static final int FAILED_LOOKS = 3;
     /** Rows sealed again per tick. */
     static final int BATCH = 100;
     static final long TICK_SECONDS = 5;
@@ -133,13 +139,25 @@ public final class SecretStore {
         @Override public String toString() { return "Binding[key " + HEX.formatHex(keyId) + "]"; }
     }
 
-    /** A table whose rows are bound under the store's key: the key is kept while any of them is under it. */
+    /**
+     * A table whose rows are bound under the store's key: the key is kept while any of them is under it. Each call runs in the
+     * store's transaction {@code tx}, under its row lock.
+     */
     public interface BoundRows {
         /** The rows bound under the key {@code keyId}. */
-        long countUnder(byte[] keyId);
+        Future<Long> countUnder(SqlConnection tx, byte[] keyId);
 
         /** Binds again under the current key up to {@code max} rows bound under another; answers how many. */
-        int bindAgain(int max);
+        Future<Integer> bindAgain(SqlConnection tx, int max);
+    }
+
+    /** The uses of one user, {@code (userKind, userId)}: by name, the kinds each use takes; empty when it uses none. */
+    public record Uses(String userKind, String userId, Map<String, Set<Secret.Kind>> uses) {
+        public Uses {
+            Objects.requireNonNull(userKind, "userKind");
+            Objects.requireNonNull(userId, "userId");
+            uses = Map.copyOf(uses);
+        }
     }
 
     /** A row as the node opened it: its kind, key id, nonce and value, null when unreadable. */
@@ -152,7 +170,6 @@ public final class SecretStore {
     private final List<String> variables;
     private final Clock clock;
     private final Timer timer;
-    private final Executor executor;
     private final Consumer<String> warn;
 
     private volatile StoreKey key;
@@ -164,6 +181,11 @@ public final class SecretStore {
     private final List<BoundRows> bound = new CopyOnWriteArrayList<>();
     private final AtomicBoolean maintaining = new AtomicBoolean();
     private volatile Future<Void> ticked = Future.succeededFuture();
+    /** The looks in a row that failed, and the time of the last good one. */
+    private volatile int failedLooks;
+    private volatile Instant lastGood;
+    /** A tick's work on the key failed, and its WARNING was logged. */
+    private volatile boolean maintainFailed;
 
     private final Object lock = new Object();
     private boolean looking;               // guarded by lock: a look runs
@@ -171,26 +193,24 @@ public final class SecretStore {
     private Timer.Cancellable tick;        // guarded by lock
     private boolean closed;                // guarded by lock
 
-    SecretStore(SecretRows rows, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer, Executor executor,
-                Consumer<String> warn) {
+    SecretStore(SecretRows rows, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer, Consumer<String> warn) {
         this.rows = Objects.requireNonNull(rows, "rows");
         this.key = Objects.requireNonNull(key, "key");
         this.node = Objects.requireNonNull(node, "node");
         this.variables = List.copyOf(new TreeSet<>(variables));
         this.clock = Objects.requireNonNull(clock, "clock");
         this.timer = Objects.requireNonNull(timer, "timer");
-        this.executor = Objects.requireNonNull(executor, "executor");
         this.warn = Objects.requireNonNull(warn, "warn");
     }
 
     /**
      * Node {@code node}'s store over Postgres's {@code pool}, under {@code key}, its {@code RAIL8_SECRET_*} variables named by
-     * {@code variables} (names only), its ticks on {@code timer}; the configuration's bound rows are asked on virtual threads.
-     * Reads nothing before {@link #start}.
+     * {@code variables} (names only, as the node reads them after their file forms), its ticks on {@code timer}. Reads nothing
+     * before {@link #start}.
      */
     public static SecretStore postgres(Pool pool, StoreKey key, String node, Collection<String> variables, Clock clock, Timer timer) {
-        return new SecretStore(new PgSecretRows(pool), key, node, variables, clock, timer,
-                command -> Thread.ofVirtual().name("rail8-secrets").start(command), text -> LOG.log(System.Logger.Level.WARNING, text));
+        return new SecretStore(new PgSecretRows(pool, PgSecretRows.LOCK_WAIT), key, node, variables, clock, timer,
+                text -> LOG.log(System.Logger.Level.WARNING, text));
     }
 
     /** Where the placeholder key pair of {@code rail8 validate} and {@code rail8 test} lies on the class path: the testkit's. */
@@ -273,7 +293,12 @@ public final class SecretStore {
         }
         Future<Void> maintained = maintain().onComplete(done -> {
             maintaining.set(false);
-            if (done.failed()) LOG.log(System.Logger.Level.WARNING, "the secret store's tick failed and is tried again at the next: " + done.cause());
+            if (done.succeeded()) {
+                maintainFailed = false;
+            } else if (!maintainFailed) {
+                maintainFailed = true;
+                warn.accept("the secret store's work on its key failed and is tried again at each tick: " + done.cause().getClass().getName());
+            }
         });
         ticked = Future.join(looked, maintained).mapEmpty();
     }
@@ -325,7 +350,13 @@ public final class SecretStore {
             run = Future.failedFuture(failure);
         }
         run.onComplete(done -> {
-            if (done.failed()) LOG.log(System.Logger.Level.WARNING, "the secret store could not be read, the node holds what it read before: " + done.cause());
+            if (done.succeeded()) {
+                failedLooks = 0;
+                lastGood = clock.instant();
+            } else if (++failedLooks == FAILED_LOOKS) {
+                warn.accept("the secret store could not be read " + FAILED_LOOKS + " times in a row: the node holds what it read "
+                        + (lastGood == null ? "at its start" : "at " + lastGood) + "; " + done.cause().getClass().getName());
+            }
             next.handle(done);
             drain();
         });
@@ -333,10 +364,8 @@ public final class SecretStore {
 
     private Future<Void> once() {
         return rows.head().compose(head -> {
-            State held = state;
-            if (head.equals(held.head())) return Future.succeededFuture();
-            Set<ByteBuffer> nonces = held.held().values().stream().map(o -> ByteBuffer.wrap(o.nonce())).collect(Collectors.toSet());
-            return rows.snapshot(nonces).map(snapshot -> {
+            if (head.equals(state.head())) return Future.succeededFuture();
+            return rows.snapshot(MAX_ROW_BYTES).map(snapshot -> {
                 apply(snapshot);
                 return null;
             });
@@ -356,10 +385,6 @@ public final class SecretStore {
         Set<String> changed = new HashSet<>();
         for (SecretRows.Meta m : snapshot.rows()) {
             Opened old = before.held().get(m.name());
-            if (old != null && old.kind() == m.kind() && Arrays.equals(old.nonce(), m.nonce()) && Arrays.equals(old.keyId(), m.keyId())) {
-                next.put(m.name(), old);
-                continue;
-            }
             Opened opened = open(k, m, snapshot.sealed().get(m.name()));
             next.put(m.name(), opened);
             if (old == null || !sameValue(old, opened)) changed.add(m.name());
@@ -391,8 +416,12 @@ public final class SecretStore {
             warnOnce(m, "the secret '" + m.name() + "' is sealed under the key " + id + ", which this node does not hold: it is unreadable");
             return new Opened(m.kind(), m.keyId(), m.nonce(), null);
         }
+        if (sealed == null) {
+            warnOnce(m, "the secret '" + m.name() + "' under the key " + id + " holds a sealed value of " + m.sealedBytes() + " bytes, more than "
+                    + MAX_ROW_BYTES + ": it is unreadable; delete it and enter it again");
+            return new Opened(m.kind(), m.keyId(), m.nonce(), null);
+        }
         try {
-            if (sealed == null) throw new GeneralSecurityException("no sealed value was read");
             byte[] plain = Seal.open(under, m.format(), SCOPE, m.name(), m.kind(), new Seal.Sealed(m.keyId(), m.nonce(), sealed));
             return new Opened(m.kind(), m.keyId(), m.nonce(), SecretValue.fromPlain(m.kind(), plain));
         } catch (GeneralSecurityException | RuntimeException failure) {   // the failure's text is not shown: it may quote the value
@@ -450,8 +479,15 @@ public final class SecretStore {
         return variables;
     }
 
-    /** {@code DEGRADED} while a row is unreadable, or while the previous key's variable is set though no row needs it. */
+    /**
+     * {@code DEGRADED} while the last {@value #FAILED_LOOKS} looks failed, while a row is unreadable, or while the previous key's
+     * variable is set though no row needs it.
+     */
     public Health health() {
+        if (failedLooks >= FAILED_LOOKS) {
+            return Health.degraded("the secret store could not be read in the last " + failedLooks + " looks: this node holds what it read "
+                    + (lastGood == null ? "at its start" : "at " + lastGood));
+        }
         List<String> unreadable = new TreeSet<>(state.held().entrySet().stream().filter(e -> e.getValue().value() == null).map(Map.Entry::getKey).toList())
                 .stream().toList();
         if (!unreadable.isEmpty()) {
@@ -498,7 +534,7 @@ public final class SecretStore {
                 return full(all, null, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                         sealed.keyId(), sealed.nonce(), sealed.sealed().length, now, now, who.name()), sealed.sealed())));
             }).compose(v -> audit(tx, who, "secret.create", name, detail(value))).compose(v -> tx.changed());
-        })).compose(v -> look()).compose(v -> entry(name)).map(Optional::orElseThrow);
+        })).compose(v -> readBack(name));
     }
 
     /**
@@ -528,7 +564,7 @@ public final class SecretStore {
             return full(all, old, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                     sealed.keyId(), sealed.nonce(), sealed.sealed().length, old.createdAt(), clock.instant(), who.name()), sealed.sealed())))
                     .compose(v -> audit(tx, who, "secret.overwrite", name, detail(value))).compose(v -> tx.changed());
-        })).compose(v -> look()).compose(v -> entry(name)).map(Optional::orElseThrow);
+        })).compose(v -> readBack(name));
     }
 
     /**
@@ -547,36 +583,53 @@ public final class SecretStore {
         return rows.<SecretRows.Head>write(List.of(name), tx -> tx.row(name).compose(row -> {
             if (row.isEmpty()) return refuse(404, "not-found", "the store holds no secret '" + name + "'", name);
             return tx.uses(name).compose(uses -> tx.unknownRecords().compose(unknown -> {
-                JsonArray usedBy = new JsonArray();
-                uses.forEach(u -> usedBy.add(user(u)));
+                JsonArray usedBy = users(uses);
+                JsonArray mayUse = new JsonArray(unknown.subList(0, Math.min(MAX_USERS_NAMED, unknown.size())));
                 if ((!uses.isEmpty() || !unknown.isEmpty()) && !confirmed) {
                     return Future.failedFuture(new SecretRefused(409, "in-use", "'" + name + "' is used"
                             + (uses.isEmpty() ? "" : " by " + uses.getFirst().userKind() + " '" + uses.getFirst().userId() + "'")
+                            + (uses.size() > 1 ? " and " + (uses.size() - 1) + " more" : "")
                             + (unknown.isEmpty() ? "" : (uses.isEmpty() ? " perhaps" : ", and perhaps") + " by the package '" + unknown.getFirst() + "'")
-                            + ": delete it with ?confirm=" + name, new JsonObject().put("name", name).put("usedBy", usedBy).put("mayUse", new JsonArray(unknown))));
+                            + ": delete it with ?confirm=" + name, new JsonObject().put("name", name).put("usedBy", usedBy).put("users", uses.size())
+                            .put("mayUse", mayUse).put("packages", unknown.size())));
                 }
                 JsonObject detail = new JsonObject().put("kind", row.get().meta().kind().id());
                 Opened held = state.held().get(name);
                 if (held != null && held.value() instanceof SecretValue.Pair pair) facts(detail, pair);
-                detail.put("confirmed", confirmed).put("users", usedBy);
+                detail.put("confirmed", confirmed).put("users", usedBy).put("userCount", uses.size());
                 return tx.delete(name).compose(v -> audit(tx, who, "secret.delete", name, detail)).compose(v -> tx.changed());
             }));
-        })).compose(v -> look());
+        })).compose(v -> look().recover(SecretStore::writtenUnread));
+    }
+
+    /** After a write's commit: this node looks again, and answers the entry of {@code name}; 503 {@code written-unread} when it cannot. */
+    private Future<JsonObject> readBack(String name) {
+        return look().compose(v -> entry(name)).map(Optional::orElseThrow).recover(SecretStore::writtenUnread);
+    }
+
+    private static <T> Future<T> writtenUnread(Throwable failure) {
+        return Future.failedFuture(new SecretRefused(503, "written-unread", "the change is written, but this node could not read it back: it is in force"
+                + " within " + TICK_SECONDS + " s; do not send it again", new JsonObject()));
     }
 
     /** Refuses a write unless this node holds a key and every live node holds it, by its current join. */
     private Future<Void> keyCheck(SecretRows.Tx tx, StoreKey k) {
-        if (!k.present()) {
-            return Future.failedFuture(new SecretRefused(503, "no-key", "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
-        }
+        if (!k.present()) return noKey();
+        return tx.liveNodes().compose(nodes -> keyCheck(nodes, k));
+    }
+
+    private static <T> Future<T> noKey() {
+        return Future.failedFuture(new SecretRefused(503, "no-key", "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
+    }
+
+    private static Future<Void> keyCheck(List<SecretRows.NodeKeys> nodes, StoreKey k) {
+        if (!k.present()) return noKey();
         byte[] id = Seal.keyId(k.current().orElseThrow());
-        return tx.liveNodes().compose(nodes -> {
-            List<String> lacking = nodes.stream().filter(n -> !n.holds(id)).map(SecretRows.NodeKeys::node).sorted().toList();
-            if (lacking.isEmpty()) return Future.succeededFuture();
-            return Future.failedFuture(new SecretRefused(409, "keys-differ", "the nodes " + lacking + " do not hold the key " + HEX.formatHex(id)
-                    + " this node seals under: try again once the roll of the key has ended", new JsonObject().put("key", HEX.formatHex(id))
-                    .put("nodes", new JsonArray(lacking))));
-        });
+        List<String> lacking = nodes.stream().filter(n -> !n.holds(id)).map(SecretRows.NodeKeys::node).sorted().toList();
+        if (lacking.isEmpty()) return Future.succeededFuture();
+        return Future.failedFuture(new SecretRefused(409, "keys-differ", "the nodes " + lacking + " do not hold the key " + HEX.formatHex(id)
+                + " this node seals under: try again once the roll of the key has ended", new JsonObject().put("key", HEX.formatHex(id))
+                .put("nodes", new JsonArray(lacking))));
     }
 
     /** Refuses a write whose sealed values together would take more than {@value #MAX_SEALED_BYTES} bytes. */
@@ -693,7 +746,10 @@ public final class SecretStore {
 
     // ---------------------------------------------------------------------------------------------------------------- the list
 
-    /** The answer of {@code GET /admin/secrets}: every secret, the missing names, the names only variables hold, the key's state. */
+    /**
+     * The answer of {@code GET /admin/secrets}: every secret, the missing names, the variables that hold a value no stored secret
+     * takes, the key's state. A node's variables and keys count only while its join is its current one.
+     */
     public Future<JsonObject> list() {
         return rows.listing().map(this::listed);
     }
@@ -723,7 +779,8 @@ public final class SecretStore {
         Map<String, List<SecretRows.Use>> uses = new TreeMap<>();
         l.uses().forEach(u -> uses.computeIfAbsent(u.name(), n -> new ArrayList<>()).add(u));
         Map<String, List<String>> variableNodes = new TreeMap<>();
-        l.nodes().forEach(n -> n.variables().forEach(v -> variableNodes.computeIfAbsent(v, x -> new ArrayList<>()).add(n.node())));
+        l.nodes().stream().filter(SecretRows.NodeKeys::joined)
+                .forEach(n -> n.variables().forEach(v -> variableNodes.computeIfAbsent(v, x -> new ArrayList<>()).add(n.node())));
         State held = state;
         Set<String> stored = new HashSet<>();
         Set<String> storedVariables = new HashSet<>();
@@ -736,7 +793,7 @@ public final class SecretStore {
             boolean readable = o != null && o.value() != null && Arrays.equals(o.nonce(), m.nonce());
             JsonObject e = new JsonObject().put("name", m.name()).put("kind", m.kind().id()).put("scope", SCOPE).put("stored", true)
                     .put("changedAt", m.changedAt().toString()).put("changedBy", m.changedBy())
-                    .put("usedBy", users(uses.get(m.name())))
+                    .put("usedBy", users(uses.get(m.name()))).put("users", uses.getOrDefault(m.name(), List.of()).size())
                     .put("shadowedOn", new JsonArray(m.name().startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(m.name()), List.of())))
                     .put("unreadable", !readable).put("keyId", HEX.formatHex(m.keyId()));
             if (readable && o.value() instanceof SecretValue.Pair pair) e.put("keyPair", pair.facts());
@@ -748,7 +805,7 @@ public final class SecretStore {
             List<String> on = name.startsWith(RESERVED) ? List.of() : variableNodes.getOrDefault(variable(name), List.of());
             boolean value = list.stream().anyMatch(u -> u.kinds().contains(Secret.Kind.VALUE));
             if (value && !on.isEmpty()) return;
-            missing.add(new JsonObject().put("name", name).put("stored", false).put("usedBy", users(list)));
+            missing.add(new JsonObject().put("name", name).put("stored", false).put("usedBy", users(list)).put("users", list.size()));
         });
         JsonArray variablesOnly = new JsonArray();
         variableNodes.forEach((variable, on) -> {
@@ -765,7 +822,7 @@ public final class SecretStore {
             String before = n.joined() && n.previous() != null ? HEX.formatHex(n.previous()) : null;
             currents.add(String.valueOf(current));
             previous |= before != null;
-            nodes.add(new JsonObject().put("node", n.node()).put("key", current).put("previous", before));
+            nodes.add(new JsonObject().put("node", n.node()).put("joined", n.joined()).put("key", current).put("previous", before));
         }
         String common = currents.size() == 1 && !currents.contains("null") ? currents.iterator().next() : mine == null ? null : HEX.formatHex(mine);
         long other = common == null ? l.rows().size() : l.rows().stream().filter(m -> !HEX.formatHex(m.keyId()).equals(common)).count();
@@ -774,26 +831,27 @@ public final class SecretStore {
         return new JsonObject().put("secrets", secrets).put("missing", missing).put("variablesOnly", variablesOnly).put("key", keyState).put("node", node);
     }
 
+    /** The first {@value #MAX_USERS_NAMED} of {@code uses}, in the order of their kind and id. */
     private static JsonArray users(List<SecretRows.Use> uses) {
         JsonArray out = new JsonArray();
         if (uses != null) uses.stream().sorted((a, b) -> (a.userKind() + "/" + a.userId()).compareTo(b.userKind() + "/" + b.userId()))
-                .forEach(u -> out.add(user(u)));
+                .limit(MAX_USERS_NAMED).forEach(u -> out.add(user(u)));
         return out;
     }
 
     // ---------------------------------------------------------------------------------------------------------------- uses
 
     /**
-     * Replaces the uses of the user {@code (userKind, userId)} with {@code uses}, by name the kinds each use takes, in the caller's
-     * transaction {@code tx}; an empty map deletes them. It takes the transaction lock of every name it writes and of every name
-     * the user used before, in ascending order of the lock's key, then checks each name against the rows in Postgres: set in the
-     * store, or, for a use that takes {@code value}, held by this node's variables, and of a kind the use takes. With a problem
-     * it writes nothing.
+     * Replaces the uses of each user of {@code users} with its uses, in the caller's transaction {@code tx}; a user with none has
+     * its uses deleted. Called at most once per transaction, with every user it changes: it takes the transaction lock of the
+     * union of the names those users use now and used before, each lock key once, in ascending order of the key, then checks each
+     * name against the rows in Postgres: set in the store, or, for a use that takes {@code value}, held by this node's variables,
+     * and of a kind the use takes. With a problem it writes nothing.
      *
      * @return one text per problem, naming the user, the name and its source, never a value; empty when it wrote the uses
      */
-    public Future<List<String>> replaceUses(SqlConnection tx, String userKind, String userId, Map<String, Set<Secret.Kind>> uses) {
-        return PgSecretRows.replaceUses(tx, List.of(new PgSecretRows.UserUses(userKind, userId, uses)), Set.copyOf(variables));
+    public Future<List<String>> replaceUses(SqlConnection tx, List<Uses> users) {
+        return PgSecretRows.replaceUses(tx, users, Set.copyOf(variables));
     }
 
     /**
@@ -805,9 +863,9 @@ public final class SecretStore {
             Map<String, Map<String, Set<Secret.Kind>>> all = new TreeMap<>();
             before.forEach(flow -> all.put(flow, Map.of()));
             all.putAll(uses);
-            List<PgSecretRows.UserUses> users = new ArrayList<>();
-            all.forEach((flow, names) -> users.add(new PgSecretRows.UserUses("flow", pkg + "/" + flow, names)));
-            return PgSecretRows.replaceUses(tx, users, Set.copyOf(variables));
+            List<Uses> users = new ArrayList<>();
+            all.forEach((flow, names) -> users.add(new Uses("flow", pkg + "/" + flow, names)));
+            return replaceUses(tx, users);
         });
     }
 
@@ -821,26 +879,30 @@ public final class SecretStore {
         byte[] previous = k.previous().map(Seal::keyId).orElse(null);
         return rows.liveNodes().compose(nodes -> {
             if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture();   // the roll has not ended
-            return blocking(() -> {
-                long rebound = 0;
-                long left = 0;
+            return rows.<long[]>write(List.of(), tx -> tx.liveNodes().compose(live -> {
+                if (!live.stream().allMatch(n -> n.names(current))) return Future.succeededFuture(new long[]{0, 1});
+                Future<long[]> chain = Future.succeededFuture(new long[]{0, 0});
                 for (BoundRows b : bound) {
-                    rebound += b.bindAgain(BATCH);
-                    if (previous != null) left += b.countUnder(previous);
+                    chain = chain.compose(sum -> b.bindAgain(tx.connection(), BATCH).compose(n -> boundUnder(tx, b, previous)
+                            .map(left -> new long[]{sum[0] + n, sum[1] + left})));
                 }
-                return new long[]{rebound, left};
-            }).compose(b -> sealAgain(k, current, b[0] > 0, b[1]).compose(remaining -> {
+                return chain;
+            })).compose(b -> sealAgain(k, current, b[0] > 0, b[1]).compose(remaining -> {
                 if (remaining != 0 || b[1] != 0 || previous == null) return Future.succeededFuture();
                 return dropPrevious(k, current, previous);
             }));
         });
     }
 
+    private static Future<Long> boundUnder(SecretRows.Tx tx, BoundRows b, byte[] keyId) {
+        return keyId == null ? Future.succeededFuture(0L) : b.countUnder(tx.connection(), keyId);
+    }
+
     /** Seals again up to {@value #BATCH} rows under another key, in one transaction; answers the rows left under another key. */
     private Future<Integer> sealAgain(StoreKey k, byte[] current, boolean rebound, long boundLeft) {
         byte[] currentKey = k.current().orElseThrow();
-        Future<Integer> done = rows.write(List.of(), tx -> tx.liveNodes().compose(nodes -> {
-            if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture(-1);
+        Future<int[]> done = rows.write(List.of(), tx -> tx.liveNodes().compose(nodes -> {
+            if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture(new int[]{-1, 0});
             return tx.rows().compose(all -> {
                 List<SecretRows.Meta> others = all.stream().filter(m -> !Arrays.equals(m.keyId(), current))
                         .sorted((a, b) -> a.name().compareTo(b.name())).toList();
@@ -870,12 +932,13 @@ public final class SecretStore {
                         audited = tx.audit(new Actor(node, OptionalLong.empty(), "local", Optional.empty(), ""), "secret.key-changed", "secret-store",
                                 new JsonObject().put("oldKey", old).put("newKey", HEX.formatHex(current)).put("rows", all.size()));
                     }
-                    if (sealedAgain == 0) return audited.map(remaining);
-                    return audited.compose(v -> tx.changed()).map(remaining);
+                    int[] result = {remaining, sealedAgain};
+                    if (sealedAgain == 0) return audited.map(result);
+                    return audited.compose(v -> tx.changed()).map(result);
                 });
             });
         }));
-        return done.compose(remaining -> look().map(remaining));
+        return done.compose(result -> result[1] == 0 ? Future.succeededFuture(result[0]) : look().map(result[0]));
     }
 
     /** Clears this node's previous key, in one transaction under the store's row lock, once no live node or row needs it. */
@@ -884,7 +947,9 @@ public final class SecretStore {
             if (!nodes.stream().allMatch(n -> n.names(current))) return Future.succeededFuture(false);
             return tx.rows().compose(all -> {
                 if (all.stream().anyMatch(m -> Arrays.equals(m.keyId(), previous))) return Future.succeededFuture(false);
-                return tx.clearPrevious(node).map(true);
+                Future<Long> left = Future.succeededFuture(0L);
+                for (BoundRows b : bound) left = left.compose(sum -> b.countUnder(tx.connection(), previous).map(n -> sum + n));
+                return left.compose(n -> n != 0 ? Future.succeededFuture(false) : tx.clearPrevious(node).map(true));
             });
         })).map(cleared -> {
             if (cleared && key == k) {
@@ -897,18 +962,6 @@ public final class SecretStore {
         });
     }
 
-    private <T> Future<T> blocking(Supplier<T> work) {
-        Promise<T> promise = Promise.promise();
-        executor.execute(() -> {
-            try {
-                promise.complete(work.get());
-            } catch (RuntimeException failure) {
-                promise.fail(failure);
-            }
-        });
-        return promise.future();
-    }
-
     // ---------------------------------------------------------------------------------------------------------------- binding
 
     /** Registers a table whose rows are bound under the store's key. */
@@ -917,13 +970,18 @@ public final class SecretStore {
     }
 
     /**
-     * {@code bytes} bound under this node's current key: HMAC-SHA256 under HKDF-SHA256 of the key, info {@code rail8 settings v1 bind}.
+     * {@code bytes} bound under this node's current key, in the caller's transaction {@code tx}: HMAC-SHA256 under HKDF-SHA256 of
+     * the key, info {@code rail8 settings v1 bind}. It takes the store's row lock for share and makes a write's key check, so a
+     * change of the key waits for {@code tx}, and a tag is persisted only in the transaction that made it.
      *
-     * @throws IllegalStateException this node holds no key
+     * @return fails with a {@link SecretRefused}: 503 {@code no-key}, 409 {@code keys-differ}
      */
-    public Binding bind(byte[] bytes) {
-        byte[] current = key.current().orElseThrow(() -> new IllegalStateException("this node holds no key of the secret store: nothing can be bound"));
-        return new Binding(Seal.keyId(current), tag(current, bytes));
+    public Future<Binding> bind(SqlConnection tx, byte[] bytes) {
+        StoreKey k = key;
+        return rows.sharedNodes(tx).compose(nodes -> keyCheck(nodes, k)).map(v -> {
+            byte[] current = k.current().orElseThrow();
+            return new Binding(Seal.keyId(current), tag(current, bytes));
+        });
     }
 
     /** Whether {@code binding} binds {@code bytes} under the key its id names, current or previous. */

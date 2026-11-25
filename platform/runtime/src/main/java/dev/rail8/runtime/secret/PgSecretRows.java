@@ -5,6 +5,7 @@ import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
+import io.vertx.pgclient.PgException;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
@@ -12,7 +13,7 @@ import io.vertx.sqlclient.SqlClient;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
 
-import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -37,10 +38,13 @@ final class PgSecretRows implements SecretRows {
     private static final String SCOPE = "'" + SecretStore.SCOPE + "'";
     private static final String HEAD = "select generation, stamp from secret_store";
     private static final String LOCK_STORE = HEAD + " for update";
+    private static final String SHARE_STORE = HEAD + " for share";
+    /** What Postgres answers when a lock was not had within {@code lock_timeout}. */
+    private static final String LOCK_NOT_AVAILABLE = "55P03";
     private static final String REPEATABLE = "set transaction isolation level repeatable read, read only";
     private static final String META = "select name, kind, format, key_id, nonce, length(sealed), created_at, changed_at, changed_by";
     private static final String ROWS = META + " from secrets where scope = " + SCOPE + " order by name";
-    private static final String SNAPSHOT = META + ", case when nonce = any($1::bytea[]) then null else sealed end from secrets where scope = "
+    private static final String SNAPSHOT = META + ", case when length(sealed) > $1 then null else sealed end from secrets where scope = "
             + SCOPE + " order by name";
     private static final String ROW = META + ", sealed from secrets where scope = " + SCOPE + " and name = $1";
     private static final String UPSERT = "insert into secrets (scope, name, kind, format, key_id, nonce, sealed, created_at, changed_at, changed_by)"
@@ -72,10 +76,15 @@ final class PgSecretRows implements SecretRows {
     private static final String PACKAGE_USERS = "select distinct user_id from secret_uses where scope = " + SCOPE
             + " and user_kind = 'flow' and starts_with(user_id, $1 || '/') order by user_id";
 
-    private final Pool pool;
+    /** How long a write waits for its locks before it is 503 {@code busy}. */
+    static final Duration LOCK_WAIT = Duration.ofSeconds(5);
 
-    PgSecretRows(Pool pool) {
+    private final Pool pool;
+    private final Duration lockWait;
+
+    PgSecretRows(Pool pool, Duration lockWait) {
         this.pool = pool;
+        this.lockWait = lockWait;
     }
 
     @Override
@@ -84,10 +93,9 @@ final class PgSecretRows implements SecretRows {
     }
 
     @Override
-    public Future<Snapshot> snapshot(Set<ByteBuffer> held) {
-        Buffer[] nonces = held.stream().map(b -> Buffer.buffer(bytes(b))).toArray(Buffer[]::new);
+    public Future<Snapshot> snapshot(int maxRow) {
         return pool.withTransaction(tx -> tx.query(REPEATABLE).execute().compose(v -> tx.query(HEAD).execute())
-                .compose(head -> tx.preparedQuery(SNAPSHOT).execute(Tuple.of(nonces)).map(rows -> {
+                .compose(head -> tx.preparedQuery(SNAPSHOT).execute(Tuple.of(maxRow)).map(rows -> {
                     List<Meta> metas = new ArrayList<>();
                     Map<String, byte[]> sealed = new HashMap<>();
                     for (Row r : rows) {
@@ -100,10 +108,22 @@ final class PgSecretRows implements SecretRows {
                 })));
     }
 
+    /**
+     * {@inheritDoc} Each lock is waited for at most {@link #lockWait}; past it the write fails with 503 {@code busy}.
+     */
     @Override
     public <T> Future<T> write(Collection<String> names, Function<Tx, Future<T>> work) {
-        return pool.withTransaction(tx -> lockNames(tx, names).compose(v -> tx.query(LOCK_STORE).execute())
-                .compose(head -> work.apply(new PgTx(tx, head(head.iterator().next())))));
+        return pool.<T>withTransaction(tx -> tx.query("set local lock_timeout = " + lockWait.toMillis()).execute()
+                .compose(v -> lockNames(tx, names)).compose(v -> tx.query(LOCK_STORE).execute())
+                .compose(head -> work.apply(new PgTx(tx, head(head.iterator().next())))))
+                .recover(failure -> Future.failedFuture(failure instanceof PgException pg && LOCK_NOT_AVAILABLE.equals(pg.getSqlState())
+                        ? new SecretRefused(503, "busy", "another change of the secret store holds its locks: try again", new JsonObject())
+                        : failure));
+    }
+
+    @Override
+    public Future<List<NodeKeys>> sharedNodes(SqlConnection tx) {
+        return tx.query(SHARE_STORE).execute().compose(v -> tx.query(LIVE).execute()).map(PgSecretRows::nodes);
     }
 
     @Override
@@ -124,6 +144,10 @@ final class PgSecretRows implements SecretRows {
 
     /** The work of one write on {@code tx}, under the store's row lock. */
     private record PgTx(SqlConnection tx, Head head) implements Tx {
+
+        @Override public SqlConnection connection() {
+            return tx;
+        }
 
         @Override public Future<List<NodeKeys>> liveNodes() {
             return tx.query(LIVE).execute().map(PgSecretRows::nodes);
@@ -187,16 +211,13 @@ final class PgSecretRows implements SecretRows {
 
     // ---------------------------------------------------------------------------------------------------------------- uses
 
-    /** A user of secrets and the kinds it takes of each name. */
-    record UserUses(String userKind, String userId, Map<String, Set<Secret.Kind>> uses) { }
-
     /**
      * {@link SecretStore#replaceUses}'s rules for every user of {@code users}, in {@code tx}: the names' locks in ascending order of
      * their keys, the checks against the rows, then the rows replaced; nothing written with a problem.
      */
-    static Future<List<String>> replaceUses(SqlConnection tx, List<UserUses> users, Set<String> variables) {
-        String[] kinds = users.stream().map(UserUses::userKind).toArray(String[]::new);
-        String[] ids = users.stream().map(UserUses::userId).toArray(String[]::new);
+    static Future<List<String>> replaceUses(SqlConnection tx, List<SecretStore.Uses> users, Set<String> variables) {
+        String[] kinds = users.stream().map(SecretStore.Uses::userKind).toArray(String[]::new);
+        String[] ids = users.stream().map(SecretStore.Uses::userId).toArray(String[]::new);
         return tx.preparedQuery(USED_BEFORE).execute(Tuple.tuple().addArrayOfString(kinds).addArrayOfString(ids)).compose(before -> {
             Set<String> names = new TreeSet<>();
             before.forEach(r -> names.add(r.getString(2)));
@@ -206,7 +227,7 @@ final class PgSecretRows implements SecretRows {
             Map<String, Secret.Kind> kindOf = new HashMap<>();
             stored.forEach(r -> kindOf.put(r.getString(0), kind(r.getString(1))));
             List<String> problems = new ArrayList<>();
-            for (UserUses u : users) {
+            for (SecretStore.Uses u : users) {
                 new TreeMap<>(u.uses()).forEach((name, takes) -> {
                     String who = u.userKind() + " '" + u.userId() + "'";
                     if (name.startsWith(SecretStore.RESERVED) && !u.userKind().equals("platform")) {
@@ -227,7 +248,7 @@ final class PgSecretRows implements SecretRows {
             if (!problems.isEmpty()) return Future.succeededFuture(problems);
             List<Tuple> deletes = users.stream().map(u -> Tuple.of(u.userKind(), u.userId())).toList();
             List<Tuple> inserts = new ArrayList<>();
-            for (UserUses u : users) {
+            for (SecretStore.Uses u : users) {
                 new TreeMap<>(u.uses()).forEach((name, takes) -> inserts.add(Tuple.of(name, u.userKind(), u.userId(),
                         takes.stream().sorted().map(Secret.Kind::id).toArray(String[]::new))));
             }
@@ -307,9 +328,4 @@ final class PgSecretRows implements SecretRows {
         return OffsetDateTime.ofInstant(at, ZoneOffset.UTC);
     }
 
-    private static byte[] bytes(ByteBuffer b) {
-        byte[] out = new byte[b.remaining()];
-        b.duplicate().get(out);
-        return out;
-    }
 }
