@@ -309,7 +309,7 @@ class DeploymentsSecretStoreTest {
         b.restore();
         DeployedPackage listed = b.deployments.packages().stream().filter(x -> x.name().equals("shop")).findFirst().orElseThrow();
         assertEquals(DeployedPackage.State.FAILED, listed.state(), listed.toString());
-        assertTrue(listed.problems().contains("endpoint 'orders-in': secret 'secret://in-token' is not set: enter it in the secret store"),
+        assertTrue(listed.problems().contains("endpoint 'orders-in': the option 'token': secret 'secret://in-token' is not set: enter it in the secret store"),
                 listed.problems().toString());
     }
 
