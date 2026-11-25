@@ -875,10 +875,10 @@ Windows with WSL. Each says whether it changes `examples/demo`, the quickstart o
    not edit), the quickstart (`environment.yaml`, copied once into `~/rail8-workspace`; both compose stacks set
    `RAIL8_ENVIRONMENT_FILE`) and the database (two new tables).
 3. **Templates and computed receivers.** Expressions in the settings in the flow, `by` with `connections`, the public
-   texts of faults, INVALID final for the work queue's retry too. Changes `examples/demo` (`invoice-async` and its test
-   on the new shape; the test checks the path each receiver saw, and both invoice tests keep their partner-down retry
-   counts). The quickstart's `invoice-sync`, which its reader edits, stays on the old shape until the editor writes the
-   new one. No change to the database.
+   texts of faults, a missing value tried once on a step with `retryable: true`. Changes `examples/demo`
+   (`invoice-async` and its test on the new shape; the test checks the path each receiver saw, and both invoice tests
+   keep their partner-down retry counts). The quickstart's `invoice-sync`, which its reader edits, stays on the old
+   shape until the editor writes the new one. No change to the database.
 4. **The flow editor on the new model.** The sender and the send step with the adapter, the connection picked from the
    systems of the workspace and the deployed ones, the flow form; New flow and Call a flow write the new shape; New system
    writes a system file. The editor keeps comments, line ends and its compare on save in a package of both shapes.
