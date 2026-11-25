@@ -191,6 +191,8 @@ with these commands, in a terminal at the repository root. Nothing is deployed a
 
 ```sh
 export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)
+[ -s ~/.rail8-secrets-key ] || { t=$(mktemp ~/.rail8-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)
 docker compose up -d --force-recreate
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
 bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
