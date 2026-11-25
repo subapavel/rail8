@@ -203,6 +203,15 @@ describe('Audit', () => {
     clock += 250;
     waiting.shift()?.();
     await expect.element(page.getByRole('button', { name: /Exporting 14 rows/ })).toBeVisible();
+
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    waiting.shift()?.();
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    await expect.element(page.getByRole('button', { name: /Exporting 14 rows/ })).toBeVisible();
+
+    clock += 250;
+    waiting.shift()?.();
+    await expect.element(page.getByRole('button', { name: /Exporting 28 rows/ })).toBeVisible();
   });
 
   test('says when the audit could not be read, in place of the rows, and reads it again', async () => {
