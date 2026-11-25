@@ -40,7 +40,9 @@ The design stands on three others and uses their names:
   off only where the flow says so, with a reason.
 - Rail8 never holds a caller's password or key in a form it could send on. It holds a verifier: a fingerprint of a
   generated value, or a slow hash of a typed one.
-- No request reads Postgres to find a system's credential. A personal token of a Message sender is the one exception.
+- No request reads Postgres to find a system's credential; a Message sender's personal token is the one exception. The
+  entry's other contact with Postgres is the count of a limit per caller, a test message's audit row, and the sender's
+  row on the message.
 - What a caller presented never reaches a step, a record or a log line.
 - An unknown caller learns nothing. Not which name exists, not which part was wrong, not which paths a flow serves.
 - Every message records its sender and every receiver, whatever the flow records.
@@ -57,7 +59,8 @@ The design stands on three others and uses their names:
 | OAuth2 token (`oauth2`) | `Authorization: Bearer <JWT>` | an issuer and the client's id | none: the issuer's keys are public | the token's issuer and client, after its signature verifies |
 
 - Later kinds: the signature of a webhook, and an AS2 certificate. Each is a proof over the body, so the caller is
-  checked once the body is stored; the step that adds them says how such a body is bounded and deleted on a refusal.
+  checked once the body is stored. The step that adds them says how such a body is bounded and deleted on a refusal,
+  and amends the contract suite's rule that `enter` comes before any byte is stored.
 - A system rotates a credential by having two for a while: a second is added and activated, the caller switches, and
   the first is removed.
 
@@ -90,20 +93,28 @@ The other types differ only in their fields:
 - **Activation checks** that:
   - the system is defined in the installation, by a deployed package or by the deploy at hand;
   - every secret is set, and is of the kind and form its field takes;
-  - the basic users, pinned fingerprints, (issuer, subject) pairs and (issuer, client) pairs are unique in the
-    environment;
+  - the basic users, typed keys' fingerprints, pinned fingerprints, (issuer, subject) pairs and (issuer, client) pairs
+    are unique in the environment;
   - certificates parse;
   - a system holds at most 16 credentials.
 - Each credential's secrets are written to `secret_uses` through the store's one method, as `credential` and the
   credential's key, at its activation.
 - **The binding.** The credential's body is bound under the store's key, as every body in force is. A database writer
   cannot plant a credential, a certificate or another system's verifier unseen. A credential whose tag fails is absent
-  from the node's snapshot, and its caller is refused as unknown.
+  from the node's snapshot, and its caller is refused as unknown. The binding stops planting, not restoring: a database
+  writer can put back an older bound row, a removed credential with its verifier among them, as the configuration of
+  an environment accepts for every object.
+- **Without the store's key** no verifier can be written (503 `no-key`), so no `basic` or `api-key` credential can be
+  activated. A `credential` and an `issuer` count as bodies that send a secret, so in a deployed environment without
+  the key their activation is 503 `no-key`, a certificate's and an OAuth2 credential's included. The quickstart holds
+  no store key, so its listening senders keep no check (`schemaVersion: 1`, or `{check: off, reason}`) until it does.
 - **An `issuer` object** (kind `issuer`, a key of one segment) holds an OAuth2 issuer: `{url, audience, clientClaim}`,
   where `clientClaim` is `azp`, `client_id` or `sub`. The node reads the issuer's keys from its JWKS over HTTPS. The
   read has a bounded size, a timeout and a refresh at most once a minute for an unknown key id, and it keeps the last
   good keys. The issuer's URL is bound under the store's key with its body. For a node with no way out, the keys may
-  be pasted into the object instead.
+  be pasted into the object instead. A token is taken only when it is signed with RS256, PS256, ES256 or EdDSA, its
+  `iss` equals the issuer's URL, its `aud` holds the audience, and it has an `exp`. `exp`, `nbf` and `iat` are read on
+  the injected clock with 60 s of leeway.
 
 ### The verifier, a kind of secret
 
@@ -120,10 +131,15 @@ a value it could send on. A verifier has one of three forms.
   `<secret>` is 43 base64url characters, 256 random bits from `SecureRandom`. `POST /admin/secrets {name, kind:
   "verifier", form: "generated"}` answers it once, with a copy button in the UI, and nothing else ever holds it. It is
   what the credential's form offers first, and the only form until the typed forms ship.
+- **Who made it could send with it.** Whoever generated a value held it once, so the sender on a message holds against
+  partners, not against the platform's own staff. The secret store's audit names who generated each value.
 - **A typed value** is for a move that keeps the callers' password, as from SAP PO behind a proxy that keeps their URL.
-  It must not start with `rail8`, so that it can never be mistaken for a generated value or a personal token.
+  It must not start with `rail8`, so that it can never be mistaken for a generated value or a personal token. Whoever
+  holds both the database and the store's key can test guesses of a typed value offline, as the store says of its
+  backups; a generated value gives nothing to guess.
 - A `basic` credential's password takes `generated` or `password`. An `api-key` credential's key takes `generated` or
-  `key`. Activation refuses any other kind or form.
+  `key`. Activation refuses any other kind or form. With a generated password the presented user must still be the
+  credential's user; any other user is an unknown caller.
 - Nobody reads a verifier back, and it is never in a draft, a history, a diff or an export. Since a verifier can be
   sent nowhere, a credential needs no consent.
 
@@ -139,15 +155,19 @@ immutable object at every activation and every change of a secret it names:
 - for each deployed flow: its named systems, or the systems subscribed to a product that holds it.
 
 The index decides each request in memory:
-- An unknown id or user is compared against a fixed dummy fingerprint, or hashed once against a dummy Argon2id hash, so
-  that known and unknown take the same time.
+- An unknown id is compared against a fixed dummy fingerprint. An unknown user takes no place to hash: its answer waits
+  on the injected timer for the node's median time of a hash. So known and unknown take about the same time.
 - A typed password costs one Argon2id hash. A node runs at most 2 for the entry at once, apart from the two of the
   logins, with no queue. Beyond that the answer is 503 `busy`; callers with generated values never wait for a place.
+- The hash and a personal token's check run on a virtual thread, never on the event loop; `enter` returns its future
+  at once.
 - A typed password that verified is kept in a cache on each node: an HMAC-SHA256 under a key the node draws at its
   start, over the credential's key, the verifier's version and the password. It holds at most 10,000 entries, each for
   at most 10 minutes, and it empties with every change of the credential or its verifier.
 - A message entered under one index keeps its sender. A change activated after it reaches only the requests that
-  enter after the new index is in force, within the configuration's own delay.
+  enter after the new index is in force: on each node within one notice, or the 5 s tick when a notice is lost.
+- A node that cannot read Postgres keeps its index, is `DEGRADED` after 30 s, and goes on taking a removed credential
+  until it reads again. A removal is itself a write to Postgres, so none is activated while Postgres is away.
 
 ## Who may send, in the flow file
 
@@ -180,13 +200,17 @@ limits: { perSender: 600/m }
   must name `senders`; `rail8 validate` says "name the systems that may send, or switch the check off with a reason".
   An adapter whose `reads()` is empty accepts only `{check: off, reason}`.
 - **Named systems** are one system key or a list. Each must be defined in the installation, else the deploy is refused,
-  as for connection keys. A named system with no active credential is a note of the deploy, not a refusal.
+  as for connection keys. A named system with no active credential is named in the deploy's answer, not refused, and
+  `GET /admin/flows` says that no allowed sender of the flow has a credential.
 - **`subscribers`** admits every system that holds a subscription to an API product that holds this flow.
 - **`by-agreement`** is for partner communication and is refused until that is designed.
-- **`{check: off, reason}`** is the only way off. The reason is shown in the flow's details and in the deploy's record.
+- **`{check: off, reason}`** is the only way off. The deploy's answer, its record and `GET /admin/flows` list every flow
+  with the check off, with its reason. Nothing in an environment forbids it: the review of the package in git and the
+  deploy's record are the guard.
 - **A polling sender** (with a connection) has no `senders`: its sender is the system of its connection. Naming one is
   refused.
-- **`direct`** has no `senders`: a call between flows keeps the caller's sender. Naming one is refused.
+- **`direct`** has no `senders`: a call between flows keeps the caller's sender, and counts on no limit per caller.
+  Naming one is refused.
 - **`limits.perSender`** applies to a listening sender whose check is on. It is refused with the check off, on a polling
   sender and on `direct`.
 - The design of systems and connections reserves `subscribers` and `by-agreement` as system keys, so that `senders`
@@ -204,7 +228,10 @@ package dev.rail8.api;
 /** The kinds of credential a caller can present. */
 public enum CredentialKind { BASIC, API_KEY, CERTIFICATE, OAUTH2 }
 
-/** What the caller of one message presented, as an adapter read it. toString never shows a password, key or token. */
+/**
+ * What the caller of one message presented, as an adapter read it. Each record overrides toString, which shows no
+ * password, key or token.
+ */
 public sealed interface Presented {
     /** The caller's address: the peer, or the client a trusted proxy names. Failures are counted by it. */
     String remote();
@@ -266,7 +293,8 @@ public interface HttpIngress {
   the contract of systems and connections compiling: it stores the body, then enters with `Nothing`. Such an adapter
   reads no credential, so a flow can use it as a listening sender only with the check off.
 - **An adapter that overrides it holds no handler of its own.** A message reaches the flow only through the handler
-  `enter` gave, so an adapter cannot deliver around the check or write a sender.
+  `enter` gave, so an adapter cannot deliver around the check or write a sender. This guards against mistakes, not
+  against a hostile plugin, which runs with the node's rights.
 - **`Entry` is a class, not a functional interface,** so a lambda passed to `consumer(in, …)` in today's adapters and
   tests still means the handler.
 - **Enter first.** A consumer calls `enter` before it reads any byte of the body, and a refusal's message is never
@@ -278,9 +306,12 @@ public interface HttpIngress {
   with `IllegalStateException` when applied twice.
 - **A presented value is bounded.** A user of more than 256 characters, a password, key or token of more than 16 KiB, or
   a chain of more than 10 certificates is unknown, with no lookup.
-- **What the HTTP port reads.** The remote address is the peer, or the client a trusted proxy names in
-  `X-Forwarded-For`. The client certificate is the TLS peer chain, or the one a trusted proxy forwards in its header.
-  From any other address both headers are ignored.
+- **A kind before its step.** Until the step that builds a kind's lookup, a caller that presents it is an unknown
+  caller, with no lookup.
+- **What the HTTP port reads.** The remote address is the peer; from a trusted proxy, it is the right-most address of
+  `X-Forwarded-For` that is not a trusted proxy. The client certificate is the TLS peer chain, or the one a trusted
+  proxy forwards in its header together with the proxy's secret (`RAIL8_HTTP_PROXY_SECRET`). From any other address,
+  or without the secret, those headers are ignored.
 
 An HTTP adapter on the node's port, such as `http`, the `webhook` sample and the adapter template:
 
@@ -314,33 +345,46 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
    is 503.
 1. **Clear text.** A request that presents a credential from an address other than loopback, not over TLS and not from
    a trusted proxy, is 403 `tls-required`, unless `RAIL8_HTTP_TLS=off`. The credential is not looked at.
-2. **Failures.** A presented name or id whose failure row waits, or a remote address whose row waits, is 429
-   `too-many` with `Retry-After`. Nothing is looked up.
+2. **Failures.** A presented name or id whose own row waits is 429 `too-many` with `Retry-After`, and nothing is
+   looked up. A remote address whose row waits holds only the costly checks: a typed password, a personal token and,
+   later, a token whose key id the issuer's keys lack. A generated value is always looked up.
 3. **Find the credential (1).** A `rail8t_` password takes the personal token's path (below). Anything else is looked up
    in the index. None found is 401 `unknown-caller`, and a failure is counted on both rows.
-4. **The path.** The port answers a path no mount holds only now: 404 for a path no flow serves, 503 for a flow that has
-   no mount at the moment. An unknown caller has already had its 401, on every path.
+4. **The path.** The port answers a path no mount holds only now: 404 for a path no flow serves. For a path held by a
+   flow with no mount at the moment, it checks the flow's Allowed senders first: 403 `not-allowed` for a caller the
+   flow does not allow, else 503. An unknown caller has already had its 401, on every path.
 5. **Allowed senders (2).** The system must be one the flow allows: else 403 `not-allowed`. A personal token picks the
    system as described below, or is 400 `sender-needed`.
 6. **Room.** The flow's admission is looked at, without taking a permit. No room is 503 `busy` with `Retry-After`, and
    nothing is counted.
-7. **The limit per caller.** One message is counted on (flow, system). Over the limit is 429 `too-many` with
-   `Retry-After`.
+7. **The limit per caller.** One message is counted on (flow, system), a test message on (flow, tester). Over the
+   limit is 429 `too-many` with `Retry-After`.
 8. **The handler.** The adapter streams the body; its own refusals are its own (405, 413). Delivery takes the flow's
-   permit by the body's real size, as today, and a flow that filled meanwhile answers 503.
+   permit by the body's real size, as today, and a flow that filled meanwhile answers 503. Such a message was counted
+   at step 7, and its stored body is deleted. The port's own admission bounds the uploads in flight; until it is
+   built, nothing does.
 9. **The sender is written (3)** with the arrival's save (at-least-once), or with the run's first records (`sync`,
    `at-most-once`).
 
-- `100 Continue` is answered only after step 7. A refusal at steps 1 to 7 closes the connection (an HTTP/2 stream is
-  reset), so a refused body is never read.
-- **With the check off** the entry never refuses on who the caller is. A known credential or a valid personal token
-  gives the sender. Anything else passes with no sender and the proof `none`, and counts no failure. A credential in
-  clear text, or one whose failure row waits, is not looked at. Steps 6 and 8 still hold.
+- `100 Continue` is answered only after step 7. A refusal at steps 1 to 7 of a request with a body closes the
+  connection (an HTTP/2 stream is reset), so a refused body is never read. A request with no body keeps its
+  connection.
 - **The proof is removed.** Before the first step and the first record, the platform removes `authorization`,
-  `x-api-key`, `rail8-sender` and the trusted proxy's certificate header from the envelope. It does so whether they
-  matched or not, with the check on or off.
-- A refusal is logged as one WARNING per flow, reason and system or remote address a minute, and counted per flow and
-  reason. It never holds what was presented.
+  `x-api-key`, `apikey`, `rail8-sender`, `rail8-proxy-secret` and the trusted proxy's certificate header from the
+  envelope, every copy in any case. It cuts the platform's own cookies (`rail8-session`, `__Host-rail8-session`,
+  `rail8-device`, `__Host-rail8-device`) out of `cookie`, because cookies are not kept apart by port. It does so
+  whether they matched or not, with the check on or off.
+- A refusal is logged as one WARNING per flow, reason and system or remote address a minute. It is counted per flow,
+  reason and known system over the last 24 hours, in memory on each node, and unknown callers count under one entry.
+  The line holds the path, never the query, and never what was presented.
+
+With the check off, the entry never refuses on who the caller is and counts no failure. Steps 6 and 8 still hold.
+
+| The caller presents | The message's sender | Its proof |
+| --- | --- | --- |
+| a credential found in the index | the credential's system | its kind |
+| a valid personal token | the system `Rail8-Sender` names, any defined system; none without the header | `token` |
+| nothing; an unknown, wrong or waiting credential; a credential in clear text | none | `none` |
 
 ## The answers
 
@@ -348,10 +392,10 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
 | --- | --- | --- | --- |
 | 401 `unknown-caller` | nothing presented; a malformed, unknown, wrong or removed credential; a personal token that fails its check, or test sending off; an unknown path | `WWW-Authenticate: Basic realm="rail8", charset="UTF-8"` | which of these, whether a name, an id or a flow exists |
 | 403 `not-allowed` | a known caller that this flow does not allow | | the systems allowed, the products, any other system |
-| 400 `sender-needed` | a personal token on a flow that allows several systems, without `Rail8-Sender` | | the systems allowed |
+| 400 `sender-needed` | a personal token on a flow that allows several systems, without `Rail8-Sender`; more than one `Rail8-Sender` | | the systems allowed |
 | 404 `not-found` | a known caller on a path no flow serves | | |
 | 429 `too-many` | a failure row waits; over the limit per caller | `Retry-After` | other callers' counts; whether a name exists |
-| 503 `busy` | the port's own admission; no room in the flow; no place to hash or to check a token; a count that cannot be claimed | `Retry-After` | |
+| 503 `busy` | the port's own admission; a flow with no mount, to a caller it allows; no room in the flow; no place to hash or to check a token; a count that cannot be claimed | `Retry-After` | |
 | 403 `tls-required` | a credential in clear text | | |
 
 - The body is `{"code": "…", "error": "…"}`, the error one fixed English text per code. The reason, the system and the
@@ -363,30 +407,40 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
 - **Generated values give nothing to guess.** A password or key of 256 random bits is found by its id, its fingerprint
   compared in constant time, and an unknown id is compared against a dummy.
 - **Failure rows** are kept in memory on each node:
-  - one for each (presented name or id, remote address), whether the name exists or not, with 5 free failures;
-  - one for each remote address, with 100 free failures;
+  - one for each (presented name or id, remote address), whether the name exists or not, with 5 free failures. Its key
+    is the presented user, the generated id, or the SHA-256 of a typed key, never the value;
+  - one for each remote address, with 100 free failures. It holds only the costly checks (step 2), so a caller with a
+    generated value is never held by another caller's failures from its address;
+  - an IPv6 address counts by its /64;
   - after the free failures, each attempt waits 1 s after the last failure, doubling up to 300 s;
   - a success forgives the failures of its own row only, so an attacker at another address cannot lock a partner out;
-  - a row is dropped 24 hours after its last failure; each table holds at most 100,000 rows, and the row with the
-    oldest last failure goes first.
-  On a pool of several nodes each node counts on its own, so an attacker gets that many times the attempts.
+  - a row is dropped 24 hours after its last failure; each table holds at most 100,000 rows, and a full table drops
+    first the rows that do not wait, then the row with the oldest last failure.
+  On a pool of several nodes each node counts on its own, so an attacker gets that many times the attempts. Without
+  `proxy=`, every caller behind a proxy has the proxy's address and shares its row.
+- **Typed values across addresses.** The step that adds typed passwords and keys also bounds the guesses against one
+  known user or key across all addresses (100 free failures a day), so that a stranger who knows the name cannot lock
+  the partner out.
 - **Equal answers.** Known and unknown get the same code, the same text and about the same time.
 - **Paths stay hidden.** An unknown caller gets 401 on every path, so it learns no path a flow serves.
 - **Personal tokens** are checked in at most 4 places a node, and the failure rows are read before the check, so a
-  flood from one address is answered 429 without a read of Postgres.
+  flood from one address is answered 429 without a read of Postgres. Made-up tokens from many addresses can hold the 4
+  places; that delays testers, never a system's caller.
 
 ## The limit per caller
 
 - **What is counted.** Each message that passed the entry's steps 1 to 6 counts once, on its flow and its sending
-  system. The window is fixed: `600/m` counts from the start of each minute of the injected clock, in UTC. Across a
-  window's edge a caller can send up to twice the rate.
+  system; a test message counts on its flow and its tester. A message counted and then refused at delivery (413, 503)
+  stays counted. The window is fixed: `600/m` counts from the start of each minute of the injected clock, in UTC.
+  Across a window's edge a caller can send up to twice the rate.
 - **Where the count lives: Postgres**, the same with one node or many, with or without Valkey. Each node claims a slice
-  of the window and admits within it. The slice is the limit divided by 8 times the live nodes, at least 1.
+  of the window and admits within it. The slice is the limit divided by 8 times the live nodes, at least 1; the live
+  nodes are the rows of `nodes` whose lease holds. With a slice of 1, every message is one write.
 
   ```sql
   create table entry_counts (
       flow         text        not null,   -- <package>/<flow>
-      sender       text        not null,   -- a system key
+      sender       text        not null,   -- a system key, or tester:<user name> for test messages
       window_start timestamptz not null,   -- the injected clock floored to the window; SQL never reads now()
       used         bigint      not null check (used >= 0),
       primary key (flow, sender, window_start));
@@ -399,7 +453,8 @@ on a path no mount holds, the port runs steps 1 to 3 itself before step 4.
 
 - **The bound.** A window never admits more than the limit. It may admit fewer, by at most (live nodes − 1) × (slice −
   1), which is less than an eighth of the limit: the slices that nodes have claimed but not used when the window ends.
-- **Over the limit:** 429 `too-many`, with `Retry-After` the seconds to the window's end.
+- **Over the limit:** 429 `too-many`, with `Retry-After` the seconds to the window's end plus a random 0 to 2 s from the
+  injected source, so that the callers held do not all return at once.
 - **A claim that fails**, because Postgres does not answer within 1 s, is 503 `busy`. A lost count loses no message.
 - Rows older than two windows are deleted with retention. Only flows with `limits.perSender` write here.
 - **With admission.** The count comes after the flow's room is looked at, so a caller is not counted for a 503 the
@@ -429,6 +484,10 @@ A user with the role **Message sender** sends a message to a flow from SoapUI, P
 authentication: the user's own name, and a personal token (`rail8t_<id>_<secret>`) as the password. A technical
 account that holds the role sends the same way, with one of its tokens.
 
+- **A token for sending.** A token has one use, chosen when it is issued: `admin`, the default and the use of every
+  token issued before, or `send`. A `send` token is refused on the admin API, and an `admin` token is an unknown caller
+  on the HTTP port. So a token that leaks from a test tool opens nothing else.
+
 - **The role and the action.** `message-sender` grants the new action `message.send`. A person or a technical account
   may hold it, a token may do it, and the emergency key may not. A developer does not hold it unless it is granted.
 - **The admin API stays closed on the port.** The port never routes to `/admin`. It recognises only a personal token,
@@ -436,10 +495,13 @@ account that holds the role sends the same way, with one of its tokens.
   (`rail8k_`) and a token sent as `Bearer` are unknown callers there.
 - **The check** is the users' own check: the token is parsed, then read by its id with its user and the user's roles
   in one query. Then the node compares the fingerprint in constant time, and checks expiry, revocation and the user's
-  block. The name must be the token's user, and the user must hold `message.send`. A node runs at most 4 such checks
-  at once, with no queue; beyond that the answer is 503 `busy`. So a revoke holds for the next request on every node.
-- **No browser.** A request that carries `Sec-Fetch-Site` with any value but `none` has its personal token refused. So
-  a page cannot send as a tester whose browser keeps the token for the port.
+  block. The token's use must be `send`, the name must be its user, and the user must hold `message.send`. A node runs
+  at most 4 such checks at once, with no queue; beyond that the answer is 503 `busy`. So a token's revoke holds for
+  the next request on every node; a credential's removal follows its activation (above).
+- **No browser.** A request that carries `Origin`, `Referer`, or `Sec-Fetch-Site` with any value but `none` has its
+  personal token refused. SoapUI, Postman and `curl` send none of them, and a cross-site request from a page carries
+  at least one, over plain HTTP too. What is left over plain HTTP is a navigation with no referrer, by a tester who
+  typed the token into the browser's prompt; a `send` token limits what that gains.
 - **Which system sends.**
   - The flow's one named system, by default.
   - The header `Rail8-Sender: <system key>` picks another, and must name a system the flow allows; under
@@ -448,15 +510,17 @@ account that holds the role sends the same way, with one of its tokens.
     `sender-needed`.
   - With the check off, the header may name any defined system; without it the message has no sender.
   - The header counts only with a personal token. From any other caller it is ignored, and it is always removed.
-- **The record.** The message counts on that system's limit. Its proof is `token`, with the token's id as the
-  credential and the user's name as the tester. An audit row `message.send` (the actor, via the token, the token's id,
+    More than one copy is 400 `sender-needed`.
+- **The record.** The message counts on the flow's `perSender` under its tester, never on the system's count. Its proof
+  is `token`, with the token's id as the credential and the user's name as the tester. An audit row `message.send` (the actor, via the token, the token's id,
   the subject `message/<id>`, the flow and the system) is written before the handler runs. When it cannot be written,
   the answer is 503.
-- **Switching test sending off.** `RAIL8_TEST_SENDING=off` on a node closes the path: a personal token is then an
-  unknown caller. The default is `on`, because a deployed test environment is where testers send. Production should
-  set `off`: a test message has no flag and reaches the flow's real receivers. The variable is the operator's and not
-  a setting of the UI, so a stolen admin account cannot open it. Every node of a pool must hold the same value;
-  `/health` shows each node's.
+- **Switching test sending off.** `RAIL8_TEST_SENDING` opens or closes the path on a node; closed, a personal token is
+  an unknown caller. It is `on` by default where `RAIL8_ENV` is `dev` or `ci`, and `off` in a deployed environment
+  unless the operator sets `on`, because a test message has no flag and reaches the flow's real receivers. A test
+  environment that testers send to sets `on`. The variable is the operator's and not a setting of the UI, so a stolen
+  admin account cannot open it. `/health` shows each node's value, and a node left unset in a deployed environment
+  stays closed.
 
 ## The record of the sender and the receivers
 
@@ -477,6 +541,7 @@ create table message_parties (
     remote        text,                             -- the caller's address, as the failure rows read it
     called_from   text,                             -- the calling message's id, for a flow called by another
     primary key (message_id, side, connection));
+-- the step that brings the searches adds the indexes they read:
 create index message_parties_system     on message_parties (system, side, at desc);
 create index message_parties_partner    on message_parties (partner, side, at desc) where partner is not null;
 create index message_parties_credential on message_parties (credential, at desc) where credential is not null;
@@ -485,7 +550,9 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
 
 - **The sender's row** is written in the arrival's transaction (at-least-once), or in the run's first group of records
   (`sync`, `at-most-once`). It is written at every recording level and with every payload setting, `off` included. A
-  flow that records nothing else still writes one row for each message, plus one for each receiver.
+  flow that records nothing else still writes one row for each message, plus one for each receiver, by the same
+  writer. For `sync` and `at-most-once` the rows share the fate of the run's records: when Postgres is away, the run
+  goes on, and its records, these rows among them, are lost, counted and logged.
 - **A receiver's row** is written at the end of the first send through each connection, from the facts the send hands
   over: the connection key, the system key, the partner, the instance name as it held then, and whether it was mocked.
   A retry or a second send through the same connection keeps the row.
@@ -501,7 +568,8 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
   - `GET /admin/messages/{id}` gains `sender` and `receivers`.
   - A message is listed by its recorded arrival, or else by its sender's row. A message of a flow that records nothing
     shows its flow, its time, its sender and its receivers, with the status `unrecorded`.
-  - `GET /admin/flows` gains each flow's allowed senders, its limit per caller and its counts of refusals by reason.
+  - `GET /admin/flows` gains each flow's allowed senders, its limit per caller, whether its check is off and why, and
+    its counts of refusals by reason and known system over the last 24 hours.
     `GET /admin/components` gains each component's `reads`.
 
 ## Roles, actions and settings
@@ -514,13 +582,18 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
 - **`RAIL8_HTTP_TLS`**, as `RAIL8_ADMIN_TLS` is for the admin port:
   - unset: a credential is taken only over the node's own TLS (once HTTPS on the HTTP port ships), on loopback, or from
     a trusted proxy;
-  - `proxy=<cidr>,…`: the addresses of TLS-terminating proxies, whose `X-Forwarded-For` and client certificate header
-    the node believes. `RAIL8_HTTP_CLIENT_CERT_HEADER` names that header, `X-Forwarded-Client-Cert` by default;
+  - `proxy=<cidr>,…`: the addresses of TLS-terminating proxies. The node believes their `X-Forwarded-For`, and their
+    client certificate header only with the secret below. Such a proxy sets both headers itself and drops what a
+    caller sent in them. `RAIL8_HTTP_CLIENT_CERT_HEADER` names the certificate header, `X-Forwarded-Client-Cert` by
+    default;
   - `off`: the network is protected another way. The node logs a WARNING at its start.
   Until HTTPS on the HTTP port ships, every deployment sets `proxy=` or `off`, and the quickstart's compose files set
   `off`.
-- **`RAIL8_TEST_SENDING`**: `on` (the default) or `off`.
-- `/health` gains `entry: {tls: "tls" | "proxy" | "off", testSending: "on" | "off"}`.
+- **`RAIL8_HTTP_PROXY_SECRET`** (or `_FILE`): 32 to 256 characters that the trusted proxy sends in `Rail8-Proxy-Secret`
+  beside a forwarded certificate, compared in constant time. Without it the node ignores the certificate header. It
+  is the one forwarded header that gives an identity, and an address range is no proof of it.
+- **`RAIL8_TEST_SENDING`**: `on` or `off`; by default `on` where `RAIL8_ENV` is `dev` or `ci`, else `off`.
+- `/health` gains `entry: {tls: "tls" | "proxy" | "off", proxySecret: true | false, testSending: "on" | "off"}`.
 
 ## Open points the design proposes
 
@@ -578,6 +651,8 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
 | Flows of an API product | 256 |
 | An issuer's JWKS | 64 KiB, a 5 s timeout, read at most once a minute |
 | A claim of the count | 1 s |
+| A proxy's secret | 32 to 256 characters |
+| A removed credential keeps working | one notice, or the 5 s tick; on a node that cannot read Postgres and is still reached, until it reads |
 
 ## Tests
 
@@ -601,7 +676,11 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
   - an index swapped while messages are in flight;
   - a removed credential refused after its activation, and a revoked token refused at the next request;
   - the audit row required for a test message;
-  - the browser guard, and the headers removed;
+  - the browser guard with `Origin`, `Referer` and `Sec-Fetch-Site`, and the headers and cookies removed;
+  - a `send` token refused on the admin API, and an `admin` token refused at the port;
+  - a caller with a generated value let through while its address's row waits, and an IPv6 /64 counted as one;
+  - a forwarded certificate ignored without the proxy's secret, and the right-most untrusted `X-Forwarded-For`;
+  - the `toString` of every `Presented` record;
   - the rows written at the recording level `off`;
   - no answer, log line or record holds a presented secret, searched in every encoding the platform writes.
 
@@ -643,19 +722,20 @@ Each step is one issue. Every step needs the steps of systems and connections th
 1. **Credentials, the check at the entry in the HTTP adapter with Named systems, and the sender and receivers on a
    message.** The `verifier` kind in its generated form; the `credential` kind for `basic` and `api-key`; the contract
    (`CredentialKind`, `Presented` with all its kinds, `Entry`, `Refused`, `reads()`, `consumer(Inbound, Entry)`,
-   `HttpIngress.presented`); the order at the entry, the answers, the failure rows, `RAIL8_HTTP_TLS` and the headers
-   removed; `senders` as Named systems and `{check: off, reason}`; `message_parties`, written for the sender, the
-   receivers, pollers and calls between flows; `GET /admin/messages/{id}` with `sender` and `receivers`; the
-   contract suite and `FakeEntry`; `http`, the `webhook` sample, the template and `docs/ADAPTERS.md`. `class:C`.
-2. **The sender and receivers in the Messages view**, the search parameters of `GET /admin/messages`, and the status
-   `unrecorded`. `class:B`.
-3. **The Message sender role and test sending:** `message.send`, the token's path, `Rail8-Sender`, the browser guard,
-   the audit row, `RAIL8_TEST_SENDING` and `/health`. `class:C`.
+   `HttpIngress.presented`); the order at the entry, the answers, the failure rows, `RAIL8_HTTP_TLS`, the remote
+   address behind a proxy and the headers removed; `senders` as Named systems and `{check: off, reason}`;
+   `message_parties` with its primary key only, written for the sender, the receivers, pollers and calls between
+   flows; `GET /admin/messages/{id}` with `sender` and `receivers`; the contract suite and `FakeEntry`; `http`, the
+   `webhook` sample, the template and `docs/ADAPTERS.md`. `class:C`.
+2. **The sender and receivers in the Messages view**, the search parameters of `GET /admin/messages` with the indexes
+   they read, and the status `unrecorded`. `class:B`.
+3. **The Message sender role and test sending:** `message.send`, the token's use `send`, the token's path,
+   `Rail8-Sender`, the browser guard, the audit row, `RAIL8_TEST_SENDING` and `/health`. `class:C`.
 4. **The limit per caller:** `limits.perSender` and `entry_counts`. `class:C`.
 5. **API products, subscriptions and Subscribers:** the kinds `api-product` and `subscription`, `config.partners`, and
    `senders: subscribers`. `class:C`.
-6. **Typed passwords and keys:** the verifier's forms `password` and `key`, Argon2id at the entry and its cache.
-   `class:C`.
-7. **Client certificates:** the `certificate` credential, from a trusted proxy's header, and from the node's own TLS
-   once HTTPS on the HTTP port ships. `class:C`.
+6. **Typed passwords and keys:** the verifier's forms `password` and `key`, Argon2id at the entry and its cache, and
+   the bound on guesses across addresses. `class:C`.
+7. **Client certificates:** the `certificate` credential, from a trusted proxy's header with `RAIL8_HTTP_PROXY_SECRET`,
+   and from the node's own TLS once HTTPS on the HTTP port ships. `class:C`.
 8. **OAuth2 tokens:** the `issuer` kind, the JWKS read, and the `oauth2` credential. `class:C`.

@@ -431,8 +431,12 @@ A UI server outside development, when it comes, runs in session mode only and ho
   them to an administrator.
 - **Limits.** At most 20 live tokens per user.
 - **On the node's HTTP port.** A token of a user who holds `message.send`, a person's or a technical account's, is the
-  one credential of this page that the HTTP port takes, as the password of basic authentication, to send a test message (`docs/WHO-MAY-SEND.md`).
-  A session, a device and the emergency key are unknown callers there, and the port never routes to `/admin`.
+  one credential of this page that the HTTP port takes, as the password of basic authentication, to send a test
+  message (`docs/WHO-MAY-SEND.md`). A session, a device and the emergency key are unknown callers there, and the port
+  never routes to `/admin`.
+- **One use** (planned with the Message sender). A token is issued for `admin`, the default and the use of every token
+  issued before, or for `send`. A `send` token is refused on the admin API, and an `admin` token is an unknown caller
+  on the HTTP port, so a token that leaks from a test tool opens nothing else.
 
 The command line sends `Authorization: Bearer $RAIL8_TOKEN`. Only `rail8 user` and `rail8 bootstrap` send
 `RAIL8_ADMIN_TOKEN`, which is how `rail8 user add` makes the first administrator. No other command ever sends a value of
