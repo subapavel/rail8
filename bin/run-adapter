@@ -137,10 +137,11 @@ session=$(P=$password node -e 'process.stdout.write(JSON.stringify({name: "admin
   | curl -sf -X POST -H 'Content-Type: application/json' --data-binary @- "$admin/admin/sessions" \
   | node -e 'let s = ""; process.stdin.on("data", (c) => (s += c)).on("end", () => process.stdout.write(JSON.parse(s).session))') \
   || fail "the administrator could not log in; its log: $run/node.log"
-curl -sf -o /dev/null -X POST -H "Authorization: Bearer $session" -H 'Content-Type: application/json' \
+# the session's header goes to curl on its standard input, not on its command line
+printf 'Authorization: Bearer %s\n' "$session" | curl -sf -o /dev/null -X POST -H @- -H 'Content-Type: application/json' \
   -d '{"add":["operator","message-bodies"],"remove":[]}' "$admin/admin/users/deploy/roles" \
   || fail "deploy was not given the roles operator and message-bodies; the node's log: $run/node.log"
-curl -sf -o /dev/null -X POST -H "Authorization: Bearer $session" "$admin/admin/me/logout" || true
+printf 'Authorization: Bearer %s\n' "$session" | curl -sf -o /dev/null -X POST -H @- "$admin/admin/me/logout" || true
 unset password session
 
 echo "run-adapter: deploying $dir/package as committed at HEAD ($(git -C "$dir" rev-parse --short HEAD))"

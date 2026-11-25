@@ -553,7 +553,7 @@ describe('the tabs', () => {
     for (const side of ['source', 'target']) {
       await expect.element(page.getByRole('region', { name: `${side} message` }).getByRole('table', { name: `${side} fields` })).toBeVisible();
     }
-    expect(loadStructure.mock.calls.length).toBeGreaterThan(1);
+    expect(loadStructure.mock.calls.length).toBe(2);
   });
 
   test('Definition asks for both messages while the mapping lacks one, and leads to the Signature tab', async () => {
