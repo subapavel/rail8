@@ -441,7 +441,7 @@ producer and the receiver's facts, from one snapshot), which `rail8-runtime` imp
 interface Environment {
     String name();                         // RAIL8_ENV: dev, test, prod
     Snapshot current();                    // never blocks; the state the node holds in memory
-    void onActivation(java.util.function.Consumer<Snapshot> listener);   // once per new snapshot, in increasing generation;
+    void onActivation(java.util.function.Consumer<Snapshot> listener);   // once per new snapshot, in the order taken;
                                                                          // one snapshot may cover several activations
 }
 interface Snapshot {
