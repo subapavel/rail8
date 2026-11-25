@@ -270,7 +270,8 @@ public interface Component {
     default Optional<String> internalAddress(Direction direction, Map<String, Object> settings) { return Optional.empty(); }
 }
 
-/** One connection as the environment holds it now: its values checked against the connection form, defaults filled in. */
+/** One connection as the environment holds it now: its values checked against the connection form, defaults filled in.
+ *  values holds no secret; each secret field is a handle in secrets, read at each use. */
 public record Connection(String key, Map<String, Object> values, Map<String, Secret> secrets) {
     public Optional<Secret> secret(String field) { return Optional.ofNullable(secrets.get(field)); }
 }
@@ -370,7 +371,7 @@ sealed interface ConnectionState permits Values, Mocked {
     String adapter();
     boolean stopped();                     // stopped by a connection administrator
 }
-record Values(String adapter, Map<String, Object> values, boolean stopped) implements ConnectionState {}   // secret:// as references
+record Values(String adapter, Map<String, Object> values, boolean stopped) implements ConnectionState {}   // a secret field: its name
 record Mocked(String adapter, MockBehaviour behaviour, boolean stopped) implements ConnectionState {}
 record MockBehaviour(Reply reply, Duration delay, Optional<Fault.Kind> fail) { enum Reply { ECHO, EMPTY } }
 ```
@@ -419,8 +420,9 @@ check the environment again: a problem shows as below.
 `onActivation` names a new generation. The next send through a changed connection builds a new producer from the new
 values, and the old one closes once its sends settle: every later attempt, a retry waiting in the queue included, goes out
 with the new values. A sender whose connection changed is stopped and started again with a new `Inbound` through today's
-restart path, without backoff. Switching to the mock and back is a change like any other. A plain secret value held in a
-connection's values that changes in the secret store is a change of that connection the same way, and rebuilds no flow.
+restart path, without backoff. Switching to the mock and back is a change like any other. A secret that a connection
+names is not a change of the connection: its handle is read at each use, so a new value reaches the adapter at its next
+login, session or handshake, and nothing is built again.
 
 ### When a connection or a system is removed
 
@@ -526,8 +528,8 @@ schemaVersion: 1
 connections:
   acme/erp/rest:   { adapter: http, values: { url: "http://localhost:8090" } }
   globex/erp/rest: { adapter: http, values: { url: "http://localhost:8090" } }
-  billing/sftp:    { adapter: sftp, values: { host: sftp, port: 22, user: demo,
-                                              password: "secret://sftp-password", hostKey: "secret://sftp-host-key" } }
+  billing/sftp:    { adapter: sftp, values: { host: sftp, port: 22, user: demo, password: sftp-password,
+                                              hostKey: "@SFTP_HOST_KEY@" } }
 instanceNames:
   acme/erp: ACME-ERP-DEV
   globex/erp: GLOBEX-ERP-DEV
@@ -536,7 +538,13 @@ instanceNames:
 
 - The file is at most 1 MiB, its generation is 1, and a change takes a restart. Without the variable the environment is
   empty, and a deploy that names a connection is refused, naming the variable.
-- It is not in any package: it belongs to the node, like its other settings. Secrets stay references.
+- It is not in any package: it belongs to the node, like its other settings, and whoever writes it is the node's
+  operator. A secret field holds the secret's name, as in the store of the configuration; every other field holds its
+  value. The quickstart's file holds a placeholder for the SFTP server's host key fingerprint, which the stack generates
+  at its first start; the node's start fills it in, as it reads the fingerprint today.
+- It is for one node, as the quickstart runs. A pool of several nodes waits for the store.
+- The secrets its connections name are not recorded as uses in the secret store, so deleting one is not refused there;
+  the next deploy and every send through the connection then fail as for a missing secret.
 - When the store is built, it replaces this file as the source of `Environment`; whether the file stays as a seed of an
   empty store is decided there.
 
@@ -546,7 +554,8 @@ The node reads both shapes while the steps land, and the last step removes the o
 
 - A flow of `schemaVersion: 1` names endpoint files as today. Inside the node each endpoint becomes one use of the new
   contract: its `config`, with the override of `RAIL8_ENV`, is split by the adapter's forms into a `Connection` of its
-  own and the settings in the flow. Its deploy checks and its hash do not change, and it does not touch the environment.
+  own and the settings in the flow. Its deploy checks and its hash do not change, it does not touch the environment, and
+  its secrets follow the secret store's rules for endpoint files.
 - A flow of `schemaVersion: 2` names connections as this document says. A package may hold both while it moves; a flow of
   one shape cannot name what belongs to the other.
 - Once the demo, the template and the documents are on the new shape, the last step removes `kind: endpoint`,
@@ -565,8 +574,8 @@ A tool that imports from SAP needs these from the format, and nothing else:
 - A **communication channel of SAP PO** becomes a connection: its party and communication component give the system key
   (`acme/edi`, or `eshop` without a party), its name the connection's name, its adapter type an adapter. Its attributes
   are split by the adapter's description at `GET /admin/components`, so the tool hard-codes no split: the connection's go
-  to the environment of each source system (development, quality, production), a password as a `secret://` name left to
-  fill; the flow's go to the flow made from the integrated configuration or receiver agreement that uses the channel.
+  to the environment of each source system (development, quality, production), a password as the name of a secret left
+  to fill; the flow's go to the flow made from the integrated configuration or receiver agreement that uses the channel.
 - An **adapter configured inside an integration flow of SAP Integration Suite** becomes a system with a connection, named
   after the flow's participant; its connection's settings and externalized parameters go to the environment, and its
   settings in the flow stay in the flow.
@@ -613,12 +622,17 @@ That design owns secrets: their kinds, the store, `Secret` handles read at each 
 which do not change.
 
 This design relies on it for:
-- `secret://` references in a connection's values, resolved as an endpoint's options are today: a plain value into
-  `Connection.values`, a handle into `Connection.secrets`;
-- telling the node that a secret changed, so that a connection holding its plain value is changed as above;
-- the deploy's check that every secret a used connection names is set.
+- a connection naming a secret only from a secret field, by the secret's name and with the kinds the field takes, and
+  holding no value; the node builds each `Connection` with a handle per secret field, so a change of a secret rebuilds
+  nothing;
+- the deploy's check that every secret a used connection names is set and of a kind its field takes;
+- the record of uses, which the configuration of an environment writes for a connection when it activates it, and which
+  lists, for a connection, the deployed flows that name it, from `deployment_connection_uses`;
+- its rule that a setting pairing a secret with an address, a proxy or a trust it was not paired with before takes
+  effect only with the secret administrator's consent. A connection's `allowedHosts` are such an address.
 
-The secrets a connection names join the flow's scrubbing of failures, as an endpoint's do today.
+The handles of a connection's secret fields join the scrubbing of the failures of every flow that uses it, as an
+endpoint's do today. A flow's own `secret://` references in its steps' options do not change.
 
 ## What this replaces
 
@@ -679,8 +693,10 @@ quickstart or the database.
 1. **The adapter's contract.** `Forms`, labels and text keys, `Connection`, `Inbound`, `Outbound`, `Call`,
    `Producer.send(e, call)`; `http`, `sftp`, `direct`, `mock`, the template, `ComponentContract`,
    `PollingConsumerContract` and `RecordingComponent` on it; endpoint files read through it; format 2 and the texts route.
-   The endpoint form shows the connection's fields and the flow's in two groups. No change to the demo, the quickstart or
-   the database.
+   The endpoint form shows the connection's fields and the flow's in two groups. The secret store's step for credentials
+   and key pairs in adapters changes `Field` and the adapter's config too: whichever lands second carries the other's
+   change onto its types (`Field.secret(name, label, help, kinds...)`, `Connection.secret(field)`). No change to the demo,
+   the quickstart or the database.
 2. **Systems and flows by name.** `system.schema.json`, flows and tests of `schemaVersion: 2` with a sender and a send step
    by name, the key rules, `Environment` with the environment file and `InMemoryEnvironment`, the deploy's checks,
    `deployment_connection_uses`, `GET /admin/systems`, the restart on activation, `rail8 validate` and `rail8 test`. The
