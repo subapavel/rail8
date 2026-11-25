@@ -5,11 +5,12 @@
 #   ci/check <area> [arguments]      ci/check help lists the areas
 #   ci/check <area> <area>...        each area in turn, every one run even after one failed
 #
-# Every area runs as a GitHub runner does: TZ=UTC; git without the machine's own settings (no identity, no signing); the
-# JDK of .java-version and the Node.js major of .nvmrc, which the workflows install, or it stops before it starts. Where an
-# area needs Docker it starts dockerd when it is not running and it can (a session's container runs as root). The Docker
-# areas start the quickstart's containers and volumes afresh and take over ~/rail8-workspace and ~/acme-adapter, as on a
-# fresh runner: run them where those can be lost, such as a session's container.
+# Every area runs as a GitHub runner does: TZ=UTC; git without the machine's own settings (no identity, no signing); no
+# _JAVA_OPTIONS (its flags are added to JAVA_TOOL_OPTIONS); the JDK of .java-version and the Node.js major of .nvmrc,
+# which the workflows install, or it stops before it starts. Where an area needs Docker it starts dockerd when it is
+# not running and it can (a session's container runs as root). The Docker areas start the quickstart's containers and
+# volumes afresh and take over ~/rail8-workspace and ~/acme-adapter, as on a fresh runner: run them where those can be
+# lost, such as a session's container.
 #
 # Exits 0 when every check of the area passed, 1 when one failed, 2 on a usage error, 3 when the area could not run here
 # (a tool missing or of another version, Docker not available); the last line of each area says which. With several
@@ -457,6 +458,12 @@ finish() {
 }
 
 export TZ=UTC
+# A runner sets no _JAVA_OPTIONS, and every JVM prints a line on stderr for it; its flags move to JAVA_TOOL_OPTIONS, the
+# variable the tests that start a JVM of their own take out of its environment.
+if [ -n "${_JAVA_OPTIONS:-}" ]; then
+  export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$_JAVA_OPTIONS"
+  unset _JAVA_OPTIONS
+fi
 tmp=$(mktemp -d)
 trap finish EXIT
 # git as on a runner: an empty global configuration and no system one

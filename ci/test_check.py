@@ -1,4 +1,5 @@
-"""Tests for ci/check: which areas it runs, when it stops before an area, and the git and clock it runs them with.
+"""Tests for ci/check: which areas it runs, when it stops before an area, and the git, clock and JVM options it runs
+them with.
 
 Run: python3 -m unittest ci.test_check  (from the repository root; ci/check guard runs it)
 
@@ -29,7 +30,8 @@ class CheckTest(unittest.TestCase):
         self.node("v22.1.0")
         self.stub("npm", "echo 10.0.0")
         # the guard area's python3: writes the clock's zone and git's user name it sees, and passes
-        self.stub("python3", f'echo "TZ=$TZ user=$(git config --get user.name)" >> "{self.dir}/seen"')
+        self.stub("python3", f'echo "TZ=$TZ user=$(git config --get user.name) _JAVA_OPTIONS=$_JAVA_OPTIONS '
+                             f'JAVA_TOOL_OPTIONS=$JAVA_TOOL_OPTIONS" >> "{self.dir}/seen"')
 
     def stub(self, name: str, body: str):
         path = self.bin / name
@@ -48,8 +50,9 @@ class CheckTest(unittest.TestCase):
     def node(self, version: str):
         self.stub("node", f"echo {version}")
 
-    def run_check(self, *args: str) -> subprocess.CompletedProcess:
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("JAVA_", "GIT_", "TZ", "MAVEN", "GITHUB_"))}
+    def run_check(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("JAVA_", "_JAVA_", "GIT_", "TZ", "MAVEN", "GITHUB_"))}
+        env.update(extra)
         env["PATH"] = f"{self.bin}:{env.get('PATH', '/usr/bin:/bin')}"
         env["HOME"] = str(self.dir)
         return subprocess.run([str(CHECK), *args], cwd=REPO, env=env, capture_output=True, text=True, timeout=TIMEOUT)
@@ -87,12 +90,12 @@ class CheckTest(unittest.TestCase):
         self.assertIn("ci/check jq: NOT RUN", result.stderr)
         self.assertIn("ci/check ui: NOT RUN", result.stderr)
 
-    def test_an_area_runs_in_utc_with_git_as_on_a_runner(self):
-        result = self.run_check("guard")
+    def test_an_area_runs_in_utc_with_git_and_java_options_as_on_a_runner(self):
+        result = self.run_check("guard", _JAVA_OPTIONS="-Dmachine=1", JAVA_TOOL_OPTIONS="-Dtool=1")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("ci/check guard: passed", result.stdout)
         seen = (self.dir / "seen").read_text().splitlines()
-        self.assertEqual(["TZ=UTC user="] * 3, seen)
+        self.assertEqual(["TZ=UTC user= _JAVA_OPTIONS= JAVA_TOOL_OPTIONS=-Dtool=1 -Dmachine=1"] * 3, seen)
 
 
 if __name__ == "__main__":
