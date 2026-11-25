@@ -80,6 +80,7 @@ describe('view of the flows under examples', () => {
   it('draws every flow as its golden view says, with no problem', async () => {
     const { items } = (await get(base)) as { items: { path: string; id?: string }[] };
     expect(items.map((i) => i.path)).toEqual([
+      'demo/flows/greet.yaml',
       'demo/flows/invoice-async.yaml',
       'demo/flows/invoice-sync.yaml',
       'demo/flows/order-jq.yaml',
