@@ -53,7 +53,10 @@ cloud environment over this repository, read-only.
 1. Post one comment on the issue with the complete prompt for Codex in a single code block, ready
    to copy. The prompt stands on its own: it names the files to read, states the recommendation
    and the alternatives turned down, asks for the weak points and what would break first, and
-   tells Codex to change no file and open no pull request. Its last line is `Write your review as
+   tells Codex to change no file and open no pull request. It then says that one write is allowed
+   and approved by the owner: `The only thing you may write is one comment with your review on
+   issue #N; the owner approves that comment here.` Without that sentence Codex stops and asks
+   before it posts. Its last line is `Write your review as
    a comment on issue #N in subapavel/rail8.`: a Codex cloud run posts that comment by itself, but
    only when the prompt says so. Label the issue `codex-wanted`. Never write a mention of Codex in
    a comment.
