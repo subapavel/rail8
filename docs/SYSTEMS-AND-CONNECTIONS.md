@@ -68,7 +68,8 @@ Rail8 supports moving from SAP PO and SAP Integration Suite and is a copy of nei
 
 ## Keys
 
-A key is made of segments: `^[a-z][a-z0-9-]{0,63}$`, never `rail8` as the first one.
+A key is made of segments: `^[a-z][a-z0-9-]{0,63}$`, never `rail8`, `subscribers` or `by-agreement` as the first one.
+The last two are words of a flow's `senders`, which takes a system key in the same place.
 
 - A **system key** is `<name>` or `<partner>/<name>`; a **connection key** is `<system key>/<connection>`. A field that
   takes a connection key reads 2 segments as a system without a partner and 3 as a partner's system.
@@ -98,7 +99,7 @@ A system is a file of `kind: system`, found by its kind anywhere in a package li
                         "description": { "type": "string", "maxLength": 1000 } } } } },
   "if": { "not": { "required": ["partner"] } }, "then": { "properties": { "name": { "$ref": "#/$defs/first" } } },
   "$defs": { "segment": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
-             "first": { "$ref": "#/$defs/segment", "not": { "const": "rail8" } } } }
+             "first": { "$ref": "#/$defs/segment", "not": { "enum": ["rail8", "subscribers", "by-agreement"] } } } }
 ```
 
 ```yaml
@@ -142,7 +143,7 @@ land (see "Moving to the new shape"). The other keys of a flow and the other ste
     "senders":    { "description": "Who may send: the place of the design of the entry, refused until it ships." } } },
 "$defs": {
   "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9+.-]{0,31}$" },
-  "connectionKey": { "type": "string", "pattern": "^(?!rail8/)[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63}){1,2}$" },
+  "connectionKey": { "type": "string", "pattern": "^(?!(rail8|subscribers|by-agreement)/)[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63}){1,2}$" },
   "settings": { "type": "object", "maxProperties": 128, "propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]{0,63}$" },
                 "additionalProperties": { "type": ["string", "integer", "boolean"] } } }
 ```
@@ -846,8 +847,8 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
 
 ## Tests
 
-- Keys: the segment rule, `rail8` first and elsewhere, the first-segment rule across packages, 2 and 3 segments read
-  apart.
+- Keys: the segment rule, `rail8`, `subscribers` and `by-agreement` first and elsewhere, the first-segment rule across
+  packages, 2 and 3 segments read apart.
 - System files: schema; an adapter without a connection form refused; the same definition in two packages accepted with
   a note, a different one refused naming both; a drop, an adapter change and an undeploy of a used system refused
   naming the flows; a move between packages without a stop; two packages naming each other's systems.
