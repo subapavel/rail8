@@ -66,6 +66,9 @@ The configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`) adds `
 `config.run`, `config.consent` and `config.import`, and grants `secret.list` to the connection administrator and the
 partner administrator too. They join this table, and the enum, when they are built.
 
+The entry of a message (`docs/WHO-MAY-SEND.md`) adds `message.send`, granted by the message sender: a token may do it,
+the emergency key may not. It joins this table, and the enum, when it is built.
+
 | Action | Routes | Granted by |
 | --- | --- | --- |
 | `message.read` | `GET /admin/messages` (every form), `/admin/message-counts`, `/admin/messages/{id}`, `/admin/messages/{id}/audit`, `/admin/dlq`, `/admin/work/held`, `/admin/work/stopped`, `/admin/work/lost` | operator |
@@ -99,9 +102,6 @@ partner administrator too. They join this table, and the enum, when they are bui
 | `self.logout` | `POST /admin/me/logout` | a session |
 | `self.tokens` | `GET /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | a person |
 | `self.token-issue` | `POST /admin/me/tokens` | a person logged in |
-
-The entry of a message (`docs/WHO-MAY-SEND.md`) adds `message.send`, granted by the message sender: a token may do it,
-the emergency key may not. It joins this table, and the enum, when it is built.
 
 "Logged in" means a session, never a token. A token of an administrator may do the reads (`user.read`, `token.read` and
 `audit.read`), but an action that needs a session is 403 `session-required`.
