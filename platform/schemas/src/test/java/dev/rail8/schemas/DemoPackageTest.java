@@ -23,9 +23,9 @@ class DemoPackageTest {
     void everyDocumentOfTheDemoPackageIsValidAgainstTheSchemaOfItsKind() throws IOException {
         List<Path> files;
         try (Stream<Path> s = Files.walk(DEMO)) {
-            files = s.filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml") || p.toString().endsWith(".json")).filter(p -> !DEMO.relativize(p).startsWith("fixtures")).sorted().toList();
+            files = s.filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml") || p.toString().endsWith(".json")).filter(p -> !isData(DEMO.relativize(p))).sorted().toList();
         }
-        assertTrue(files.size() >= 12, "package.yaml, six endpoints, four flows and their tests: " + files);
+        assertTrue(files.size() >= 22, "package.yaml, nine endpoints, six flows and their tests: " + files);
         for (Path f : files) {
             JsonObject doc = Documents.read(f);
             Schemas schema = Schemas.forKind(doc.getString("kind"));
@@ -34,12 +34,17 @@ class DemoPackageTest {
         }
     }
 
+    /** Whether a file is data a document names, with no kind of its own: a fixture, a mapping or a schema the mapping reads. */
+    private static boolean isData(Path inPackage) {
+        return inPackage.startsWith("fixtures") || inPackage.startsWith("mappings") || inPackage.startsWith("structures");
+    }
+
     @Test
     void theFlowReferencesOnlyEndpointsThatExistAndTheTestOnlyFixturesThatExist() throws IOException {
         Package pkg = Package.load(DEMO);
         assertEquals("demo", pkg.name());
-        assertEquals(Set.of("http-in", "http-in-async", "http-in-order", "order-partner-call", "order-partner-in", "sftp-inbox", "partner-domestic", "partner-foreign"), pkg.endpointIds());
-        assertEquals(Set.of("invoice-sync", "invoice-async", "sftp-invoice", "order-jq", "order-partner"), Set.copyOf(pkg.flowIds()));
+        assertEquals(Set.of("http-in", "http-in-async", "http-in-greet", "http-in-order", "order-partner-call", "order-partner-in", "sftp-inbox", "partner-domestic", "partner-foreign"), pkg.endpointIds());
+        assertEquals(Set.of("invoice-sync", "invoice-async", "sftp-invoice", "order-jq", "order-partner", "greet"), Set.copyOf(pkg.flowIds()));
         List<String> problems = pkg.crossCheck();
         assertTrue(problems.isEmpty(), String.join("\n", problems));
     }

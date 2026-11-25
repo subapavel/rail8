@@ -1,0 +1,8 @@
+# greet's door: served at /http/greet on the node's HTTP port.
+schemaVersion: 1
+kind: endpoint
+id: http-in-greet
+scheme: http
+direction: in
+config:
+  address: /greet

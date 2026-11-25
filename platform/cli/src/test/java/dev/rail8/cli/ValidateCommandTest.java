@@ -58,6 +58,7 @@ class ValidateCommandTest {
             "package demo 0.1.0",
             "endpoints/  -  -",
             "  http-in-async.yaml  endpoint  http-in-async",
+            "  http-in-greet.yaml  endpoint  http-in-greet",
             "  http-in-order.yaml  endpoint  http-in-order",
             "  http-in.yaml  endpoint  http-in",
             "  order-partner-call.yaml  endpoint  order-partner-call",
@@ -68,6 +69,8 @@ class ValidateCommandTest {
             "fixtures/  -  -",
             "fixtures/inbox/  -  -",
             "flows/  -  -",
+            "  greet.test.yaml  test  -",
+            "  greet.yaml  flow  greet",
             "  invoice-async.test.yaml  test  -",
             "  invoice-async.yaml  flow  invoice-async",
             "  invoice-sync.test.yaml  test  -",
@@ -77,7 +80,10 @@ class ValidateCommandTest {
             "  order-partner.test.yaml  test  -",
             "  order-partner.yaml  flow  order-partner",
             "  sftp-invoice.test.yaml  test  -",
-            "  sftp-invoice.yaml  flow  sftp-invoice");
+            "  sftp-invoice.yaml  flow  sftp-invoice",
+            "mappings/  -  -",
+            "structures/  -  -",
+            "structures/greeting/  -  -");
 
     /** The {@code tree} fixture: a root endpoint, folder.yaml with both fields and with a description only, a nested folder. */
     static final List<String> TREE = List.of(

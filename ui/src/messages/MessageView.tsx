@@ -207,6 +207,8 @@ function StepsTable({ attempt, rows, onShow }: { attempt: number; rows: Row[]; o
   const texts = useText();
   const { t } = texts;
   const step = (row: Row) => (row.kind === 'step' ? row.step : null);
+  // a step by its number, a wait by its place among the rows
+  const keys = new Map(rows.map((row, i) => [row, row.kind === 'step' ? `step-${row.step.step}` : `wait-${i}`]));
   // a wait's label spans the name, the outcome and the start; its time is under the wall time, and nothing follows it
   const across = (span: number) => (row: Row) => (row.kind === 'wait' ? { colSpan: span } : {});
   const columns: TableColumnsType<Row> = [
@@ -259,7 +261,7 @@ function StepsTable({ attempt, rows, onShow }: { attempt: number; rows: Row[]; o
       size="small"
       pagination={false}
       scroll={{ x: 'max-content' }}
-      rowKey={(row, i) => (row.kind === 'step' ? `step-${row.step.step}` : `wait-${i}`)}
+      rowKey={(row) => keys.get(row) ?? ''}
       columns={columns}
       dataSource={rows}
     />
