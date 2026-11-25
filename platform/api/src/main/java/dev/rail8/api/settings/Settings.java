@@ -12,21 +12,22 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * What an adapter's endpoints may set, described once for every reader: the node checks an endpoint file's
- * {@code options} with {@link #check}, the admin API serves {@link #toJson} and the UI draws its form from that. A
- * component returns its description from {@link dev.rail8.api.Component#settings()}; the components the node ships and
- * those a plugin adds describe themselves the same way.
+ * One form of an adapter, described once for every reader: the node checks values with {@link #check}, the admin API
+ * serves it within the adapter's {@link Forms} and the UI draws the form from that. An adapter has two, the connection
+ * form and the flow form ({@link Forms}).
  *
  * <pre>{@code
  * static final Tab POLLING = Tab.of("polling", "Polling");
- * static final Settings SETTINGS = Settings.of(
- *         Field.text("host", "The server's name or address."),
- *         Field.integer("port", "The server's port.").range(1, 65535).byDefault(22),
- *         Field.secret("password", "The password, or set privateKey.").tab(Tab.SECURITY),
- *         Field.secret("privateKey", "The private key, or set password.").tab(Tab.SECURITY),
- *         Field.choice("afterSuccess", "What happens to a delivered file.", "delete", "move").byDefault("delete").tab(POLLING).in(),
- *         Field.text("moveTo", "Where a delivered file goes.").required().visibleWhen("afterSuccess", "move").tab(POLLING).in())
+ * static final Settings CONNECTION = Settings.of(
+ *         Field.text("host", "Host", "The server's name or address.").required(),
+ *         Field.integer("port", "Port", "The server's port.").range(1, 65535).byDefault(22),
+ *         Field.secret("password", "Password", "The password, or set privateKey.").tab(Tab.SECURITY),
+ *         Field.secret("privateKey", "Private key", "The private key, or set password.").tab(Tab.SECURITY))
  *     .exactlyOne("password", "privateKey");
+ * static final Settings FLOW = Settings.of(
+ *         Field.choice("afterSuccess", "After success", "What happens to a delivered file.",
+ *                 Choice.of("delete", "Delete"), Choice.of("move", "Move")).byDefault("delete").tab(POLLING).in(),
+ *         Field.text("moveTo", "Move to", "Where a delivered file goes.").required().visibleWhen("afterSuccess", "move").tab(POLLING).in());
  * }</pre>
  *
  * <p>A description is checked while it is built and is finite: at most 256 fields, 16 tabs of its own and 16
@@ -34,21 +35,13 @@ import java.util.TreeSet;
  * description throws refuses the node's start. The node sets {@code flow} and {@code maxBodyBytes} on every in endpoint
  * itself, so no field serving in endpoints has either name.
  *
- * <p>{@link #NONE} is the description of a component that describes nothing: the node then checks its options against
- * {@link dev.rail8.api.Component#configSchema()} and the form offers a raw editor.
+ * <p>{@link #NONE} is a form that describes nothing: {@link #check} accepts any values and the form offers a raw editor.
  *
  * @since 0.1
  */
 public final class Settings {
 
-    /**
-     * The version of the JSON form. A key or type added later that a reader may ignore keeps it; a change to what a
-     * description accepts raises it. A reader that meets a field type it does not know offers a raw editor for it and
-     * makes no claim on its value. The keys {@code actions} on a field and at the top level are kept for helper actions.
-     */
-    public static final int FORMAT = 1;
-
-    /** The description of a component that describes nothing; {@link #check} has nothing to say about its options. */
+    /** A form that describes nothing; {@link #check} has nothing to say about its values. */
     public static final Settings NONE = new Settings(false, List.of(), List.of());
 
     private static final int MAX_FIELDS = 256;
@@ -58,15 +51,35 @@ public final class Settings {
     private static final Set<String> NODE_KEYS = Set.of("flow", "maxBodyBytes");
 
     /**
-     * One broken rule of an endpoint's options: {@code path} is the option's JSON pointer within {@code options}
-     * ({@code /port}), or {@code ""} for a rule over several options; {@code message} says what is wrong in the form's
-     * words, never quoting the value, so a secret set by mistake is not repeated.
+     * One broken rule of a form's values: {@code path} is the setting's JSON pointer within the values ({@code /port}), or
+     * {@code ""} for a rule over several settings; {@code code} is stable, one of the constants below; {@code message} says
+     * what is wrong in the form's English words, never quoting the value, so a secret set by mistake is not repeated.
      *
      * @since 0.1
      */
-    public record Problem(String path, String message) {
+    public record Problem(String path, String code, String message) {
+        /** A required field is left out while it is shown. */
+        public static final String REQUIRED = "required";
+        /** A key that no field of the form has. */
+        public static final String UNKNOWN = "unknown";
+        /** A whole number below the field's least. */
+        public static final String MIN = "min";
+        /** A whole number above the field's greatest. */
+        public static final String MAX = "max";
+        /** A text that does not match the field's pattern. */
+        public static final String PATTERN = "pattern";
+        /** A value that is none of the field's choices. */
+        public static final String CHOICE = "choice";
+        /** A value of another type than the field's, or an empty text. */
+        public static final String TYPE = "type";
+        /** A setting of a field that serves the other direction only. */
+        public static final String DIRECTION = "direction";
+        /** Not exactly one field of an {@link #exactlyOne} group is set. */
+        public static final String EXACTLY_ONE = "exactlyOne";
+
         public Problem {
             Objects.requireNonNull(path, "path");
+            Objects.requireNonNull(code, "code");
             Objects.requireNonNull(message, "message");
         }
     }
@@ -159,7 +172,34 @@ public final class Settings {
         return new Settings(described, fields, List.copyOf(more));
     }
 
-    /** Whether the component describes its settings; false only for {@link #NONE}. */
+    /** The fields in declaration order. */
+    List<Field> fields() {
+        return fields;
+    }
+
+    /** The field named {@code name}, if the form has one. */
+    Field field(String name) {
+        return byName.get(name);
+    }
+
+    /** Whether the form has a field named {@code name}. */
+    public boolean has(String name) {
+        return byName.containsKey(name);
+    }
+
+    /** The default of every field serving {@code direction} that has one, by name; a whole number as a {@code long}. */
+    public Map<String, Object> defaults(Direction direction) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (Field f : fields) if (f.hasDefault() && f.serves(direction)) m.put(f.name(), f.byDefault());
+        return Collections.unmodifiableMap(m);
+    }
+
+    /** The names of the secret fields, in declaration order. */
+    public List<String> secrets() {
+        return fields.stream().filter(Field::isSecret).map(Field::name).toList();
+    }
+
+    /** Whether the form describes its settings; false only for {@link #NONE}. */
     public boolean described() {
         return described;
     }
@@ -193,13 +233,13 @@ public final class Settings {
             Object value = options.get(f.name());
             String path = pointer(f.name());
             if (!f.serves(direction)) {
-                if (value != null) problems.add(new Problem(path, "a setting of " + other(direction) + " endpoints only"));
+                if (value != null) problems.add(new Problem(path, Problem.DIRECTION, "a setting of " + other(direction) + " endpoints only"));
             } else if (value != null) {
-                String problem = f.problem(value, true);
-                if (problem != null) problems.add(new Problem(path, problem));
+                Field.Wrong problem = f.problem(value, true);
+                if (problem != null) problems.add(new Problem(path, problem.code(), problem.message()));
             } else if (f.isRequired() && shown.contains(f.name())) {
                 String by = f.shownBy();
-                problems.add(new Problem(path, by == null ? "is required" : "is required when " + by + " is " + values.get(by)));
+                problems.add(new Problem(path, Problem.REQUIRED, by == null ? "is required" : "is required when " + by + " is " + values.get(by)));
             }
         }
         Set<String> unknown = new TreeSet<>();
@@ -208,11 +248,11 @@ public final class Settings {
             if (e.getValue() == null || byName.containsKey(key) || (direction == Direction.IN && NODE_KEYS.contains(key))) continue;
             unknown.add(key);
         }
-        for (String key : unknown) problems.add(new Problem(pointer(key), "no such setting"));
+        for (String key : unknown) problems.add(new Problem(pointer(key), Problem.UNKNOWN, "no such setting"));
         for (List<String> group : groups) {
             if (!byName.get(group.get(0)).serves(direction)) continue;
             long set = group.stream().filter(name -> options.get(name) != null).count();
-            if (set != 1) problems.add(new Problem("", "set exactly one of " + String.join(", ", group)));
+            if (set != 1) problems.add(new Problem("", Problem.EXACTLY_ONE, "set exactly one of " + String.join(", ", group)));
         }
         return List.copyOf(problems);
     }
@@ -226,14 +266,14 @@ public final class Settings {
     }
 
     /**
-     * The description as the admin API serves it, immutable and equal on every call: {@code format} ({@link #FORMAT}),
-     * {@code described}, {@code tabs} (each {@code id}, {@code label} and {@code common}: general, the component's own in
-     * the order fields first use them, then retry, recording and security), {@code fields} in declaration order and
-     * {@code rules}. A field always has {@code name}, {@code type} ({@code text}, {@code secret}, {@code integer},
-     * {@code boolean} or {@code choice}), {@code help}, {@code tab} (an id), {@code required} and {@code directions}
-     * ({@code in}, {@code out} or both), and only what it sets of {@code pattern}, {@code default}, {@code min},
-     * {@code max}, {@code choices} and {@code visibleWhen} ({@code field} and {@code values}). A rule is
-     * {@code {"kind": "exactlyOne", "fields": [...]}}.
+     * The form as JSON, immutable and equal on every call: {@code described}, {@code tabs} (each {@code id}, {@code label}
+     * and {@code common}: general, the adapter's own in the order fields first use them, then retry, recording and
+     * security), {@code fields} in declaration order and {@code rules}. A field always has {@code name}, {@code type}
+     * ({@code text}, {@code secret}, {@code integer}, {@code boolean} or {@code choice}), {@code label}, {@code help},
+     * {@code tab} (an id), {@code required} and {@code directions} ({@code in}, {@code out} or both), and only what it sets
+     * of {@code pattern}, {@code default}, {@code min}, {@code max}, {@code choices} (each {@code value} and {@code label}),
+     * {@code expression} (its escape in lower case) and {@code visibleWhen} ({@code field} and {@code values}). A rule is
+     * {@code {"kind": "exactlyOne", "fields": [...]}}. {@link Forms#toJson} carries two of them with their text keys.
      */
     public Map<String, Object> toJson() {
         return json;
@@ -250,7 +290,7 @@ public final class Settings {
         for (Field f : fields) fieldJson.add(f.toJson());
         List<Object> rules = new ArrayList<>();
         for (List<String> g : groups) rules.add(ordered("kind", "exactlyOne", "fields", g));
-        return ordered("format", FORMAT, "described", described, "tabs", List.copyOf(tabJson), "fields", List.copyOf(fieldJson),
+        return ordered("described", described, "tabs", List.copyOf(tabJson), "fields", List.copyOf(fieldJson),
                 "rules", List.copyOf(rules));
     }
 

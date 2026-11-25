@@ -4,7 +4,7 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BodyTooLargeException;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.IdGenerator;
@@ -16,7 +16,6 @@ import io.vertx.core.buffer.Buffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -52,9 +51,8 @@ class MockIngestTest {
     final AtomicInteger minted = new AtomicInteger();
     final IdGenerator ids = () -> "in-" + minted.incrementAndGet();
     final MockComponent http = new MockComponent("http", rt.blobs(), rt.timer(), ids);
-    /** As Deployments hands it to the consumer: {@code <scheme>://<id>}, the endpoint's config plus the flow and its maxBodyBytes. */
-    final EndpointConfig in = new EndpointConfig("http-in", URI.create("http://http-in"),
-            Map.of("address", "/in", "flow", "orders", "maxBodyBytes", 8L));
+    /** As the node hands it to the consumer: the flow, its body limit, and a connection keyed by the endpoint's id holding its config. */
+    final Inbound in = Uses.in("http-in", "orders", 8, Map.of("address", "/in"));
     final List<Consumer> started = new ArrayList<>();
     final List<Promise<Ack>> holds = new ArrayList<>();
 
@@ -67,7 +65,7 @@ class MockIngestTest {
     record Handled(List<Envelope> envelopes, List<Thread> threads) {}
 
     /** Starts a consumer of {@code mock} on {@code cfg} whose handler records what it gets and on which thread, and answers {@code answer}. */
-    Handled consume(MockComponent mock, EndpointConfig cfg, Function<Envelope, Future<Ack>> answer) {
+    Handled consume(MockComponent mock, Inbound cfg, Function<Envelope, Future<Ack>> answer) {
         Handled handled = new Handled(new CopyOnWriteArrayList<>(), new CopyOnWriteArrayList<>());
         Consumer c = mock.consumer(cfg, e -> {
             handled.threads().add(Thread.currentThread());
@@ -134,7 +132,7 @@ class MockIngestTest {
         assertInstanceOf(IllegalStateException.class, failureOf(() -> http.ingest("http-in", Headers.empty(), Buffer.buffer("x"))),
                 "no consumer at all");
 
-        Handled other = consume(http, new EndpointConfig("other-in", URI.create("http://other-in"), Map.of("flow", "other", "maxBodyBytes", 8L)),
+        Handled other = consume(http, Uses.in("other-in", "other", 8, Map.of()),
                 e -> Future.succeededFuture(new Ack.Accepted(e.id())));
         assertInstanceOf(IllegalStateException.class, failureOf(() -> http.ingest("http-in", Headers.empty(), Buffer.buffer("x"))),
                 "a consumer of another endpoint only");
@@ -171,8 +169,7 @@ class MockIngestTest {
     void ingestOnHttpSetsMethodAndPath() {
         Handled viaHttp = consume(http, in, e -> Future.succeededFuture(new Ack.Accepted(e.id())));
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), ids);
-        Handled viaSftp = consume(sftp, new EndpointConfig("drop", URI.create("sftp://drop"),
-                Map.of("user", "u", "flow", "orders", "maxBodyBytes", 8L)), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        Handled viaSftp = consume(sftp, Uses.in("drop", "orders", 8, Map.of("user", "u")), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
 
         http.ingest("http-in", Headers.empty(), Buffer.buffer("<a/>")).await();
         sftp.ingest("drop", Headers.empty(), Buffer.buffer("<a/>")).await();
@@ -187,8 +184,7 @@ class MockIngestTest {
     /** An http endpoint without an {@code address} is at the prefix alone: the ingress envelope's {@code http.path} is {@code /http}. */
     @Test
     void ingestOnHttpWithoutAnAddressIsAtThePrefix() {
-        Handled handled = consume(http, new EndpointConfig("http-root", URI.create("http://http-root"),
-                Map.of("flow", "orders", "maxBodyBytes", 8L)), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        Handled handled = consume(http, Uses.in("http-root", "orders", 8, Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
 
         http.ingest("http-root", Headers.empty(), Buffer.buffer("<a/>")).await();
 
@@ -214,9 +210,8 @@ class MockIngestTest {
     @Test
     void ingestIsNotSent() {
         consume(http, in, e -> Future.succeededFuture(new Ack.Accepted(e.id())));
-        EndpointConfig partner = new EndpointConfig("partner", URI.create("http://partner"), Map.of());
         Envelope out = rt.ingress("orders", Headers.empty(), Buffer.buffer("<b/>"));
-        http.producer(partner).send(out).await();
+        http.producer(Uses.out("partner")).send(out, Uses.CALL).await();
         assertEquals(List.of(out), http.sent(), "a producer's send is recorded");
 
         http.ingest("http-in", Headers.empty(), Buffer.buffer("<a/>")).await();

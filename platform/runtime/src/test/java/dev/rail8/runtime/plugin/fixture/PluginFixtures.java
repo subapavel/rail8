@@ -1,9 +1,13 @@
 package dev.rail8.runtime.plugin.fixture;
 
+import java.util.Map;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Expressions;
 import dev.rail8.api.Health;
@@ -42,6 +46,9 @@ public final class PluginFixtures {
 
     private PluginFixtures() {}
 
+    /** Forms that describe nothing, each direction reaching a connection. */
+    static final Forms CONNECTED = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
+
     /** This class and every class nested in it: what each fixture jar holds. */
     public static Class<?>[] classes() {
         return Stream.concat(Stream.of(PluginFixtures.class), Stream.of(PluginFixtures.class.getDeclaredClasses())).toArray(Class<?>[]::new);
@@ -63,9 +70,9 @@ public final class PluginFixtures {
         }
 
         @Override public String scheme() { return scheme; }
-        @Override public String configSchema() { return "{\"type\":\"object\"}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("never started"); }
+        @Override public Forms forms() { return CONNECTED; }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
@@ -131,6 +138,35 @@ public final class PluginFixtures {
         @Override public List<Component> components(ComponentContext context) { return List.of(new Named("http", context)); }
     }
 
+    /** A plugin that brings a component of the scheme {@code rail8}, whose text keys are the platform's own. */
+    public static final class PlatformScheme implements Plugin {
+        @Override public String name() { return "platform-scheme"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new Named("rail8", context)); }
+    }
+
+    /** A component of the scheme {@code loner} whose out direction reaches no connection, as only an internal adapter's may. */
+    public static final class Unconnected implements Component {
+        private final String scheme;
+
+        public Unconnected(String scheme) { this.scheme = scheme; }
+
+        @Override public String scheme() { return scheme; }
+        @Override public Forms forms() {
+            return new Forms(Settings.NONE, Settings.of(Field.text("address", "Address", "Where it sends.").out()), Map.of(Direction.OUT, Forms.Reach.NO_CONNECTION));
+        }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
+        @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
+    }
+
+    /** A plugin named {@code loner} whose one component, {@link Unconnected} of the scheme {@code loner}, sends without a connection. */
+    public static final class SendsWithoutConnection implements Plugin {
+        @Override public String name() { return "loner"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new Unconnected("loner")); }
+    }
+
     /** A plugin that brings a component of the platform's scheme {@code mock}. */
     public static final class MockScheme implements Plugin {
         @Override public String name() { return "mock-scheme"; }
@@ -192,12 +228,14 @@ public final class PluginFixtures {
         }
     }
 
-    /** A component of the scheme {@code badly} whose settings description names a field {@code Max}, which no field may be named. */
+    /** A component of the scheme {@code badly} whose connection form names a field {@code Max}, which no field may be named. */
     public static final class BadlyDescribed implements Component {
         @Override public String scheme() { return "badly"; }
-        @Override public Settings settings() { return Settings.of(Field.integer("Max", "The most.")); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("never started"); }
+        @Override public Forms forms() {
+            return new Forms(Settings.of(Field.integer("Max", "Max", "The most.")), Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION));
+        }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
@@ -208,12 +246,12 @@ public final class PluginFixtures {
         @Override public List<Component> components(ComponentContext context) { return List.of(new BadlyDescribed()); }
     }
 
-    /** A component of the scheme {@code unsaid} whose settings description is null. */
+    /** A component of the scheme {@code unsaid} whose forms are null. */
     public static final class NullDescribed implements Component {
         @Override public String scheme() { return "unsaid"; }
-        @Override public Settings settings() { return null; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("never started"); }
+        @Override public Forms forms() { return null; }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
@@ -273,7 +311,13 @@ public final class PluginFixtures {
     /** A plugin built against the next api minor. */
     public static final class NextMinor implements Plugin {
         @Override public String name() { return "next-minor"; }
-        @Override public String api() { return "0.4"; }
+        @Override public String api() { return "0.5"; }
+    }
+
+    /** A plugin built against api 0.3, the contract before connections. */
+    public static final class OnApi03 implements Plugin {
+        @Override public String name() { return "on-api-03"; }
+        @Override public String api() { return "0.3"; }
     }
 
     /** A plugin named {@code settled} whose one step's type is {@code depth-<n>}, {@code n} its setting {@code DEPTH}: 1 to 9, 5 unset. */

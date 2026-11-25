@@ -85,7 +85,7 @@ class PluginsCommandTest {
         plugin("acme.jar", CliPlugins.Acme.class);
         Path pkg = CliRuns.copy(PACKAGE, copy.resolve("plugin"));
         Path partner = pkg.resolve("endpoints/partner.yaml");
-        Files.writeString(partner, Files.readString(partner).replace("url: acme://partner", "url: http://partner"));
+        Files.writeString(partner, Files.readString(partner).replace("url: acme://partner", "url: 42"));
         Ran ran = run("validate", pkg.toString(), "--plugins", plugins.toString());
         assertEquals(1, ran.exit(), ran.toString());
         assertTrue(ran.problems().stream().anyMatch(p -> p.contains("partner") && p.contains("url")), ran.toString());

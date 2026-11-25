@@ -1,17 +1,23 @@
 package dev.rail8.core.flow;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Pipeline;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepConfig;
 import dev.rail8.api.StepFactory;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
@@ -33,13 +39,13 @@ class FlowBuilderEdgeTest {
 
     final FakeRuntime rt = FakeRuntime.create();
 
-    static final class NullComponent implements Component {
+    static class NullComponent implements Component {
         @Override public String scheme() { return "null"; }
-        @Override public String configSchema() { return "{}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
-        @Override public Producer producer(EndpointConfig cfg) {
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION)); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Producer producer(Outbound out) {
             return new Producer() {
-                @Override public Future<Envelope> send(Envelope e) { return Future.succeededFuture(e); }
+                @Override public Future<Envelope> send(Envelope e, Call call) { return Future.succeededFuture(e); }
                 @Override public Future<Void> close() { return Future.succeededFuture(); }
             };
         }
@@ -70,6 +76,22 @@ class FlowBuilderEdgeTest {
         Envelope kept = in.withHeader("a", "b");
         Envelope filtered = FlowBuilder.numbered((e, rest) -> kept, two).apply(in, e -> { throw new AssertionError("rest must not run"); });
         assertSame(kept, filtered, "a stage that does not hand on is not numbered: the rest never runs");
+    }
+
+    /** A {@code to} step through an adapter that only takes messages in is refused at build, naming the step, the endpoint and the adapter; no producer is built. */
+    @Test
+    void aSendThroughAnAdapterThatDoesNotSendIsRefusedAtBuild() {
+        java.util.concurrent.atomic.AtomicInteger built = new java.util.concurrent.atomic.AtomicInteger();
+        rt.withComponent(new NullComponent() {
+            @Override public String scheme() { return "inonly"; }
+            @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)); }
+            @Override public Producer producer(Outbound out) { built.incrementAndGet(); return super.producer(out); }
+        });
+        FlowBuilder builder = new FlowBuilder(rt.runtime(), List.of(), List.of(), Map.of("door", new EndpointConfig("door", URI.create("inonly://door"), Map.of())));
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> builder.build(FlowDefinition.from(FlowBuilderTest.flow(List.of(
+                Map.of("type", "to", "name", "send", "endpoint", "door")))), FlowBuilderTest.NO_FILES));
+        assertTrue(refused.getMessage().contains("send") && refused.getMessage().contains("'door'") && refused.getMessage().contains("'inonly' does not send"), refused.getMessage());
+        assertEquals(0, built.get(), "no producer built");
     }
 
     @Test

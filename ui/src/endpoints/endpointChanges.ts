@@ -1,7 +1,7 @@
 import { load } from 'js-yaml';
 import { leaves, same, type SettingChange } from '../leaves';
 import { EndpointFileError, readEndpoint, type EndpointDocument } from './files/endpointYaml';
-import type { SettingsDescription } from './settings';
+import { endpointSettings, type ComponentForms, type SettingsDescription } from './settings';
 import { msg, type Label } from '../language';
 
 /** One changed setting of an endpoint: its key path, the title it is shown under, and its two values on one line each; `none` when absent. */
@@ -64,11 +64,11 @@ function optionsChanges(before: Record<string, unknown>, after: Record<string, u
 
 /**
  * How the endpoint file changed from `before` to `after`, each its text or null when the file has no version there,
- * as {@link EndpointChanges} describes. `descriptions` holds the settings descriptions of the components the node
- * serves, by scheme; the options are titled by the description of the newer version's scheme, or of the older one's
- * for a deleted endpoint.
+ * as {@link EndpointChanges} describes. `descriptions` holds the settings of the components the node serves, by
+ * scheme; the options are titled by the settings of the newer version's scheme and direction, or of the older one's for
+ * a deleted endpoint.
  */
-export function endpointChanges(before: string | null, after: string | null, descriptions: ReadonlyMap<string, SettingsDescription>): EndpointChanges {
+export function endpointChanges(before: string | null, after: string | null, descriptions: ReadonlyMap<string, ComponentForms>): EndpointChanges {
   const out: EndpointChanges = { status: 'modified', unreadable: [], envelope: [], config: [], environments: [] };
   if (before === after) return { ...out, status: 'same' };
   const read = (text: string | null, side: 'before' | 'after'): { doc: Record<string, unknown>; endpoint: EndpointDocument } | null => {
@@ -87,7 +87,9 @@ export function endpointChanges(before: string | null, after: string | null, des
   if (out.unreadable.length > 0) return { ...out, status: 'unreadable' };
   if (older !== null && newer !== null && same(older.doc, newer.doc)) return { ...out, status: 'formatting' };
 
-  const description = descriptions.get((newer ?? older)!.endpoint.scheme);
+  const { scheme, direction } = (newer ?? older)!.endpoint;
+  const forms = descriptions.get(scheme);
+  const description = forms === undefined ? undefined : endpointSettings(forms, direction);
   out.envelope = leaves(older === null ? undefined : envelopeOf(older.doc), newer === null ? undefined : envelopeOf(newer.doc));
   out.config = optionsChanges(older?.endpoint.config ?? {}, newer?.endpoint.config ?? {}, description);
   const a = new Map((older?.endpoint.environments ?? []).map((e) => [e.name, e.config]));

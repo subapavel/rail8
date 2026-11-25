@@ -2,7 +2,8 @@ package dev.rail8.components.sftp;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Connection;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.testkit.FakeRuntime;
@@ -25,7 +26,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.CopyOption;
 import java.nio.file.Files;
@@ -39,6 +39,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -80,7 +81,7 @@ class SftpConsumerEdgeTest {
 
     SftpComponent component() { return new SftpComponent(rt.blobs(), rt.ids(), rt.timer(), rt.clock()); }
 
-    Consumer started(SftpComponent component, EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+    Consumer started(SftpComponent component, Inbound cfg, Function<Envelope, Future<Ack>> handler) {
         Consumer c = component.consumer(cfg, handler);
         consumers.add(c);
         c.start().await();
@@ -97,8 +98,11 @@ class SftpConsumerEdgeTest {
     static List<String> files(List<Envelope> seen) { return seen.stream().map(e -> e.get(SftpComponent.FILE).orElse("?")).toList(); }
 
     /** {@code cfg} reaching the server through a new {@link TcpRelay}, which tells when the client closed its session. */
-    EndpointConfig via(TcpRelay relay, EndpointConfig cfg) {
-        return new EndpointConfig(cfg.name(), URI.create("sftp://127.0.0.1:" + relay.port() + cfg.uri().getPath()), cfg.options());
+    Inbound via(TcpRelay relay, Inbound cfg) {
+        Connection c = cfg.connection().orElseThrow();
+        Map<String, Object> values = new HashMap<>(c.values());
+        values.put("port", relay.port());
+        return new Inbound(cfg.flow(), Optional.of(new Connection(c.key(), values, c.secrets())), cfg.settings(), cfg.maxBodyBytes());
     }
 
     TcpRelay relay() throws IOException {
@@ -114,30 +118,23 @@ class SftpConsumerEdgeTest {
     // ---- options the consumer refuses itself ---------------------------------------------------------------------------
 
     @Test
-    void aConsumerWithoutUserHostKeyMoveToOrAPositiveLimitIsRefused() {
+    void aConsumerWithoutHostUserHostKeyOrMoveToIsRefused() {
         SftpComponent component = component();
         Function<Envelope, Future<Ack>> h = e -> Future.succeededFuture(new Ack.Accepted(e.id()));
-        Map<String, Object> valid = sftp.endpoint("in", "/inbox", Map.of()).options();
         for (var refusal : List.of(
-                Map.entry(without(valid, "hostKey"), "'hostKey' is required"),
-                Map.entry(without(valid, "user"), "'user' is required"),
-                Map.entry(with(valid, "maxBodyBytes", 0), "'maxBodyBytes' must be a positive integer"),
-                Map.entry(with(valid, "afterSuccess", "move"), "'moveTo' is required"))) {
-            EndpointConfig cfg = new EndpointConfig("in", URI.create("sftp://127.0.0.1:" + sftp.port() + "/inbox"), refusal.getKey());
+                Map.entry(with(Map.of(), "hostKey", null), "connection 'in': the setting 'hostKey' is required"),
+                Map.entry(with(Map.of(), "user", null), "connection 'in': the setting 'user' is required"),
+                Map.entry(with(Map.of(), "host", null), "connection 'in': the setting 'host' is required"),
+                Map.entry(Map.<String, Object>of("afterSuccess", "move"), "flow 'contract': the setting 'moveTo' is required"))) {
+            Inbound cfg = sftp.endpoint("in", "/inbox", refusal.getKey());
             IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> component.consumer(cfg, h));
-            assertTrue(refused.getMessage().contains(refusal.getValue()), refusal.getValue() + ": " + refused.getMessage());
+            assertTrue(refused.getMessage().startsWith(refusal.getValue()), refusal.getValue() + ": " + refused.getMessage());
         }
     }
 
     static Map<String, Object> with(Map<String, Object> options, String key, Object value) {
         Map<String, Object> m = new HashMap<>(options);
         m.put(key, value);
-        return m;
-    }
-
-    static Map<String, Object> without(Map<String, Object> options, String key) {
-        Map<String, Object> m = new HashMap<>(options);
-        m.remove(key);
         return m;
     }
 
@@ -352,11 +349,12 @@ class SftpConsumerEdgeTest {
             server.start();
         }
 
-        EndpointConfig endpoint(String privateKey, Map<String, Object> extra) {
-            Map<String, Object> options = new HashMap<>(Map.of("user", EmbeddedSftp.USER, "privateKey", privateKey,
-                    "hostKey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), "maxBodyBytes", 1_000_000));
+        Inbound endpoint(String privateKey, Map<String, Object> extra) {
+            Map<String, Object> options = new HashMap<>(Map.of("host", "127.0.0.1", "port", server.getPort(), "user", EmbeddedSftp.USER,
+                    "privateKey", privateKey, "hostKey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), "maxBodyBytes", 1_000_000L,
+                    "flow", "contract", "dir", "/inbox"));
             options.putAll(extra);
-            return new EndpointConfig("keyed", URI.create("sftp://127.0.0.1:" + server.getPort() + "/inbox"), options);
+            return EmbeddedSftp.inbound("keyed", options);
         }
 
         @Override public void close() throws IOException { server.stop(true); }

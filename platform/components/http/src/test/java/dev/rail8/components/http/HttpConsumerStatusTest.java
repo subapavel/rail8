@@ -1,7 +1,6 @@
 package dev.rail8.components.http;
 
 import dev.rail8.api.Ack;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.NackException;
@@ -21,7 +20,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
-import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -91,8 +89,7 @@ class HttpConsumerStatusTest {
         failures.put("no-fault", new IllegalStateException("boom"));
         failures.put("partner-5xx", new HttpStatusException(500, "partner exploded"));
         failures.put("partner-4xx", new HttpStatusException(404, "no such partner path"));
-        EndpointConfig in = new EndpointConfig("http-in", URI.create("http://in"), Map.of("address", "/in", "flow", "orders", "maxBodyBytes", 1024));
-        consumer = (HttpComponent.HttpConsumer) http.consumer(in, (Envelope e) -> Future.<Ack>failedFuture(failures.get(e.headers().get("x-case"))));
+        consumer = (HttpComponent.HttpConsumer) http.consumer(Uses.in("orders", "/in", 1024), (Envelope e) -> Future.<Ack>failedFuture(failures.get(e.headers().get("x-case"))));
         consumer.start().await();
 
         Map<String, Integer> expected = new LinkedHashMap<>();
@@ -126,8 +123,7 @@ class HttpConsumerStatusTest {
         Map<String, Exception> thrown = new LinkedHashMap<>();
         thrown.put("io", new IOException("disk gone"));
         thrown.put("interrupted", new InterruptedException("woken by the stop deadline"));
-        EndpointConfig in = new EndpointConfig("http-in", URI.create("http://in"), Map.of("address", "/in", "flow", "orders", "maxBodyBytes", 1024));
-        consumer = (HttpComponent.HttpConsumer) http.consumer(in, (Envelope e) -> { throw sneaky(thrown.get(e.headers().get("x-case"))); });
+        consumer = (HttpComponent.HttpConsumer) http.consumer(Uses.in("orders", "/in", 1024), (Envelope e) -> { throw sneaky(thrown.get(e.headers().get("x-case"))); });
         consumer.start().await();
         for (Map.Entry<String, Exception> c : thrown.entrySet()) {
             Future<Answer> answered = raw.request(new RequestOptions().setMethod(HttpMethod.POST).setAbsoluteURI(consumer.url().orElseThrow().toString()).setTimeout(5_000))

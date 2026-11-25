@@ -2,7 +2,7 @@ package dev.rail8.components.mock;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -30,7 +29,7 @@ class MockPollingTest {
 
     final FakeRuntime rt = FakeRuntime.create();
     final MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer());
-    final EndpointConfig in = new EndpointConfig("sftp-in", URI.create("sftp://partner.example/inbox"), Map.of());
+    final Inbound in = Uses.in("sftp-in");
     final List<String> seen = new CopyOnWriteArrayList<>();
     final Function<Envelope, Future<Ack>> accept = e -> {
         seen.add(e.body().whole().toString());

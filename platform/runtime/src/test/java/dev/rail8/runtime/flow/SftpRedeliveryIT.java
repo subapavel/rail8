@@ -1,5 +1,6 @@
 package dev.rail8.runtime.flow;
 
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
@@ -128,7 +129,7 @@ class SftpRedeliveryIT {
         builder = new FlowBuilder(runtime, List.of(), List.of(), Map.of("partner", new EndpointConfig("partner", URI.create("mock://partner"), Map.of())))
                 .recording(messages, Meter.system()).queue(queue).dlq(new PgDlq(pool)).intake(new PgIntake(pool, blobs, messages, queue));
         SftpComponent component = new SftpComponent(blobs, new FakeIds("sd"), rt.timer(), rt.clock());
-        EndpointConfig in = sftp.endpoint("sftp-in", "/inbox", Map.of("intervalMs", 1000, "flow", def.id(), "maxBodyBytes", def.maxBodyBytes()));
+        Inbound in = sftp.endpoint("sftp-in", "/inbox", Map.of("intervalMs", 1000, "flow", def.id(), "maxBodyBytes", def.maxBodyBytes()));
         delivery = builder.delivery(def, DEMO);
         worker = builder.worker(def, DEMO, "w1");
         Function<Envelope, Future<Ack>> recorded = e -> delivery.apply(e).onSuccess(answers::add);

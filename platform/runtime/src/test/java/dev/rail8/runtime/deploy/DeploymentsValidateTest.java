@@ -3,15 +3,17 @@ package dev.rail8.runtime.deploy;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Runtime;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.plugin.Plugins;
@@ -226,36 +228,61 @@ class DeploymentsValidateTest {
         noAbsolutePath(problems, broken);
     }
 
-    /**
-     * The http component as {@code inner}, with a configSchema() that refuses every config: with its settings description when
-     * {@code described}, else with none.
-     */
-    record RefusingSchema(Component inner, boolean described) implements Component {
+    /** The http component as {@code inner}, with a connection form that describes nothing, its flow form and reach as the inner's. */
+    record Undescribed(Component inner) implements Component {
         @Override public String scheme() { return inner.scheme(); }
-        @Override public Settings settings() { return described ? inner.settings() : Settings.NONE; }
-        @Override public String configSchema() { return "{\"not\":{}}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, inner.forms().flow(), inner.forms().reach()); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
+        @Override public Producer producer(Outbound out) { return inner.producer(out); }
         @Override public Future<Health> health() { return inner.health(); }
-        @Override public Optional<InetSocketAddress> listensOn(EndpointConfig cfg) { return inner.listensOn(cfg); }
-        @Override public boolean polls(EndpointConfig cfg) { return inner.polls(cfg); }
-        @Override public Optional<String> target(EndpointConfig cfg) { return inner.target(cfg); }
+        @Override public Optional<String> httpPrefix() { return inner.httpPrefix(); }
+        @Override public Optional<InetSocketAddress> listensOn(Inbound in) { return inner.listensOn(in); }
+        @Override public Optional<String> polledPlace(Inbound in) { return inner.polledPlace(in); }
+        @Override public Optional<String> target(Outbound out) { return inner.target(out); }
     }
 
     /**
-     * A component that describes its settings is judged by that description only, never by its configSchema(): the demo's
-     * http endpoints pass with an http component whose schema refuses every config, and that schema refuses all five of
-     * them once the component describes nothing.
+     * An endpoint is judged by its component's forms only: a key the http component does not describe is refused, and the
+     * same endpoint passes once the component's connection form describes nothing — such a form takes any key of an endpoint
+     * whose direction connects.
      */
     @Test
-    void aDescribedComponentIsJudgedByItsDescriptionOnly() throws Exception {
-        assertEquals(List.of(), validate(shipped("dev", c -> "http".equals(c.scheme()) ? new RefusingSchema(c, true) : c), "demo", DEMO));
+    void anEndpointIsJudgedByItsComponentsFormsOnly() throws Exception {
+        Path odd = demoCopy("unknown-key", Map.of("endpoints/partner-domestic.yaml", Map.of("  maxBodyBytes: 1048576", "  maxBodyBytes: 1048576\n  colour: blue")));
 
-        List<String> undescribed = validate(shipped("dev", c -> "http".equals(c.scheme()) ? new RefusingSchema(c, false) : c), "demo", DEMO);
+        assertOnly(validate(shipped("dev"), "demo", odd), "endpoint 'partner-domestic' config (environment dev) at '/colour': no such setting");
+        assertEquals(List.of(), validate(shipped("dev", c -> "http".equals(c.scheme()) ? new Undescribed(c) : c), "demo", odd),
+                "a connection form that describes nothing takes any key");
+    }
 
-        assertEquals(new TreeSet<>(List.of("http-in", "http-in-async", "http-in-order", "partner-domestic", "partner-foreign")),
-                undescribed.stream().map(l -> l.substring("endpoint '".length(), l.indexOf("' config (environment dev) at "))).collect(Collectors.toCollection(TreeSet::new)),
-                "every http endpoint, and nothing else, is refused by the schema: " + undescribed);
+    /**
+     * An endpoint of {@code schemaVersion: 1} keeps what it may hold today: an http url with user info still validates, while
+     * the connection of an environment would refuse it.
+     */
+    @Test
+    void aV1HttpUrlWithUserInfoStillValidates() throws Exception {
+        Path withUser = demoCopy("user-info", Map.of("endpoints/partner-domestic.yaml",
+                Map.of("url: http://localhost:8090/echo", "url: http://rail8:leaky-pw-4711@localhost:8090/echo")));
+
+        assertEquals(List.of(), validate(shipped("dev"), "demo", withUser));
+    }
+
+    /** An endpoint of a direction its adapter does not serve is refused, the endpoint and the adapter named. */
+    @Test
+    void anEndpointOfADirectionItsAdapterDoesNotServeIsRefused() throws Exception {
+        Path sending = demoCopy("sftp-out", Map.of("endpoints/sftp-inbox.yaml", Map.of("direction: in", "direction: out")));
+
+        List<String> problems = validate(shipped("dev"), "demo", sending);
+
+        assertTrue(problems.contains("endpoint 'sftp-inbox' is out: the adapter of scheme 'sftp' does not serve the out direction"), problems.toString());
+    }
+
+    /** A v1 sftp endpoint names its server's host: one without it is refused, the host named as required. */
+    @Test
+    void aV1SftpEndpointWithoutAHostIsRefused() throws Exception {
+        Path noHost = demoCopy("no-host", Map.of("endpoints/sftp-inbox.yaml", Map.of("  host: sftp\n", "")));
+
+        assertOnly(validate(shipped("dev"), "demo", noHost), "endpoint 'sftp-inbox' config (environment dev) at '/host': is required");
     }
 
     /** An endpoint config its component's settings description refuses (http: an address is a path) is a problem naming endpoint, environment and pointer, and nothing else is. */

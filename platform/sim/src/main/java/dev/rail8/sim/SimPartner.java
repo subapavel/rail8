@@ -1,14 +1,19 @@
 package dev.rail8.sim;
 
+import dev.rail8.api.Ack;
 import dev.rail8.api.Body;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
-import dev.rail8.api.Ack;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 
@@ -28,6 +33,8 @@ final class SimPartner implements Component, Producer {
 
     static final String SCHEME = "sim";
     static final String REPLY_PREFIX = "ack:";
+    /** It describes nothing and only takes sends, each through its endpoint's connection. */
+    static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION));
 
     private final Faults faults;
     private final Oracle oracle;
@@ -46,18 +53,18 @@ final class SimPartner implements Component, Producer {
 
     @Override public String scheme() { return SCHEME; }
 
-    @Override public String configSchema() { return "{}"; }
+    @Override public Forms forms() { return FORMS; }
 
-    @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+    @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
         throw new UnsupportedOperationException("the simulation's driver sends; the partner consumes nothing");
     }
 
-    @Override public Producer producer(EndpointConfig cfg) { return this; }
+    @Override public Producer producer(Outbound out) { return this; }
 
     @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
 
     @Override
-    public Future<Envelope> send(Envelope e) {
+    public Future<Envelope> send(Envelope e, Call call) {
         String id = e.id();
         int attempt = e.get(Envelope.ATTEMPT).orElse(1);
         int ordinal = ordinals.merge(id + "#" + attempt, 1, Integer::sum) - 1;

@@ -6,16 +6,22 @@ import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
 import dev.rail8.api.BodyTooLargeException;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.IdGenerator;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Secret;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Choice;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.api.settings.Tab;
 import io.vertx.core.Future;
@@ -36,7 +42,6 @@ import org.apache.sshd.sftp.common.SftpException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
@@ -57,17 +62,19 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
- * The {@code sftp} component: a polling consumer on the Apache MINA SSHD client; no producer yet. URI {@code sftp://host[:port, default 22]/dir}; options (checked against {@link #settings()}): optional
- * {@code host}, {@code port} (1–65535) and {@code dir}, each of which wins over the URI's own part (a deployed endpoint's URI is
- * only {@code sftp://<id>}; absent, the URI decides), {@code user},
- * exactly one of {@code password} / {@code privateKey}, {@code hostKey} (the server key's {@code SHA256:} fingerprint — a
- * mismatch refuses the session, there is no accept-all; in a packaged endpoint as written, a {@code secret://<name>}
- * reference, which the check lets pass because the deploy checks the config before it resolves secrets), {@code maxBodyBytes} (set by the deploy, never unlimited), and
+ * The {@code sftp} component: a polling consumer on the Apache MINA SSHD client; no producer yet. Its sender reaches a
+ * connection, which says where the server is and how to log in: {@code host} (required), {@code port} (1–65535, 22),
+ * {@code user}, exactly one of the secrets {@code password} / {@code privateKey}, the secret {@code hostKey} (the server
+ * key's {@code SHA256:} fingerprint — a mismatch refuses the session, there is no accept-all), {@code connectTimeoutMs}
+ * (10 000) and {@code ioTimeoutMs} (30 000). The flow says what is polled: {@code dir} (none: the login directory),
  * {@code glob} ({@code *}), {@code intervalMs} (10 000), {@code maxFilesPerPoll} (100), {@code minAgeMs} (0),
- * {@code afterSuccess} ({@code delete} | {@code move}, then {@code moveTo}), {@code connectTimeoutMs} (10 000),
- * {@code ioTimeoutMs} (30 000), optional {@code errorDir} and {@code flow}.
+ * {@code afterSuccess} ({@code delete} | {@code move}, then {@code moveTo}) and an optional {@code errorDir}; the largest
+ * body is the flow's {@link Inbound#maxBodyBytes}. The secrets are read at each login, never when a consumer is built, so a
+ * changed secret is used from the next login on; a {@code hostKey} that is not a {@code SHA256:} fingerprint fails that
+ * login, naming the field and never its value.
  *
  * <p>A round runs on a virtual thread the consumer starts (the timer only fires it; the next round is scheduled
  * {@code intervalMs} after it ended): it lists the directory, keeps the regular files whose name matches the glob and whose
@@ -104,36 +111,47 @@ public final class SftpComponent implements Component {
     /** The file's server mtime, ISO-8601. */
     public static final Key<String> MTIME = new Key<>("sftp.mtime");
 
-    /** The tab of the options that say which files a round takes and what becomes of them. */
+    static final int DEFAULT_PORT = 22;
+    /** The tab of the settings that say which files a round takes and what becomes of them. */
     static final Tab POLLING = Tab.of("polling", "Polling");
+    /** What a {@code hostKey} is: a server key's SHA256 fingerprint as OpenSSH prints it. */
+    static final Pattern FINGERPRINT = Pattern.compile("SHA256:[A-Za-z0-9+/]+=*");
     /**
-     * What an sftp endpoint may set, all of it for in endpoints: the server and the login, which files a round takes and
-     * what becomes of them, and the timeouts. A {@code secret://} reference stands in for any text, the hostKey included.
+     * The forms, all for the in direction: the connection holds the server, the login and the timeouts; the flow holds which
+     * files a round takes and what becomes of them.
      */
-    static final Settings SETTINGS = Settings.of(
-            Field.text("host", "The server's name or address; none: the URI's host.").in(),
-            Field.integer("port", "The server's port; none: the URI's, else 22.").range(1, 65535).in(),
-            Field.text("dir", "The directory polled; none: the URI's path.").in(),
-            Field.text("user", "The user to log in as.").required().tab(Tab.SECURITY).in(),
-            Field.secret("password", "The user's password; or set privateKey.").tab(Tab.SECURITY).in(),
-            Field.secret("privateKey", "The user's private key in OpenSSH form; or set password.").tab(Tab.SECURITY).in(),
-            Field.text("hostKey", "The server key's SHA256 fingerprint; a session with any other key is refused.")
-                    .required().pattern("SHA256:[A-Za-z0-9+/]+=*").tab(Tab.SECURITY).in(),
-            Field.text("glob", "Which file names a round takes.").byDefault("*").tab(POLLING).in(),
-            Field.integer("intervalMs", "How long after a round the next one starts, in milliseconds.").min(1).byDefault(10_000).tab(POLLING).in(),
-            Field.integer("maxFilesPerPoll", "The most files one round takes.").min(1).byDefault(100).tab(POLLING).in(),
-            Field.integer("minAgeMs", "How old a file must be before it is taken, in milliseconds: one still being written is left.")
-                    .min(0).byDefault(0).tab(POLLING).in(),
-            Field.choice("afterSuccess", "What becomes of a file once it is taken in.", "delete", "move").byDefault("delete").tab(POLLING).in(),
-            Field.text("moveTo", "The directory a file taken in is moved to.").required().visibleWhen("afterSuccess", "move").tab(POLLING).in(),
-            Field.text("errorDir", "The directory a refused file is moved to; none: it stays and is not taken again.").tab(POLLING).in(),
-            Field.integer("connectTimeoutMs", "How long connecting and logging in may take, in milliseconds.").min(1).byDefault(10_000).in(),
-            Field.integer("ioTimeoutMs", "How long the session may sit idle, in milliseconds.").min(1).byDefault(30_000).in())
-        .exactlyOne("password", "privateKey");
+    static final Forms FORMS = new Forms(
+            Settings.of(
+                    Field.text("host", "Host", "The server's name or address.").required().in(),
+                    Field.integer("port", "Port", "The server's port.").range(1, 65535).byDefault(DEFAULT_PORT).in(),
+                    Field.text("user", "User", "The user to log in as.").required().tab(Tab.SECURITY).in(),
+                    Field.secret("password", "Password", "The user's password; or set privateKey.").tab(Tab.SECURITY).in(),
+                    Field.secret("privateKey", "Private key", "The user's private key in OpenSSH form; or set password.").tab(Tab.SECURITY).in(),
+                    Field.secret("hostKey", "Host key", "The server key's fingerprint as OpenSSH prints it, SHA256: and its base64; a "
+                            + "session with any other key is refused.").required().tab(Tab.SECURITY).in(),
+                    Field.integer("connectTimeoutMs", "Connect timeout (ms)", "How long connecting and logging in may take, in milliseconds.")
+                            .min(1).byDefault(10_000).in(),
+                    Field.integer("ioTimeoutMs", "Idle timeout (ms)", "How long the session may sit idle, in milliseconds.")
+                            .min(1).byDefault(30_000).in())
+                .exactlyOne("password", "privateKey"),
+            Settings.of(
+                    Field.text("dir", "Directory", "The directory polled; none: the login directory.").tab(POLLING).in(),
+                    Field.text("glob", "File names", "Which file names a round takes, as a glob such as *.xml.").byDefault("*").tab(POLLING).in(),
+                    Field.integer("intervalMs", "Interval (ms)", "How long after a round the next one starts, in milliseconds.")
+                            .min(1).byDefault(10_000).tab(POLLING).in(),
+                    Field.integer("maxFilesPerPoll", "Files per round", "The most files one round takes.").min(1).byDefault(100).tab(POLLING).in(),
+                    Field.integer("minAgeMs", "Minimum age (ms)", "How old a file must be before it is taken, in milliseconds: one still "
+                            + "being written is left.").min(0).byDefault(0).tab(POLLING).in(),
+                    Field.choice("afterSuccess", "After success", "What becomes of a file once it is taken in.",
+                            Choice.of("delete", "Delete"), Choice.of("move", "Move")).byDefault("delete").tab(POLLING).in(),
+                    Field.text("moveTo", "Move to", "The directory a file taken in is moved to.").required()
+                            .visibleWhen("afterSuccess", "move").tab(POLLING).in(),
+                    Field.text("errorDir", "Error directory", "The directory a refused file is moved to; none: it stays and is not "
+                            + "taken again.").tab(POLLING).in()),
+            Map.of(Direction.IN, Forms.Reach.CONNECTION));
 
     /** The MINA client's NIO2 I/O threads: the minimum; a consumer's round blocks on its own virtual thread. */
     static final int NIO_WORKERS = 1;
-    static final int DEFAULT_PORT = 22;
 
     private final BlobStore blobs;
     private final IdGenerator ids;
@@ -151,35 +169,29 @@ public final class SftpComponent implements Component {
 
     @Override public String scheme() { return "sftp"; }
 
-    @Override public Settings settings() { return SETTINGS; }
+    @Override public Forms forms() { return FORMS; }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        return new SftpConsumer(cfg, handler);
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        return new SftpConsumer(in, handler);
     }
 
     /**
-     * The server an endpoint of {@code cfg} reaches: {@code sftp://host:port} by the {@code host} and {@code port} options
-     * over the URI's parts as a consumer connects, port 22 by default, lower-cased, never the user or the directory.
-     * An IPv6 host option is bracketed (a URI's host already is). Empty when neither names a host.
+     * Every sftp sender polls a directory other nodes may poll too: {@code <connection key> sftp://<host>:<port> <dir> <glob>},
+     * the host lower-cased and an IPv6 one bracketed, {@code .} for the login directory. Nothing is opened.
      */
     @Override
-    public Optional<String> target(EndpointConfig cfg) {
-        return Optional.ofNullable(hostOf(cfg)).map(host -> {
-            String literal = host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
-            return "sftp://" + literal.toLowerCase(Locale.ROOT) + ":" + portOf(cfg);
-        });
-    }
-
-    /** Every sftp endpoint polls a directory other nodes may poll too: the node runs its consumer only under the endpoint's lease. */
-    @Override
-    public boolean polls(EndpointConfig cfg) {
-        return true;
+    public Optional<String> polledPlace(Inbound in) {
+        Connection c = connection(in);
+        String host = required(c, "host");
+        String literal = host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+        return Optional.of(c.key() + " sftp://" + literal.toLowerCase(Locale.ROOT) + ":" + number(c.values(), "port", DEFAULT_PORT)
+                + " " + text(in.settings(), "dir", ".") + " " + text(in.settings(), "glob", "*"));
     }
 
     /** Refused, as the component has no producer yet: the flow build reports it. */
     @Override
-    public Producer producer(EndpointConfig cfg) {
+    public Producer producer(Outbound out) {
         throw new IllegalArgumentException("sftp has no producer before Phase 4");
     }
 
@@ -196,19 +208,15 @@ public final class SftpComponent implements Component {
         return v == null ? fallback : String.valueOf(v);
     }
 
-    /** The host to connect to: the {@code host} option over the URI's host (a deployed URI is only {@code sftp://<id>}). */
-    private static String hostOf(EndpointConfig cfg) {
-        return text(cfg.options(), "host", cfg.uri().getHost());
+    /** The connection {@code in} names; an {@link IllegalArgumentException} when it names none. */
+    private static Connection connection(Inbound in) {
+        return Objects.requireNonNull(in, "in").connection().orElseThrow(() -> new IllegalArgumentException(
+                "flow '" + in.flow() + "': an sftp sender polls through a connection, and none is named"));
     }
 
-    /** The port to connect to: the {@code port} option over the URI's port, else {@value #DEFAULT_PORT}. */
-    private static int portOf(EndpointConfig cfg) {
-        return (int) number(cfg.options(), "port", cfg.uri().getPort() < 0 ? DEFAULT_PORT : cfg.uri().getPort());
-    }
-
-    private static String required(EndpointConfig cfg, String key) {
-        Object v = cfg.options().get(key);
-        if (v == null) throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option '" + key + "' is required");
+    private static String required(Connection c, String key) {
+        Object v = c.values().get(key);
+        if (v == null) throw new IllegalArgumentException("connection '" + c.key() + "': the setting '" + key + "' is required");
         return String.valueOf(v);
     }
 
@@ -239,11 +247,11 @@ public final class SftpComponent implements Component {
         private final String name;
         private final String host;
         private final int port;
-        private final String dir;
+        private final String dir;          // null: the login directory
         private final String user;
-        private final String password;     // null when the endpoint logs in with a private key
-        private final String privateKey;   // null when it logs in with a password
-        private final String hostKey;
+        private final Secret password;     // null when the connection logs in with a private key; read at each login
+        private final Secret privateKey;   // null when it logs in with a password; read at each login
+        private final Secret hostKey;      // read at each login
         private final long maxBodyBytes;
         private final String flow;
         private final PathMatcher glob;
@@ -260,42 +268,41 @@ public final class SftpComponent implements Component {
         // the round's thread only, and close() once the last round ended (ordered by the monitor)
         private ClientSession session;
         private SftpClient sftp;
+        private String polled;             // the directory listed: dir, or the session's login directory
         // guarded by this
         private Timer.Cancellable next;
         private boolean roundInFlight;
         private boolean stopping;
 
-        SftpConsumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+        SftpConsumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             this.handler = Objects.requireNonNull(handler, "handler");
-            Map<String, Object> o = cfg.options();
-            this.name = cfg.name();
-            URI uri = cfg.uri();
-            // an option wins over the URI part: a deployed endpoint's URI is only sftp://<id>
-            this.host = hostOf(cfg);
-            this.port = portOf(cfg);
-            this.dir = text(o, "dir", uri.getPath());
-            this.user = required(cfg, "user");
-            this.password = text(o, "password", null);
-            this.privateKey = text(o, "privateKey", null);
-            this.hostKey = required(cfg, "hostKey");
-            if (!(o.get("maxBodyBytes") instanceof Number max) || max.longValue() < 1) {
-                throw new IllegalArgumentException("endpoint '" + name + "': option 'maxBodyBytes' must be a positive integer (never unlimited), was " + o.get("maxBodyBytes"));
-            }
-            this.maxBodyBytes = max.longValue();
-            this.flow = text(o, "flow", name);
+            Connection c = connection(in);
+            Map<String, Object> o = in.settings();
+            this.name = c.key();
+            this.host = required(c, "host");
+            this.port = (int) number(c.values(), "port", DEFAULT_PORT);
+            this.user = required(c, "user");
+            this.password = c.secret("password").orElse(null);
+            this.privateKey = c.secret("privateKey").orElse(null);
+            this.hostKey = c.secret("hostKey").orElseThrow(() -> new IllegalArgumentException("connection '" + name + "': the setting 'hostKey' is required"));
+            this.dir = text(o, "dir", null);
+            this.maxBodyBytes = in.maxBodyBytes();
+            this.flow = in.flow();
             this.glob = FileSystems.getDefault().getPathMatcher("glob:" + text(o, "glob", "*"));
             this.interval = Duration.ofMillis(number(o, "intervalMs", 10_000));
             this.maxFilesPerPoll = number(o, "maxFilesPerPoll", 100);
             this.minAge = Duration.ofMillis(number(o, "minAgeMs", 0));
-            this.moveTo = "move".equals(o.get("afterSuccess")) ? required(cfg, "moveTo") : null;
+            if ("move".equals(o.get("afterSuccess")) && o.get("moveTo") == null) {
+                throw new IllegalArgumentException("flow '" + flow + "': the setting 'moveTo' is required when afterSuccess is move");
+            }
+            this.moveTo = "move".equals(o.get("afterSuccess")) ? String.valueOf(o.get("moveTo")) : null;
             this.errorDir = text(o, "errorDir", null);
-            this.connectTimeout = Duration.ofMillis(number(o, "connectTimeoutMs", 10_000));
+            this.connectTimeout = Duration.ofMillis(number(c.values(), "connectTimeoutMs", 10_000));
             this.client = SshClient.setUpDefaultClient();
             CoreModuleProperties.NIO_WORKERS.set(client, NIO_WORKERS);
             CoreModuleProperties.IO_CONNECT_TIMEOUT.set(client, connectTimeout);
             // bounds every SFTP answer; a session idle that long (a slow handler) is closed and reopened for the delete
-            CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ofMillis(number(o, "ioTimeoutMs", 30_000)));
-            client.setServerKeyVerifier((s, address, key) -> hostKey.equals(KeyUtils.getFingerPrint(key)));
+            CoreModuleProperties.IDLE_TIMEOUT.set(client, Duration.ofMillis(number(c.values(), "ioTimeoutMs", 30_000)));
             client.setHostConfigEntryResolver(HostConfigEntryResolver.EMPTY);    // never ~/.ssh/config
             client.setKeyIdentityProvider(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);   // never ~/.ssh/id_*
         }
@@ -394,9 +401,11 @@ public final class SftpComponent implements Component {
         private List<Remote> due() throws IOException {
             List<Remote> listed = new ArrayList<>();
             try {
-                for (SftpClient.DirEntry entry : sftp().readDir(dir)) {
+                SftpClient remote = sftp();
+                String where = polled;
+                for (SftpClient.DirEntry entry : remote.readDir(where)) {
                     SftpClient.Attributes a = entry.getAttributes();
-                    listed.add(new Remote(entry.getFilename(), join(dir, entry.getFilename()), a.getSize(),
+                    listed.add(new Remote(entry.getFilename(), join(where, entry.getFilename()), a.getSize(),
                             a.isRegularFile() ? a.getModifyTime().toInstant() : null));
                 }
                 running.replace(this, Boolean.TRUE);
@@ -489,27 +498,35 @@ public final class SftpComponent implements Component {
 
         /**
          * The session's SFTP channel, (re)connected and logged in when there is none or the session is closing or closed (the
-         * partner went away, or it sat idle for {@code ioTimeoutMs} while a handler worked). Set and dropped together with it.
+         * partner went away, or it sat idle for {@code ioTimeoutMs} while a handler worked). Set and dropped together with it,
+         * and with the directory listed: {@code dir}, else the login directory the server names. Each login reads the secrets
+         * anew; a {@code hostKey} that is no {@code SHA256:} fingerprint fails it before anything is sent.
          */
         private SftpClient sftp() throws IOException {
             if (sftp != null && session.isOpen()) return sftp;
             drop();
+            String expected = hostKey.value();
+            if (!FINGERPRINT.matcher(expected).matches()) {
+                throw new IOException("connection '" + name + "': the setting 'hostKey' must be a SHA256: fingerprint as OpenSSH prints it");
+            }
+            client.setServerKeyVerifier((s, address, key) -> expected.equals(KeyUtils.getFingerPrint(key)));
             session = client.connect(user, host, port).verify(connectTimeout).getSession();
-            if (password != null) session.addPasswordIdentity(password);
+            if (password != null) session.addPasswordIdentity(password.value());
             if (privateKey != null) {
-                for (KeyPair key : keys()) session.addPublicKeyIdentity(key);
+                for (KeyPair key : keys(privateKey.value())) session.addPublicKeyIdentity(key);
             }
             session.auth().verify(connectTimeout);   // a host key other than hostKey fails here, before any credential is sent
             sftp = SftpClientFactory.instance().createSftpClient(session);
+            polled = dir != null ? dir : sftp.canonicalPath(".");
             return sftp;
         }
 
-        private Iterable<KeyPair> keys() throws IOException {
+        private Iterable<KeyPair> keys(String pem) throws IOException {
             try {
-                return SecurityUtils.loadKeyPairIdentities(session, NamedResource.ofName("privateKey of endpoint '" + name + "'"),
-                        new ByteArrayInputStream(privateKey.getBytes(StandardCharsets.UTF_8)), FilePasswordProvider.EMPTY);
+                return SecurityUtils.loadKeyPairIdentities(session, NamedResource.ofName("privateKey of connection '" + name + "'"),
+                        new ByteArrayInputStream(pem.getBytes(StandardCharsets.UTF_8)), FilePasswordProvider.EMPTY);
             } catch (GeneralSecurityException e) {
-                throw new IOException("endpoint '" + name + "': privateKey cannot be read", e);
+                throw new IOException("connection '" + name + "': privateKey cannot be read", e);
             }
         }
 
@@ -518,6 +535,7 @@ public final class SftpComponent implements Component {
             ClientSession s = session;
             session = null;
             sftp = null;
+            polled = null;
             if (s != null) s.close(true);
         }
     }

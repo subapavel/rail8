@@ -1,21 +1,27 @@
 package dev.rail8.testkit;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 
+import java.util.Map;
 import java.util.function.Function;
 
 /**
  * Test-only component for the testkit's own tests: the producer hands the envelope straight to the
- * last started consumer's handler, called on a virtual thread of its own per delivery (D-057), and returns it; health is UP
+ * last started consumer's handler, whatever the call, called on a virtual thread of its own per delivery, and returns it; health is UP
  * once a consumer runs. A stopped consumer's handler is
  * gone at once and its {@code stop()} completes when the answers still outstanding have completed (D-056). Not the mock
  * component (P1-06), which lives in platform/components/mock and passes the same contract suite.
@@ -35,9 +41,12 @@ final class LoopbackComponent implements Component {
 
     @Override public String scheme() { return "loopback"; }
 
-    @Override public String configSchema() { return "{\"type\":\"object\",\"properties\":{}}"; }
+    /** No form describes a field and no direction reaches a connection. */
+    static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.NO_CONNECTION));
 
-    @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> h) {
+    @Override public Forms forms() { return FORMS; }
+
+    @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         ConsumerDrain drain = new ConsumerDrain();
         return new Consumer() {
             @Override public Future<Void> start() { handler = new Running(h, drain); running = true; return Future.succeededFuture(); }
@@ -45,13 +54,13 @@ final class LoopbackComponent implements Component {
         };
     }
 
-    @Override public Producer producer(EndpointConfig cfg) {
+    @Override public Producer producer(Outbound out) {
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
-                return BoundedSends.within(d, timer, () -> send(e));
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
+                return BoundedSends.within(d, timer, () -> send(e, call));
             }
 
-            @Override public Future<Envelope> send(Envelope e) {
+            @Override public Future<Envelope> send(Envelope e, Call call) {
                 Running at = handler;
                 if (at == null) return Future.failedFuture(new IllegalStateException("no consumer running"));
                 return at.drain().deliver(at.handler(), BoundedSends.carryingItsId(e)).compose(ack -> switch (ack) {

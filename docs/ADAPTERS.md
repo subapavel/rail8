@@ -1,15 +1,16 @@
 # Writing an adapter
 
 An adapter connects Rail8 to one kind of outside system: it is a component of its own scheme, with a consumer that takes
-messages in, a producer that sends them out, and a settings description from which the node checks endpoint files and the
-UI draws their forms. It is built with the development kit:
+messages in, a producer that sends them out, and two forms from which the node checks endpoint files and the UI draws its
+screens. It is built with the development kit:
 
 - **the contract**, `rail8-api`: the `Plugin` and `Component` interfaces and the settings types;
 - **the test suite**, `rail8-testkit`: the contract suites `ComponentContract` and `PollingConsumerContract`, the fakes, and
   `RecordingComponent`, the mock of any scheme;
 - **the sample**, `examples/webhook-plugin`: an adapter of the scheme `webhook`, an HTTP consumer and producer, and a package
   that uses it;
-- **the settings description**, `Component.settings()`: every option an endpoint of the adapter may set;
+- **the forms**, `Component.forms()`: the connection form and the flow form, every field an endpoint of the adapter may set
+  (see "The two forms" below);
 - **the template**, `bin/rail8 new-adapter`: the skeleton of a new adapter;
 - **the local run**, `bin/run-adapter`: a node with the adapter and the UI on your machine.
 
@@ -41,7 +42,7 @@ sample under the new names:
 | File | What it is |
 | --- | --- |
 | `pom.xml` | the build: `mvn package` writes the adapter's jar into `target/plugin` |
-| `src/main/java/…/AcmeComponent.java` | the component: its settings description, consumer, producer and health |
+| `src/main/java/…/AcmeComponent.java` | the component: its forms, consumer, producer and health |
 | `src/main/java/…/AcmePlugin.java`, `src/main/resources/META-INF/services/…` | the plugin that adds the component, and the file that names it |
 | `src/test/java/…/AcmeComponentContractTest.java` | the component against the contract suite |
 | `src/test/java/…/AcmeMockContractTest.java` | the adapter's mock against the same suite |
@@ -66,13 +67,63 @@ the blob store and runs the flow on the message's own virtual thread. Keep that 
 
 It builds and passes the contract suite as written; it speaks HTTP. The comments marked `HTTP:` in the component are where
 your protocol goes; the rest (the body streamed through the blob store, the handler's acknowledgement, the deadline, the
-stop) is what every adapter keeps. Then change the settings description to your options, and the package's endpoint
-files with it.
+stop) is what every adapter keeps. Then change the forms to your fields, and the package's endpoint files with them.
 
 A consumer that loses its connection after its start fails `broken()` with the cause; leave the waiting and the next
 attempt to the node, which stops the consumer and starts a fresh one of the same endpoint after a delay that grows with
 each failure in a row. A consumer that cannot break once started, such as one that mounts its endpoint on the node's HTTP
 port, as in the sample, keeps the default.
+
+## The two forms
+
+`Component.forms()` answers `new Forms(connection, flow, reach)`:
+
+- **The connection form** describes what is the same for every flow that talks to one system: where it is and how to log
+  in, such as a URL, a host and port, a user, a password. A secret field (`Field.secret`) is never handed over as text: the
+  adapter reads it through `Connection.secret(name)`, a `Secret` whose `value()` it asks for at each login, and whose
+  text is only its reference.
+- **The flow form** describes what one flow sets on its use of the system: a path, a directory, a polling interval.
+- **The reach** says, for each direction the adapter serves (`IN`, `OUT`), whether a use of that direction reaches a
+  connection (`Reach.CONNECTION`) or not (`Reach.NO_CONNECTION`). A direction missing from the map is one the adapter does
+  not serve, and an endpoint of it is refused at deploy. Only the platform's own internal adapters, `direct` and `mock`,
+  send without a connection: a plugin whose out direction reaches none is refused when the node starts.
+
+A field is built with `Field.text`, `Field.integer`, `Field.bool`, `Field.secret` or `Field.choice` (its values made with
+`Choice.of(value, label)`), each with a name, a short English label and a help text, then narrowed with `.in()` or
+`.out()`, `.required()`, `.byDefault(..)`, `.min(..)`, `.max(..)`, `.range(..)`, `.pattern(..)`, `.tab(..)` and
+`.visibleWhen(..)`. The node sets `flow` and `maxBodyBytes` itself, so no form has a field of those names. On a connecting
+out endpoint `maxBodyBytes` is the reply's limit, which the node hands in each call.
+
+What the node hands the adapter:
+
+| Type | What it is |
+| --- | --- |
+| `Inbound(flow, connection, settings, maxBodyBytes)` | a sender: the flow it feeds, the connection when its direction reaches one, the flow form's values, the body limit; `consumer(in, handler)` builds its consumer |
+| `Outbound(connection)` | what a producer is built for: one connection, or none on an internal adapter; `producer(out)` builds one producer per connection |
+| `Connection(key, values, secrets)` | the connection form's values, a secret field's under `secrets`; for an endpoint file the key is the endpoint's id |
+| `Call(flow, step, settings, maxReplyBytes, address)` | one send: the flow and step that send, the flow form's values of the step's endpoint and the reply's limit; `send(e, call)` |
+
+Both forms give each value its default when the endpoint file sets none. A component whose connection form describes
+nothing (`Settings.NONE`) takes every key the flow form does not, as it is written.
+
+The UI reads the forms from `GET /admin/components`, format 2: for each scheme its `reach`, the fields of each form with
+their label, help, type, default and rules, and the tabs. Every label has a text key that the UI's translations may
+override: `<scheme>.field.<name>.label` and `<scheme>.field.<name>.help` for a field, `<scheme>.field.<name>.choice.<value>`
+for a choice, `<scheme>.tab.<id>` for a tab of the adapter's own and `rail8.tab.<id>` for a common one. A text key without a
+translation shows the label as the adapter wrote it. The scheme `rail8` is the platform's own and no adapter may take it.
+
+A problem the node finds in an endpoint's config is one line, `endpoint '<id>' config (environment <env>) at '<path>':
+<message>`, and in the forms' own check (`Settings.check`) each problem has a stable code: `required`, `unknown`, `min`,
+`max`, `pattern`, `choice`, `type`, `direction` or `exactlyOne`. An endpoint file of `schemaVersion: 1` keeps what it may
+hold today: a connection field's `pattern` is not checked on it, so an http URL with user info still deploys.
+
+A plugin is built against one version of `rail8-api`, and a node loads only plugins of its own: a plugin built on api 0.3
+is refused with a line naming its version and saying to build it again on the node's. Build an older adapter again on
+this contract: replace `settings()` with `forms()`, take `Inbound` in `consumer` and `Outbound` in `producer`, and send with
+`send(e, call)`.
+
+Upgrade every node before polling flows run. A node leases a polling flow under the key `<package>/<flow>/from`, and a node
+of the release before takes another key, so the two would poll one directory together.
 
 ## Test it
 
@@ -99,7 +150,7 @@ port, where the adapter's in endpoints are served, is `127.0.0.1:18090`. The por
 free; the quickstart's node may keep running, its UI may not.
 
 - **Endpoints** lists the endpoint files of the adapter's folder, which is the run's working folder. An endpoint's form is
-  drawn from your settings description. Edit, change a setting, Check, and Save writes the file in your folder.
+  drawn from your forms. Edit, change a setting, Check, and Save writes the file in your folder.
 - **Send a test message** through the adapter. For the template's package, from another terminal:
 
   ```sh

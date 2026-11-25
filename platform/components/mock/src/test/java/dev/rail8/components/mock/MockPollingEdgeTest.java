@@ -5,7 +5,7 @@ import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.testkit.FakeRuntime;
@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -44,7 +43,8 @@ class MockPollingEdgeTest {
     @TempDir
     Path base;
 
-    static EndpointConfig in(Map<String, Object> options) { return new EndpointConfig("sftp-in", URI.create("sftp://partner.example/inbox"), options); }
+    /** The sender of the endpoint {@code sftp-in} whose flow takes bodies of up to {@code maxBodyBytes}. */
+    static Inbound in(long maxBodyBytes) { return Uses.in("sftp-in", "sftp-in", maxBodyBytes, Map.of()); }
 
     /** Fires the next round and waits until it is over (the round after it is scheduled). */
     void round() {
@@ -56,7 +56,7 @@ class MockPollingEdgeTest {
     @Test
     void aFileAboveTheEndpointsMaxBodyBytesIsNeverDelivered() {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer());
-        Consumer consumer = sftp.consumer(in(Map.of("maxBodyBytes", 3)), e -> {
+        Consumer consumer = sftp.consumer(in(3), e -> {
             seen.add(e.body().whole().toString());
             return Future.succeededFuture(new Ack.Accepted(e.id()));
         });
@@ -77,7 +77,7 @@ class MockPollingEdgeTest {
     void aFinallyRefusedFileDroppedAgainIsANewFile() {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), rt.ids());
         List<String> ids = new CopyOnWriteArrayList<>();
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> {
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> {
             seen.add(e.body().whole().toString());
             ids.add(e.id());
             return Future.succeededFuture("first".equals(e.body().whole().toString()) ? new Ack.Nack("malformed", false) : new Ack.Accepted(e.id()));
@@ -102,7 +102,7 @@ class MockPollingEdgeTest {
     void unreadableFixturesFailTheStartAndSubdirectoriesAreNotFed() throws IOException {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer());
         sftp.bindAll(Map.of("sftp-in", Map.of("files", "missing/*.xml")), base);
-        Future<Void> start = sftp.consumer(in(Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id()))).start();
+        Future<Void> start = sftp.consumer(in(Uses.LIMIT), e -> Future.succeededFuture(new Ack.Accepted(e.id()))).start();
         assertTrue(start.failed(), "the fixtures' directory does not exist: " + start);
         assertInstanceOf(IllegalStateException.class, start.cause());
         assertEquals(Health.Status.DOWN, sftp.health().await().status(), "a consumer that did not start polls nothing");
@@ -111,7 +111,7 @@ class MockPollingEdgeTest {
         Files.writeString(inbox.resolve("a.xml"), "<a/>");
         Files.createDirectories(inbox.resolve("sub.xml"));   // a directory whose name matches
         sftp.bindAll(Map.of("sftp-in", Map.of("files", "fixtures/*.xml")), base);
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
         consumer.start().await();
         try {
             assertEquals(List.of("a.xml"), List.copyOf(sftp.remaining("sftp-in")), "regular files only");
@@ -129,7 +129,7 @@ class MockPollingEdgeTest {
     @Test
     void aConsumerStoppedBeforeItStartedStopsAtOnce() throws Exception {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer());
-        sftp.consumer(in(Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id()))).stop().await(10, TimeUnit.SECONDS);
+        sftp.consumer(in(Uses.LIMIT), e -> Future.succeededFuture(new Ack.Accepted(e.id()))).stop().await(10, TimeUnit.SECONDS);
         assertEquals(0, rt.timer().pending(), "no round was ever scheduled");
     }
 
@@ -161,7 +161,7 @@ class MockPollingEdgeTest {
     void stopWaitsForTheRoundInFlightEvenBeforeItsDelivery() throws Exception {
         GatedBlobStore gated = new GatedBlobStore(rt.blobs());
         MockComponent sftp = new MockComponent("sftp", gated, rt.timer());
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> {
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> {
             seen.add(e.body().whole().toString());
             return Future.succeededFuture(new Ack.Accepted(e.id()));
         });
@@ -204,7 +204,7 @@ class MockPollingEdgeTest {
     @Test
     void roundZeroIsScheduledAtOnceOnStart() throws Exception {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer());
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
         consumer.start().await();
         assertEquals(1, rt.timer().pending(), "start scheduled round 0");
         assertEquals(Duration.ZERO, rt.timer().nextDelay(), "round 0 at once on start, not a ROUND later");
@@ -217,7 +217,7 @@ class MockPollingEdgeTest {
         MockComponent sftp = new MockComponent("sftp", store, rt.timer());
         List<String> ids = new CopyOnWriteArrayList<>();
         Promise<Ack> answer = Promise.promise();
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> {
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> {
             seen.add(e.body().whole().toString());
             ids.add(e.id());
             return seen.size() == 1 ? answer.future() : Future.succeededFuture(new Ack.Accepted(e.id()));

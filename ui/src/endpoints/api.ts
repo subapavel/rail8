@@ -1,6 +1,6 @@
 import { currentLanguage, textsIn } from '../language';
 import type { NodeIngress } from './inbound';
-import type { Options, SettingsDescription } from './settings';
+import type { ComponentForms, Options } from './settings';
 import { refusalText } from '../refusal';
 import { uiFetch } from '../session';
 
@@ -35,11 +35,11 @@ export interface StoredEndpoint {
   etag: string;
 }
 
-/** A component the node serves, with the path its in endpoints are served under on the node's HTTP port, if any, and its settings description. */
+/** A component the node serves, with the path its in endpoints are served under on the node's HTTP port, if any, and its two forms. */
 export interface ComponentSettings {
   scheme: string;
   httpPrefix: string | null;
-  settings: SettingsDescription;
+  settings: ComponentForms;
 }
 
 /** What `GET /admin/components` answers: where the node takes requests, and every component it serves. */

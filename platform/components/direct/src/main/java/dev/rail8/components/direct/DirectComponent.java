@@ -3,19 +3,23 @@ package dev.rail8.components.direct;
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Component;
+import dev.rail8.api.Call;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.Health;
 import dev.rail8.api.IdGenerator;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
 import dev.rail8.api.Views;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -34,21 +38,23 @@ import java.util.function.Function;
 import java.util.regex.Pattern;
 
 /**
- * Calls between the flows of one node. An in endpoint of scheme {@code direct} serves an {@code address}; an out endpoint
- * naming the same address calls the flow it belongs to, and the send is answered with what that flow answered. Nothing
- * leaves the node: the callee's flow receives the caller's body itself, not a copy.
+ * Calls between the flows of one node. A sender of scheme {@code direct} serves an {@code address}; a send naming the same
+ * address calls the flow it belongs to, and the send is answered with what that flow answered. Nothing leaves the node:
+ * the callee's flow receives the caller's body itself, not a copy. Neither direction reaches a connection: the flow form's
+ * {@code address} is all there is.
  *
- * <p><b>Address</b> (option {@code address}, in and out): a path such as {@code /orders} or {@code /orders/eu}, at most 256
- * characters, matched exactly. {@link #internalAddress} answers it for both directions. An in endpoint also takes the
- * node's {@code maxBodyBytes} (required, positive: the largest body its flow takes) and {@code flow} (its flow's name,
- * by default the endpoint's name).
+ * <p><b>Address</b> (the flow form's field {@code address}, in and out): a path such as {@code /orders} or
+ * {@code /orders/eu}, at most 256 characters, matched exactly. {@link #internalAddress} answers it for both directions. A
+ * consumer takes its flow and the largest body that flow takes from its {@link Inbound}.
  *
  * <p><b>Consumer</b>: its start claims the address, and fails with an {@link IllegalStateException} naming the flow that
  * serves it already. Its stop releases the address at once, so the next version of the flow can claim it, takes nothing
  * new, and completes once every answer its flow still owes has been given. A stopped consumer is never started again.
  *
- * <p><b>Producer</b>: a send looks the address up and is refused, in this order:
+ * <p><b>Producer</b>: one serves every call; a send looks up the address of its {@link Call}'s settings and is refused, in
+ * this order:
  * <ol>
+ *   <li>the call's {@code address} is absent or not a path: a {@link Fault} of kind {@link Fault.Kind#INVALID};</li>
  *   <li>the call would be more than {@value #MAX_DEPTH} calls deep (the prop {@code rail8.depth} the caller arrived with,
  *       plus one): a final {@link NackException}, also for a depth that is not a whole number from 0;</li>
  *   <li>no flow serves the address, or its consumer is stopping: a retryable {@link NackException};</li>
@@ -90,9 +96,10 @@ public final class DirectComponent implements Component {
     static final int MAX_DEPTH = 8;
     private static final String ADDRESS_PATTERN = "^(?=.{2,256}$)/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*$";
     private static final Pattern ADDRESS = Pattern.compile(ADDRESS_PATTERN);
-    private static final Settings SETTINGS = Settings.of(
-            Field.text("address", "The address in this node: an in endpoint serves it, an out endpoint calls the flow serving it. "
-                    + "A path such as /orders, matched exactly.").required().pattern(ADDRESS_PATTERN));
+    private static final Forms FORMS = new Forms(Settings.of(), Settings.of(
+            Field.text("address", "Address", "The address in this node: a sender serves it, a send calls the flow serving it. "
+                    + "A path such as /orders, matched exactly.").required().pattern(ADDRESS_PATTERN)),
+            Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.NO_CONNECTION));
 
     private final BlobStore blobs;
     private final IdGenerator ids;
@@ -111,46 +118,49 @@ public final class DirectComponent implements Component {
 
     @Override public String scheme() { return "direct"; }
 
-    @Override public Settings settings() { return SETTINGS; }
+    @Override public Forms forms() { return FORMS; }
 
-    /** The endpoint's {@code address}; an {@link IllegalArgumentException} when it has none or not a path. */
+    /** The setting {@code address}; an {@link IllegalArgumentException} when it is absent or not a path. */
     @Override
-    public Optional<String> internalAddress(EndpointConfig cfg) {
-        return Optional.of(address(cfg));
+    public Optional<String> internalAddress(Direction direction, Map<String, Object> settings) {
+        Objects.requireNonNull(direction, "direction");
+        return Optional.of(address(settings));
     }
 
-    private static String address(EndpointConfig cfg) {
-        Object v = cfg.options().get("address");
+    private static String address(Map<String, Object> settings) {
+        Object v = settings.get("address");
         if (!(v instanceof String a) || !ADDRESS.matcher(a).matches()) {
-            throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option 'address' must be a path such as /orders, of at most 256 characters, was " + v);
+            throw new IllegalArgumentException("the setting 'address' must be a path such as /orders, of at most 256 characters, was " + v);
         }
         return a;
     }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        Objects.requireNonNull(cfg, "cfg");
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        Objects.requireNonNull(in, "in");
         Objects.requireNonNull(handler, "handler");
-        Object max = cfg.options().get("maxBodyBytes");
-        if (!(max instanceof Number n) || n.longValue() <= 0) {
-            throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option 'maxBodyBytes' must be a positive integer (never unlimited), was " + max);
+        String address;
+        try {
+            address = address(in.settings());
+        } catch (IllegalArgumentException bad) {
+            throw new IllegalArgumentException("flow '" + in.flow() + "': " + bad.getMessage(), bad);
         }
-        Object flow = cfg.options().get("flow");
-        return new Served(address(cfg), flow == null ? cfg.name() : flow.toString(), n.longValue(), handler);
+        return new Served(address, in.flow(), in.maxBodyBytes(), handler);
     }
 
+    /** The one producer: each send calls the flow serving its call's {@code address}. */
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        String address = address(Objects.requireNonNull(cfg, "cfg"));
+    public Producer producer(Outbound out) {
+        Objects.requireNonNull(out, "out");
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e) {
-                return call(address, e, null);
+            @Override public Future<Envelope> send(Envelope e, Call call) {
+                return call(e, call, null);
             }
 
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
                 Duration left = d.remaining();
                 if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: message " + e.id() + " not sent", true));
-                return call(address, e, d);
+                return call(e, call, d);
             }
 
             @Override public Future<Void> close() { return Future.succeededFuture(); }
@@ -162,8 +172,14 @@ public final class DirectComponent implements Component {
         return Future.succeededFuture(served.isEmpty() ? Health.down("no address served") : Health.up());
     }
 
-    /** A call of the flow serving {@code address}, cut when {@code d} — none: never — runs out first. */
-    private Future<Envelope> call(String address, Envelope e, Deadline d) {
+    /** A call of the flow serving the address of {@code call}, cut when {@code d} — none: never — runs out first. */
+    private Future<Envelope> call(Envelope e, Call call, Deadline d) {
+        String address;
+        try {
+            address = address(call.settings());
+        } catch (IllegalArgumentException bad) {
+            return Future.failedFuture(new CallFailed(Fault.Kind.INVALID, "flow '" + call.flow() + "', step '" + call.step() + "': " + bad.getMessage(), bad));
+        }
         Object stamped = e.props().asMap().get(DEPTH);
         Integer depth = depth(stamped);
         if (depth == null) {

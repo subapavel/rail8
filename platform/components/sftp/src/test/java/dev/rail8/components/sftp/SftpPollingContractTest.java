@@ -1,7 +1,7 @@
 package dev.rail8.components.sftp;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.testkit.FakeRuntime;
 import dev.rail8.testkit.PollingConsumerContract;
 import io.vertx.core.buffer.Buffer;
@@ -38,7 +38,7 @@ class SftpPollingContractTest extends PollingConsumerContract {
 
     @Override protected Component component() { return new SftpComponent(rt.blobs(), rt.ids(), rt.timer(), rt.clock()); }
 
-    @Override protected EndpointConfig endpoint() { return server.endpoint("sftp-in", "/inbox", Map.of()); }
+    @Override protected Inbound inbound() { return server.endpoint("sftp-in", "/inbox", Map.of()); }
 
     @Override protected void drop(String name, ReadStream<Buffer> bytes) { server.drop("/inbox", name, bytesOf(bytes)); }
 

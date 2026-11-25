@@ -1,11 +1,10 @@
 package dev.rail8.components.mock;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.testkit.ComponentContract;
 import dev.rail8.testkit.FakeRuntime;
 
-import java.net.URI;
 import java.util.Map;
 
 /** The mock passes the same suite as the real components, standing in for the {@code http} scheme. */
@@ -21,7 +20,8 @@ class MockComponentContractTest extends ComponentContract {
         return new MockComponent("http", FakeRuntime.create().blobs(), timer);
     }
 
-    @Override protected EndpointConfig endpoint() {
-        return new EndpointConfig("partner-domestic", URI.create("http://localhost:8081/echo"), Map.of("url", "http://localhost:8081/echo"));
+    /** A connection keyed by the endpoint's id and holding its config, as the node hands the mock every use. */
+    @Override protected Inbound inbound() {
+        return Uses.in("partner-domestic", FLOW, MAX_BYTES, Map.of("url", "http://localhost:8081/echo"));
     }
 }

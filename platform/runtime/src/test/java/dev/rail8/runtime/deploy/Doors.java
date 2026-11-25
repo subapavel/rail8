@@ -1,18 +1,29 @@
 package dev.rail8.runtime.deploy;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Choice;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.testkit.RecordingComponent;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -59,7 +70,15 @@ import java.util.function.Function;
  * recorded by the endpoint's name ({@link #listensOnAsked()}). {@link #Doors(String)} serves another scheme than {@value #SCHEME}.
  *
  * <p>{@link #internalAddress} answers an endpoint's {@code address} option, empty when it sets none; {@code addressRefuse} makes it
- * throw with that text, {@code addressNull} answer null. Every call is recorded by the endpoint's name ({@link #internalAddressAsked()}).
+ * throw with that text, {@code addressNull} answer null. Every call is recorded by the address it was asked with, {@code "-"}
+ * without one ({@link #internalAddressAsked()}).
+ *
+ * <p>Its forms ({@link #FORMS}) reach a connection both ways, so each consumer and producer is built for a connection whose key
+ * is the endpoint's id: the fields of its flow form ({@code level}, {@code port}, {@code host}, {@code address},
+ * {@code addressRefuse}, {@code addressNull}) are checked and handed as settings in the flow, and its connection form describes
+ * nothing, so it takes every other key as written. A consumer, a producer, {@link #listensOn} and {@link #target} read the
+ * endpoint as {@link EndpointConfig} again: the connection's key, {@code <scheme>://<key>}, and its values and settings in one
+ * map, a consumer's with the {@code flow} and {@code maxBodyBytes} of its {@link Inbound}.
  *
  * <p>P2-09b (D-099): {@link #target} names no target unless a case sets a naming with {@link #targets} — then every {@code to}
  * on this component sends under the node's limit of the key that naming answers.
@@ -69,15 +88,17 @@ public final class Doors implements Component {
     public static final String SCHEME = "rec";
 
     /**
-     * The options this component takes: a key outside them, {@code level} outside low/high or {@code port} outside 0..65535 fails
-     * its configSchema.
+     * The forms of this component: {@code level} outside low/high or {@code port} outside 0..65535 is refused; every other key
+     * goes to the connection, which describes nothing.
      */
-    public static final String CONFIG_SCHEMA = """
-            {"type":"object","additionalProperties":false,"properties":{
-              "path":{"type":"string"},"url":{"type":"string"},"level":{"enum":["low","high"]},"tags":{"type":"object"},
-              "refuse":{"type":"string"},"flow":{"type":"string"},"maxBodyBytes":{"type":"integer","minimum":1},
-              "host":{"type":"string"},"port":{"type":"integer","minimum":0,"maximum":65535},"listenRefuse":{"type":"string"},
-              "address":{"type":"string"},"addressRefuse":{"type":"string"},"addressNull":{"type":"boolean"}}}""";
+    public static final Forms FORMS = new Forms(Settings.NONE, Settings.of(
+            Field.choice("level", "Level", "A level.", Choice.of("low", "Low"), Choice.of("high", "High")),
+            Field.text("host", "Host", "Where a consumer listens."),
+            Field.integer("port", "Port", "The port a consumer listens on.").min(0).max(65535),
+            Field.text("address", "Address", "The node-local address."),
+            Field.text("addressRefuse", "Address refusal", "What internalAddress throws."),
+            Field.bool("addressNull", "Address null", "Whether internalAddress answers null.")),
+            Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
 
     private final String scheme;
     private final RecordingComponent partner;
@@ -226,7 +247,21 @@ public final class Doors implements Component {
 
     @Override public String scheme() { return scheme; }
 
-    @Override public String configSchema() { return CONFIG_SCHEMA; }
+    @Override public Forms forms() { return FORMS; }
+
+    /** The endpoint of {@code connection} as this fixture's tests read it: the key, {@code <scheme>://<key>}, every value in one map. */
+    private EndpointConfig view(Optional<Connection> connection, Map<String, Object> settings, Map<String, Object> more) {
+        Connection c = connection.orElseThrow(() -> new IllegalArgumentException("a " + scheme + " endpoint reaches a connection"));
+        Map<String, Object> options = new LinkedHashMap<>(c.values());
+        options.putAll(settings);
+        options.putAll(more);
+        return new EndpointConfig(c.key(), URI.create(scheme + "://" + c.key()), options);
+    }
+
+    /** The in endpoint {@code in} stands for, as the consumers of this component read it. */
+    public EndpointConfig endpoint(Inbound in) {
+        return view(in.connection(), in.settings(), Map.of("flow", in.flow(), "maxBodyBytes", in.maxBodyBytes()));
+    }
 
     /**
      * Where a consumer of {@code cfg} would listen (P1-09g, {@code Component.listensOn}): empty without a {@code port} option, else
@@ -235,7 +270,9 @@ public final class Doors implements Component {
      * that is no number (a config its schema refuses) an {@link IllegalArgumentException}. Every call is recorded first
      * ({@link #listensOnAsked()}).
      */
-    public Optional<InetSocketAddress> listensOn(EndpointConfig cfg) {
+    @Override
+    public Optional<InetSocketAddress> listensOn(Inbound in) {
+        EndpointConfig cfg = endpoint(in);
         listensOnAsked.add(cfg.name());
         if (cfg.options().get("listenRefuse") instanceof String why) throw new IllegalStateException(why);
         String refused = listenRefusals.get(cfg.name());
@@ -252,7 +289,7 @@ public final class Doors implements Component {
 
     /** The target a producer of {@code cfg} calls: what the naming set by {@link #targets} answers, empty by default. */
     @Override
-    public Optional<String> target(EndpointConfig cfg) { return naming.apply(cfg); }
+    public Optional<String> target(Outbound out) { return naming.apply(view(out.connection(), Map.of(), Map.of())); }
 
     /** From now on {@link #listensOn} of the endpoint {@code endpoint} throws an {@link IllegalStateException} with {@code why}; null stops it. */
     public void refuseListen(String endpoint, String why) {
@@ -264,24 +301,24 @@ public final class Doors implements Component {
     public List<String> listensOnAsked() { return List.copyOf(listensOnAsked); }
 
     /**
-     * The node-local address {@code cfg} names: its {@code address} option, empty without one. {@code addressRefuse} makes it throw
-     * an {@link IllegalStateException} with that text, {@code addressNull} answer null. Every call is recorded first
+     * The node-local address {@code settings} name: the {@code address} setting, empty without one. {@code addressRefuse} makes it
+     * throw an {@link IllegalStateException} with that text, {@code addressNull} answer null. Every call is recorded first
      * ({@link #internalAddressAsked()}).
      */
     @Override
-    public Optional<String> internalAddress(EndpointConfig cfg) {
-        internalAddressAsked.add(cfg.name());
-        if (cfg.options().get("addressRefuse") instanceof String why) throw new IllegalStateException(why);
-        if (Boolean.TRUE.equals(cfg.options().get("addressNull"))) return null;
-        return Optional.ofNullable((String) cfg.options().get("address"));
+    public Optional<String> internalAddress(Direction direction, Map<String, Object> settings) {
+        internalAddressAsked.add(String.valueOf(settings.getOrDefault("address", "-")));
+        if (settings.get("addressRefuse") instanceof String why) throw new IllegalStateException(why);
+        if (Boolean.TRUE.equals(settings.get("addressNull"))) return null;
+        return Optional.ofNullable((String) settings.get("address"));
     }
 
-    /** The name of the endpoint of every {@link #internalAddress} call, in order. */
+    /** The address of every {@link #internalAddress} call, {@code "-"} without one, in order. */
     public List<String> internalAddressAsked() { return List.copyOf(internalAddressAsked); }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        Objects.requireNonNull(cfg, "cfg");
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        EndpointConfig cfg = endpoint(Objects.requireNonNull(in, "in"));
         Objects.requireNonNull(handler, "handler");
         onConsumer.accept(cfg);
         if (cfg.options().get("refuse") instanceof String why) throw new IllegalArgumentException(why);
@@ -292,11 +329,12 @@ public final class Doors implements Component {
     }
 
     @Override
-    public Producer producer(EndpointConfig cfg) {
+    public Producer producer(Outbound outbound) {
+        EndpointConfig cfg = view(outbound.connection(), Map.of(), Map.of());
         producerConfigs.add(cfg);
         Out out;
         synchronized (outs) {
-            out = new Out(outs.size() + 1, cfg.name(), partner.producer(cfg));
+            out = new Out(outs.size() + 1, cfg.name(), partner.producer(outbound));
             outs.add(out);
         }
         return out;
@@ -354,13 +392,13 @@ public final class Doors implements Component {
         public List<Integer> unansweredAtClose() { return List.copyOf(unansweredAtClose); }
 
         @Override
-        public Future<Envelope> send(Envelope e) {
+        public Future<Envelope> send(Envelope e, Call call) {
             sentIds.add(e.id());
             if (closeFailsSends && closes.get() > 0) return Future.failedFuture(new IllegalStateException(this + ": a send after the close"));
             unanswered.incrementAndGet();
             Promise<Envelope> answer = Promise.promise();
             pending.add(answer);
-            inner.send(e).onComplete(r -> {
+            inner.send(e, call).onComplete(r -> {
                 if (r.succeeded()) answer.tryComplete(r.result());
                 else answer.tryFail(r.cause());
             });

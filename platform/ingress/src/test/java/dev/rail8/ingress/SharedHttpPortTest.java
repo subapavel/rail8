@@ -3,12 +3,15 @@ package dev.rail8.ingress;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.testkit.FakeClock;
 import dev.rail8.testkit.FakeTimer;
@@ -61,8 +64,9 @@ class SharedHttpPortTest {
         return port.listen(Map.of("http", "/http"), held::contains).await();
     }
 
-    static EndpointConfig in(String name, Object address) {
-        return new EndpointConfig(name, URI.create("http://" + name), address == null ? Map.of() : Map.of("address", address));
+    /** A sender of the flow {@code flow} with the setting {@code address}, none when null. */
+    static Inbound in(String flow, Object address) {
+        return new Inbound(flow, Optional.empty(), address == null ? Map.of() : Map.of("address", address), 1024);
     }
 
     /** {@code status body} of a request, or the failure's class when it got no response. */
@@ -89,7 +93,7 @@ class SharedHttpPortTest {
     @Test
     void aRequestReachesTheMountAtItsExactPathAndNoOtherPath() {
         listen(Set.of());
-        HttpIngress.Mount mount = port.mount(in("orders", "/orders"), req -> answer(req, req.method() + " " + req.path() + "?" + req.query())).await();
+        HttpIngress.Mount mount = port.mount("http", in("orders", "/orders"), req -> answer(req, req.method() + " " + req.path() + "?" + req.query())).await();
 
         assertEquals(URI.create("http://127.0.0.1:" + port.port() + "/http/orders"), mount.url());
         assertEquals("200 POST /http/orders?a=1", call(HttpMethod.POST, "/http/orders?a=1"), "the query aside, every method reaches the handler");
@@ -106,8 +110,8 @@ class SharedHttpPortTest {
     void twoPrefixesShareOneConnection() {
         port.listen(Map.of("http", "/http", "hook", "/hook"), path -> false).await();
         Set<HttpConnection> connections = ConcurrentHashMap.newKeySet();
-        port.mount(in("orders", "/orders"), req -> { connections.add(req.connection()); answer(req, "http"); }).await();
-        port.mount(new EndpointConfig("hooks", URI.create("hook://hooks"), Map.of("address", "/orders")),
+        port.mount("http", in("orders", "/orders"), req -> { connections.add(req.connection()); answer(req, "http"); }).await();
+        port.mount("hook", in("hooks", "/orders"),
                 req -> { connections.add(req.connection()); answer(req, "hook"); }).await();
         HttpClientAgent one = vertx.createHttpClient(new PoolOptions().setHttp1MaxSize(1));
         try {
@@ -124,7 +128,7 @@ class SharedHttpPortTest {
     @Test
     void aHeldPathIsTryAgainWhileAnotherPathServes() {
         listen(Set.of("/http/swapping"));
-        port.mount(in("orders", "/orders"), req -> answer(req, "ok")).await();
+        port.mount("http", in("orders", "/orders"), req -> answer(req, "ok")).await();
         assertEquals("200 ok", call(HttpMethod.POST, "/http/orders"));
         assertEquals("503 the endpoint at /http/swapping takes no request at the moment retry-after=1", call(HttpMethod.POST, "/http/swapping"));
         assertEquals("200 ok", call(HttpMethod.POST, "/http/orders"), "the other path serves on");
@@ -140,14 +144,14 @@ class SharedHttpPortTest {
     @Test
     void aHandlerThatThrowsGetsItsRequestA500() {
         listen(Set.of());
-        port.mount(in("broken", "/broken"), req -> { throw new IllegalStateException("bug"); }).await();
+        port.mount("http", in("broken", "/broken"), req -> { throw new IllegalStateException("bug"); }).await();
         assertEquals("500 the endpoint failed to take the request", call(HttpMethod.POST, "/http/broken"));
     }
 
     @Test
     void aHandlerThatThrowsAfterItWroteTheHeadGetsItsRequestReset() {
         listen(Set.of());
-        port.mount(in("half", "/half"), req -> {
+        port.mount("http", in("half", "/half"), req -> {
             req.response().setChunked(true).write("started");
             throw new IllegalStateException("bug");
         }).await();
@@ -158,15 +162,15 @@ class SharedHttpPortTest {
     @Test
     void onePathHasOneMountUntilItCloses() {
         listen(Set.of());
-        HttpIngress.Mount first = port.mount(in("a", "/orders"), req -> answer(req, "a")).await();
-        Future<HttpIngress.Mount> second = port.mount(in("b", "/orders"), req -> answer(req, "b"));
+        HttpIngress.Mount first = port.mount("http", in("a", "/orders"), req -> answer(req, "a")).await();
+        Future<HttpIngress.Mount> second = port.mount("http", in("b", "/orders"), req -> answer(req, "b"));
 
         IllegalStateException held = assertInstanceOf(IllegalStateException.class, second.cause());
-        assertEquals("endpoint 'b': the path /http/orders is mounted by endpoint 'a'", held.getMessage());
+        assertEquals("flow 'b': the path /http/orders is mounted by flow 'a'", held.getMessage());
         assertEquals("200 a", call(HttpMethod.POST, "/http/orders"));
 
         first.close().await();
-        port.mount(in("b", "/orders"), req -> answer(req, "b")).await();
+        port.mount("http", in("b", "/orders"), req -> answer(req, "b")).await();
         assertEquals("200 b", call(HttpMethod.POST, "/http/orders"), "the path is free at once once its mount closed");
 
         assertTrue(first.close().succeeded(), "a late close of the first mount answers as its first close");
@@ -176,28 +180,27 @@ class SharedHttpPortTest {
     @Test
     void aMountNeedsAPrefixForItsSchemeAndAnAddressOfItsForm() {
         listen(Set.of());
-        Function<EndpointConfig, Throwable> refusal = cfg -> port.mount(cfg, req -> answer(req, "")).cause();
+        Function<Inbound, Throwable> refusal = in -> port.mount("http", in, req -> answer(req, "")).cause();
 
-        assertEquals("endpoint 'w': the scheme webhook declares no HTTP prefix",
-                assertInstanceOf(IllegalArgumentException.class, refusal.apply(new EndpointConfig("w", URI.create("webhook://w"),
-                        Map.of("address", "/x")))).getMessage());
-        assertEquals("endpoint 'x': option 'address' is missing", assertInstanceOf(IllegalArgumentException.class, refusal.apply(in("x", null))).getMessage());
+        assertEquals("flow 'w': the scheme webhook declares no HTTP prefix",
+                assertInstanceOf(IllegalArgumentException.class, port.mount("webhook", in("w", "/x"), req -> answer(req, "")).cause()).getMessage());
+        assertEquals("flow 'x': option 'address' is missing", assertInstanceOf(IllegalArgumentException.class, refusal.apply(in("x", null))).getMessage());
         for (Object bad : List.of("orders", "/", "/a//b", "/a/../b", "/..", "/a/.", "/a b", "/a%20b", "/a?b", "/" + "a".repeat(256), 7)) {
             assertInstanceOf(IllegalArgumentException.class, refusal.apply(in("x", bad)), String.valueOf(bad));
         }
         for (Object good : List.of("/a", "/A.b_c~d-e/1", "/" + "a".repeat(255), "/a/.b/..c")) {
-            port.mount(in("ok", good), req -> answer(req, "")).await().close().await();
+            port.mount("http", in("ok", good), req -> answer(req, "")).await().close().await();
         }
     }
 
     @Test
     void noMountBeforeTheListenNorAfterTheClose() {
-        assertEquals("endpoint 'a': the HTTP port takes no mounts yet: it is not listening",
-                assertInstanceOf(IllegalStateException.class, port.mount(in("a", "/a"), req -> answer(req, "")).cause()).getMessage());
+        assertEquals("flow 'a': the HTTP port takes no mounts yet: it is not listening",
+                assertInstanceOf(IllegalStateException.class, port.mount("http", in("a", "/a"), req -> answer(req, "")).cause()).getMessage());
         listen(Set.of());
         port.close().await();
-        assertEquals("endpoint 'a': the HTTP port takes no mounts any more: it is closed",
-                assertInstanceOf(IllegalStateException.class, port.mount(in("a", "/a"), req -> answer(req, "")).cause()).getMessage());
+        assertEquals("flow 'a': the HTTP port takes no mounts any more: it is closed",
+                assertInstanceOf(IllegalStateException.class, port.mount("http", in("a", "/a"), req -> answer(req, "")).cause()).getMessage());
         assertInstanceOf(IllegalStateException.class, port.listen(Map.of(), path -> false).cause(), "it listens once");
     }
 
@@ -206,7 +209,7 @@ class SharedHttpPortTest {
         listen(Set.of("/http/slow"));
         CompletableFuture<HttpServerRequest> taken = new CompletableFuture<>();
         CompletableFuture<Context> on = new CompletableFuture<>();
-        HttpIngress.Mount mount = port.mount(in("slow", "/slow"), req -> { on.complete(Vertx.currentContext()); taken.complete(req); }).await();
+        HttpIngress.Mount mount = port.mount("http", in("slow", "/slow"), req -> { on.complete(Vertx.currentContext()); taken.complete(req); }).await();
         Future<String> pending = client.request(HttpMethod.POST, port.port(), "127.0.0.1", "/http/slow")
                 .compose(req -> req.send().compose(res -> res.body().map(body -> res.statusCode() + " " + body)));
         HttpServerRequest req = taken.get(10, TimeUnit.SECONDS);
@@ -230,7 +233,7 @@ class SharedHttpPortTest {
     void aRequestStillOpenAtTheDrainDeadlineIsReset() throws Exception {
         listen(Set.of());
         CompletableFuture<HttpServerRequest> taken = new CompletableFuture<>();
-        HttpIngress.Mount mount = port.mount(in("stuck", "/stuck"), taken::complete).await();
+        HttpIngress.Mount mount = port.mount("http", in("stuck", "/stuck"), taken::complete).await();
         Future<String> pending = client.request(HttpMethod.POST, port.port(), "127.0.0.1", "/http/stuck")
                 .compose(req -> req.send().compose(res -> res.body().map(body -> res.statusCode() + " " + body)));
         taken.get(10, TimeUnit.SECONDS);
@@ -249,7 +252,7 @@ class SharedHttpPortTest {
         listen(Set.of());
         CompletableFuture<Void> gone = new CompletableFuture<>();
         CompletableFuture<HttpServerRequest> taken = new CompletableFuture<>();
-        HttpIngress.Mount mount = port.mount(in("stuck", "/stuck"), req -> {
+        HttpIngress.Mount mount = port.mount("http", in("stuck", "/stuck"), req -> {
             req.response().closeHandler(v -> gone.complete(null));
             taken.complete(req);
         }).await();
@@ -270,7 +273,7 @@ class SharedHttpPortTest {
     @Test
     void aCloseWithNothingInFlightCompletesAtOnce() {
         listen(Set.of());
-        HttpIngress.Mount mount = port.mount(in("idle", "/idle"), req -> answer(req, "ok")).await();
+        HttpIngress.Mount mount = port.mount("http", in("idle", "/idle"), req -> answer(req, "ok")).await();
         assertEquals("200 ok", call(HttpMethod.POST, "/http/idle"));
         assertTrue(mount.close().succeeded());
         assertEquals(0, timer.pending());
@@ -279,7 +282,7 @@ class SharedHttpPortTest {
     @Test
     void theOpenRequestsOfAMountArePrunedAsTheyAnswer() {
         listen(Set.of());
-        HttpIngress.Mount mount = port.mount(in("many", "/many"), req -> answer(req, "ok")).await();
+        HttpIngress.Mount mount = port.mount("http", in("many", "/many"), req -> answer(req, "ok")).await();
         for (int i = 0; i < 3 * SharedHttpPort.PRUNE_AT; i++) {
             assertEquals("200 ok", call(HttpMethod.POST, "/http/many"));
             assertTrue(port.taken("/http/many") <= SharedHttpPort.PRUNE_AT, "kept at most " + SharedHttpPort.PRUNE_AT + ": " + port.taken("/http/many"));
@@ -291,7 +294,7 @@ class SharedHttpPortTest {
     void thePrefixesOfTheComponentsAreReadAndChecked() {
         assertEquals(Map.of("http", "/http", "hook-2", "/hook-2"), SharedHttpPort.prefixes(List.of(
                 component("http", Optional.of("/http"), Settings.of(HttpIngress.ADDRESS)),
-                component("hook-2", Optional.of("/hook-2"), Settings.of(Field.text("secret", "A secret.").in(), HttpIngress.ADDRESS)),
+                component("hook-2", Optional.of("/hook-2"), Settings.of(Field.text("token", "Token", "A token.").in(), HttpIngress.ADDRESS)),
                 component("sftp", Optional.empty(), Settings.NONE))));
 
         assertEquals("the component of the scheme a (" + Prefixed.class.getName() + ") declares the HTTP prefix 'http': a prefix is / and one"
@@ -304,9 +307,9 @@ class SharedHttpPortTest {
         assertEquals("the component of the scheme a (" + Prefixed.class.getName() + ") and the component of the scheme b (" + Prefixed.class.getName()
                         + ") both declare the HTTP prefix /x; a prefix has one component",
                 refused(component("a", Optional.of("/x"), Settings.of(HttpIngress.ADDRESS)), component("b", Optional.of("/x"), Settings.of(HttpIngress.ADDRESS))));
-        assertTrue(refused(component("a", Optional.of("/x"), Settings.of(Field.text("address", "Mine.").in()))).endsWith(
-                "but its settings do not list the in field 'address' (HttpIngress.ADDRESS)"), "its own address field is not the node's");
-        assertTrue(refused(component("a", Optional.of("/x"), Settings.NONE)).contains("do not list"));
+        assertTrue(refused(component("a", Optional.of("/x"), Settings.of(Field.text("address", "Address", "Mine.").in()))).endsWith(
+                "but its flow form does not list the in field 'address' (HttpIngress.ADDRESS)"), "its own address field is not the node's");
+        assertTrue(refused(component("a", Optional.of("/x"), Settings.NONE)).contains("does not list"));
         assertTrue(refused(component("a", null, Settings.of(HttpIngress.ADDRESS))).contains("its HTTP prefix cannot be read"));
     }
 
@@ -314,15 +317,16 @@ class SharedHttpPortTest {
         return assertThrows(IllegalStateException.class, () -> SharedHttpPort.prefixes(List.of(components))).getMessage();
     }
 
-    static Component component(String scheme, Optional<String> prefix, Settings settings) {
-        return new Prefixed(scheme, prefix, settings);
+    /** A component of {@code scheme} and {@code prefix} whose flow form is {@code flow}; its in direction reaches no connection. */
+    static Component component(String scheme, Optional<String> prefix, Settings flow) {
+        return new Prefixed(scheme, prefix, new Forms(Settings.of(), flow, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)));
     }
 
-    /** A component that only names its scheme, prefix and settings. */
-    record Prefixed(String scheme, Optional<String> prefix, Settings settings) implements Component {
+    /** A component that only names its scheme, prefix and forms. */
+    record Prefixed(String scheme, Optional<String> prefix, Forms forms) implements Component {
         @Override public Optional<String> httpPrefix() { return prefix; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException(); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException(); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 }

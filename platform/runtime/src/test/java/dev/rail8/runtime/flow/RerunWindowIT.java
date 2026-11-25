@@ -114,8 +114,8 @@ class RerunWindowIT {
     void empty() {
         admin.query("truncate message_keys, messages, dlq, work, nodes").execute().await();
         partnerServer = vertx.createHttpServer().requestHandler(partner).listen(0, "127.0.0.1").await();
-        endpoints = Map.of("partner", new EndpointConfig("partner", URI.create("http://127.0.0.1:" + partnerServer.actualPort() + "/partner"),
-                Map.of("maxBodyBytes", 65_536L)));
+        endpoints = Map.of("partner", new EndpointConfig("partner", URI.create("http://partner"),
+                Map.of("url", "http://127.0.0.1:" + partnerServer.actualPort() + "/partner", "maxBodyBytes", 65_536L)));
         Map<String, Object> doc = new HashMap<>();
         doc.put("schemaVersion", 1);
         doc.put("kind", "flow");

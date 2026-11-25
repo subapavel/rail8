@@ -4,7 +4,6 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.settings.Direction;
@@ -26,8 +25,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.net.URI;
-import java.util.HashMap;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -114,18 +111,12 @@ class HttpConsumerStopTest {
         if (consumer != null) consumer.stop().otherwiseEmpty().await(BOUND_SECONDS, TimeUnit.SECONDS);
     }
 
-    static EndpointConfig endpoint(Map<String, Object> extra) {
-        Map<String, Object> options = new HashMap<>(Map.of("address", "/in", "flow", "orders", "maxBodyBytes", 1024));
-        options.putAll(extra);
-        return new EndpointConfig("http-in", URI.create("http://in"), options);
+    HttpComponent.HttpConsumer listen(Function<Envelope, Future<Ack>> handler) {
+        return listen(http, handler);
     }
 
-    HttpComponent.HttpConsumer listen(Map<String, Object> extra, Function<Envelope, Future<Ack>> handler) {
-        return listen(http, extra, handler);
-    }
-
-    HttpComponent.HttpConsumer listen(HttpComponent on, Map<String, Object> extra, Function<Envelope, Future<Ack>> handler) {
-        consumer = (HttpComponent.HttpConsumer) on.consumer(endpoint(extra), handler);
+    HttpComponent.HttpConsumer listen(HttpComponent on, Function<Envelope, Future<Ack>> handler) {
+        consumer = (HttpComponent.HttpConsumer) on.consumer(Uses.in("orders", "/in", 1024), handler);
         consumer.start().await();
         return consumer;
     }
@@ -159,7 +150,7 @@ class HttpConsumerStopTest {
     @Test
     void aBodyCompletingAfterStopBeganIs503AndTheHandlerIsNotCalled() throws Exception {
         AtomicInteger handled = new AtomicInteger();
-        listen(Map.of(), e -> { handled.incrementAndGet(); return Future.succeededFuture(new Ack.Accepted(e.id())); });
+        listen(e -> { handled.incrementAndGet(); return Future.succeededFuture(new Ack.Accepted(e.id())); });
         Answer before = within(send("<before/>")).result();
         assertEquals(202, before.status(), "a body completing while the consumer runs goes to the handler: " + before.body());
         assertEquals(1, handled.get());
@@ -183,7 +174,7 @@ class HttpConsumerStopTest {
         CountDownLatch invoked = new CountDownLatch(1);
         AtomicInteger handled = new AtomicInteger();
         Promise<Ack> answer = Promise.promise();
-        listen(Map.of(), e -> {
+        listen(e -> {
             int n = handled.incrementAndGet();   // the state the test reads after the latch, set before it opens
             invoked.countDown();
             return n == 1 ? answer.future() : Future.succeededFuture(new Ack.Accepted(e.id()));
@@ -209,8 +200,8 @@ class HttpConsumerStopTest {
 
     @Test
     void shutdownTimeoutMsIsNoOptionAnyMore() {
-        assertEquals(List.of(new Settings.Problem("/shutdownTimeoutMs", "no such setting")),
-                http.settings().check(Map.of("address", "/in", "shutdownTimeoutMs", 5_000), Direction.IN),
+        assertEquals(List.of(new Settings.Problem("/shutdownTimeoutMs", Settings.Problem.UNKNOWN, "no such setting")),
+                http.forms().flow().check(Map.of("address", "/in", "shutdownTimeoutMs", 5_000), Direction.IN),
                 "the drain deadline is the node's stop deadline, the same for every endpoint on its HTTP port");
     }
 
@@ -223,7 +214,7 @@ class HttpConsumerStopTest {
             CountDownLatch invoked = new CountDownLatch(1);
             Promise<Ack> never = Promise.promise();
             HttpComponent onShort = new HttpComponent(vertx, blobs, rt.ids(), rt.timer(), quick);
-            listen(onShort, Map.of(), e -> { invoked.countDown(); return never.future(); });
+            listen(onShort, e -> { invoked.countDown(); return never.future(); });
             Future<Answer> inFlight = send("<never-answered/>");
             reached(invoked, "the handler was invoked");
 

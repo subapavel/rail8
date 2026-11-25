@@ -241,17 +241,16 @@ class PartnerFailureParkIT {
         Watched(Component inner) { this.inner = inner; }
 
         @Override public String scheme() { return inner.scheme(); }
-        @Override public String configSchema() { return inner.configSchema(); }
-        @Override public dev.rail8.api.settings.Settings settings() { return inner.settings(); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
+        @Override public dev.rail8.api.settings.Forms forms() { return inner.forms(); }
+        @Override public Consumer consumer(dev.rail8.api.Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
         @Override public Future<Health> health() { return inner.health(); }
 
-        @Override public Producer producer(EndpointConfig cfg) {
-            Producer p = inner.producer(cfg);
+        @Override public Producer producer(dev.rail8.api.Outbound out) {
+            Producer p = inner.producer(out);
             return new Producer() {
-                @Override public Future<Envelope> send(Envelope e) {
+                @Override public Future<Envelope> send(Envelope e, dev.rail8.api.Call call) {
                     sends.incrementAndGet();
-                    return p.send(e).onFailure(failures::add);
+                    return p.send(e, call).onFailure(failures::add);
                 }
 
                 @Override public Future<Void> close() { return p.close(); }
@@ -290,7 +289,7 @@ class PartnerFailureParkIT {
             messageStores.add(messages);
             http = new Watched(new HttpComponent(vertx, blobs, rt.ids()));
             Runtime runtime = new Runtime(rt.clock(), recordingTimer(), rt.ids(), blobs, rt.hasher(), Map.of(http.scheme(), http));
-            Map<String, EndpointConfig> endpoints = Map.of("partner", new EndpointConfig("partner", partnerUri, Map.of("maxBodyBytes", 65_536L)));
+            Map<String, EndpointConfig> endpoints = Map.of("partner", new EndpointConfig("partner", partnerUri, Map.of("url", partnerUri.toString(), "maxBodyBytes", 65_536L)));
             builder = new FlowBuilder(runtime, List.of(stamp()), List.of(), endpoints)
                     .recording(messages, Meter.system()).queue(new PgWorkQueue(pool, "node-a")).dlq(new PgDlq(pool))
                     // the runs' time limits on a timer of their own over the same clock: the recorded timer holds the retries'

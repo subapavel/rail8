@@ -1,5 +1,8 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -65,18 +68,18 @@ class DeploymentsListenerEdgeTest {
 
         @Override public String scheme() { return inner.scheme(); }
 
-        @Override public String configSchema() { return inner.configSchema(); }
+        @Override public Forms forms() { return inner.forms(); }
 
         @Override
-        public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
+        public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
 
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
+        @Override public Producer producer(Outbound out) { return inner.producer(out); }
 
         @Override public Future<Health> health() { return inner.health(); }
 
         @Override
-        public Optional<InetSocketAddress> listensOn(EndpointConfig cfg) {
-            asked.add(cfg.name());
+        public Optional<InetSocketAddress> listensOn(Inbound in) {
+            asked.add(inner.endpoint(in).name());
             return null;
         }
     }

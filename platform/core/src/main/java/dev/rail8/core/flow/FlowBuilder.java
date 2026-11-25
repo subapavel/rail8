@@ -4,7 +4,11 @@ import dev.rail8.api.BodyKind;
 import dev.rail8.api.Cache;
 import dev.rail8.api.Component;
 import dev.rail8.api.Deadline;
+import dev.rail8.api.Call;
 import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Expressions;
 import dev.rail8.api.Headers;
@@ -543,7 +547,7 @@ public final class FlowBuilder {
                 }
                 if (kind == BodyKind.SPLIT_ASSEMBLE) splitBefore = true;
                 Stage stage = switch (step.type()) {
-                    case "to" -> to(step, forward, opened, fence);
+                    case "to" -> to(step, flow, forward, opened, fence);
                     case "route" -> route(step, resources);
                     case "filter" -> new Filter(predicate(step, step.requireString("when"), resources));
                     case "extractKey" -> extractKey(step, resources);
@@ -636,9 +640,9 @@ public final class FlowBuilder {
      * The producer gets the envelope through {@code forward} (the flow's {@code forwardHeaders}) under its target's limit;
      * what goes on is its reply. Every producer created is added to {@code opened} at once.
      */
-    private Stage to(StepConfig step, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence) {
+    private Stage to(StepConfig step, FlowDefinition flow, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence) {
         if (step.config().get("endpoint") != null) {
-            Send send = send(step, step.requireString("endpoint"), opened, fence);
+            Send send = send(step, flow, step.requireString("endpoint"), opened, fence);
             return Stage.of(e -> send.apply(forward.apply(e)));
         }
         Key<String> prop = new Key<>(step.requireString("byProp"));
@@ -646,7 +650,7 @@ public final class FlowBuilder {
             throw new IllegalArgumentException(step + ": 'endpoints' must map every value of " + prop.name() + " to an endpoint");
         }
         Map<String, Send> sends = new LinkedHashMap<>();
-        choices.forEach((choice, endpoint) -> sends.put(String.valueOf(choice), send(step, String.valueOf(endpoint), opened, fence)));
+        choices.forEach((choice, endpoint) -> sends.put(String.valueOf(choice), send(step, flow, String.valueOf(endpoint), opened, fence)));
         return Stage.of(e -> {
             String choice = e.get(prop).orElseThrow(() -> new IllegalStateException(step + ": prop " + prop.name() + " is not set; a route step before it decides"));
             Send send = sends.get(choice);
@@ -655,8 +659,12 @@ public final class FlowBuilder {
         });
     }
 
-    /** The producer of {@code endpoint}, added to {@code opened} at once, the limit of the target its component names, and {@code fence}. */
-    private Send send(StepConfig step, String endpoint, List<Producer> opened, BooleanSupplier fence) {
+    /**
+     * The producer of {@code endpoint}, added to {@code opened} at once, the call of {@code step} through it, the limit of the
+     * target its component names, and {@code fence}. Each endpoint a step names is one use of the adapter's contract with a
+     * producer of its own ({@link EndpointUse}).
+     */
+    private Send send(StepConfig step, FlowDefinition flow, String endpoint, List<Producer> opened, BooleanSupplier fence) {
         EndpointConfig cfg = endpoints.get(endpoint);
         if (cfg == null) throw new IllegalArgumentException(step + ": unknown endpoint '" + endpoint + "' (" + endpoints.keySet() + ")");
         Component component;
@@ -665,9 +673,13 @@ public final class FlowBuilder {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(step + ": endpoint '" + endpoint + "' " + cfg.uri() + ": " + e.getMessage(), e);
         }
-        Producer producer = component.producer(cfg);
+        Forms forms = component.forms();
+        if (!forms.serves(Direction.OUT)) throw new IllegalArgumentException(step + ": endpoint '" + endpoint + "': the adapter '" + cfg.scheme() + "' does not send");
+        Outbound out = EndpointUse.outbound(forms, cfg);
+        Call call = EndpointUse.call(forms, cfg, flow.id(), step.name(), flow.maxBodyBytes());
+        Producer producer = component.producer(out);
         opened.add(producer);
-        return new Send(endpoint, producer, component.target(cfg).map(targets::of).orElseGet(targets::unshared), runtime.clock(), runtime.timer(), fence,
+        return new Send(endpoint, producer, call, component.target(out).map(targets::of).orElseGet(targets::unshared), runtime.clock(), runtime.timer(), fence,
                 fence instanceof Fence f ? f : null);   // only a Fence bounds a send in time and abandons it when the fence closes
     }
 
@@ -675,16 +687,16 @@ public final class FlowBuilder {
      * A {@code to}'s send: the producer's, under the limit of its target, waiting no longer than the time left on {@code clock}
      * until the deadline of the message bound, maxWait when none is; under the permit, a closed {@code fence} fails it with a
      * {@link FencedException} before the producer is called. With a message bound the producer gets
-     * {@code send(e, d)}: {@code d} is the time left until the message's deadline — the earlier of that and what
+     * {@code send(e, call, d)}: {@code d} is the time left until the message's deadline — the earlier of that and what
      * the fence has left when {@code fence} is a {@link Fence} — re-read at each {@code remaining()}; no time left fails the send
-     * with a retryable {@link NackException} and the producer is not called. Without a message bound it gets {@code send(e)}.
+     * with a retryable {@link NackException} and the producer is not called. Without a message bound it gets {@code send(e, call)}.
      * With a {@link Fence} the run stops waiting once the fence closes ({@link FencedWait}) and a producer failure landing while
      * it is closed is a {@link FencedException} with that failure as its cause; the permit is held until the producer's own
      * future settles. Under the permit a stopped run fails the send with a {@link RunStoppedException} before the producer is
      * called, and a send it starts is watched by the run, which returns only once that send has settled. Otherwise what the
      * send fails with comes out as is.
      */
-    private record Send(String endpoint, Producer producer, TargetLimit limit, Clock clock, Timer timer, BooleanSupplier fence, Fence bound) {
+    private record Send(String endpoint, Producer producer, Call call, TargetLimit limit, Clock clock, Timer timer, BooleanSupplier fence, Fence bound) {
         Envelope apply(Envelope e) {
             MessageContext context = MessageContext.isBound() ? MessageContext.current() : null;
             Runs.Run run = Runs.current();
@@ -702,7 +714,7 @@ public final class FlowBuilder {
                 if (stopped != null) return Future.failedFuture(new RunStoppedException(stopped, null));
                 if (wait != null) wait.arm();   // before the producer is called: nothing of the send is out before the fence is watched
                 try {   // a null answer fails here, inside the catch, so its re-read is disarmed too
-                    Future<Envelope> sent = Objects.requireNonNull(d == null ? producer.send(e) : producer.send(e, d),
+                    Future<Envelope> sent = Objects.requireNonNull(d == null ? producer.send(e, call) : producer.send(e, call, d),
                             () -> "endpoint '" + endpoint + "': the send answered no future");
                     if (run != null) run.watch(sent);   // the run returns only once it has settled
                     return sent;

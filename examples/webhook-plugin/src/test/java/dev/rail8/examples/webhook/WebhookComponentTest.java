@@ -2,8 +2,11 @@ package dev.rail8.examples.webhook;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Call;
+import dev.rail8.api.Connection;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Settings;
@@ -57,15 +60,15 @@ class WebhookComponentTest {
     @Test
     void itsPrefixIsItsOwnAndItsInEndpointsNameAnAddress() {
         assertEquals(Optional.of("/webhook"), component.httpPrefix());
-        assertEquals(Optional.empty(), component.listensOn(new EndpointConfig("in", URI.create("webhook://in"), Map.of("address", "/in"))),
-                "no port of its own: the node's HTTP port");
-        assertEquals(List.of(new Settings.Problem("/address", "is required")), component.settings().check(Map.of(), Direction.IN));
+        assertEquals(Optional.empty(), component.listensOn(in("/in", 1024)), "no port of its own: the node's HTTP port");
+        assertEquals(List.of(new Settings.Problem("/address", Settings.Problem.REQUIRED, "is required")), component.forms().flow().check(Map.of(), Direction.IN));
+        assertEquals(List.of(new Settings.Problem("/url", Settings.Problem.REQUIRED, "is required")), component.forms().connection().check(Map.of(), Direction.OUT));
+        assertTrue(component.forms().connects(Direction.OUT) && !component.forms().connects(Direction.IN), "a connection for the out direction only");
     }
 
     @Test
     void theConsumerAnswersAFinalRefusal400AnotherPath404AnotherMethod405AndABodyAboveItsLimit413() {
-        Consumer consumer = component.consumer(new EndpointConfig("in", URI.create("webhook://in"),
-                Map.of("address", "/in", "maxBodyBytes", 8, "flow", "test")), e -> Future.succeededFuture(new Ack.Nack("no such order", false)));
+        Consumer consumer = component.consumer(in("/in", 8), e -> Future.succeededFuture(new Ack.Nack("no such order", false)));
         consumer.start().await();
         HttpClientAgent client = vertx.createHttpClient();
         try {
@@ -84,8 +87,7 @@ class WebhookComponentTest {
     @Test
     void theConsumerAnswersAnAcceptedMessage202WithItsId() {
         AtomicReference<String> accepted = new AtomicReference<>();
-        Consumer consumer = component.consumer(new EndpointConfig("in", URI.create("webhook://in"),
-                Map.of("address", "/in", "maxBodyBytes", 1024, "flow", "test")), e -> {
+        Consumer consumer = component.consumer(in("/in", 1024), e -> {
             accepted.set(e.id());
             return Future.succeededFuture(new Ack.Accepted(e.id()));
         });
@@ -106,10 +108,9 @@ class WebhookComponentTest {
         for (int status : new int[] {400, 404, 429, 500, 503}) {
             HttpServer partner = vertx.createHttpServer().requestHandler(req -> req.body().onSuccess(b -> req.response().setStatusCode(status).end("why: " + status)))
                     .listen(0, "127.0.0.1").await();
-            Producer producer = component.producer(new EndpointConfig("partner", URI.create("webhook://partner"),
-                    Map.of("url", "http://127.0.0.1:" + partner.actualPort() + "/", "maxBodyBytes", 1024)));
+            Producer producer = component.producer(partner("http://127.0.0.1:" + partner.actualPort() + "/"));
             try {
-                Future<?> sent = producer.send(rt.ingress("test", dev.rail8.api.Headers.empty(), Buffer.buffer("order")));
+                Future<?> sent = producer.send(rt.ingress("test", dev.rail8.api.Headers.empty(), Buffer.buffer("order")), CALL);
                 sent.otherwiseEmpty().await();
                 NackException nack = assertInstanceOf(NackException.class, sent.cause(), status + ": " + sent.cause());
                 assertEquals(status == 429 || status >= 500, nack.retryable(), status + ": " + nack);
@@ -126,12 +127,43 @@ class WebhookComponentTest {
         assertEquals(Optional.of("http://partner.example:80"), component.target(partner("http://Partner.example/orders?x=1")));
         assertEquals(Optional.of("https://partner.example:443"), component.target(partner("https://partner.example/orders")));
         assertEquals(Optional.of("http://partner.example:8443"), component.target(partner("http://partner.example:8443")));
-        assertEquals(Optional.empty(), component.target(new EndpointConfig("in", URI.create("webhook://in"), Map.of())));
+        assertEquals(Optional.empty(), component.target(partner("http:///orders")), "a url without a host names no partner");
     }
 
-    static EndpointConfig partner(String url) {
-        return new EndpointConfig("partner", URI.create("webhook://partner"), Map.of("url", url, "maxBodyBytes", 1024));
+    /** The reply limit is the call's: a reply above it fails the send. */
+    @Test
+    void aReplyAboveTheCallsLimitFailsTheSend() {
+        HttpServer partner = vertx.createHttpServer().requestHandler(req -> req.body().onSuccess(b -> req.response().end("r".repeat(100))))
+                .listen(0, "127.0.0.1").await();
+        Producer producer = component.producer(partner("http://127.0.0.1:" + partner.actualPort() + "/"));
+        try {
+            dev.rail8.api.Envelope order = rt.ingress("test", dev.rail8.api.Headers.empty(), Buffer.buffer("order"));
+            assertEquals(100, producer.send(order, call(100)).await().body().size(), "at the call's limit");
+            Future<?> above = producer.send(order, call(99));
+            above.otherwiseEmpty().await();
+            assertInstanceOf(dev.rail8.api.BodyTooLargeException.class, above.cause(), "above it");
+        } finally {
+            producer.close().await();
+            partner.close().await();
+        }
     }
+
+    /** A sender of the flow {@code test} at {@code address}, bodies up to {@code maxBodyBytes}. */
+    static Inbound in(String address, long maxBodyBytes) {
+        return new Inbound("test", Optional.empty(), Map.of("address", address), maxBodyBytes);
+    }
+
+    /** A producer's connection {@code partner} to {@code url}. */
+    static Outbound partner(String url) {
+        return new Outbound(Optional.of(new Connection("partner", Map.of("url", url), Map.of())));
+    }
+
+    /** A call of the step {@code send}, replies up to {@code maxReplyBytes}. */
+    static Call call(long maxReplyBytes) {
+        return new Call("test", "send", Map.of(), maxReplyBytes, Optional.empty());
+    }
+
+    static final Call CALL = call(1024);
 
     static int status(HttpClientAgent client, HttpMethod method, int port, String path, String body) {
         return client.request(method, port, "127.0.0.1", path).compose(req -> req.send(body)).await().statusCode();

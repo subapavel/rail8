@@ -1,6 +1,5 @@
 package dev.rail8.components.mock;
 
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
@@ -11,7 +10,6 @@ import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -19,8 +17,14 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static dev.rail8.components.mock.Uses.CALL;
+import static dev.rail8.components.mock.Uses.out;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static dev.rail8.components.mock.Uses.CALL;
+import static dev.rail8.components.mock.Uses.out;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static dev.rail8.components.mock.Uses.CALL;
+import static dev.rail8.components.mock.Uses.out;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -31,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MockDeadlineTest {
 
     final FakeRuntime rt = FakeRuntime.create();
-    final EndpointConfig partner = new EndpointConfig("partner", URI.create("http://localhost:8081/echo"), Map.of());
+    final String partner = "partner";
 
     Envelope message() { return rt.ingress("f", Headers.empty(), Buffer.buffer("<a/>")); }
 
@@ -39,14 +43,14 @@ class MockDeadlineTest {
     void aSendWithNoTimeLeftIsNotRecordedAndADelayedAnswerIsCut() {
         MockComponent mock = new MockComponent("http", rt.blobs(), rt.timer());
         mock.bind("partner", Behaviour.from(Map.of("delay", "10s"), java.nio.file.Path.of("")));
-        Producer p = mock.producer(partner);
-        Future<Envelope> late = p.send(message(), () -> Duration.ZERO);
+        Producer p = mock.producer(out(partner));
+        Future<Envelope> late = p.send(message(), CALL, () -> Duration.ZERO);
         assertTrue(late.failed() && late.cause() instanceof NackException n && n.retryable(), "no time left: a retryable Nack: " + late.cause());
         assertEquals(List.of(), mock.sent(), "not recorded");
 
         AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(3));
         Envelope e = message();
-        Future<Envelope> delayed = p.send(e, () -> Duration.between(rt.clock().instant(), until.get()));
+        Future<Envelope> delayed = p.send(e, CALL, () -> Duration.between(rt.clock().instant(), until.get()));
         assertEquals(List.of(e), mock.sent(), "recorded as given: " + mock.sent());
         rt.clock().advance(Duration.ofSeconds(3));
         NackException cut = assertInstanceOf(NackException.class, delayed.cause(), "cut at 3 s, the answer due at 10 s: " + delayed);
@@ -61,9 +65,9 @@ class MockDeadlineTest {
             rt.timer().schedule(delay, task);
             return () -> false;
         };
-        Producer p = new MockComponent("http", rt.blobs(), lateCancels).producer(partner);
+        Producer p = new MockComponent("http", rt.blobs(), lateCancels).producer(out(partner));
         AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(5));
-        Future<Envelope> echoed = p.send(message(), () -> Duration.between(rt.clock().instant(), until.get()));
+        Future<Envelope> echoed = p.send(message(), CALL, () -> Duration.between(rt.clock().instant(), until.get()));
         assertTrue(echoed.succeeded(), "echoed at once: " + echoed);
         assertEquals(1, schedules.get(), "fixture: one cut armed");
         until.set(rt.clock().instant().plusSeconds(10));

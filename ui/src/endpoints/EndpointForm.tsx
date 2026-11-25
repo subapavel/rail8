@@ -1,4 +1,5 @@
 import { CheckCircleOutlined, EditOutlined, SaveOutlined } from '@ant-design/icons';
+import { ProCard } from '@ant-design/pro-components';
 import { Alert, App, Button, Flex, Form, Modal, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
@@ -11,7 +12,7 @@ import { RawOptions } from './RawOptions';
 import type { EndpointsApi, StoredEndpoint } from './api';
 import { inboundAddress, optionsIn, type NodeIngress } from './inbound';
 import { sameValue } from './same-value';
-import { checkOptions, shownFields, type Options, type Problem, type SettingsDescription, type SettingsField } from './settings';
+import { checkOptions, endpointSettings, shownFields, type EndpointSettings, type Group, type Options, type Problem, type SettingsField } from './settings';
 
 export interface EndpointFormProps {
   api: EndpointsApi;
@@ -25,7 +26,7 @@ export interface EndpointFormProps {
  * The component's description, while it is read, once read with its HTTP prefix and where the node takes requests, or
  * why it could not be.
  */
-type Described = { kind: 'reading' } | { kind: 'read'; settings: SettingsDescription; httpPrefix: string | null; ingress: NodeIngress } | { kind: 'missing'; why: Message };
+type Described = { kind: 'reading' } | { kind: 'read'; settings: EndpointSettings; httpPrefix: string | null; ingress: NodeIngress } | { kind: 'missing'; why: Message };
 
 /**
  * Under the address of an in endpoint: a preview of the URL senders call, or of the path on the node's HTTP port when
@@ -52,19 +53,27 @@ function optionOf(path: string): string | null {
   return path === '' ? null : path.slice(1).replaceAll('~1', '/').replaceAll('~0', '~');
 }
 
-/** A key of the file that no field describes, drawn as a field of no known type. */
-function undescribed(name: string): SettingsField {
-  return { name, type: 'raw', help: msg('endpoints.form.undescribed'), tab: 'general', required: false, directions: ['in', 'out'] };
+/** A key of the file that no field describes, drawn in `group` as a field of no known type. */
+function undescribed(name: string, group: Group): SettingsField {
+  return { name, type: 'raw', help: msg('endpoints.form.undescribed'), tab: 'general', required: false, directions: ['in', 'out'], group };
 }
 
+/** The title of each group of fields, in the order the groups are shown. */
+const GROUPS: { group: Group; title: string }[] = [
+  { group: 'connection', title: 'endpoints.form.group.connection' },
+  { group: 'flow', title: 'endpoints.form.group.flow' },
+];
+
 /**
- * An endpoint's settings form, drawn from its component's settings description: the endpoint's id, scheme, direction
- * and file; the environments that override options; then the description's tabs, each with the fields it holds that
- * serve the endpoint's direction and are shown, and the problems the check finds in them. It opens read-only; Edit, when
+ * An endpoint's settings form, drawn from its component's two forms: the endpoint's id, scheme, direction and file; the
+ * environments that override options; then the description's tabs, each with the fields it holds that serve the
+ * endpoint's direction and are shown, in two titled groups, the connection's and the flow's, each shown when it has a
+ * field, and the problems the check finds in them. It opens read-only; Edit, when
  * the file may be edited and the description could be read, then Cancel, Check and Save. Save writes only `config`,
  * sending the version it read, and a file changed on disk since opens a dialog. Cancel with unsaved changes asks
  * first; while there are some, `guardClose` is given the form's save, and the page asks before it unloads. Without the
- * description the file's options are shown as JSON, read-only, with the reason.
+ * description the file's options are shown as JSON, read-only, with the reason; for a component that does not serve
+ * the endpoint's direction, as JSON with a warning.
  */
 export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const texts = useText();
@@ -112,8 +121,9 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   }, [api, path]);
 
   const scheme = stored?.file.scheme;
+  const direction = stored?.file.direction;
   useEffect(() => {
-    if (scheme === undefined) return undefined;
+    if (scheme === undefined || direction === undefined) return undefined;
     let current = true;
     api.components().then(
       (components) => {
@@ -122,7 +132,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         const ingress = { environment: components.environment, httpOrigin: components.httpOrigin };
         setDescribed(
           found
-            ? { kind: 'read', settings: found.settings, httpPrefix: found.httpPrefix, ingress }
+            ? { kind: 'read', settings: endpointSettings(found.settings, direction), httpPrefix: found.httpPrefix, ingress }
             : { kind: 'missing', why: msg('endpoints.form.noComponent', { scheme }) },
         );
       },
@@ -131,7 +141,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     return () => {
       current = false;
     };
-  }, [api, scheme]);
+  }, [api, scheme, direction]);
 
   // a control that holds text that is no value yet holds an unsaved change too
   const unsaved = editing && stored !== null && (invalid.size > 0 || !sameValue(present(draft), stored.file.config));
@@ -227,20 +237,17 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   };
 
   const shown = settings === null ? new Set<string>() : shownFields(settings, present(options));
-  const fieldsOn = (tabId: string): SettingsField[] => {
+  const fieldsOn = (tabId: string, group: Group): SettingsField[] => {
     if (settings === null) return [];
-    const fields = settings.fields.filter((f) => f.tab === tabId && f.directions.includes(file.direction) && shown.has(f.name));
+    const fields = settings.fields.filter((f) => f.tab === tabId && f.group === group && f.directions.includes(file.direction) && shown.has(f.name));
     if (tabId !== 'general') return fields;
-    // on an in endpoint the node sets flow and maxBodyBytes itself: no field describes them, and they are no stray key
-    const named = new Set([...settings.fields.map((f) => f.name), ...(file.direction === 'in' ? ['flow', 'maxBodyBytes'] : [])]);
-    return [
-      ...fields,
-      ...Object.keys(options)
-        .filter((k) => !named.has(k) && options[k] !== undefined)
-        .map(undescribed),
-    ];
+    // a key no field describes stands in the group whose form takes it, or in the flow's when no form does; on an in
+    // endpoint the node sets flow and maxBodyBytes itself, so they are no stray key
+    const named = new Set(settings.fields.map((f) => f.name));
+    const strays = Object.keys(options).filter((k) => !named.has(k) && options[k] !== undefined && !(file.direction === 'in' && ['flow', 'maxBodyBytes'].includes(k)));
+    return [...fields, ...strays.filter(() => (settings.stray ?? 'flow') === group).map((name) => undescribed(name, group))];
   };
-
+  const served = settings === null || settings.served;
   const canEdit = file.editable && settings !== null;
   let arrival: ReactNode;
   if (described.kind === 'read' && described.httpPrefix !== null && file.direction === 'in') {
@@ -300,6 +307,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
           }
         />
       )}
+      {!served && <Alert type="warning" showIcon title={t('endpoints.form.notServed', { scheme: file.scheme, direction: file.direction })} />}
       {file.environments.length > 0 && (
         <Alert
           type="info"
@@ -340,7 +348,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
       {saveFailure !== null && <Alert type="error" showIcon title={t('endpoints.form.notSaved')} description={say(texts, saveFailure)} />}
       {described.kind === 'reading' ? (
         <ReadSpinner label={t('endpoints.form.describing')} />
-      ) : settings === null || !settings.described ? (
+      ) : settings === null || !settings.described || !settings.served ? (
         <Form layout="vertical">
           <RawOptions
             key={generation}
@@ -360,28 +368,34 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
           aria-label={t('endpoints.form.tabs')}
           id={tabsId}
           items={tabs.map((one) => {
-            const fields = fieldsOn(one.id);
+            const groups = GROUPS.map((g) => ({ ...g, fields: fieldsOn(one.id, g.group) })).filter((g) => g.fields.length > 0);
             return {
               key: one.id,
               label: one.label,
               children:
-                fields.length === 0 ? (
+                groups.length === 0 ? (
                   <p>{t(file.direction === 'in' ? 'endpoints.form.noFields.in' : 'endpoints.form.noFields.out')}</p>
                 ) : (
-                  <Form layout="vertical">
-                    {fields.map((field) => (
-                      <FieldControl
-                        key={`${generation}-${field.name}`}
-                        field={field}
-                        value={options[field.name]}
-                        readOnly={!editing}
-                        onChange={(value) => change(field.name, value)}
-                        onInvalid={(bad) => markInvalid(field.name, bad)}
-                        problem={problemOf.get(field.name)}
-                        {...(field.name === 'address' && arrival !== undefined ? { note: arrival } : {})}
-                      />
+                  <Flex vertical gap="large">
+                    {groups.map(({ group, title, fields }) => (
+                      <ProCard key={group} title={<h2>{t(title)}</h2>} headerBordered>
+                        <Form layout="vertical" aria-label={t(title)}>
+                          {fields.map((field) => (
+                            <FieldControl
+                              key={`${generation}-${field.name}`}
+                              field={field}
+                              value={options[field.name]}
+                              readOnly={!editing}
+                              onChange={(value) => change(field.name, value)}
+                              onInvalid={(bad) => markInvalid(field.name, bad)}
+                              problem={problemOf.get(field.name)}
+                              {...(field.name === 'address' && arrival !== undefined ? { note: arrival } : {})}
+                            />
+                          ))}
+                        </Form>
+                      </ProCard>
                     ))}
-                  </Form>
+                  </Flex>
                 ),
             };
           })}

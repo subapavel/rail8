@@ -1,5 +1,9 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -123,26 +127,26 @@ class DeploymentsSecretsTest {
      * that records the config of every consumer it builds; it never connects. No package here sends to it.
      */
     static final class SftpShaped implements Component {
-        final List<EndpointConfig> consumers = new CopyOnWriteArrayList<>();
-        private final Settings settings;
+        final List<Inbound> consumers = new CopyOnWriteArrayList<>();
+        private final Forms forms;
 
         SftpShaped(FakeRuntime rt) {
-            this.settings = new SftpComponent(rt.blobs(), rt.ids(), rt.timer(), rt.clock()).settings();
+            this.forms = new SftpComponent(rt.blobs(), rt.ids(), rt.timer(), rt.clock()).forms();
         }
 
         @Override public String scheme() { return "sftp"; }
 
-        @Override public Settings settings() { return settings; }
+        @Override public Forms forms() { return forms; }
 
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-            consumers.add(cfg);
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+            consumers.add(in);
             return new Consumer() {
                 @Override public Future<Void> start() { return Future.succeededFuture(); }
                 @Override public Future<Void> stop() { return Future.succeededFuture(); }
             };
         }
 
-        @Override public Producer producer(EndpointConfig cfg) {
+        @Override public Producer producer(Outbound out) {
             throw new UnsupportedOperationException("fixture: no package of these cases sends to sftp");
         }
 
@@ -297,17 +301,63 @@ class DeploymentsSecretsTest {
     void anSftpPasswordReferenceReachesTheComponentResolved() throws Exception {
         Node n = node(Map.of("RAIL8_SECRET_DROP_PASSWORD", "pw-from-the-env-4711"));
         PackageDraft p = PackageDraft.of("drop", "1.0.0")
-                .endpoint("drop", "sftp", "in", new JsonObject().put("user", "rail8").put("password", "secret://drop-password").put("hostKey", HOST_KEY))
+                .endpoint("drop", "sftp", "in", new JsonObject().put("host", "sftp.example").put("user", "rail8").put("password", "secret://drop-password").put("hostKey", HOST_KEY))
                 .endpoint("partner", "out", url("rec://partner"))
                 .flow("from-drop", "1.0.0", "sync", "drop", 4096, PackageDraft.toPartner());
 
         n.deploy(p);
 
         assertEquals(1, n.sftp.consumers.size(), "one consumer built: " + n.sftp.consumers);
-        Map<String, Object> options = n.sftp.consumers.getFirst().options();
-        assertEquals("pw-from-the-env-4711", options.get("password"), "the component gets the value: " + options);
-        assertEquals("rail8", options.get("user"), "the other options as written: " + options);
-        assertEquals(HOST_KEY, options.get("hostKey"), "the other options as written: " + options);
+        Connection connection = n.sftp.consumers.getFirst().connection().orElseThrow();
+        assertEquals("pw-from-the-env-4711", connection.secret("password").orElseThrow().value(), "the component gets the value: " + connection);
+        assertEquals("rail8", connection.values().get("user"), "the other options as written: " + connection);
+        assertEquals(HOST_KEY, connection.secret("hostKey").orElseThrow().value(), "the other options as written: " + connection);
+    }
+
+    /** {@code name} 1.0.0: one sync flow {@code from-drop} from the sftp endpoint {@code drop}, whose config is {@code drop}. */
+    static PackageDraft drop(String name, JsonObject drop) {
+        return PackageDraft.of(name, "1.0.0")
+                .endpoint("drop", "sftp", "in", drop)
+                .endpoint("partner", "out", url("rec://partner"))
+                .flow("from-drop", "1.0.0", "sync", "drop", 4096, PackageDraft.toPartner());
+    }
+
+    /**
+     * The secrets of a connection never show: a password by reference and a host key written as it is reach the component as
+     * secrets of its connection, while the connection's own text, the listings the admin API encodes (packages, flows and the
+     * adapters' forms), the record, every file the node wrote, the problems of a refused deploy and the logs hold neither value,
+     * and the flow's hash is the same on a node whose values differ.
+     */
+    @Test
+    void theSecretsOfAConnectionNeverShow() throws Exception {
+        String password = "leaky-pw-4711";
+        String hostKey = "SHA256:LeakyHostKey4712LeakyHostKey4712LeakyHost=";
+        InMemoryDeploymentStore records = new InMemoryDeploymentStore();
+        Node n = new Node("node-1", "dev", Map.of("RAIL8_SECRET_DROP_PASSWORD", password), records);
+        JsonObject config = new JsonObject().put("host", "sftp.example").put("user", "rail8").put("password", "secret://drop-password").put("hostKey", hostKey);
+
+        n.deploy(drop("drop", config));
+        DeployRefusedException refused = n.refused(drop("broken", config.copy().put("port", 0)));
+
+        Connection connection = n.sftp.consumers.getFirst().connection().orElseThrow();
+        assertEquals(List.of(password, hostKey), List.of(connection.secret("password").orElseThrow().value(), connection.secret("hostKey").orElseThrow().value()),
+                "the component gets both values: the checks below are not vacuous");
+        assertFalse(refused.problems().isEmpty(), "fixture: the broken package is refused: " + refused.problems());
+        String forms = new JsonObject(n.deployments.forms().get("sftp").toJson("sftp")).encode();
+        for (String value : List.of(password, hostKey)) {
+            assertFalse(n.sftp.consumers.toString().contains(value), "the sender's text: " + n.sftp.consumers);
+            assertFalse(String.valueOf(n.deployments.packages()).contains(value), "the package listing: " + n.deployments.packages());
+            assertFalse(String.valueOf(n.deployments.flows()).contains(value), "the flow listing: " + n.deployments.flows());
+            assertFalse(forms.contains(value), "the adapter's forms: " + forms);
+            assertFalse(String.valueOf(within(records.read(), "the records")).contains(value), "the record");
+            assertFalse((refused.error() + refused.problems()).contains(value), "the refusal: " + refused.error() + " " + refused.problems());
+            assertEquals(List.of(), filesHolding(n.data, value).stream().filter(f -> !f.endsWith(Path.of("endpoints", "drop.yaml"))).toList(),
+                    "no file the node wrote holds the value, but the unpacked endpoint file as written");
+            assertNotLogged(value);
+        }
+        Node other = node(Map.of("RAIL8_SECRET_DROP_PASSWORD", "another-pw"));
+        other.deploy(drop("drop", config));
+        assertEquals(n.deployments.flows().getFirst().hash(), other.deployments.flows().getFirst().hash(), "one hash, whatever the node's value");
     }
 
     /**
@@ -493,7 +543,7 @@ class DeploymentsSecretsTest {
     /** {@code roll} at {@code version}: {@code from-drop} (sftp, password by reference) and {@code orders} (rec), both sync to partner by reference. */
     static PackageDraft rolled(String version) {
         return PackageDraft.of("roll", version)
-                .endpoint("drop", "sftp", "in", new JsonObject().put("user", "rail8").put("password", "secret://drop-password").put("hostKey", HOST_KEY))
+                .endpoint("drop", "sftp", "in", new JsonObject().put("host", "sftp.example").put("user", "rail8").put("password", "secret://drop-password").put("hostKey", HOST_KEY))
                 .endpoint("orders-in", "in", new JsonObject().put("path", "/orders"))
                 .endpoint("partner", "out", url("secret://partner-url"))
                 .flow("from-drop", version, "sync", "drop", 4096, PackageDraft.toPartner())
@@ -521,9 +571,10 @@ class DeploymentsSecretsTest {
         assertEquals(Kind.FAILED, refused.kind(), refused.error() + " " + refused.problems());
         assertTrue(refused.error().contains("2.0.0 did not start") && refused.error().contains("1.0.0 runs again") && !refused.error().contains("FAILED"),
                 refused.error());
-        List<EndpointConfig> consumers = n.sftp.consumers;
+        List<Inbound> consumers = n.sftp.consumers;
         assertEquals(consumersBefore + 2, consumers.size(), "v2's consumer, then v1's built again: " + consumers);
-        assertEquals("pw-from-the-env-4711", consumers.getLast().options().get("password"), "the rebuilt consumer gets the value: " + consumers.getLast());
+        assertEquals("pw-from-the-env-4711", consumers.getLast().connection().orElseThrow().secret("password").orElseThrow().value(),
+                "the rebuilt consumer gets the value: " + consumers.getLast());
         List<Map<String, Object>> produced = n.produced("partner");
         assertTrue(produced.size() > producersBefore, "producers were built after v1's: " + produced);
         for (Map<String, Object> options : produced.subList(producersBefore, produced.size())) {

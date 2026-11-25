@@ -1,5 +1,10 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Settings;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -165,12 +170,12 @@ class DeploymentsEdgeTest {
         }
     }
 
-    /** A component whose schema takes any option, null included; its consumers and producers are the {@link Doors}' own. */
+    /** A component whose forms describe nothing, so it takes any option, null included; its consumers and producers are the {@link Doors}' own. */
     record Loose(Doors doors) implements Component {
         @Override public String scheme() { return "loose"; }
-        @Override public String configSchema() { return "{\"type\":\"object\"}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return doors.consumer(cfg, handler); }
-        @Override public Producer producer(EndpointConfig cfg) { return doors.producer(cfg); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION)); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return doors.consumer(in, handler); }
+        @Override public Producer producer(Outbound out) { return doors.producer(out); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 

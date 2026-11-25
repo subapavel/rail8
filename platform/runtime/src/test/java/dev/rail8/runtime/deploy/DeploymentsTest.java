@@ -1,5 +1,7 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Direction;
+import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
@@ -379,7 +381,7 @@ class DeploymentsTest {
         p.endpointDoc("partner").put("config", new JsonObject().put("url", "rec://partner-base").put("tags", new JsonObject().put("a", "x"))).put("environments", new JsonObject()
                 .put("dev", new JsonObject().put("config", new JsonObject().put("url", "rec://partner-dev")))
                 .put("prod", new JsonObject().put("config", new JsonObject().put("url", "rec://partner-prod"))));
-        assertFalse(Schemas.check(Doors.CONFIG_SCHEMA, inBase).valid(), "fixture: the base config alone fails the component's schema (level: wrong)");
+        assertFalse(EndpointUse.check(Doors.FORMS, Direction.IN, inBase.getMap()).isEmpty(), "fixture: the base config alone fails the component's forms (level: wrong)");
 
         deploy(p);   // the node is dev: the component's schema judges the config with dev's keys laid over it
 

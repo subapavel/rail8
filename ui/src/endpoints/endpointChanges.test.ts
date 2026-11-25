@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { say, textsIn } from '../language';
 import { endpointChanges, HIDDEN } from './endpointChanges';
-import type { SettingsDescription } from './settings';
+import type { ComponentForms } from './settings';
 
 const endpoint = (config: string, rest = '') => `schemaVersion: 1
 kind: endpoint
@@ -11,23 +11,24 @@ direction: out
 config:
 ${config}${rest}`;
 
-const HTTP: SettingsDescription = {
-  format: 1,
-  described: true,
+const HTTP: ComponentForms = {
+  format: 2,
+  reach: { out: 'connection' },
+  described: { connection: true, flow: true },
   tabs: [
     { id: 'general', label: 'General', common: false },
     { id: 'auth', label: 'Authentication', common: false },
   ],
-  fields: [
-    { name: 'url', type: 'text', help: 'Where it sends.', tab: 'general', required: true, directions: ['out'] },
-    { name: 'headers', type: 'map', help: 'Headers.', tab: 'general', required: false, directions: ['out'] },
-    { name: 'password', type: 'secret', help: 'The password.', tab: 'auth', required: false, directions: ['out'] },
+  connection: [
+    { name: 'url', type: 'text', label: 'URL', help: 'Where it sends.', tab: 'general', required: true, directions: ['out'] },
+    { name: 'password', type: 'secret', label: 'Password', help: 'The password.', tab: 'auth', required: false, directions: ['out'] },
   ],
+  flow: [{ name: 'headers', type: 'map', label: 'Headers', help: 'Headers.', tab: 'general', required: false, directions: ['out'] }],
   rules: [],
 };
 
 const described = new Map([['http', HTTP]]);
-const none = new Map<string, SettingsDescription>();
+const none = new Map<string, ComponentForms>();
 
 describe('endpointChanges', () => {
   test('lists a changed setting under its tab and field, and a key the description lacks under its key path', () => {

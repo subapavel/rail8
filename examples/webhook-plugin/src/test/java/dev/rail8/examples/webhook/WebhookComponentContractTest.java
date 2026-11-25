@@ -2,7 +2,9 @@ package dev.rail8.examples.webhook;
 
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Connection;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Timer;
 import dev.rail8.ingress.SharedHttpPort;
 import dev.rail8.testkit.ComponentContract;
@@ -11,8 +13,8 @@ import io.vertx.core.Vertx;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 
-import java.net.URI;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The webhook component over real sockets on the loopback interface, its consumers mounted on a shared HTTP port of the test's
@@ -44,14 +46,14 @@ class WebhookComponentContractTest extends ComponentContract {
         return new WebhookComponent(vertx, rt.blobs(), rt.ids(), timer, port);
     }
 
-    /** The consumer is served at {@code /webhook/in}. {@code flow} and {@code maxBodyBytes} are what the node sets. */
-    @Override protected EndpointConfig endpoint() {
-        return new EndpointConfig("in", URI.create("webhook://in"), Map.of("address", "/in", "maxBodyBytes", 1_000_000, "flow", "contract"));
+    /** The consumer is served at {@code /webhook/in}; the in direction reaches no connection. */
+    @Override protected Inbound inbound() {
+        return new Inbound(FLOW, Optional.empty(), Map.of("address", "/in"), 1_000_000);
     }
 
-    /** The producer sends to the URL the started consumer is served at. */
-    @Override protected EndpointConfig producerEndpoint(Consumer started) {
+    /** The producer sends through a connection to the URL the started consumer is served at. */
+    @Override protected Outbound outbound(Consumer started) {
         String url = ((WebhookComponent.WebhookConsumer) started).url().orElseThrow().toString();
-        return new EndpointConfig("out", URI.create("webhook://out"), Map.of("url", url, "maxBodyBytes", 1_000_000));
+        return new Outbound(Optional.of(new Connection("out", Map.of("url", url), Map.of())));
     }
 }

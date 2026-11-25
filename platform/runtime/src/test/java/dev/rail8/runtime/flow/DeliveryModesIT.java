@@ -1,5 +1,6 @@
 package dev.rail8.runtime.flow;
 
+import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.Body;
@@ -173,7 +174,7 @@ class DeliveryModesIT {
         HttpComponent http = new HttpComponent(vertx, blobs, ids, new VertxTimer(vertx), httpPort);
         EndpointConfig in = new EndpointConfig("http-in", URI.create("http://127.0.0.1:0/in"),
                 Map.of("address", "/in", "flow", def.id(), "maxBodyBytes", def.maxBodyBytes()));
-        consumer = (HttpComponent.HttpConsumer) http.consumer(in, delivery);
+        consumer = (HttpComponent.HttpConsumer) http.consumer(EndpointUse.inbound(http.forms(), in, def.id(), def.maxBodyBytes()), delivery);
         consumer.start().await();
     }
 

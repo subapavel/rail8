@@ -4,23 +4,28 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
 /**
- * P2-15b: a partner component at the SPI boundary whose producer overrides {@code send(Envelope, Deadline)} and records every
- * call with the {@link Deadline} it was given — the test reads {@code remaining()} on it whenever it likes (it is live) — and
- * every call of the plain {@code send(Envelope)} too, which a builder that bounds its sends must never make. Every call stays
+ * A partner component at the SPI boundary whose producer overrides {@code send(Envelope, Call, Deadline)} and records
+ * every call with the {@link Deadline} it was given — the test reads {@code remaining()} on it whenever it likes (it is live) —
+ * and every call of the plain {@code send(Envelope, Call)} too, which a builder that bounds its sends must never make. Every call stays
  * unanswered until the test answers it ({@link Call#reply}, {@link Call#fail}). Its target is {@value #TARGET}, so a
  * {@code Targets} limit of that key applies.
  */
@@ -28,7 +33,7 @@ final class DeadlinePartner implements Component {
 
     static final String TARGET = "partner://p:1";
 
-    /** One send: the envelope, the deadline given ({@code null} for a plain {@code send(e)}), its answer. */
+    /** One send: the envelope, the deadline given ({@code null} for a plain {@code send(e, call)}), its answer. */
     record Call(Envelope envelope, Deadline deadline, Promise<Envelope> answer) {
         Duration remaining() { return deadline.remaining(); }
 
@@ -41,20 +46,20 @@ final class DeadlinePartner implements Component {
     final List<Call> plainCalls = new CopyOnWriteArrayList<>();
 
     @Override public String scheme() { return "partner"; }
-    @Override public String configSchema() { return "{}"; }
-    @Override public Optional<String> target(EndpointConfig cfg) { return Optional.of(TARGET); }
-    @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+    @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION)); }
+    @Override public Optional<String> target(Outbound out) { return Optional.of(TARGET); }
+    @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
     @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
 
-    @Override public Producer producer(EndpointConfig cfg) {
+    @Override public Producer producer(Outbound out) {
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
+            @Override public Future<Envelope> send(Envelope e, dev.rail8.api.Call use, Deadline d) {
                 Call call = new Call(e, d, Promise.promise());
                 calls.add(call);   // published after the promise exists: a test that sees the call can answer it
                 return call.answer().future();
             }
 
-            @Override public Future<Envelope> send(Envelope e) {
+            @Override public Future<Envelope> send(Envelope e, dev.rail8.api.Call use) {
                 Call call = new Call(e, null, Promise.promise());
                 plainCalls.add(call);
                 return call.answer().future();

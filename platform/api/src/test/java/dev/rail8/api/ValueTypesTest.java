@@ -6,8 +6,10 @@ import org.junit.jupiter.api.Test;
 import java.net.URI;
 import java.time.Clock;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -141,6 +143,58 @@ class ValueTypesTest {
     }
 
     @Test
+    void aConnectionCopiesItsMapsAndNamesItsFieldsButNeverAValue() {
+        Map<String, Object> values = new java.util.HashMap<>(Map.of("host", "sftp.partner.example", "port", 22));
+        Map<String, Secret> secrets = new java.util.HashMap<>(Map.of("password", Secret.of("secret://partner.password", () -> "s3cr3t-pw")));
+        Connection c = new Connection("partner", values, secrets);
+        values.put("host", "elsewhere");
+        secrets.clear();
+        assertEquals("sftp.partner.example", c.values().get("host"), "a copy: a later change of the caller's map is not seen");
+        assertEquals("secret://partner.password", c.secret("password").orElseThrow().reference());
+        assertEquals(Optional.empty(), c.secret("privateKey"), "a secret field left empty");
+        assertThrows(UnsupportedOperationException.class, () -> c.values().clear());
+        assertThrows(UnsupportedOperationException.class, () -> c.secrets().clear());
+        assertEquals("Connection[key=partner, values=[host, port], secrets=[password]]", c.toString(), "the key and the field names");
+        assertFalse(c.toString().contains("sftp.partner.example"), "never a value: " + c);
+        assertFalse(c.toString().contains("s3cr3t-pw"), "never a secret's value: " + c);
+        assertFalse(c.toString().contains("secret://"), "nor a secret's reference: " + c);
+        assertThrows(NullPointerException.class, () -> new Connection(null, Map.of(), Map.of()));
+        assertThrows(NullPointerException.class, () -> new Connection("k", null, Map.of()));
+        assertThrows(NullPointerException.class, () -> new Connection("k", Map.of(), null));
+    }
+
+    @Test
+    void anInboundAnOutboundAndACallCopyTheirSettingsAndRefuseALimitBelowOne() {
+        Map<String, Object> settings = new java.util.HashMap<>(Map.of("dir", "/outbox"));
+        Inbound in = new Inbound("orders", Optional.empty(), settings, 1);
+        settings.put("dir", "/elsewhere");
+        assertEquals(Map.of("dir", "/outbox"), in.settings(), "a copy");
+        assertThrows(UnsupportedOperationException.class, () -> in.settings().clear());
+        IllegalArgumentException zero = assertThrows(IllegalArgumentException.class, () -> new Inbound("orders", Optional.empty(), Map.of(), 0));
+        assertEquals("maxBodyBytes must be at least 1, was 0", zero.getMessage());
+        assertThrows(NullPointerException.class, () -> new Inbound(null, Optional.empty(), Map.of(), 1));
+        assertThrows(NullPointerException.class, () -> new Inbound("orders", null, Map.of(), 1));
+        assertThrows(NullPointerException.class, () -> new Inbound("orders", Optional.empty(), null, 1));
+
+        assertEquals(Optional.empty(), new Outbound(Optional.empty()).connection());
+        assertThrows(NullPointerException.class, () -> new Outbound(null));
+
+        Map<String, Object> callSettings = new java.util.HashMap<>(Map.of("path", "/in"));
+        Call call = new Call("orders", "send", callSettings, 1, Optional.empty());
+        callSettings.clear();
+        assertEquals(Map.of("path", "/in"), call.settings(), "a copy");
+        assertThrows(UnsupportedOperationException.class, () -> call.settings().clear());
+        IllegalArgumentException none = assertThrows(IllegalArgumentException.class, () -> new Call("orders", "send", Map.of(), -1, Optional.empty()));
+        assertEquals("maxReplyBytes must be at least 1, was -1", none.getMessage());
+        assertEquals("maxReplyBytes must be at least 1, was 0",
+                assertThrows(IllegalArgumentException.class, () -> new Call("orders", "send", Map.of(), 0, Optional.empty())).getMessage());
+        assertThrows(NullPointerException.class, () -> new Call(null, "send", Map.of(), 1, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new Call("orders", null, Map.of(), 1, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new Call("orders", "send", null, 1, Optional.empty()));
+        assertThrows(NullPointerException.class, () -> new Call("orders", "send", Map.of(), 1, null));
+    }
+
+    @Test
     void healthFactories() {
         assertEquals(new Health(Health.Status.UP, ""), Health.up());
         assertEquals(new Health(Health.Status.DOWN, "pool exhausted"), Health.down("pool exhausted"));
@@ -174,9 +228,12 @@ class ValueTypesTest {
         InMemoryBlobStore store = new InMemoryBlobStore(10);
         Component mock = new Component() {
             @Override public String scheme() { return "mock"; }
-            @Override public String configSchema() { return "{}"; }
-            @Override public Consumer consumer(EndpointConfig cfg, java.util.function.Function<Envelope, io.vertx.core.Future<Ack>> handler) { return null; }
-            @Override public Producer producer(EndpointConfig cfg) { return null; }
+            @Override public dev.rail8.api.settings.Forms forms() {
+                return new dev.rail8.api.settings.Forms(dev.rail8.api.settings.Settings.NONE, dev.rail8.api.settings.Settings.NONE,
+                        Map.of(dev.rail8.api.settings.Direction.OUT, dev.rail8.api.settings.Forms.Reach.CONNECTION));
+            }
+            @Override public Consumer consumer(Inbound in, java.util.function.Function<Envelope, io.vertx.core.Future<Ack>> handler) { return null; }
+            @Override public Producer producer(Outbound out) { return null; }
             @Override public io.vertx.core.Future<Health> health() { return io.vertx.core.Future.succeededFuture(Health.up()); }
         };
         IdGenerator ids = () -> "id-1";

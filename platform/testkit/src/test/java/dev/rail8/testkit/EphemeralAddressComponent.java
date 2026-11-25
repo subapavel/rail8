@@ -1,15 +1,20 @@
 package dev.rail8.testkit;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 
 import java.util.Map;
@@ -21,8 +26,9 @@ import java.util.function.Function;
 /**
  * Test-only component whose consumer address exists only once the consumer has started — the shape of a transport that
  * binds an ephemeral port: {@link Consumer#start()} assigns a fresh address ({@code addr-1}, {@code addr-2}, …) and
- * registers the handler there, {@link Consumer#stop()} unregisters it. The endpoint options cannot name that address
- * beforehand; a producer reaches a consumer only through the option {@code address} of its own config and fails the send
+ * registers the handler there, {@link Consumer#stop()} unregisters it. The inbound cannot name that address beforehand;
+ * its in direction reaches no connection, its out direction one: a producer reaches a consumer only through the value
+ * {@code address} of its connection and fails the send
  * with {@code "no consumer at " + address} when nothing runs there. Delivery and the {@link Ack} semantics are the mock
  * component's: a {@link Ack.Reply} answers with its reply, {@link Ack.Accepted} with the envelope sent, a {@link Ack.Nack}
  * fails the send with a {@link NackException} carrying its reason; the handler runs on a virtual thread of its own per
@@ -59,23 +65,24 @@ final class EphemeralAddressComponent implements Component {
 
     @Override public String scheme() { return "ephemeral"; }
 
-    @Override public String configSchema() {
-        return "{\"type\":\"object\",\"properties\":{\"address\":{\"type\":\"string\"}}}";
-    }
+    /** No form describes a field; the out direction reaches a connection, the in direction none. */
+    static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
 
-    @Override public EphemeralConsumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        Objects.requireNonNull(cfg, "cfg");
+    @Override public Forms forms() { return FORMS; }
+
+    @Override public EphemeralConsumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        Objects.requireNonNull(in, "in");
         return new EphemeralConsumer(Objects.requireNonNull(handler, "handler"));
     }
 
-    @Override public Producer producer(EndpointConfig cfg) {
-        Object address = Objects.requireNonNull(cfg, "cfg").options().get("address");
+    @Override public Producer producer(Outbound out) {
+        Object address = out.connection().map(c -> c.values().get("address")).orElse(null);
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
-                return BoundedSends.within(d, timer, () -> send(e));
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
+                return BoundedSends.within(d, timer, () -> send(e, call));
             }
 
-            @Override public Future<Envelope> send(Envelope e) {
+            @Override public Future<Envelope> send(Envelope e, Call call) {
                 Running at = running.get(String.valueOf(address));   // no address: "null", never assigned
                 if (at == null) return Future.failedFuture(new IllegalStateException("no consumer at " + address));
                 return at.drain().deliver(at.handler(), BoundedSends.carryingItsId(e)).compose(ack -> switch (ack) {

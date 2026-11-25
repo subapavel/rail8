@@ -125,10 +125,12 @@ function fakeEndpoints(): EndpointsApi {
           scheme: 'http',
           httpPrefix: null,
           settings: {
-            format: 1,
-            described: true,
+            format: 2,
+            reach: { in: 'connection' as const, out: 'connection' as const },
+            described: { connection: true, flow: true },
             tabs: [{ id: 'general' as const, label: 'General', common: true }],
-            fields: [{ name: 'port', type: 'integer' as const, help: 'The port.', tab: 'general', required: true, directions: ['in' as const, 'out' as const] }],
+            connection: [{ name: 'port', type: 'integer' as const, label: 'Port', help: 'The port.', tab: 'general', required: true, directions: ['in' as const, 'out' as const] }],
+            flow: [],
             rules: [],
           },
         },
@@ -279,7 +281,7 @@ describe('Flows', () => {
   test("shows the arrival's endpoint in its component's form, and opens it in a tab of its own", async () => {
     await open();
     await nodeOf('http-in').click();
-    await expect.element(page.getByRole('textbox', { name: 'port', exact: true })).toHaveValue('8080');
+    await expect.element(page.getByRole('textbox', { name: 'Port', exact: true })).toHaveValue('8080');
     // the flow's own Edit, and none in the endpoint's form
     expect(button('Edit').elements()).toHaveLength(1);
     await button('Open endpoint').click();

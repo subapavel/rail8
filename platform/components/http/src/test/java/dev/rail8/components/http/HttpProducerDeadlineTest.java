@@ -1,7 +1,7 @@
 package dev.rail8.components.http;
 
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Call;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
@@ -75,10 +75,13 @@ class HttpProducerDeadlineTest {
     /** A producer of {@link #http} to a fresh partner, {@code extra} added to its options. */
     HttpComponent.HttpProducer producer(Map<String, Object> extra) {
         String url = partner();
-        Map<String, Object> options = new java.util.HashMap<>(Map.of("url", url, "maxBodyBytes", 4096));
-        options.putAll(extra);
-        return (HttpComponent.HttpProducer) http.producer(new EndpointConfig("partner", URI.create(url), options));
+        Map<String, Object> values = new java.util.HashMap<>(Map.of("url", url));
+        values.putAll(extra);
+        return (HttpComponent.HttpProducer) http.producer(Uses.out(values));
     }
+
+    /** A call without a path, replies up to 4096 bytes. */
+    static final Call CALL = Uses.call(4096);
 
     Envelope tagged(String tag) {
         return rt.ingress("f", Headers.empty().with("x-tag", tag), Buffer.buffer(tag));
@@ -94,9 +97,9 @@ class HttpProducerDeadlineTest {
     void aTimeoutMsExpiryIsARetryableNackForAPlainAndABoundedSend() throws Exception {
         HttpComponent.HttpProducer p = producer(Map.of("timeoutMs", 200));
         try {
-            NackException plain = assertInstanceOf(NackException.class, failureOf(p.send(tagged("plain"))), "the partner never answers");
+            NackException plain = assertInstanceOf(NackException.class, failureOf(p.send(tagged("plain"), CALL)), "the partner never answers");
             assertTrue(plain.retryable(), "retryable, as a cut is: " + plain);
-            NackException bounded = assertInstanceOf(NackException.class, failureOf(p.send(tagged("bounded"), () -> Duration.ofMinutes(1))),
+            NackException bounded = assertInstanceOf(NackException.class, failureOf(p.send(tagged("bounded"), CALL, () -> Duration.ofMinutes(1))),
                     "a bounded send with a minute left still times out after timeoutMs");
             assertTrue(bounded.retryable(), bounded.toString());
             assertEquals(List.of("plain", "bounded"), tags, "both reached the partner");
@@ -110,11 +113,11 @@ class HttpProducerDeadlineTest {
         HttpComponent.HttpProducer p = producer(Map.of());
         try {
             for (Duration left : List.of(Duration.ZERO, Duration.ofMillis(-5))) {
-                NackException refused = assertInstanceOf(NackException.class, failureOf(p.send(tagged("late"), () -> left)), left + " left");
+                NackException refused = assertInstanceOf(NackException.class, failureOf(p.send(tagged("late"), CALL, () -> left)), left + " left");
                 assertTrue(refused.retryable(), refused.toString());
             }
             assertEquals(0, p.sends(), "no request, not counted");
-            Future<Envelope> inTime = p.send(tagged("in-time"), () -> Duration.ofMinutes(1));
+            Future<Envelope> inTime = p.send(tagged("in-time"), CALL, () -> Duration.ofMinutes(1));
             assertTrue(soon(() -> open.containsKey("in-time")), "witness: with time left the request goes out: " + tags);
             open.get("in-time").setStatusCode(202).end();
             inTime.await(10, TimeUnit.SECONDS);
@@ -129,18 +132,18 @@ class HttpProducerDeadlineTest {
     void aSendCutWhileItWaitsForAConnectionIsResetUnsent() throws Exception {
         HttpComponent.HttpProducer p = producer(Map.of("poolSize", 1));
         try {
-            Future<Envelope> first = p.send(tagged("first"));
+            Future<Envelope> first = p.send(tagged("first"), CALL);
             assertTrue(soon(() -> open.containsKey("first")), "fixture: the first send holds the pool's one connection: " + tags);
             AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(5));
             Deadline d = () -> Duration.between(rt.clock().instant(), until.get());
-            Future<Envelope> waiting = p.send(tagged("cut"), d);   // waits for the connection
+            Future<Envelope> waiting = p.send(tagged("cut"), CALL, d);   // waits for the connection
             rt.clock().advance(Duration.ofSeconds(5));
             NackException cut = assertInstanceOf(NackException.class, failureOf(waiting), "cut at its deadline while it waited");
             assertTrue(cut.retryable(), cut.toString());
 
             open.get("first").setStatusCode(202).end();   // the connection frees: the cut request gets it, and is reset unsent
             first.await(10, TimeUnit.SECONDS);
-            Future<Envelope> third = p.send(tagged("third"));
+            Future<Envelope> third = p.send(tagged("third"), CALL);
             assertTrue(soon(() -> open.containsKey("third")), "the next send goes out: " + tags);
             open.get("third").setStatusCode(202).end();
             third.await(10, TimeUnit.SECONDS);
@@ -156,12 +159,12 @@ class HttpProducerDeadlineTest {
         dev.rail8.api.Timer shutDown = (delay, task) -> { throw refused; };
         HttpComponent timed = new HttpComponent(vertx, rt.blobs(), rt.ids(), shutDown);
         String url = partner();
-        HttpComponent.HttpProducer p = (HttpComponent.HttpProducer) timed.producer(new EndpointConfig("partner", URI.create(url), Map.of("url", url, "maxBodyBytes", 4096)));
+        HttpComponent.HttpProducer p = (HttpComponent.HttpProducer) timed.producer(Uses.out(url));
         try {
-            Future<Envelope> sent = p.send(tagged("unarmed"), () -> Duration.ofMinutes(1));   // a refusal is a failed future, never a throw
+            Future<Envelope> sent = p.send(tagged("unarmed"), CALL, () -> Duration.ofMinutes(1));   // a refusal is a failed future, never a throw
             assertSame(refused, failureOf(sent), "the timer's own failure, as it threw");
             assertEquals(0, p.sends(), "no request, not counted");
-            Future<Envelope> plain = p.send(tagged("witness"));   // an unbounded send arms no cut
+            Future<Envelope> plain = p.send(tagged("witness"), CALL);   // an unbounded send arms no cut
             assertTrue(soon(() -> open.containsKey("witness")), "witness: the partner is reachable: " + tags);
             open.get("witness").setStatusCode(202).end();
             plain.await(10, TimeUnit.SECONDS);
@@ -184,10 +187,10 @@ class HttpProducerDeadlineTest {
                 .listen(0, "127.0.0.1").await();
         servers.add(s);
         String url = "http://127.0.0.1:" + s.actualPort() + "/in";
-        dev.rail8.api.Producer p = timed.producer(new EndpointConfig("partner", URI.create(url), Map.of("url", url, "maxBodyBytes", 4096)));
+        dev.rail8.api.Producer p = timed.producer(Uses.out(url));
         try {
             AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(5));
-            p.send(tagged("answered"), () -> Duration.between(rt.clock().instant(), until.get())).await(10, TimeUnit.SECONDS);
+            p.send(tagged("answered"), CALL, () -> Duration.between(rt.clock().instant(), until.get())).await(10, TimeUnit.SECONDS);
             assertEquals(1, schedules.get(), "fixture: one cut armed for the send");
             until.set(rt.clock().instant().plusSeconds(10));   // the deadline still open when the stale re-read fires
             rt.clock().advance(Duration.ofSeconds(5));
@@ -204,10 +207,10 @@ class HttpProducerDeadlineTest {
                 .listen(0, "127.0.0.1").await();
         servers.add(s);
         String url = "http://127.0.0.1:" + s.actualPort() + "/in";
-        dev.rail8.api.Producer p = onVertx.producer(new EndpointConfig("partner", URI.create(url), Map.of("url", url, "maxBodyBytes", 4096)));
+        dev.rail8.api.Producer p = onVertx.producer(Uses.out(url));
         try {
             Instant until = Instant.now().plusMillis(150);   // the real clock: Vert.x timers run on it
-            Throwable failure = failureOf(p.send(tagged("silent"), () -> Duration.between(Instant.now(), until)));
+            Throwable failure = failureOf(p.send(tagged("silent"), CALL, () -> Duration.between(Instant.now(), until)));
             NackException cut = assertInstanceOf(NackException.class, failure, "cut at its deadline, the partner silent");
             assertTrue(cut.retryable() && cut.reason().contains("was cut"), "the cut, not the 30 s timeoutMs: " + cut);
         } finally {

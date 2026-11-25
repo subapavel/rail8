@@ -1,6 +1,6 @@
 package dev.rail8.testkit;
 
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Producer;
@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -53,7 +52,7 @@ class RecordingComponentHoldOrderTest {
     static final Duration BOUND = Duration.ofSeconds(10);
 
     final RecordingComponent http = new RecordingComponent("http");
-    final EndpointConfig partner = new EndpointConfig("partner", URI.create("http://partner/in"), Map.of());
+    final Outbound partner = RecordingComponent.outbound("partner");
     final FakeRuntime rt = FakeRuntime.create();
     final List<CountDownLatch> latches = new CopyOnWriteArrayList<>();   // every hold and gate: opened in @AfterEach
     final List<Thread> threads = new CopyOnWriteArrayList<>();
@@ -152,7 +151,7 @@ class RecordingComponentHoldOrderTest {
             this.label = label;
             this.sender = Thread.ofVirtual().name("sender-" + label).unstarted(() -> {
                 try {
-                    sent.set(noted(label, p.send(e)));
+                    sent.set(noted(label, p.send(e, RecordingComponent.CALL)));
                 } catch (Throwable t) {
                     thrown.set(t);
                 }
@@ -234,7 +233,7 @@ class RecordingComponentHoldOrderTest {
 
         // the second side, while a's sender still stands in the hook: arm the next hold, send c, see it arrive
         CountDownLatch cHold = onOwnThread("arming-c", () -> hold(1));
-        Future<Envelope> cSent = onOwnThread("sender-c", () -> noted("c", p.send(c)));
+        Future<Envelope> cSent = onOwnThread("sender-c", () -> noted("c", p.send(c, RecordingComponent.CALL)));
         onOwnThread("await-c", () -> { http.awaitSent(2, BOUND); return null; });
 
         Future<Envelope> aSent = first.go();
@@ -272,7 +271,7 @@ class RecordingComponentHoldOrderTest {
                 + "does not reach back — a's send took the late hold instead: " + aSent);
         assertSame(a, aSent.result());
 
-        Future<Envelope> bSent = onOwnThread("sender-b", () -> noted("b", p.send(b)));
+        Future<Envelope> bSent = onOwnThread("sender-b", () -> noted("b", p.send(b, RecordingComponent.CALL)));
         assertFalse(bSent.isComplete(), "the late hold holds the next send");
         late.countDown();
         assertEquals("a", nextAnswered("a's answer noted"));
@@ -284,10 +283,10 @@ class RecordingComponentHoldOrderTest {
     void aHoldArmedAfterAHeldSendWasRecordedHoldsTheNextSend() {
         Producer p = http.producer(partner);
         CountDownLatch aHold = hold(1);
-        Future<Envelope> aSent = noted("a", p.send(envelope("a")));
+        Future<Envelope> aSent = noted("a", p.send(envelope("a"), RecordingComponent.CALL));
         http.awaitSent(1, BOUND);
         CountDownLatch bHold = hold(1);
-        Future<Envelope> bSent = noted("b", p.send(envelope("b")));
+        Future<Envelope> bSent = noted("b", p.send(envelope("b"), RecordingComponent.CALL));
         assertFalse(aSent.isComplete() || bSent.isComplete(), "both held");
         bHold.countDown();
         assertEquals("b", nextAnswered("b's latch was counted down"), "the hold armed after a was recorded is b's");
@@ -302,10 +301,10 @@ class RecordingComponentHoldOrderTest {
     void holdNextOfTwoHoldsTheNextTwoSendsOnOneLatchAndNotTheThird() {
         Producer p = http.producer(partner);
         CountDownLatch both = hold(2);
-        Future<Envelope> aSent = noted("a", p.send(envelope("a")));
-        Future<Envelope> bSent = noted("b", p.send(envelope("b")));
+        Future<Envelope> aSent = noted("a", p.send(envelope("a"), RecordingComponent.CALL));
+        Future<Envelope> bSent = noted("b", p.send(envelope("b"), RecordingComponent.CALL));
         Envelope c = envelope("c");
-        Future<Envelope> cSent = p.send(c);
+        Future<Envelope> cSent = p.send(c, RecordingComponent.CALL);
         assertTrue(cSent.isComplete(), "holdNext(2) holds two sends: the third is answered at once");
         assertSame(c, cSent.result());
         assertFalse(aSent.isComplete() || bSent.isComplete(), "the first two are held");
@@ -347,7 +346,7 @@ class RecordingComponentHoldOrderTest {
             List<Envelope> batch = batches.get(s);
             Thread t = Thread.ofVirtual().name("sender-" + s).start(() -> {
                 await(start, "the start", null);
-                for (Envelope e : batch) noted(labels.get(e), p.send(e));
+                for (Envelope e : batch) noted(labels.get(e), p.send(e, RecordingComponent.CALL));
             });
             threads.add(t);
             running.add(t);

@@ -4,20 +4,25 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.BodyTooLargeException;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.IdGenerator;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
 import dev.rail8.api.Views;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
@@ -50,22 +55,22 @@ import java.util.function.Function;
  * The {@code webhook} component: a consumer that takes HTTP POSTs on the node's HTTP port and a producer that POSTs to a URL,
  * over the Vert.x HTTP client.
  *
- * <p><b>Consumer</b> (options {@code address}, required, the path under the prefix {@value #PREFIX} that senders call, see
- * {@link WebhookConsumer#url()}; and {@code flow} and {@code maxBodyBytes}, which the node sets). Its start mounts the endpoint on
- * the node's HTTP port, its stop closes the mount. A POST to the endpoint's path is streamed into the blob store, refused with 413
- * above {@code maxBodyBytes}, and handed to the flow's handler as a new message, on a virtual thread of its own. The handler's
+ * <p><b>Consumer</b> (the flow's setting {@code address}, required, the path under the prefix {@value #PREFIX} that senders
+ * call, see {@link WebhookConsumer#url()}; no connection). Its start mounts the sender on the node's HTTP port, its stop closes
+ * the mount. A POST to the sender's path is streamed into the blob store, refused with 413 above the flow's
+ * {@link Inbound#maxBodyBytes}, and handed to the flow's handler as a new message, on a virtual thread of its own. The handler's
  * {@link Ack} is the answer: {@code Accepted} 202 with the message id in {@code x-message-id}, {@code Reply} 200 with the reply's
  * headers and body, a retryable {@code Nack} 503 and a final one 400, both with the reason as the body. A handler that fails is
  * 500 with its message. Another method is 405. Once {@link Consumer#stop()} began, a request is 503 and the handler is not called.
  *
- * <p><b>Producer</b> (options {@code url}, required; {@code maxBodyBytes}, required, the most a reply may hold;
- * {@code timeoutMs}, default 30 000). A send POSTs the envelope's body, streamed from a fresh {@code open()}, with its headers
+ * <p><b>Producer</b> (one per connection: its {@code url}, required, with no user info; {@code timeoutMs}, default 30 000;
+ * each send's {@link Call#maxReplyBytes}, the most a reply may hold). A send POSTs the envelope's body, streamed from a fresh {@code open()}, with its headers
  * and its message id as {@code x-message-id}. A 2xx response is the reply: its headers, and its body stored as the next step's.
  * Any other status fails the send with a {@link NackException} whose reason holds the first {@value #REASON_BYTES} bytes of the
  * response body: retryable for 429 and 5xx, final otherwise. A send that times out fails retryable, and so does a bounded send
  * still unanswered when its {@link Deadline} runs out: the request is reset.
  *
- * <p><b>What is HTTP here.</b> The prefix and the options {@code address}, {@code url} and {@code timeoutMs}, the mount on the
+ * <p><b>What is HTTP here.</b> The prefix and the settings {@code address}, {@code url} and {@code timeoutMs}, the mount on the
  * node's HTTP port in {@link WebhookConsumer}, the client in {@link WebhookProducer}, and the statuses they answer and read are
  * this component's protocol; the parts marked {@code HTTP:} below are where an adapter for another protocol puts its own. An
  * adapter taking requests over HTTP keeps the prefix, its own, and the mount; one for a protocol that is not HTTP declares no
@@ -81,15 +86,21 @@ public final class WebhookComponent implements Component {
     /** Its address on the node's HTTP port: an in endpoint is served at this prefix followed by its {@code address}. */
     public static final String PREFIX = "/webhook";
 
+    /** A URL without user info: no {@code @} between {@code //} and the path, query or fragment. */
+    static final String NO_USER_INFO = "[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]+([/?#].*)?";
+
     /**
-     * What a webhook endpoint may set: the node checks every endpoint file against it, and the UI draws the endpoint's form
-     * from it. The consumer's {@code flow} and {@code maxBodyBytes} are the node's and are no field here.
+     * The two forms: the node checks every use against them, and the UI draws its forms from them. The connection says where
+     * the partner is; the flow says where senders call. A sender reaches no connection, a send always does. The flow's name
+     * and the body limits are the node's and are no field here.
      */
-    static final Settings SETTINGS = Settings.of(
-            HttpIngress.ADDRESS,
-            Field.text("url", "The URL each message is posted to.").required().out(),
-            Field.integer("maxBodyBytes", "The largest reply body taken, in bytes.").required().min(1).out(),
-            Field.integer("timeoutMs", "How long a request may take, in milliseconds.").min(1).byDefault(30_000).out());
+    static final Forms FORMS = new Forms(
+            Settings.of(
+                    Field.text("url", "URL", "The URL each message is posted to, such as https://partner.example/hook. "
+                            + "No user name or password in it.").required().pattern(NO_USER_INFO).out(),
+                    Field.integer("timeoutMs", "Timeout (ms)", "How long a request may take, in milliseconds.").min(1).byDefault(30_000).out()),
+            Settings.of(HttpIngress.ADDRESS),
+            Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
 
     /** Headers that describe one connection, never copied from a message to a request or a response, or back. */
     private static final Set<String> HOP_BY_HOP =
@@ -120,16 +131,16 @@ public final class WebhookComponent implements Component {
 
     @Override public Optional<String> httpPrefix() { return Optional.of(PREFIX); }
 
-    @Override public Settings settings() { return SETTINGS; }
+    @Override public Forms forms() { return FORMS; }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        return new WebhookConsumer(cfg, handler);
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        return new WebhookConsumer(in, handler);
     }
 
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        return new WebhookProducer(cfg);
+    public Producer producer(Outbound out) {
+        return new WebhookProducer(connection(out));
     }
 
     /** Up while a consumer is mounted. */
@@ -139,32 +150,37 @@ public final class WebhookComponent implements Component {
     }
 
     /**
-     * The partner a producer of {@code cfg} calls, {@code http://host:port} of its {@code url}, so that the node limits the sends
-     * to one partner together; empty when the endpoint has no url or the url names no host.
+     * The partner a producer of {@code out} calls, {@code http://host:port} of its connection's {@code url}, so that the node
+     * limits the sends to one partner together; empty when the url names no host.
      */
     @Override
-    public Optional<String> target(EndpointConfig cfg) {
-        if (!(cfg.options().get("url") instanceof String url)) return Optional.empty();
-        URI uri = URI.create(url);
+    public Optional<String> target(Outbound out) {
+        URI uri = URI.create(text(connection(out), "url", null));
         if (uri.getHost() == null || uri.getScheme() == null) return Optional.empty();
         String scheme = uri.getScheme().toLowerCase(Locale.ROOT);
         int port = uri.getPort() >= 0 ? uri.getPort() : "https".equals(scheme) ? 443 : 80;
         return Optional.of(scheme + "://" + uri.getHost().toLowerCase(Locale.ROOT) + ":" + port);
     }
 
-    /** The option {@code key} as text; {@code fallback} when it is absent, refused when it is absent and {@code fallback} is null. */
-    private static String text(EndpointConfig cfg, String key, String fallback) {
-        Object value = cfg.options().get(key);
-        if (value == null && fallback == null) throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option '" + key + "' is required");
+    /** The connection {@code out} names; refused when it names none. */
+    private static Connection connection(Outbound out) {
+        return Objects.requireNonNull(out, "out").connection()
+                .orElseThrow(() -> new IllegalArgumentException("a webhook producer posts through a connection, and none is named"));
+    }
+
+    /** The connection's value {@code key} as text; {@code fallback} when it is absent, refused when it is absent and {@code fallback} is null. */
+    private static String text(Connection c, String key, String fallback) {
+        Object value = c.values().get(key);
+        if (value == null && fallback == null) throw new IllegalArgumentException("connection '" + c.key() + "': the setting '" + key + "' is required");
         return value == null ? fallback : String.valueOf(value);
     }
 
-    /** The option {@code key} as a number; {@code fallback} when it is absent, refused when it is absent and {@code fallback} is null. */
-    private static long number(EndpointConfig cfg, String key, Long fallback) {
-        Object value = cfg.options().get(key);
+    /** The connection's value {@code key} as a number; {@code fallback} when it is absent. */
+    private static long number(Connection c, String key, long fallback) {
+        Object value = c.values().get(key);
         if (value instanceof Number n) return n.longValue();
-        if (value == null && fallback != null) return fallback;
-        throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option '" + key + "' must be a number, was " + value);
+        if (value == null) return fallback;
+        throw new IllegalArgumentException("connection '" + c.key() + "': the setting '" + key + "' must be a number, was " + value);
     }
 
     /** {@code raw} as a message's headers: names in lower case, the hop-by-hop ones left out. */
@@ -177,19 +193,19 @@ public final class WebhookComponent implements Component {
         return new Headers(kept);
     }
 
-    /** A consumer: its endpoint mounted on the node's HTTP port. */
+    /** A consumer: its sender mounted on the node's HTTP port. */
     public final class WebhookConsumer implements Consumer {
-        private final EndpointConfig cfg;
+        private final Inbound in;
         private final Function<Envelope, Future<Ack>> handler;
         private final String flow;
         private final long maxBodyBytes;
         private volatile HttpIngress.Mount mount;
 
-        WebhookConsumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-            this.cfg = Objects.requireNonNull(cfg, "cfg");
+        WebhookConsumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+            this.in = Objects.requireNonNull(in, "in");
             this.handler = Objects.requireNonNull(handler, "handler");
-            this.flow = text(cfg, "flow", cfg.name());
-            this.maxBodyBytes = number(cfg, "maxBodyBytes", null);
+            this.flow = in.flow();
+            this.maxBodyBytes = in.maxBodyBytes();
         }
 
         /** The URL senders call, on the node's HTTP port; empty while it is not started. */
@@ -199,8 +215,8 @@ public final class WebhookComponent implements Component {
 
         @Override
         public Future<Void> start() {
-            // HTTP: the endpoint mounted on the node's HTTP port; another protocol opens its listener or connection here.
-            return http.mount(cfg, this::handle).map(mounted -> {
+            // HTTP: the sender mounted on the node's HTTP port; another protocol opens its listener or connection here.
+            return http.mount(SCHEME, in, this::handle).map(mounted -> {
                 mount = mounted;
                 running.add(this);
                 return null;
@@ -273,39 +289,37 @@ public final class WebhookComponent implements Component {
         }
     }
 
-    /** A producer: an HTTP client with a connection pool of its own. */
+    /** A producer of one connection, shared by every flow that sends through it: an HTTP client with a connection pool of its own. */
     public final class WebhookProducer implements Producer {
         private final String name;
         private final String url;
-        private final long maxReplyBytes;
         private final long timeoutMs;
         private final HttpClientAgent client;
 
-        WebhookProducer(EndpointConfig cfg) {
-            this.name = cfg.name();
-            this.url = text(cfg, "url", null);
-            this.maxReplyBytes = number(cfg, "maxBodyBytes", null);
-            this.timeoutMs = number(cfg, "timeoutMs", 30_000L);
+        WebhookProducer(Connection c) {
+            this.name = c.key();
+            this.url = text(c, "url", null);
+            this.timeoutMs = number(c, "timeoutMs", 30_000L);
             this.client = vertx.createHttpClient();
         }
 
         @Override
-        public Future<Envelope> send(Envelope e) {
-            return post(e, null);
+        public Future<Envelope> send(Envelope e, Call call) {
+            return post(e, call.maxReplyBytes(), null);
         }
 
         /**
-         * {@link #send(Envelope)}, cut when {@code d} runs out: with no time left nothing is sent; else a timer at what is left
+         * {@link #send(Envelope, Call)}, cut when {@code d} runs out: with no time left nothing is sent; else a timer at what is left
          * reads {@code d} again, waits on while time is left (the deadline was renewed) and otherwise fails the send and resets
          * its request.
          */
         @Override
-        public Future<Envelope> send(Envelope e, Deadline d) {
+        public Future<Envelope> send(Envelope e, Call call, Deadline d) {
             Duration left = d.remaining();
             if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: message " + e.id() + " not sent to " + name, true));
             Cut cut = new Cut(d);
             cut.arm(left);
-            post(e, cut).onComplete(done -> {
+            post(e, call.maxReplyBytes(), cut).onComplete(done -> {
                 cut.armed.cancel();
                 if (done.succeeded()) cut.out.tryComplete(done.result());
                 else cut.out.tryFail(done.cause());
@@ -314,7 +328,7 @@ public final class WebhookComponent implements Component {
         }
 
         // HTTP: one POST per send, the body streamed from a fresh open(); another protocol writes to its partner here.
-        private Future<Envelope> post(Envelope e, Cut cut) {
+        private Future<Envelope> post(Envelope e, long maxReplyBytes, Cut cut) {
             Envelope out = e.withOutboundId();
             RequestOptions options = new RequestOptions().setMethod(HttpMethod.POST).setAbsoluteURI(url)
                     .setConnectTimeout(timeoutMs).setIdleTimeout(timeoutMs);
@@ -327,13 +341,13 @@ public final class WebhookComponent implements Component {
                 // Paused as it arrives, so that no byte of the response is lost before reply() reads it.
                 req.response().onSuccess(HttpClientResponse::pause);
                 return req.send(e.body().open());
-            }).compose(res -> reply(e, res)).recover(failure -> Future.failedFuture(failure instanceof TimeoutException
+            }).compose(res -> reply(e, res, maxReplyBytes)).recover(failure -> Future.failedFuture(failure instanceof TimeoutException
                     ? new NackException("the request to " + name + " timed out: " + failure.getMessage(), true)
                     : failure));
         }
 
         // HTTP: a 2xx response is the reply, any other status a refusal, retryable or for good.
-        private Future<Envelope> reply(Envelope e, HttpClientResponse res) {
+        private Future<Envelope> reply(Envelope e, HttpClientResponse res, long maxReplyBytes) {
             int status = res.statusCode();
             if (status / 100 == 2) {
                 Headers headers = headers(res.headers());

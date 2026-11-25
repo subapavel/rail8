@@ -158,7 +158,7 @@ class ValidateCommandTest {
         assertEquals(expected, ran.outLines(), ran.toString());
     }
 
-    /** An endpoint config its component's configSchema refuses is the check's problem: every problem line names it, environment dev. */
+    /** An endpoint config its component's forms refuse is the check's problem: every problem line names it, environment dev. */
     @Test
     void anEndpointConfigProblemIsPrintedAndExit1() {
         Ran ran = run("validate", FIXTURES.resolve("bad-config").toString());

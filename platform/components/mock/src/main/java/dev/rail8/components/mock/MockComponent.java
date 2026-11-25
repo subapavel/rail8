@@ -3,19 +3,25 @@ package dev.rail8.components.mock;
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.IdGenerator;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
@@ -43,18 +49,21 @@ import java.util.stream.Stream;
 /**
  * The in-process mock of any scheme: it records what it was sent and replies from fixtures. It is bound to the scheme it
  * stands in for, so the flow file stays byte-identical, with one
- * {@link Behaviour} per endpoint from the flow's {@code *.test.yaml}. A producer records every envelope per endpoint and
+ * {@link Behaviour} per endpoint from the flow's {@code *.test.yaml}. Its forms describe nothing and both directions reach
+ * a connection, so every use names one, and the mock keys everything by that connection's key: for an endpoint file, the
+ * endpoint's id, called the endpoint below. A producer records every envelope per endpoint and
  * answers with the reply of the consumer running on that same endpoint when there is one, else per behaviour: the fixture as
- * the next body (or the request echoed), after the delay through the injected timer, or a failure — a status or fault
+ * the next body (or the request echoed; a fixture above the call's {@code maxReplyBytes} fails the send with the store's
+ * {@code BodyTooLargeException}), after the delay through the injected timer, or a failure — a status or fault
  * as {@link NackException}, retryable as HTTP would be. Each delivery calls a consumer's handler on a virtual thread of its
  * own, with the envelope's {@link Envelope#H_MESSAGE_ID} ({@link Envelope#withOutboundId()}); {@link #sent} records
- * the envelope as it was given. A bounded send ({@code send(e, d)}) with no time left fails with a retryable
+ * the envelope as it was given. A bounded send ({@code send(e, call, d)}) with no time left fails with a retryable
  * {@link NackException} and is neither recorded nor counted; one still unanswered (a delay, a held handler) is cut on the
  * injected timer — the same failure — once its deadline, re-read at each firing, has run out. Standing in for a polling component such as {@code sftp}, a consumer also polls: every second on the
  * injected timer it delivers the files {@link #drop dropped} on its endpoint — and the behaviour's {@code files} fixtures,
  * fed at its start in name order — oldest first, one at a time, by the rules of the real one: Accepted or Reply removes
  * the file, a retryable Nack or a failed answer keeps it and ends the round, a final Nack (or a body above the endpoint's
- * {@code maxBodyBytes}) keeps it and never delivers it again to that consumer; {@link #undelivered} names the files still
+ * {@link Inbound#maxBodyBytes}) keeps it and never delivers it again to that consumer; {@link #undelivered} names the files still
  * pending. While {@link #partnerDown} plays the partner of an endpoint down, a round there breaks its consumer
  * ({@link Consumer#broken()}), which polls no more; the files stay. {@link #ingest} hands a running consumer a message as the real one would take it from its sender
  * ({@code rail8 test}'s {@code send}); {@link #delivered} records what each consumer's handler was given, whoever gave
@@ -64,7 +73,8 @@ import java.util.stream.Stream;
  */
 public final class MockComponent implements Component {
 
-    static final String CONFIG_SCHEMA = "{\"type\":\"object\"}";   // the real endpoint's options are not the mock's business
+    /** Forms that describe nothing: the real adapter's settings are not the mock's business. Both directions connect. */
+    static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
     /** How often a consumer polls the files dropped on its endpoint. */
     static final Duration ROUND = Duration.ofSeconds(1);
     /** The props an http consumer sets on what it takes in (HttpComponent.METHOD / PATH): the mock depends on the api only. */
@@ -176,22 +186,22 @@ public final class MockComponent implements Component {
 
     /**
      * Hands {@code bytes} with {@code headers} to the consumer running on the endpoint named {@code endpoint} as that consumer
-     * takes in what its sender sends: stored under {@code BlobKey.body(id, 0)} within the {@code maxBodyBytes} of the
-     * consumer's config, an id from this mock's generator and the config's {@code flow} ({@code Envelope.ingress}); an http
-     * mock's envelope carries the props {@code http.method} {@code POST} and {@code http.path} the path the http component serves
-     * the endpoint at ({@code /http} and the config's {@code address}). It goes
+     * takes in what its sender sends: stored under {@code BlobKey.body(id, 0)} within the consumer's
+     * {@link Inbound#maxBodyBytes}, an id from this mock's generator and the consumer's flow ({@code Envelope.ingress}); an
+     * http mock's envelope carries the props {@code http.method} {@code POST} and {@code http.path} the path the http
+     * component serves the endpoint at ({@code /http} and the setting {@code address}). It goes
      * through the consumer's own handler — on a virtual thread of its own, counted for the consumer's stop — and
      * is {@link #delivered}, never {@link #sent}.
      *
      * @return the handler's answer; failed with {@code BodyTooLargeException} when the bytes are above the consumer's
-     *         {@code maxBodyBytes} — the handler is never called
+     *         {@link Inbound#maxBodyBytes} — the handler is never called
      * @throws IllegalStateException no consumer of this mock runs on {@code endpoint}
      */
     public Future<Ack> ingest(String endpoint, Headers headers, Buffer bytes) {
         Running running = handlers.get(Objects.requireNonNull(endpoint, "endpoint"));
         if (running == null) throw new IllegalStateException("no consumer of the " + scheme + " mock runs on endpoint " + endpoint);
         String id = ids.next();
-        return blobs.write(BlobKey.body(id, 0), bytes, running.maxBodyBytes(bytes.length())).compose(body -> {
+        return blobs.write(BlobKey.body(id, 0), bytes, running.maxBodyBytes()).compose(body -> {
             Envelope in = Envelope.ingress(id, running.flow(), headers, body);
             return running.handler().apply("http".equals(scheme) ? in.with(HTTP_METHOD, "POST").with(HTTP_PATH, running.path()) : in);
         });
@@ -201,47 +211,53 @@ public final class MockComponent implements Component {
     public List<Envelope> delivered(String endpoint) { return List.copyOf(delivered.getOrDefault(endpoint, List.of())); }
 
     /**
-     * A consumer running on its endpoint: the {@code flow} and {@code maxBodyBytes} its config carries (the deploy sets both),
-     * the path an http consumer takes requests at (its prefix and its config's {@code address}; the prefix alone without one)
-     * and its tracked handler.
+     * A consumer running on its endpoint: its {@link Inbound}'s flow and body limit, the path an http consumer takes requests
+     * at (its prefix and the setting {@code address}; the prefix alone without one) and its tracked handler.
      */
-    private record Running(String flow, Object maxBody, String path, Function<Envelope, Future<Ack>> handler) {
-        Running(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-            this(cfg.options().get("flow") instanceof String f ? f : cfg.name(), cfg.options().get("maxBodyBytes"),
-                    HTTP_PREFIX + (cfg.options().get("address") instanceof String a ? a : ""), handler);
+    private record Running(String flow, long maxBodyBytes, String path, Function<Envelope, Future<Ack>> handler) {
+        Running(Inbound in, Function<Envelope, Future<Ack>> handler) {
+            this(in.flow(), in.maxBodyBytes(), HTTP_PREFIX + (setting(in, "address") instanceof String a ? a : ""), handler);
         }
+    }
 
-        /** The endpoint's limit, if its config sets one; else {@code size}, the bytes' own. */
-        long maxBodyBytes(long size) {
-            return maxBody instanceof Number n ? n.longValue() : size;
-        }
+    /** The value {@code name} of {@code in}: the flow's setting, else the connection's value (an undescribed form takes it). */
+    private static Object setting(Inbound in, String name) {
+        Object v = in.settings().get(name);
+        return v != null ? v : in.connection().map(c -> c.values().get(name)).orElse(null);
+    }
+
+    /** The key of the connection {@code connection}, by which the mock keys a use; a use without one is refused. */
+    private String key(Optional<Connection> connection) {
+        return connection.map(Connection::key).orElseThrow(() -> new IllegalArgumentException(
+                "the " + scheme + " mock keys each use by its connection, and this one names none"));
     }
 
     @Override public String scheme() { return scheme; }
 
-    @Override public String configSchema() { return CONFIG_SCHEMA; }
+    @Override public Forms forms() { return FORMS; }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> h) {
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         Objects.requireNonNull(h, "handler");
-        Objects.requireNonNull(cfg, "cfg");
+        Objects.requireNonNull(in, "in");
+        String endpoint = key(in.connection());
         Drain drain = new Drain();
-        List<Envelope> given = delivered.computeIfAbsent(cfg.name(), k -> new CopyOnWriteArrayList<>());
-        Running running = new Running(cfg, e -> {
+        List<Envelope> given = delivered.computeIfAbsent(endpoint, k -> new CopyOnWriteArrayList<>());
+        Running running = new Running(in, e -> {
             given.add(e);   // recorded before the handler runs: whoever reads its answer finds it
             return drain.deliver(h, e);
         });
-        Poller poller = new Poller(cfg.name(), running, drain);
+        Poller poller = new Poller(endpoint, running, drain);
         return new Consumer() {
             /** Registers the handler, feeds the behaviour's {@code files} and schedules round 0; fails when a fixture cannot be read. */
             @Override public Future<Void> start() {
                 try {
-                    poller.feed(behaviours.getOrDefault(cfg.name(), Behaviour.ECHO).files());
+                    poller.feed(behaviours.getOrDefault(endpoint, Behaviour.ECHO).files());
                 } catch (IOException unreadable) {
-                    return Future.failedFuture(new IllegalStateException("mock files fixtures cannot be read for endpoint " + cfg.name(), unreadable));
+                    return Future.failedFuture(new IllegalStateException("mock files fixtures cannot be read for endpoint " + endpoint, unreadable));
                 }
-                handlers.put(cfg.name(), running);
-                refusedOn.put(cfg.name(), poller.refused);
+                handlers.put(endpoint, running);
+                refusedOn.put(endpoint, poller.refused);
                 poller.start();
                 return Future.succeededFuture();
             }
@@ -249,7 +265,7 @@ public final class MockComponent implements Component {
              * Unregisters the handler and cancels the next round at once; completes once every answer it handed out has
              * completed and the round in flight has removed its file.
              */
-            @Override public Future<Void> stop() { handlers.remove(cfg.name(), running); poller.stop(); return drain.stop(); }
+            @Override public Future<Void> stop() { handlers.remove(endpoint, running); poller.stop(); return drain.stop(); }
             /** Fails once a round found the partner down before a stop. */
             @Override public Future<Void> broken() { return poller.broken.future(); }
         };
@@ -366,9 +382,9 @@ public final class MockComponent implements Component {
         /** Delivers one file; whether the round goes on. */
         private boolean take(Dropped file) {
             String id = ids.next();
-            Future<Body> written = blobs.write(BlobKey.body(id, 0), file.bytes(), running.maxBodyBytes(file.bytes().length()));
+            Future<Body> written = blobs.write(BlobKey.body(id, 0), file.bytes(), running.maxBodyBytes());
             written.otherwiseEmpty().await();
-            if (written.failed()) return refuse(file);   // above the endpoint's maxBodyBytes: refused finally, as the real one does
+            if (written.failed()) return refuse(file);   // above the flow's maxBodyBytes: refused finally, as the real one does
             Ack ack = running.handler().apply(Envelope.ingress(id, running.flow(), Headers.empty(), written.result())).otherwiseEmpty().await();
             return switch (ack) {
                 case Ack.Accepted a -> removed(file);
@@ -392,19 +408,20 @@ public final class MockComponent implements Component {
     }
 
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        Objects.requireNonNull(cfg, "cfg");
-        String name = cfg.name();
+    public Producer producer(Outbound out) {
+        Objects.requireNonNull(out, "out");
+        String name = key(out.connection());
         List<Envelope> mine = sentTo.computeIfAbsent(name, k -> new CopyOnWriteArrayList<>());
         AtomicLong count = sends.computeIfAbsent(name, k -> new AtomicLong());
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
                 Duration left = d.remaining();
                 if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: mock " + name + " did not send message " + e.id(), true));
-                return cutAt(d, left, () -> send(e));
+                return cutAt(d, left, () -> send(e, call));
             }
 
-            @Override public Future<Envelope> send(Envelope e) {
+            @Override public Future<Envelope> send(Envelope e, Call call) {
+                Objects.requireNonNull(call, "call");
                 sent.add(e);
                 mine.add(e);
                 Behaviour b = behaviours.getOrDefault(name, Behaviour.ECHO);
@@ -413,7 +430,7 @@ public final class MockComponent implements Component {
                     if (b.failsOn(n)) return Future.failedFuture(failure(name, b.fail().orElseThrow()));
                     Running running = handlers.get(name);
                     if (running != null) return deliver(running.handler(), e);
-                    return b.reply().map(fixture -> reply(e, fixture)).orElse(Future.succeededFuture(e));
+                    return b.reply().map(fixture -> reply(e, fixture, call.maxReplyBytes())).orElse(Future.succeededFuture(e));
                 });
             }
             @Override public Future<Void> close() { return Future.succeededFuture(); }
@@ -506,15 +523,18 @@ public final class MockComponent implements Component {
         });
     }
 
-    /** The fixture as the next step's body, under {@link Envelope#nextKey()} (the run's own from its second attempt on); the content type from the file's extension. */
-    private Future<Envelope> reply(Envelope e, Path fixture) {
+    /**
+     * The fixture as the next step's body, under {@link Envelope#nextKey()} (the run's own from its second attempt on), at most
+     * {@code maxReplyBytes}; the content type from the file's extension.
+     */
+    private Future<Envelope> reply(Envelope e, Path fixture, long maxReplyBytes) {
         byte[] bytes;
         try {
             bytes = Files.readAllBytes(fixture);
         } catch (IOException x) {
             return Future.failedFuture(new IllegalStateException("mock reply fixture cannot be read: " + fixture, x));
         }
-        return blobs.write(e.nextKey(), Buffer.buffer(bytes), bytes.length)
+        return blobs.write(e.nextKey(), Buffer.buffer(bytes), maxReplyBytes)
                 .map(body -> e.next(body).withHeader(Envelope.H_CONTENT_TYPE, contentType(fixture)));
     }
 

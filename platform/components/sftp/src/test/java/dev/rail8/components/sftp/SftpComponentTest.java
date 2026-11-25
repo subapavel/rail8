@@ -5,7 +5,10 @@ import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Connection;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Secret;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.settings.Direction;
@@ -22,7 +25,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -81,9 +83,9 @@ class SftpComponentTest {
 
     static SftpComponent component(FakeRuntime on) { return new SftpComponent(on.blobs(), on.ids(), on.timer(), on.clock()); }
 
-    EndpointConfig inbox(Map<String, Object> extra) { return sftp.endpoint("sftp-in", "/inbox", extra); }
+    Inbound inbox(Map<String, Object> extra) { return sftp.endpoint("sftp-in", "/inbox", extra); }
 
-    Consumer started(SftpComponent component, EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+    Consumer started(SftpComponent component, Inbound cfg, Function<Envelope, Future<Ack>> handler) {
         Consumer c = component.consumer(cfg, handler);
         consumers.add(c);
         c.start().await();
@@ -140,7 +142,7 @@ class SftpComponentTest {
     }
 
     /** What the node does after a break: stops the consumer, then starts a fresh one of the same endpoint. */
-    Consumer fresh(SftpComponent component, Consumer broken, EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) throws Exception {
+    Consumer fresh(SftpComponent component, Consumer broken, Inbound cfg, Function<Envelope, Future<Ack>> handler) throws Exception {
         consumers.remove(broken);
         broken.stop().await(10, TimeUnit.SECONDS);
         return started(component, cfg, handler);
@@ -210,7 +212,7 @@ class SftpComponentTest {
         List<Envelope> onA = new CopyOnWriteArrayList<>();
         List<Envelope> onB = new CopyOnWriteArrayList<>();
         Promise<Ack> aNeverAnswers = hold();
-        EndpointConfig in = inbox(Map.of());
+        Inbound in = inbox(Map.of());
         started(component(rt), in, e -> {
             onA.add(e);
             ledger.add(file(e));
@@ -447,7 +449,7 @@ class SftpComponentTest {
     void aServerRestartBreaksTheConsumerAndAFreshOneServesOnceItIsBack() throws Exception {
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         SftpComponent component = component(rt);
-        EndpointConfig in = inbox(Map.of());
+        Inbound in = inbox(Map.of());
         Consumer first = started(component, in, accepting(seen));
         sftp.drop("/inbox", "before.xml", Buffer.buffer("<before/>"));
         round(rt);
@@ -468,7 +470,7 @@ class SftpComponentTest {
 
     @Test
     void startCompletesAtOnceWhileThePartnerIsDown() throws IOException {
-        EndpointConfig in = inbox(Map.of());
+        Inbound in = inbox(Map.of());
         sftp.close();   // nothing listens there any more
         SftpComponent component = component(rt);
         Consumer consumer = component.consumer(in, accepting(new CopyOnWriteArrayList<>()));
@@ -483,7 +485,7 @@ class SftpComponentTest {
     void aDirectoryThatCannotBeListedBreaksTheConsumerAndTurnsHealthDown() throws Exception {
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         SftpComponent component = component(rt);
-        EndpointConfig missing = sftp.endpoint("sftp-in", "/missing", Map.of());
+        Inbound missing = sftp.endpoint("sftp-in", "/missing", Map.of());
         Consumer first = started(component, missing, accepting(seen));
         brokenRound(rt, first);
         assertEquals(Health.Status.DOWN, health(component), "the last round could not list its directory");
@@ -556,51 +558,54 @@ class SftpComponentTest {
 
     @Test
     void theProducerIsRefusedAtBuild() {
-        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> component(rt).producer(inbox(Map.of())));
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> component(rt).producer(new Outbound(inbox(Map.of()).connection())));
         assertEquals("sftp has no producer before Phase 4", refused.getMessage());
     }
 
+    /** The connection form takes the server and the login; the flow form takes which files a round takes and what becomes of them. */
     @Test
-    void optionsOutsideTheDescriptionAreRefused() {
-        assertEquals("sftp", component(rt).scheme());
-        Settings settings = component(rt).settings();
-        // what the deploy checks: the endpoint's own config, before it sets flow and maxBodyBytes on an in endpoint
-        Map<String, Object> base = Map.of("user", "rail8", "password", "s3cret", "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
-        assertValid(settings, base, "user, password and hostKey");
-        assertValid(settings, with(without(base, "password"), "privateKey", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"),
+    void settingsOutsideTheFormsAreRefused() {
+        Settings connection = SftpComponent.FORMS.connection();
+        Settings flow = SftpComponent.FORMS.flow();
+        Map<String, Object> base = Map.of("host", "sftp", "user", "rail8", "password", "s3cret", "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
+        assertValid(connection, base, "host, user, password and hostKey");
+        assertValid(connection, with(without(base, "password"), "privateKey", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"),
                 "a private key instead of the password");
-        Map<String, Object> every = new HashMap<>(base);
-        every.putAll(Map.of("glob", "*.xml", "intervalMs", 5_000, "maxFilesPerPoll", 10, "minAgeMs", 30_000, "afterSuccess", "move", "moveTo", "/done",
-                "connectTimeoutMs", 5_000, "ioTimeoutMs", 10_000, "errorDir", "/error"));
-        every.putAll(Map.of("flow", "orders/sftp-intake", "maxBodyBytes", 1_000_000));
-        assertValid(settings, every, "every option the component knows, the two the deploy sets included");
-        assertValid(settings, with(base, "maxBodyBytes", 0), "maxBodyBytes is the node's on an in endpoint: the consumer refuses a bad one");
-        assertValid(settings, with(base, "afterSuccess", "delete"), "afterSuccess delete");
-        assertRefused(settings, without(base, "hostKey"), "no hostKey: never accept-all");
-        assertRefused(settings, with(base, "privateKey", "-----BEGIN OPENSSH PRIVATE KEY-----"), "both password and privateKey");
-        assertRefused(settings, without(base, "password"), "neither password nor privateKey");
-        assertRefused(settings, without(base, "user"), "no user");
-        assertRefused(settings, with(base, "afterSuccess", "move"), "move without moveTo");
-        assertRefused(settings, with(base, "afterSuccess", "copy"), "afterSuccess is delete or move");
-        assertRefused(settings, with(base, "pasword", "typo"), "strict: an option the component does not know");
-        EndpointConfig noLimit = new EndpointConfig("sftp-in", inbox(Map.of()).uri(), without(inbox(Map.of()).options(), "maxBodyBytes"));
-        IllegalArgumentException unlimited = assertThrows(IllegalArgumentException.class,
-                () -> component(rt).consumer(noLimit, e -> Future.succeededFuture(new Ack.Accepted(e.id()))));
-        assertTrue(String.valueOf(unlimited.getMessage()).contains("maxBodyBytes"), "a consumer without maxBodyBytes is refused, never unlimited: " + unlimited.getMessage());
-        EndpointConfig zero = new EndpointConfig("sftp-in", inbox(Map.of()).uri(), with(inbox(Map.of()).options(), "maxBodyBytes", 0));
-        IllegalArgumentException belowOne = assertThrows(IllegalArgumentException.class,
-                () -> component(rt).consumer(zero, e -> Future.succeededFuture(new Ack.Accepted(e.id()))));
-        assertTrue(String.valueOf(belowOne.getMessage()).contains("maxBodyBytes"), "maxBodyBytes below 1 is refused: " + belowOne.getMessage());
+        assertValid(connection, with(with(with(base, "port", 2222), "connectTimeoutMs", 5_000), "ioTimeoutMs", 10_000), "every connection setting");
+        assertValid(connection, with(base, "hostKey", "anything"), "the host key is a secret: its form is checked at each login");
+        assertRefused(connection, without(base, "hostKey"), "no hostKey: never accept-all");
+        assertRefused(connection, with(base, "privateKey", "-----BEGIN OPENSSH PRIVATE KEY-----"), "both password and privateKey");
+        assertRefused(connection, without(base, "password"), "neither password nor privateKey");
+        assertRefused(connection, without(base, "user"), "no user");
+        assertRefused(connection, without(base, "host"), "no host");
+        assertRefused(connection, with(base, "glob", "*.xml"), "a flow setting is not the connection's");
+        assertRefused(connection, with(base, "pasword", "typo"), "strict: a setting the form does not know");
+
+        Map<String, Object> every = Map.of("dir", "/inbox", "glob", "*.xml", "intervalMs", 5_000, "maxFilesPerPoll", 10, "minAgeMs", 30_000,
+                "afterSuccess", "move", "moveTo", "/done", "errorDir", "/error");
+        assertValid(flow, every, "every flow setting");
+        assertValid(flow, Map.of(), "none: the login directory, every file, deleted after success");
+        assertValid(flow, Map.of("afterSuccess", "delete"), "afterSuccess delete");
+        assertRefused(flow, Map.of("afterSuccess", "move"), "move without moveTo");
+        assertRefused(flow, Map.of("afterSuccess", "copy"), "afterSuccess is delete or move");
+        assertRefused(flow, Map.of("host", "sftp"), "a connection setting is not the flow's");
+        assertRefused(flow, Map.of("dir", 7), "dir as a number");
     }
 
-    // ---- P2-06 (D-086): host, port and dir as options, for a deployed endpoint whose URI is only <scheme>://<id> ------------
-
-    /** The real server's options under {@code uri}: the URI's own host, port and directory are what the options must override. */
-    private EndpointConfig under(String uri, Map<String, Object> extra) {
-        return new EndpointConfig("sftp-in", URI.create(uri), sftp.endpoint("sftp-in", "/inbox", extra).options());
+    @Test
+    void aSenderWithoutAConnectionIsRefusedNamingItsFlow() {
+        Inbound none = new Inbound("orders/sftp-intake", Optional.empty(), Map.of("dir", "/inbox"), 1024);
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> component(rt).consumer(none, accepting(new CopyOnWriteArrayList<>())));
+        assertEquals("flow 'orders/sftp-intake': an sftp sender polls through a connection, and none is named", refused.getMessage());
+        IllegalArgumentException noMoveTo = assertThrows(IllegalArgumentException.class,
+                () -> component(rt).consumer(inbox(Map.of("afterSuccess", "move", "flow", "orders/sftp-intake")), accepting(new CopyOnWriteArrayList<>())));
+        assertEquals("flow 'orders/sftp-intake': the setting 'moveTo' is required when afterSuccess is move", noMoveTo.getMessage());
     }
 
-    private List<String> deliveredBy(FakeRuntime on, EndpointConfig cfg, SftpComponent component) {
+    // ---- the connection names the server, the flow the directory ---------------------------------------------------------
+
+    private List<String> deliveredBy(FakeRuntime on, Inbound cfg, SftpComponent component) {
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         started(component, cfg, accepting(seen));
         round(on);
@@ -608,108 +613,128 @@ class SftpComponentTest {
     }
 
     @Test
-    void hostOptionWinsOverTheUriHost() {
+    void theConnectionsHostAndPortNameTheServer() {
         sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
         SftpComponent component = component(rt);
-        assertEquals(List.of("real.xml"),
-                deliveredBy(rt, under("sftp://no-such-host.invalid:" + sftp.port() + "/inbox", Map.of("host", "127.0.0.1")), component),
-                "the host option names the server; the URI's host does not resolve");
+        assertEquals(List.of("real.xml"), deliveredBy(rt, inbox(Map.of()), component), "the connection's host and port");
         assertEquals(Health.Status.UP, health(component));
         assertEquals(Set.of(), sftp.files("/inbox"), "and the delivered file was deleted");
-    }
 
-    @Test
-    void portOptionWinsOverTheUriPort() {
-        sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
-        assertEquals(List.of("real.xml"),
-                deliveredBy(rt, under("sftp://127.0.0.1:1/inbox", Map.of("port", sftp.port())), component(rt)),
-                "the port option names the server's port; the URI's port 1 refuses");
-    }
-
-    @Test
-    void dirOptionWinsOverTheUriPath() {
-        sftp.mkdir("/other");
-        sftp.drop("/other", "decoy.xml", Buffer.buffer("<decoy/>"));
-        sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
-        assertEquals(List.of("real.xml"),
-                deliveredBy(rt, under("sftp://127.0.0.1:" + sftp.port() + "/other", Map.of("dir", "/inbox")), component(rt)),
-                "the dir option names the polled directory, not the URI's path");
-        assertEquals(Set.of("decoy.xml"), sftp.files("/other"), "the URI's directory is never touched");
-    }
-
-    @Test
-    void hostPortAndDirOptionsWinOverTheUri() {
-        sftp.mkdir("/other");
-        sftp.drop("/other", "decoy.xml", Buffer.buffer("<decoy/>"));
-        sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
-        List<Envelope> seen = new CopyOnWriteArrayList<>();
-        // what a deployed endpoint looks like: the URI is <scheme>://<id>, host, port and directory come from the options
-        started(component(rt), under("sftp://sftp-in", Map.of("host", "127.0.0.1", "port", sftp.port(), "dir", "/inbox")), accepting(seen));
-        round(rt);
-        assertEquals(List.of("real.xml"), files(seen));
-        assertEquals("/inbox/real.xml", seen.get(0).get(SftpComponent.PATH).orElse(null));
-        assertEquals(Set.of("decoy.xml"), sftp.files("/other"));
-    }
-
-    @Test
-    void withoutOptionsTheUriDecides() {
-        sftp.mkdir("/other");
-        sftp.drop("/other", "decoy.xml", Buffer.buffer("<decoy/>"));
-        sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
-        assertEquals(List.of("real.xml"), deliveredBy(rt, under("sftp://127.0.0.1:" + sftp.port() + "/inbox", Map.of()), component(rt)),
-                "the URI's host, port and path are used when no option is given");
-        assertEquals(Set.of("decoy.xml"), sftp.files("/other"));
-
-        FakeRuntime other = FakeRuntime.create();   // and a URI naming a host that is not there reaches nothing: the URI's host is the one dialled
         sftp.drop("/inbox", "kept.xml", Buffer.buffer("<kept/>"));
-        SftpComponent unreachable = component(other);
-        List<Envelope> none = new CopyOnWriteArrayList<>();
-        brokenRound(other, started(unreachable, under("sftp://no-such-host.invalid:" + sftp.port() + "/inbox", Map.of()), accepting(none)));
-        assertEquals(List.of(), files(none));
-        assertEquals(Health.Status.DOWN, health(unreachable), "the round could not connect");
+        for (Map<String, Object> elsewhere : List.<Map<String, Object>>of(Map.of("host", "no-such-host.invalid"), Map.of("port", 1))) {
+            FakeRuntime other = FakeRuntime.create();
+            SftpComponent unreachable = component(other);
+            List<Envelope> none = new CopyOnWriteArrayList<>();
+            brokenRound(other, started(unreachable, inbox(elsewhere), accepting(none)));
+            assertEquals(List.of(), files(none), elsewhere + ": nothing delivered");
+            assertEquals(Health.Status.DOWN, health(unreachable), elsewhere + ": the round could not connect");
+        }
         assertEquals(Set.of("kept.xml"), sftp.files("/inbox"));
     }
 
     @Test
-    void theDescriptionAcceptsHostPortAndDirAndRefusesBadPorts() {
-        Settings settings = component(rt).settings();
-        Map<String, Object> base = Map.of("user", "rail8", "password", "s3cret", "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
-        assertValid(settings, with(with(with(base, "host", "sftp"), "port", 22), "dir", "inbox"), "host, port and dir together");
-        assertValid(settings, with(base, "host", "sftp"), "host alone");
+    void theDirSettingNamesThePolledDirectory() {
+        sftp.mkdir("/other");
+        sftp.drop("/other", "decoy.xml", Buffer.buffer("<decoy/>"));
+        sftp.drop("/inbox", "real.xml", Buffer.buffer("<real/>"));
+        List<Envelope> seen = new CopyOnWriteArrayList<>();
+        started(component(rt), inbox(Map.of()), accepting(seen));
+        round(rt);
+        assertEquals(List.of("real.xml"), files(seen));
+        assertEquals("/inbox/real.xml", seen.get(0).get(SftpComponent.PATH).orElse(null));
+        assertEquals(Set.of("decoy.xml"), sftp.files("/other"), "another directory is never touched");
+    }
+
+    /** Without {@code dir} a round lists the directory the server logs the user into (here the server's root). */
+    @Test
+    void withoutADirTheLoginDirectoryIsPolled() {
+        sftp.drop("/", "home.xml", Buffer.buffer("<home/>"));
+        sftp.drop("/inbox", "elsewhere.xml", Buffer.buffer("<elsewhere/>"));
+        Map<String, Object> noDir = new HashMap<>();
+        noDir.put("dir", null);
+        List<Envelope> seen = new CopyOnWriteArrayList<>();
+        started(component(rt), inbox(noDir), accepting(seen));
+        round(rt);
+        assertEquals(List.of("home.xml"), files(seen), "the login directory's file, not the subdirectory's");
+        assertEquals("/home.xml", seen.get(0).get(SftpComponent.PATH).orElse(null), "its path under the login directory the server names");
+        assertEquals(Set.of(), sftp.files("/"), "accepted: deleted from the login directory");
+        assertEquals(Set.of("elsewhere.xml"), sftp.files("/inbox"));
+    }
+
+    @Test
+    void portsOutsideOneTo65535AndAnEmptyHostAreRefusedByTheConnectionForm() {
+        Settings settings = SftpComponent.FORMS.connection();
+        Map<String, Object> base = Map.of("host", "sftp", "user", "rail8", "password", "s3cret", "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
         assertValid(settings, with(base, "port", 1), "port 1, the lowest");
         assertValid(settings, with(base, "port", 65535), "port 65535, the highest");
-        assertValid(settings, with(base, "dir", "/inbox"), "dir alone");
         assertRefused(settings, with(base, "port", 0), "port 0");
         assertRefused(settings, with(base, "port", 70000), "port 70000");
         assertRefused(settings, with(base, "port", 65536), "port 65536");
         assertRefused(settings, with(base, "port", "22"), "port as text");
         assertRefused(settings, with(base, "host", 7), "host as a number");
-        assertRefused(settings, with(base, "dir", 7), "dir as a number");
+        assertRefused(settings, with(base, "host", ""), "an empty host names no server");
     }
 
-    @Test
-    void anEmptyHostOptionIsRefusedByTheDescription() {
-        Map<String, Object> base = Map.of("user", "rail8", "password", "s3cret", "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");
-        assertRefused(component(rt).settings(), with(base, "host", ""), "an empty host names no server (the URI's would silently not be used)");
+    // ---- the secrets: read at each login --------------------------------------------------------------------------------
+
+    /** {@code in} with its connection's secrets replaced by {@code secrets}. */
+    static Inbound withSecrets(Inbound in, Map<String, Secret> secrets) {
+        Connection c = in.connection().orElseThrow();
+        return new Inbound(in.flow(), Optional.of(new Connection(c.key(), c.values(), secrets)), in.settings(), in.maxBodyBytes());
+    }
+
+    /** A secret giving {@code value}, each read counted in {@code reads}. */
+    static Secret counted(String ref, String value, java.util.concurrent.atomic.AtomicInteger reads) {
+        return Secret.of(ref, () -> {
+            reads.incrementAndGet();
+            return value;
+        });
     }
 
     /**
-     * The deploy checks the config as written, secret references unresolved (D-081): the demo's {@code hostKey: secret://sftp-host-key}
-     * (the key is generated at the stack's first start) and {@code password: secret://sftp-password} must pass this description, and a
-     * hostKey that is neither a fingerprint nor a well-formed reference must still not.
+     * No secret is read while the consumer is built or started; each login reads the password and the host key anew: a round
+     * after a dropped session logs in again and reads them again.
      */
     @Test
-    void theHostKeyMayBeASecretReferenceButNothingElseThatIsNotAFingerprint() {
-        Settings settings = component(rt).settings();
-        Map<String, Object> base = Map.of("user", "demo", "password", "secret://sftp-password", "hostKey", "secret://sftp-host-key");
-        assertValid(settings, base, "password and hostKey as secret references, as the demo's endpoint is written");
-        assertValid(settings, with(base, "hostKey", "secret://sftp.host-key_2"), "a reference name with . and -");
-        assertValid(settings, with(base, "hostKey", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU"), "a fingerprint still validates");
-        assertRefused(settings, with(base, "hostKey", "secret://"), "a reference without a name");
-        assertRefused(settings, with(base, "hostKey", "secret://UPPER"), "a reference name outside [a-z0-9][a-z0-9._-]*");
-        assertRefused(settings, with(base, "hostKey", "x secret://sftp-host-key"), "text around a reference");
-        assertRefused(settings, with(base, "hostKey", "sha256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU"), "a fingerprint with the wrong prefix case");
-        assertRefused(settings, with(base, "hostKey", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA"), "a public key line is no fingerprint");
+    void theSecretsAreReadAtEachLoginNeverWhileTheConsumerIsBuilt() {
+        java.util.concurrent.atomic.AtomicInteger passwordReads = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger hostKeyReads = new java.util.concurrent.atomic.AtomicInteger();
+        Inbound in = withSecrets(inbox(Map.of()), Map.of(
+                "password", counted("secret://sftp-in.password", EmbeddedSftp.PASSWORD, passwordReads),
+                "hostKey", counted("secret://sftp-in.hostkey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), hostKeyReads)));
+        sftp.drop("/inbox", "f1.xml", Buffer.buffer("<one/>"));
+        sftp.onNextReading((session, path) -> { throw new IOException("the test failed the read of " + path); });
+        Consumer consumer = component(rt).consumer(in, accepting(new CopyOnWriteArrayList<>()));
+        assertEquals(List.of(0, 0), List.of(passwordReads.get(), hostKeyReads.get()), "built: nothing read");
+        consumers.add(consumer);
+        consumer.start().await();
+        assertEquals(List.of(0, 0), List.of(passwordReads.get(), hostKeyReads.get()), "started: nothing read");
+        round(rt);
+        assertEquals(List.of(1, 1), List.of(passwordReads.get(), hostKeyReads.get()), "the first login read each once");
+        assertTrue(soon(() -> sftp.sessionsClosed() == 1), "the failed read dropped the session");
+        round(rt);
+        assertEquals(2, sftp.sessionsCreated(), "a second login");
+        assertEquals(List.of(2, 2), List.of(passwordReads.get(), hostKeyReads.get()), "the second login read each again");
+    }
+
+    /**
+     * A host key that is no {@code SHA256:} fingerprint fails the login before anything is sent: the round breaks the consumer
+     * with a failure naming the connection and the setting {@code hostKey}, never its value.
+     */
+    @Test
+    void aHostKeyThatIsNoFingerprintFailsTheLoginNamingTheSettingNeverItsValue() {
+        for (String wrong : List.of("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA", "sha256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU", "SHA256:", "SHA256:abc def")) {
+            FakeRuntime on = FakeRuntime.create();
+            Inbound in = withSecrets(inbox(Map.of()), Map.of("password", Secret.of("secret://sftp-in.password", () -> EmbeddedSftp.PASSWORD),
+                    "hostKey", Secret.of("secret://sftp-in.hostkey", () -> wrong)));
+            Throwable broke = brokenRound(on, started(component(on), in, accepting(new CopyOnWriteArrayList<>())));
+            StringBuilder chain = new StringBuilder();
+            for (Throwable t = broke; t != null; t = t.getCause()) chain.append(t.getMessage()).append(" | ");
+            assertTrue(chain.toString().contains("connection 'sftp-in': the setting 'hostKey' must be a SHA256: fingerprint"), wrong + ": " + chain);
+            if (!wrong.equals("SHA256:")) assertFalse(chain.toString().contains(wrong), wrong + ": the value is never quoted: " + chain);
+        }
+        assertEquals(0, sftp.sessionsCreated(), "refused before connecting");
+        assertEquals(0, sftp.passwordChecks(), "the password never left the node");
     }
 
     static Map<String, Object> with(Map<String, Object> options, String key, Object value) {
@@ -733,22 +758,31 @@ class SftpComponentTest {
         assertFalse(settings.check(options, Direction.IN).isEmpty(), what + ": refused by settings(), but valid: " + options);
     }
 
-    // ---- P2-02L (D-083): the node holds the endpoint's lease ----------------------------------------------------------
+    // ---- the node holds the lease of the place a sender polls -----------------------------------------------------------
 
     /**
-     * Every sftp endpoint polls: the node runs its consumer only while it holds the endpoint's lease. Answered from the config
-     * alone — here one for a port nothing listens on, and one for this server: no session is opened.
+     * Every sftp sender polls: {@code polledPlace} names the connection, its server and the directory and glob of the flow —
+     * the host lower-cased, an IPv6 one bracketed, the port 22 by default, {@code .} for the login directory. Answered from the
+     * use alone: nothing connected.
      */
     @Test
-    void everySftpEndpointPolls() {
+    void everySenderPollsThePlaceItsConnectionDirAndGlobName() {
         SftpComponent component = component(rt);
-        EndpointConfig nowhere = new EndpointConfig("sftp-in", URI.create("sftp://127.0.0.1:1/inbox"),
-                Map.of("user", "rail8", "password", "x", "hostKey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), "maxBodyBytes", 1024));
-
-        assertTrue(component.polls(inbox(Map.of())), "the default options");
-        assertTrue(component.polls(inbox(Map.of("afterSuccess", "move", "moveTo", "/done", "glob", "*.xml"))), "moving, filtered");
-        assertTrue(component.polls(nowhere), "a partner nobody reaches");
-        assertEquals(0, sftp.sessionsCreated(), "answered from the config alone: nothing connected");
+        assertEquals(Optional.of("sftp-in sftp://127.0.0.1:" + sftp.port() + " /inbox *"), component.polledPlace(inbox(Map.of())), "the defaults");
+        assertEquals(Optional.of("sftp-in sftp://127.0.0.1:" + sftp.port() + " /inbox *.xml"),
+                component.polledPlace(inbox(Map.of("afterSuccess", "move", "moveTo", "/done", "glob", "*.xml"))), "moving, filtered");
+        Map<String, Object> noDir = new HashMap<>();
+        noDir.put("dir", null);
+        noDir.put("port", null);
+        noDir.put("host", "Files.Example");
+        assertEquals(Optional.of("sftp-in sftp://files.example:22 . *"), component.polledPlace(inbox(noDir)), "lower-cased, port 22, the login directory");
+        assertEquals(Optional.of("sftp-in sftp://[fe80::1]:2222 /inbox *"), component.polledPlace(inbox(Map.of("host", "FE80::1", "port", 2222))),
+                "an IPv6 host bracketed, lower-cased");
+        assertEquals(Optional.of("sftp-in sftp://[::1]:22 /inbox *"), component.polledPlace(inbox(Map.of("host", "[::1]", "port", 22))),
+                "a bracketed host is not bracketed twice");
+        assertEquals(Optional.of("partner-b sftp://127.0.0.1:" + sftp.port() + " /inbox *"), component.polledPlace(sftp.endpoint("partner-b", "/inbox", Map.of())),
+                "another connection to the same directory: another place");
+        assertEquals(0, sftp.sessionsCreated(), "answered from the use alone: nothing connected");
     }
 
     /** A move whose name is taken in {@code moveTo} is suffixed with the id of the message the file was delivered as. */
@@ -767,54 +801,5 @@ class SftpComponentTest {
         assertEquals(Set.of("x.xml", "x.xml." + second), sftp.files("/done"), "the taken name is suffixed with the second message's id");
         assertEquals("<second/>", sftp.read("/done/x.xml." + second));
         assertEquals(Set.of(), sftp.files("/inbox"));
-    }
-
-    // ---- P2-09a (D-099): the target a producer calls ------------------------------------------------------------------
-
-    /**
-     * The target of an sftp endpoint is {@code sftp://host:port} with the {@code host} / {@code port} options over the URI's
-     * parts (D-086: a deployed URI is only {@code sftp://<id>}), port 22 by default, lower-cased, never the user or the
-     * directory — two directories on one server name one target. Answered from the config alone: nothing connected.
-     */
-    @Test
-    void targetFollowsHostPortOptionsOverUri() {
-        SftpComponent component = component(rt);
-        Map<String, Object> creds = Map.of("user", "rail8", "password", "x", "hostKey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), "maxBodyBytes", 1024);
-        java.util.function.BiFunction<String, Map<String, Object>, EndpointConfig> at = (uri, extra) -> {
-            Map<String, Object> options = new java.util.HashMap<>(creds);
-            options.putAll(extra);
-            return new EndpointConfig("sftp-in", URI.create(uri), options);
-        };
-
-        assertEquals(Optional.of("sftp://files.example:2222"), component.target(at.apply("sftp://rail8@Files.Example:2222/inbox", Map.of())), "the URI alone, user and path dropped");
-        assertEquals(Optional.of("sftp://files.example:22"), component.target(at.apply("sftp://files.example/inbox", Map.of())), "no port anywhere: 22");
-        assertEquals(Optional.of("sftp://sftp.partner.example:2200"), component.target(at.apply("sftp://partner-a", Map.of("host", "SFTP.Partner.Example", "port", 2200))),
-                "a deployed endpoint: sftp://<id>, host and port from the options");
-        assertEquals(Optional.of("sftp://other.example:2222"), component.target(at.apply("sftp://files.example:2222/inbox", Map.of("host", "other.example"))),
-                "the host option over the URI's host, the URI's port kept");
-        assertEquals(Optional.of("sftp://files.example:2022"), component.target(at.apply("sftp://files.example:2222/inbox", Map.of("port", 2022))),
-                "the port option over the URI's port");
-        assertEquals(component.target(at.apply("sftp://files.example:2222/inbox", Map.of())), component.target(at.apply("sftp://files.example:2222/outbox", Map.of("dir", "/elsewhere"))),
-                "two directories of one server: one target");
-        assertEquals(Optional.of("sftp://127.0.0.1:" + sftp.port()), component.target(inbox(Map.of())), "this server's endpoint");
-        assertEquals(0, sftp.sessionsCreated(), "answered from the config alone: nothing connected");
-    }
-
-    /** An IPv6 host option is bracketed in the target, as a URI writes it; a bracketed URI host is not bracketed twice (D-099). */
-    @Test
-    void anIpv6HostOptionIsBracketedInTheTarget() {
-        SftpComponent component = component(rt);
-        Map<String, Object> creds = Map.of("user", "rail8", "password", "x", "hostKey", EmbeddedSftp.fingerprint(EmbeddedSftp.HOST_KEY), "maxBodyBytes", 1024);
-        java.util.function.BiFunction<String, Map<String, Object>, EndpointConfig> at = (uri, extra) -> {
-            Map<String, Object> options = new java.util.HashMap<>(creds);
-            options.putAll(extra);
-            return new EndpointConfig("sftp-in", URI.create(uri), options);
-        };
-
-        assertEquals(Optional.of("sftp://[::1]:22"), component.target(at.apply("sftp://partner-a", Map.of("host", "::1"))), "host option ::1, default port");
-        assertEquals(Optional.of("sftp://[fe80::1]:2222"), component.target(at.apply("sftp://partner-a", Map.of("host", "FE80::1", "port", 2222))),
-                "lower-cased, the port option");
-        assertEquals(Optional.of("sftp://[::1]:2200"), component.target(at.apply("sftp://[::1]:2200/inbox", Map.of())), "a bracketed URI host is not bracketed twice");
-        assertEquals(0, sftp.sessionsCreated(), "answered from the config alone: nothing connected");
     }
 }

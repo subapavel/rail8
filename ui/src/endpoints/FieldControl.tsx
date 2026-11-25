@@ -1,4 +1,4 @@
-import { Form, Input, Select } from 'antd';
+import { Form, Input, Select, Typography } from 'antd';
 import { useId, useState, type ReactNode } from 'react';
 import { say, useText, type Texts } from '../language';
 import { KNOWN_TYPES, type SettingsField } from './settings';
@@ -37,8 +37,8 @@ function integer(text: string): unknown {
 }
 
 /**
- * One option of an endpoint as a form group: its name as the label, its help text below, and the problem the check
- * finds. Read-only it shows the value as text, a secret masked. Editing, text and secrets are text inputs (empty is not
+ * One option of an endpoint as a form group: its label with its name beside it, its help text below, and the problem
+ * the check finds. Read-only it shows the value as text, a secret masked and a choice by its label. Editing, text and secrets are text inputs (empty is not
  * set), a whole number a text input that keeps what was typed, true or false and a choice a select with "Not set",
  * and a field of a type the form does not know a raw editor of its value as JSON.
  */
@@ -53,16 +53,18 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
   const describedBy = `${id}-help`;
 
   const text = known ? shown(value) : value === undefined ? '' : JSON.stringify(value);
+  const label = field.label === undefined ? field.name : say(texts, field.label);
+  const choiceLabel = (choice: string) => field.choiceLabels?.[choice] ?? choice;
 
   let control;
   if (readOnly) {
     control = (
       <Input
         id={id}
-        aria-label={field.name}
+        aria-label={label}
         readOnly
         type={field.type === 'secret' ? 'password' : 'text'}
-        value={text}
+        value={field.type === 'choice' && typeof value === 'string' ? choiceLabel(value) : text}
         placeholder={placeholder(texts, field) ?? t('endpoints.field.notSet')}
         aria-describedby={describedBy}
         aria-invalid={status === 'error'}
@@ -75,7 +77,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
     control = (
       <Select
         id={id}
-        aria-label={field.name}
+        aria-label={label}
         aria-describedby={describedBy}
         aria-invalid={status === 'error'}
         aria-required={field.required}
@@ -85,7 +87,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
         options={[
           { value: '', label: unset },
           ...(value !== undefined && value !== null && !values.includes(shown(value)) ? [{ value: shown(value), label: shown(value) }] : []),
-          ...values.map((v) => ({ value: v, label: v })),
+          ...values.map((v) => ({ value: v, label: choiceLabel(v) })),
         ]}
         onChange={(chosen) => onChange(chosen === '' ? undefined : field.type === 'boolean' ? chosen === 'true' : chosen)}
       />
@@ -94,7 +96,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
     control = (
       <Input
         id={id}
-        aria-label={field.name}
+        aria-label={label}
         type={field.type === 'secret' ? 'password' : 'text'}
         inputMode={field.type === 'integer' ? 'numeric' : undefined}
         value={shown(value)}
@@ -110,7 +112,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
     control = (
       <Input
         id={id}
-        aria-label={field.name}
+        aria-label={label}
         value={raw ?? text}
         aria-describedby={describedBy}
         aria-invalid={status === 'error'}
@@ -137,7 +139,15 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
 
   return (
     <Form.Item
-      label={field.name}
+      label={
+        label === field.name ? (
+          label
+        ) : (
+          <>
+            {label}&nbsp;<Typography.Text type="secondary">{field.name}</Typography.Text>
+          </>
+        )
+      }
       htmlFor={id}
       required={field.required}
       validateStatus={status}

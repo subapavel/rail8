@@ -463,8 +463,8 @@ class NodeIT {
     // --- P2-02L (D-083): the node's poller lease store. RAIL8_VALKEY_URI set: the leases are held in that Valkey, the client is
     // closed at close; absent: they are held in memory and start logs one WARNING naming the missing Valkey.
 
-    /** The lease of {@link #pollingShop()}'s flow in Valkey: the store's prefix, then {@code <package>/<flow>/<scheme>://<endpoint id>}. */
-    static final String FEED_LEASE = "rail8:poller:shop/feed/poll://drop";
+    /** The lease of {@link #pollingShop()}'s flow in Valkey: the store's prefix, then {@code <package>/<flow>/from}. */
+    static final String FEED_LEASE = "rail8:poller:shop/feed/from";
 
     /** The {@code poll} scheme: the {@link Doors} of the deploy tests, every endpoint of which polls, so the node leases its consumers. */
     static final class PollingDoors implements Component {
@@ -472,15 +472,15 @@ class NodeIT {
 
         @Override public String scheme() { return inner.scheme(); }
 
-        @Override public String configSchema() { return inner.configSchema(); }
+        @Override public dev.rail8.api.settings.Forms forms() { return inner.forms(); }
 
-        @Override public dev.rail8.api.Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
+        @Override public dev.rail8.api.Consumer consumer(dev.rail8.api.Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
 
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
+        @Override public Producer producer(dev.rail8.api.Outbound out) { return inner.producer(out); }
 
         @Override public Future<Health> health() { return inner.health(); }
 
-        @Override public boolean polls(EndpointConfig cfg) { return true; }
+        @Override public Optional<String> polledPlace(dev.rail8.api.Inbound in) { return Optional.of(inner.endpoint(in).name()); }
 
         boolean aConsumerRuns() { return inner.doors().stream().anyMatch(Doors.Door::started); }
     }

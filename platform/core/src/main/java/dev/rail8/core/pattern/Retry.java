@@ -1,6 +1,7 @@
 package dev.rail8.core.pattern;
 
 import dev.rail8.api.Envelope;
+import dev.rail8.api.Fault;
 import dev.rail8.api.Stage;
 import dev.rail8.api.Step;
 import dev.rail8.api.Timer;
@@ -9,7 +10,10 @@ import dev.rail8.core.flow.Runs;
 import dev.rail8.core.node.FencedException;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 
@@ -25,6 +29,8 @@ import java.util.concurrent.CountDownLatch;
  * {@link InterruptedException}: a cancelled run, rethrown at once with the interrupt flag restored and, on an attempt after
  * the first, the earlier attempts' failures suppressed on it in attempt order; and a {@link FencedException}: the
  * node's fence is closed, so no attempt may send, and it is thrown at once with the earlier failures suppressed. A failure
+ * with a {@link Fault} of kind {@link Fault.Kind#INVALID} in its cause chain (a send refused as invalid) fails again however
+ * often it runs, so it is thrown at once too, with the earlier failures suppressed. A failure
  * while the message's run is stopped ({@link Runs#why()}: its time limit passed or it was cancelled) is thrown at once too,
  * with no pause and no further attempt. An {@link Error} is not a transient failure and is never caught.
  *
@@ -51,7 +57,7 @@ public final class Retry {
                         earlier.forEach(failure::addSuppressed);
                         throw failure;
                     }
-                    if (failure instanceof FencedException || attempt > policy.attempts() || Runs.why().isPresent()
+                    if (failure instanceof FencedException || invalid(failure) || attempt > policy.attempts() || Runs.why().isPresent()
                             || !pause(policy.delayBefore(attempt), timer)) {
                         earlier.forEach(failure::addSuppressed);
                         throw failure;
@@ -82,6 +88,15 @@ public final class Retry {
             for (Envelope h : handed) last = rest.apply(h);
             return handed.size() == 1 ? last : result;
         };
+    }
+
+    /** Whether the first {@link Fault} in {@code failure}'s cause chain is of kind {@link Fault.Kind#INVALID}; a loop ends the walk. */
+    static boolean invalid(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable t = failure; t != null && seen.add(t); t = t.getCause()) {
+            if (t instanceof Fault fault) return fault.kind() == Fault.Kind.INVALID;
+        }
+        return false;
     }
 
     /** Parks until the timer fires; false when interrupted (the interrupt is kept, the timer task cancelled). */

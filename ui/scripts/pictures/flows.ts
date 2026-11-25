@@ -1,5 +1,7 @@
 import type { EndpointFile, EndpointsApi } from '../../src/endpoints/api';
 import type { FlowFile, FlowsApi } from '../../src/endpoints/flows/api';
+import { DIRECT_FORMS, HTTP_FORMS, SFTP_FORMS } from '../../src/endpoints/fake/forms';
+import type { Options } from '../../src/endpoints/settings';
 
 // The working folder that the pictures of the Endpoints and Flows screens show: the endpoints and flows of the orders
 // package, read-only. Nothing is ever saved.
@@ -11,6 +13,19 @@ const ENDPOINTS: { id: string; scheme: string; direction: 'in' | 'out'; address:
   { id: 'partner-foreign', scheme: 'sftp', direction: 'out', address: '/outbox' },
 ];
 const pathOf = (id: string) => `orders/endpoints/${id}.yaml`;
+
+/** The settings each endpoint file holds, beside its address; the form of an endpoint shows them. */
+const CONFIG: Record<string, Options> = {
+  'erp-out': { url: 'https://erp.example/idoc', timeoutMs: 10000, maxBodyBytes: 1048576, path: '/orders' },
+};
+
+/** An endpoint the form shows but no flow uses: the partner's files the invoices are read from. */
+const INVOICE_FILES = {
+  id: 'invoice-files',
+  scheme: 'sftp',
+  direction: 'in' as const,
+  config: { host: 'sftp.partner.example', user: 'rail8', privateKey: 'secret://partner.private-key', hostKey: 'secret://partner.host-key', dir: '/outbox/invoices', glob: '*.xml', afterSuccess: 'move', moveTo: '/outbox/done' },
+};
 
 const ORDERS = `schemaVersion: 1
 kind: flow
@@ -79,33 +94,31 @@ export function pictureFlows(): FlowsApi {
   };
 }
 
-/** The endpoints of the folder, and a node that serves the http and sftp components with one setting each. */
+/** The endpoints of the folder, and a node that serves the http, sftp and direct components as they describe themselves. */
 export function pictureEndpoints(): EndpointsApi {
   const file = (path: string): EndpointFile => {
+    if (path === pathOf(INVOICE_FILES.id)) return { path, editable: false, ...INVOICE_FILES, description: 'The invoices the partner leaves on its server.', environments: [] };
     const found = ENDPOINTS.find((e) => pathOf(e.id) === path) ?? ENDPOINTS[0]!;
-    return { path, editable: false, id: found.id, scheme: found.scheme, direction: found.direction, description: null, config: { address: found.address }, environments: [] };
+    return { path, editable: false, id: found.id, scheme: found.scheme, direction: found.direction, description: null, config: CONFIG[found.id] ?? { address: found.address }, environments: [] };
   };
-  const described = (scheme: string) => ({
-    scheme,
-    httpPrefix: null,
-    settings: {
-      format: 1,
-      described: true,
-      tabs: [{ id: 'general' as const, label: 'General', common: true }],
-      fields: [{ name: 'address', type: 'string' as const, help: 'Where the messages go or come from.', tab: 'general', required: true, directions: ['in' as const, 'out' as const] }],
-      rules: [],
-    },
-  });
   return {
     list: async () => ({
       configured: true,
       editable: false,
       truncated: false,
-      items: ENDPOINTS.map(({ id, scheme, direction }) => ({ path: pathOf(id), id, scheme, direction })),
+      items: [...ENDPOINTS, INVOICE_FILES].map(({ id, scheme, direction }) => ({ path: pathOf(id), id, scheme, direction })),
     }),
     read: async (path) => ({ file: file(path), etag: '"1"' }),
     save: refused,
     create: refused,
-    components: async () => ({ environment: 'dev', httpOrigin: null, items: [described('http'), described('sftp')] }),
+    components: async () => ({
+      environment: 'dev',
+      httpOrigin: null,
+      items: [
+        { scheme: 'http', httpPrefix: '/http', settings: HTTP_FORMS },
+        { scheme: 'sftp', httpPrefix: null, settings: SFTP_FORMS },
+        { scheme: 'direct', httpPrefix: null, settings: DIRECT_FORMS },
+      ],
+    }),
   };
 }
