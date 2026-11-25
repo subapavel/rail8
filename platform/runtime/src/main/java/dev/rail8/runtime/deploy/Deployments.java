@@ -2784,7 +2784,8 @@ public final class Deployments {
      * a reference the store holds as a typed secret the field takes is kept instead, and so is every reference off the node
      * ({@link #secretField}): the flow's build makes it a live handle. Null, with a line added to {@code problems} per reference,
      * when one is malformed ({@code endpoint '<id>': } and the refusal naming it) or cannot be read as a kind its place takes
-     * ({@code endpoint '<id>': }, for a secret field its option, and {@link Secrets#problem}): no line carries a value.
+     * ({@code endpoint '<id>': }, for a secret field its option, and {@link Secrets#problem}; for a typed secret in an option that
+     * is no secret field, that the option takes a plain value only): no line carries a value.
      */
     private JsonObject resolved(String id, Component component, JsonObject cfg, Map<String, Optional<SecretStore.Held>> rows, List<String> problems) {
         int before = problems.size();
@@ -2792,7 +2793,7 @@ public final class Deployments {
         JsonObject values = new JsonObject();
         cfg.forEach(e -> values.put(e.getKey(), fields.contains(e.getKey())
                 ? secretField(id, e.getKey(), fieldKinds(component, e.getKey()), e.getValue(), rows, problems)
-                : resolved(id, e.getValue(), rows, problems)));
+                : resolved(id, e.getKey(), e.getValue(), rows, problems)));
         return problems.size() == before ? values : null;
     }
 
@@ -2819,15 +2820,15 @@ public final class Deployments {
         }
     }
 
-    private Object resolved(String id, Object value, Map<String, Optional<SecretStore.Held>> rows, List<String> problems) {
+    private Object resolved(String id, String option, Object value, Map<String, Optional<SecretStore.Held>> rows, List<String> problems) {
         if (value instanceof JsonObject object) {
             JsonObject copy = new JsonObject();
-            object.forEach(e -> copy.put(e.getKey(), resolved(id, e.getValue(), rows, problems)));
+            object.forEach(e -> copy.put(e.getKey(), resolved(id, option, e.getValue(), rows, problems)));
             return copy;
         }
         if (value instanceof JsonArray array) {
             JsonArray copy = new JsonArray();
-            array.forEach(item -> copy.add(resolved(id, item, rows, problems)));
+            array.forEach(item -> copy.add(resolved(id, option, item, rows, problems)));
             return copy;
         }
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
@@ -2835,7 +2836,10 @@ public final class Deployments {
             Optional<SecretStore.Held> row = row(reference, rows);
             Optional<String> problem = config.secrets().problem(reference, PLAIN, row);
             if (problem.isPresent()) {
-                problems.add("endpoint '" + id + "': " + problem.get());
+                problems.add("endpoint '" + id + "': " + (row.isPresent() && row.get().kind() != Secret.Kind.VALUE
+                        ? "secret '" + reference + "' is a secret of kind " + row.get().kind().id() + " in the secret store: the option '" + option
+                        + "' is not a secret field, so it takes a plain value only"
+                        : problem.get()));
                 return null;
             }
             return plain(reference, row);
