@@ -34,9 +34,15 @@ class DemoPackageTest {
         }
     }
 
-    /** Whether a file is data a document names, with no kind of its own: a fixture, a mapping or a schema the mapping reads. */
+    /**
+     * Whether a file is data a document names, with no kind of its own: a fixture, a mapping or a schema the mapping
+     * reads, in a folder of that name at any depth of the package.
+     */
     private static boolean isData(Path inPackage) {
-        return inPackage.startsWith("fixtures") || inPackage.startsWith("mappings") || inPackage.startsWith("structures");
+        for (Path name : inPackage) {
+            if (name.toString().equals("fixtures") || name.toString().equals("mappings") || name.toString().equals("structures")) return true;
+        }
+        return false;
     }
 
     @Test
