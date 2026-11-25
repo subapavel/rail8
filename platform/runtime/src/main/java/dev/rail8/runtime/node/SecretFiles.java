@@ -32,7 +32,8 @@ import java.util.TreeMap;
 final class SecretFiles {
 
     /** The named secret variables that have a file form, beside every {@code RAIL8_SECRET_<NAME>}. */
-    static final Set<String> NAMED = Set.of("RAIL8_PG_PASSWORD", "RAIL8_ADMIN_TOKEN", "RAIL8_GIT_TOKEN", "RAIL8_VALKEY_URI");
+    static final Set<String> NAMED = Set.of("RAIL8_PG_PASSWORD", "RAIL8_ADMIN_TOKEN", "RAIL8_GIT_TOKEN", "RAIL8_VALKEY_URI",
+            "RAIL8_SECRETS_KEY", "RAIL8_SECRETS_KEY_PREVIOUS");
     /** The most bytes a secret file may hold: enough for a PEM key or a service account's JSON. */
     static final long MAX_BYTES = 64L * 1024;
 
