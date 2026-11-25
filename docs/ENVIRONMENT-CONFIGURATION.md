@@ -362,10 +362,15 @@ The secret administrator decides to which servers each secret may go. A connecti
 else. The consent is held on the object and given to the exact draft it covers.
 
 - **The server.** An adapter marks with `.server()` the fields of its connection form that name the server it connects
-  to: a URL, a host, a port. A connection's server is the list of the effective values of those fields, in the form's
-  order: a field not set counts as its default, a URL counts by its host and its port alone, the scheme's default port
-  filled in, and a host is compared in lower case. Each entry of the platform's `allowedHosts` is a server of its own,
-  case aside, an entry without a port taking the scheme's default. No other field counts: a path, a time limit, a
+  to: a URL, a host, a port, each a text or an integer field; the description serves such a field with `"server": true`.
+  A connection's server is the list of the effective values of those fields, in the form's order: a field not set
+  counts as its default, a URL counts by its host and its port alone, the scheme's default port filled in, and a host is
+  compared in lower case. It is written as text, the values joined by `:`, so `http`'s server and `sftp`'s are each
+  `host:port`; an IPv6 literal is written in brackets, and a marked text field that is not a URL refuses a `:` outside
+  brackets (422 `invalid`), so two servers never write the same text. Each entry of the platform's `allowedHosts` is a
+  server of its own, written `host:port` with its host in lower case and a `*.` kept as written. An entry without a port
+  takes the scheme's default; on a form whose address fields name more than one scheme it is one server for each of
+  their default ports, so the consent names every port it lets a secret reach. No other field counts: a path, a time limit, a
   proxy, a trusted certificate, a pinned certificate or host key, a switch of TLS verification. One function in
   `rail8-runtime` computes the servers and the sends, and the read, the consent, the activation and a test all call it.
 - **What a body sends** is a set of pairs: each secret its secret fields name, with each of its servers. A secret that
@@ -802,7 +807,7 @@ This is a loop of activations, not a change list.
 
 | Status | Code | When |
 | --- | --- | --- |
-| 400 | `bad-request` | a body not of the route's form, or without `expect` |
+| 400 | `bad-request` | a path or a body not of the route's form, a key the parser refuses among them, naming the rule it breaks, or without `expect`; after the caller's authorisation, before any read of the store, with no audit row. A well-formed key that no row holds is 404; in an import file a refused key is a problem of that file |
 | 404 | `not-found` | a read of a key no row holds and no deployed system names; a `fromVersion` whose history row is gone |
 | 409 | `no-draft`, `nothing-to-consent` | a discard or activation without a draft; a consent with no draft, or to one that needs none |
 | 409 | `not-set` | a stop or start of a connection with nothing in force |
