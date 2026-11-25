@@ -209,34 +209,6 @@ class AdminServerSecretsTest extends AdminAccessFixture {
         assertEquals(403, call("DELETE", "/admin/secrets/db", Optional.of(developer), null).status());
     }
 
-    /** A node without the store's key answers a write 503 {@code no-key}, and lists. */
-    @Test
-    void aWriteOnANodeWithoutTheKeyIs503() throws Exception {
-        MemorySecretStores keyless = new MemorySecretStores();
-        SecretStore store = keyless.start("node-9", Map.of(), rt.clock(), rt.timer());
-        Map<String, String> env = new HashMap<>(Map.of("RAIL8_ENV", "dev", "RAIL8_NODE_ID", "node-9", "RAIL8_DATA_DIR", tmp.resolve("keyless").toString()));
-        NodeConfig config = NodeConfig.from(env);
-        Doors doors = new Doors();
-        Deployments mine = deployments;
-        Deployments without = new Deployments(config.withSecrets(config.secrets().withStore(store)),
-                new dev.rail8.api.Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors)),
-                Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(), messages, new InMemoryDlq(), rows, () -> 0L);
-        try {
-            deployments = without;
-            int port = server(new AdminServer.Config("127.0.0.1", 0, Optional.of(KEY))).start(vertx).await(10, TimeUnit.SECONDS);
-            Answer refused = send(port, "POST", "/admin/secrets", Optional.of(admin), value("db", "rejected-value").encode());
-            captured.add(refused.body());
-            refused(refused, 503, "no-key");
-            assertEquals(200, send(port, "GET", "/admin/secrets", Optional.of(admin), null).status());
-        } finally {
-            deployments = mine;
-            store.close();
-            OnVirtualThread.call(() -> { without.close(); return null; });
-        }
-        written.add("rejected-value");
-        assertNoValueCaptured();
-    }
-
     /** No captured text and no audit row holds a value written: as text, URL-encoded, JSON-escaped, or in base64. */
     void assertNoValueCaptured() {
         List<String> texts = new ArrayList<>(captured);

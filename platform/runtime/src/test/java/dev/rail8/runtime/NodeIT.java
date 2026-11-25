@@ -48,6 +48,7 @@ import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.PgConnection;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
+import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Transaction;
 import io.vertx.redis.client.Redis;
 import io.vertx.redis.client.RedisAPI;
@@ -316,6 +317,41 @@ class NodeIT {
      * hold is a large body in the journal — so a started node keeps no {@code <data>/spool}; its bodies live under the journal
      * directory ({@code <data>/journal} by default). (The case used to pin that a start clears the spool a previous run left.)
      */
+    /**
+     * A node without the secret store's key does not start on a store that holds a row: the first start imports one secret,
+     * and the start without the key is refused, naming the variable, with the store's row, its generation and the node's
+     * row as they were.
+     */
+    @Test
+    void aNodeWithoutTheStoresKeyDoesNotStartOnAStoreThatHoldsARow() throws Exception {
+        Map<String, String> env = env("ci");
+        env.put("RAIL8_SECRET_HELD", "held-value");
+        closeNode(start(env, ctx -> List.of()));
+        node = null;
+        String before = storeState();
+        assertTrue(before.startsWith("1 secrets, generation 1"), before);
+
+        env.remove("RAIL8_SECRETS_KEY");
+        NodeConfig config = NodeConfig.from(env);
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> OnVirtualThread.call(() -> Node.start(config, vertx, ctx -> List.of(), List.of(), List.of())));
+        assertTrue(String.valueOf(refused.getMessage()).startsWith("RAIL8_SECRETS_KEY is not set"), refused.getMessage());
+        assertEquals(before, storeState(), "nothing written");
+    }
+
+    /** The store's rows, its generation and stamp, and the nodes' rows, as text. */
+    String storeState() {
+        PgConnection reader = PgConnection.connect(vertx, options(database)).await();
+        try {
+            Row row = reader.query("select (select count(*) from secrets), generation, stamp,"
+                    + " (select string_agg(node || ' ' || epoch || ' ' || coalesce(lease_until::text, ''), ', ') from nodes) from secret_store")
+                    .execute().await().iterator().next();
+            return row.getLong(0) + " secrets, generation " + row.getLong(1) + ", stamp " + row.getLong(2) + ", nodes " + row.getString(3);
+        } finally {
+            reader.close().await();
+        }
+    }
+
     @Test
     void aStartedNodeKeepsNoSpool() throws Exception {
         Path besides = Files.writeString(data.resolve("not-the-spool.txt"), "outside the journal");

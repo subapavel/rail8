@@ -49,7 +49,7 @@ class MemorySecretStoreTest extends SecretStoreContract {
     }
 
     @Override void forge(String node, byte[] keyId) {
-        db.forge(new SecretRows.NodeKeys(node, 1, 1L, keyId, null, List.of()));
+        db.forge(new SecretRows.NodeKeys(node, 1, 1L, keyId, null));
         epochs.put(node, 1L);
     }
 
@@ -128,9 +128,9 @@ class MemorySecretStoreTest extends SecretStoreContract {
         };
         Node b = start("b", K1);
         dev.rail8.testkit.FakeClock clock = dev.rail8.testkit.FakeClock.at(java.time.Instant.parse("2026-11-25T10:00:00Z"));
-        SecretStore a = new SecretStore(slow, Secrets.fromEnv(Map.of(StoreKey.VARIABLE, b64(K1))).key(), "a", List.of(), clock,
-                new dev.rail8.testkit.FakeTimer(clock), captured::add);
-        await(a.start(join("a")));
+        SecretStore a = new SecretStore(slow, Secrets.fromEnv(Map.of(StoreKey.VARIABLE, b64(K1))).key().orElseThrow(), "a", clock,
+                new dev.rail8.testkit.FakeTimer(clock), captured::add, captured::add);
+        await(a.start(join("a"), SecretStore.Import.none()));
         db.listen(a::notice);
         armed[0] = true;
         create(b, value("db", "first-value"));

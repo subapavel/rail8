@@ -176,7 +176,8 @@ bin/run-adapter ~/acme-adapter
 ```
 
 It builds the adapter's jar, starts an empty Postgres of its own in Docker, starts a node with the adapter's
-`target/plugin` as its plugins (admin API on `127.0.0.1:18081`, with an emergency key made for the run), makes the node's
+`target/plugin` as its plugins (admin API on `127.0.0.1:18081`, with an emergency key and a secret store's key made for
+the run, as `openssl` makes it), makes the node's
 first users with `rail8 bootstrap`, deploys `package/` as the adapter's `HEAD` commit holds it
 (the node reads the folder's repository, with `RAIL8_GIT_PATH=package`), starts a partner that answers every
 request with the body it was sent on `127.0.0.1:18091`, and runs the UI on **http://localhost:5173**. The UI needs no

@@ -9,6 +9,8 @@ A demo stack for GATE checks 1-2 (D-085), not production: the node runs `RAIL8_E
 ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am   # the jars the node image and `deploy` use, with the engines they need
 cd deploy/compose
 export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency key, required: compose refuses to start without it
+[ -s ~/.rail8-stack-secrets-key ] || { t=$(mktemp ~/.rail8-stack-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-stack-secrets-key; rm -f "$t"; }
+export RAIL8_SECRETS_KEY=$(cat ~/.rail8-stack-secrets-key)   # the secret store's key, made once and kept: required, as the token
 docker compose up -d --build                           # returns once the node is healthy
 ../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
 export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token: it deploys, and reads the deployed packages
@@ -18,7 +20,7 @@ curl -X POST --data-binary @../../examples/demo/fixtures/sample-invoice.xml loca
 curl -X POST --data-binary @../../examples/demo/fixtures/sample-invoice.xml localhost:8080/http/invoice/async   # flow invoice-async: 202 after the durable save
 docker compose --profile history up -d clickhouse      # optional
 docker compose --profile kafka up -d kafka             # optional: the event-broker add-on
-docker compose --profile history --profile kafka down -v   # stop and remove every volume
+docker compose --profile history --profile kafka down -v   # stop and remove every volume; without the key: RAIL8_SECRETS_KEY=x docker compose ... down -v
 ```
 
 Postgres runs `postgres:18.6` with its volume at `/var/lib/postgresql` (D-129). A `pg-data` volume made by the earlier
@@ -41,12 +43,13 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
   hosts reach is given `RAIL8_ADMIN_TLS_CERT` and `RAIL8_ADMIN_TLS_KEY` in place of `off`; the image's health check,
   `/opt/rail8/health.sh`, then asks `/health` over HTTPS. The node's HTTP port, shared by every inbound HTTP endpoint: `localhost:8080`; the demo's http-in at `/http/in`, its async door `http-in-async` at `/http/invoice/async` (answers 202).
 - Postgres password: `RAIL8_PG_PASSWORD` (default `rail8`).
-- A secret mounted as a file: each of the node's secrets can be given as the path of a file that holds it, the variable's
-  name with `_FILE` added (`docs/ARCHITECTURE.md`, part 10). The stack gives the SFTP host key's fingerprint this way:
+- A secret mounted as a file: each variable the store's first start imports can be given as the path of a file that holds
+  it, the variable's name with `_FILE` added (`docs/ARCHITECTURE.md`, part 10). The stack gives the SFTP host key's
+  fingerprint this way:
 
   ```yaml
   environment:
-    RAIL8_SECRET_SFTP_HOST_KEY_FILE: /sftp-fingerprint/host-key.fingerprint   # read once at start, one line end dropped
+    RAIL8_SECRET_SFTP_HOST_KEY_FILE: /sftp-fingerprint/host-key.fingerprint   # read once, by the import, one line end dropped
   volumes:
     - sftp-fingerprint:/sftp-fingerprint:ro
   ```
@@ -54,7 +57,7 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
   10 s and deletes a file once the flow `sftp-invoice` has saved it). The one-shot `sftp-keys` generates an RSA host key (3072 bits; the node's SFTP client does not offer ed25519) into the
   `sftp-hostkeys` volume on the first start (never replaced) and writes its public fingerprint to `host-key.fingerprint` in the separate volume
   `sftp-fingerprint`, the only one the node mounts (read-only, no host key reaches it); the
-  node reads that file as `RAIL8_SECRET_SFTP_HOST_KEY_FILE`, the password reaches it as `RAIL8_SECRET_SFTP_PASSWORD`.
+  node's first start imports that file as `sftp-host-key` and `RAIL8_SECRET_SFTP_PASSWORD` as `sftp-password`.
   Nothing secret or generated is in the repo. The fingerprint:
 
   ```sh
@@ -70,10 +73,15 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
 
 ## The secret store
 
-The stack starts without the store's key: each node reads its secrets from its `RAIL8_SECRET_*` variables only, and a
-write to `/admin/secrets` is 503 `no-key`. To keep secrets in the store, give every node of the installation the same key,
-the base64 of 256 random bits (`openssl rand -base64 32`), as `RAIL8_SECRETS_KEY_FILE` (preferred) or `RAIL8_SECRETS_KEY`.
-It is never the journal's key. What the store holds is sealed in Postgres under that key, and Postgres never holds the key.
+The store's key is required: a node without it refuses to start, and compose refuses to start the stack. Every node of
+an installation takes the same key, the base64 of 256 random bits (`openssl rand -base64 32`), as `RAIL8_SECRETS_KEY_FILE`
+(preferred) or `RAIL8_SECRETS_KEY`; this stack passes `RAIL8_SECRETS_KEY` from the shell, as above. It is never the
+journal's key. What the store holds is sealed in Postgres under that key, and Postgres never holds the key.
+
+- **The store is the only source of a secret.** The first node that joins an empty store imports its `RAIL8_SECRET_<NAME>`
+  variables, each as `<name>` in lower case with `_` as `-`, and `RAIL8_GIT_USER` with `RAIL8_GIT_TOKEN` as `rail8.git`.
+  After that no variable is read: a value changed later is entered in the store (`/admin/secrets`), or the stack starts
+  again after `docker compose down -v`. A node that finds such a variable set logs one WARNING naming it.
 
 - **A lost key loses every secret.** Back the key up apart from the database and its backups: a backup of the database
   without the key holds nothing that can be read.

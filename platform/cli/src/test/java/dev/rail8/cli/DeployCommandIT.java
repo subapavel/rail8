@@ -120,6 +120,10 @@ class DeployCommandIT {
         byte[] journalKey = new byte[32];
         new java.security.SecureRandom().nextBytes(journalKey);
         env.put("RAIL8_JOURNAL_KEY", java.util.Base64.getEncoder().encodeToString(journalKey));
+        // and the secret store's key: a node without it does not start
+        byte[] storeKey = new byte[32];
+        new java.security.SecureRandom().nextBytes(storeKey);
+        env.put("RAIL8_SECRETS_KEY", java.util.Base64.getEncoder().encodeToString(storeKey));
         // the demo's sftp-inbox keeps its password and host key as secret:// references (P2-06): the node it is deployed to has both
         env.put("RAIL8_SECRET_SFTP_PASSWORD", "demo");
         env.put("RAIL8_SECRET_SFTP_HOST_KEY", "SHA256:zuCbj2cX0buHOs3UvKwKc/FsR3hTNWRKrSBVsfc5gzU");

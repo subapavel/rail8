@@ -13,9 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P2-04 (D-081): what {@link Secrets} keeps of the env, how two compare (a {@link NodeConfig} is a record: its equality covers
- * them), what its text shows, and how {@link NodeConfig} carries them — read by {@link NodeConfig#from}, none by its other
- * constructors, swapped by {@link NodeConfig#withSecrets}.
+ * What {@link Secrets} keeps of the env, how two compare (a {@link NodeConfig} is a record: its equality covers them), what
+ * its text shows, and how {@link NodeConfig} carries them: read by {@link NodeConfig#from}, none by its other constructors,
+ * swapped by {@link NodeConfig#withSecrets}.
  */
 class SecretsEqualityTest {
 
@@ -32,14 +32,17 @@ class SecretsEqualityTest {
         }
     }
 
-    /** Only the {@code RAIL8_SECRET_*} variables are kept: two envs that differ elsewhere hold equal secrets. */
+    /**
+     * Only the names of the variables the import is given are kept, never a value: two envs that differ elsewhere, or in a
+     * value, hold equal secrets.
+     */
     @Test
-    void equalOverTheSecretVariablesOnly() {
+    void equalOverTheSecretVariablesNamesOnly() {
         Secrets one = Secrets.fromEnv(Map.of("RAIL8_SECRET_A", "1", "PATH", "/bin"));
         Secrets same = Secrets.fromEnv(Map.of("RAIL8_SECRET_A", "1", "HOME", "/root"));
         assertEquals(one, same);
         assertEquals(one.hashCode(), same.hashCode());
-        assertNotEquals(one, Secrets.fromEnv(Map.of("RAIL8_SECRET_A", "2")), "another value");
+        assertEquals(one, Secrets.fromEnv(Map.of("RAIL8_SECRET_A", "2")), "another value is no other import");
         assertNotEquals(one, Secrets.fromEnv(Map.of("RAIL8_SECRET_B", "1")), "another variable");
         assertEquals(Secrets.fromEnv(Map.of()), Secrets.fromEnv(Map.of("PATH", "/bin")), "none kept of an env without one");
         assertEquals(Secrets.placeholder(), Secrets.placeholder());
@@ -48,21 +51,27 @@ class SecretsEqualityTest {
         assertFalse(one.equals("RAIL8_SECRET_A"), "no other type is equal");
     }
 
-    /** The text names the variables, never a value; the placeholder's names the placeholder. */
+    /** The text names the variables and the key's id, never a value nor a key; the placeholder's names the placeholder. */
     @Test
     void textNamesNoValue() {
-        assertEquals("Secrets[env [RAIL8_SECRET_A, RAIL8_SECRET_B]]", Secrets.fromEnv(Map.of("RAIL8_SECRET_B", "v-b", "RAIL8_SECRET_A", "v-a",
-                "PATH", "/bin")).toString());
+        String key = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+        String text = Secrets.fromEnv(Map.of("RAIL8_SECRET_B", "v-b", "RAIL8_SECRET_A", "v-a", "PATH", "/bin", "RAIL8_SECRETS_KEY", key)).toString();
+        assertTrue(text.startsWith("Secrets[Import[RAIL8_SECRET_A, RAIL8_SECRET_B], StoreKey["), text);
+        assertFalse(text.contains("v-a") || text.contains("v-b") || text.contains(key), text);
         assertEquals("Secrets[placeholder https://secret.invalid/]", Secrets.placeholder().toString());
     }
 
-    /** {@link NodeConfig#from} reads the env's secrets; {@link NodeConfig#withSecrets} replaces them and nothing else. */
+    /**
+     * {@link NodeConfig#from} reads the store's key and the names of the variables to import, and no value: a reference is not
+     * set before the store joins. {@link NodeConfig#withSecrets} replaces them and nothing else.
+     */
     @Test
     void nodeConfigCarriesTheSecrets() {
         Map<String, String> env = new java.util.HashMap<>(node());
         env.put("RAIL8_SECRET_A", "value-a");
         NodeConfig read = NodeConfig.from(env);
-        assertEquals(Optional.of("value-a"), read.secrets().resolve("secret://a"));
+        assertEquals(Optional.empty(), read.secrets().resolve("secret://a"), "the variable is no value of the resolver");
+        assertEquals(java.util.List.of("RAIL8_SECRET_A"), read.secrets().imports().names());
         assertEquals(Secrets.fromEnv(env), read.secrets());
 
         NodeConfig dry = read.withSecrets(Secrets.placeholder());

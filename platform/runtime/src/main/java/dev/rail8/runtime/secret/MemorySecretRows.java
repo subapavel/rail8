@@ -68,8 +68,8 @@ final class MemorySecretRows implements SecretRows {
 
         synchronized void node(String node, long epoch, boolean live) {
             Node old = nodes.get(node);
-            SecretRows.NodeKeys k = old == null ? new NodeKeys(node, epoch, null, null, null, List.of())
-                    : new NodeKeys(node, epoch, old.keys().secretEpoch(), old.keys().key(), old.keys().previous(), old.keys().variables());
+            SecretRows.NodeKeys k = old == null ? new NodeKeys(node, epoch, null, null, null)
+                    : new NodeKeys(node, epoch, old.keys().secretEpoch(), old.keys().key(), old.keys().previous());
             nodes.put(node, new Node(k, live));
         }
 
@@ -157,7 +157,7 @@ final class MemorySecretRows implements SecretRows {
         synchronized (db) {
             MemTx tx = new MemTx(db.head, new TreeMap<>(db.rows), new TreeMap<>(db.nodes), new ArrayList<>(), changed);
             done = work.apply(tx);
-            if (!done.isComplete()) throw new IllegalStateException("a write of the memory store completes before it returns");
+            if (!done.isComplete()) awaited(done);   // the import's reads of its files complete on a thread of their own
             if (done.succeeded()) {
                 db.head = tx.head;
                 db.rows = tx.rows;
@@ -167,6 +167,18 @@ final class MemorySecretRows implements SecretRows {
         }
         if (done.succeeded()) db.notice(changed[0]);
         return done;
+    }
+
+    /** Blocks until {@code done} completes. */
+    private static void awaited(Future<?> done) {
+        java.util.concurrent.CountDownLatch completed = new java.util.concurrent.CountDownLatch(1);
+        done.onComplete(r -> completed.countDown());
+        try {
+            completed.await();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("a write of the memory store was interrupted", interrupted);
+        }
     }
 
     @Override
@@ -229,16 +241,16 @@ final class MemorySecretRows implements SecretRows {
 
         @Override public Future<List<String>> unknownRecords() { return Future.succeededFuture(List.copyOf(db.unknown)); }
 
-        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables) {
+        @Override public Future<Boolean> joined(String node, long epoch, byte[] key, byte[] previous) {
             Node old = nodes.get(node);
-            if (old == null) return Future.failedFuture(new IllegalStateException("the node " + node + " has no row of nodes"));
-            nodes.put(node, new Node(new NodeKeys(node, old.keys().epoch(), epoch, key, previous, List.copyOf(variables)), old.live()));
-            return Future.succeededFuture();
+            if (old == null || old.keys().epoch() != epoch || !old.live()) return Future.succeededFuture(false);
+            nodes.put(node, new Node(new NodeKeys(node, old.keys().epoch(), epoch, key, previous), old.live()));
+            return Future.succeededFuture(true);
         }
 
         @Override public Future<Void> clearPrevious(String node) {
             NodeKeys k = nodes.get(node).keys();
-            nodes.put(node, new Node(new NodeKeys(node, k.epoch(), k.secretEpoch(), k.key(), null, k.variables()), nodes.get(node).live()));
+            nodes.put(node, new Node(new NodeKeys(node, k.epoch(), k.secretEpoch(), k.key(), null), nodes.get(node).live()));
             return Future.succeededFuture();
         }
 
@@ -251,6 +263,12 @@ final class MemorySecretRows implements SecretRows {
         @Override public Future<Void> auditByNode(String node, String action, String subject, JsonObject detail) {
             if (db.auditFails) return Future.failedFuture(new IllegalStateException("the audit is not available"));
             audit.add(new Audit(node, PgSecretRows.LOCAL, action, subject, detail.copy()));
+            return Future.succeededFuture();
+        }
+
+        @Override public Future<Void> auditLocal(String actor, String action, String subject, JsonObject detail) {
+            if (db.auditFails) return Future.failedFuture(new IllegalStateException("the audit is not available"));
+            audit.add(new Audit(actor, PgSecretRows.LOCAL, action, subject, detail.copy()));
             return Future.succeededFuture();
         }
 

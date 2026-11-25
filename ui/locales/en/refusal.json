@@ -60,7 +60,6 @@
   "refusal.no-folder": "No folder {path} in the working folder.",
   "refusal.no-git-base": "The node has no RAIL8_GIT_BASE, so it deploys nothing.",
   "refusal.no-held-work": "No held work item {seq}.",
-  "refusal.no-key": "This node holds no key of the secret store.",
   "refusal.no-lost-work": "No lost work item {seq}.",
   "refusal.no-message": "No message {id} was recorded.",
   "refusal.no-message-list": "This node does not list or count messages by time.",

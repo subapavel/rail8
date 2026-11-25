@@ -321,20 +321,20 @@ class PgSecretStoreIT extends SecretStoreContract {
     }
 
     @Test
-    void replaceUsesChecksKindsAndVariablesAndDeletesWithAnEmptyMap() {
-        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_FROM_ENV", "env-value"));
-        written.add("env-value");
+    void replaceUsesChecksKindsAndTheStoreAndDeletesWithAnEmptyMap() {
+        Node a = start("a", K1);
         create(a, credentials("login", "user", "the-password"));
-        Open first = replace(a.store, "pkg/orders", Map.of("login", Set.of(Secret.Kind.VALUE), "from-env", Set.of(Secret.Kind.VALUE),
-                "from-env-typed", Set.of(Secret.Kind.CREDENTIALS)));
+        create(a, value("db", "the-value"));
+        Open first = replace(a.store, "pkg/orders", Map.of("login", Set.of(Secret.Kind.VALUE), "db", Set.of(Secret.Kind.VALUE),
+                "absent", Set.of(Secret.Kind.VALUE)));
         List<String> problems = await(first.problems());
         end(first);
         assertEquals(2, problems.size(), problems.toString());
         assertTrue(problems.stream().anyMatch(t -> t.contains("secret://login") && t.contains("credentials")), problems.toString());
-        assertTrue(problems.stream().anyMatch(t -> t.contains("secret://from-env-typed") && t.contains("not set")), problems.toString());
+        assertTrue(problems.stream().anyMatch(t -> t.contains("secret://absent") && t.contains("not set: enter it in the secret store")), problems.toString());
         assertEquals(0L, sql("select count(*) from secret_uses where user_kind = 'flow'").getFirst().getLong(0), "nothing written with a problem");
 
-        Open second = replace(a.store, "pkg/orders", Map.of("login", Set.of(Secret.Kind.CREDENTIALS), "from-env", Set.of(Secret.Kind.VALUE)));
+        Open second = replace(a.store, "pkg/orders", Map.of("login", Set.of(Secret.Kind.CREDENTIALS), "db", Set.of(Secret.Kind.VALUE)));
         assertEquals(List.of(), await(second.problems()));
         end(second);
         assertEquals(2L, sql("select count(*) from secret_uses where user_kind = 'flow'").getFirst().getLong(0));
@@ -342,6 +342,20 @@ class PgSecretStoreIT extends SecretStoreContract {
         assertEquals(List.of(), await(gone.problems()));
         end(gone);
         assertEquals(0L, sql("select count(*) from secret_uses where user_kind = 'flow'").getFirst().getLong(0), "an empty map deletes them");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aJoinCompletesWhileAnotherTransactionHoldsANamesLock() {
+        written.add("imported-value");
+        SqlConnection holder = pool.getConnection().await();
+        opened.add(holder);
+        Transaction tx = holder.begin().await();
+        int key = holder.query("select hashtext('installation' || chr(31) || 'db')").execute().await().iterator().next().getInteger(0);
+        holder.query("select pg_advisory_xact_lock(297, " + key + ")").execute().await();
+        Node a = start("a", withK1(Map.of("RAIL8_SECRET_DB", "imported-value")));   // start awaits: it fails the test if the join waits
+        assertEquals(java.util.Optional.of("imported-value"), read(a, "db"), "the join takes the store's row lock, no name's lock");
+        tx.commit().await();
         assertNoValueCaptured();
     }
 }

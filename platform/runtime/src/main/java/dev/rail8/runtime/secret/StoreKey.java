@@ -20,9 +20,6 @@ public final class StoreKey {
     /** The variable of the previous key, set only while the key is being changed. */
     public static final String PREVIOUS = "RAIL8_SECRETS_KEY_PREVIOUS";
 
-    /** No key: the node reads its variables only, and a write is refused. */
-    public static final StoreKey NONE = new StoreKey(null, null);
-
     private static final int BYTES = 32;
 
     private final byte[] current;
@@ -34,19 +31,20 @@ public final class StoreKey {
     }
 
     /**
-     * The key of {@code env}'s two variables; {@link #NONE} when neither is set.
+     * The key of {@code env}'s two variables; empty when {@code RAIL8_SECRETS_KEY} and its file form are both unset or empty,
+     * and {@code RAIL8_SECRETS_KEY_PREVIOUS} too.
      *
      * @throws IllegalArgumentException a variable that is not the base64 of 256 bits, a previous key without a key, or two
      *                                  equal keys; the message names the variable, never a value
      */
-    public static StoreKey fromEnv(Map<String, String> env) {
+    public static Optional<StoreKey> fromEnv(Map<String, String> env) {
         byte[] current = read(env, VARIABLE);
         byte[] previous = read(env, PREVIOUS);
         if (current == null && previous != null) throw new IllegalArgumentException(PREVIOUS + " is set without " + VARIABLE);
         if (current != null && previous != null && MessageDigest.isEqual(current, previous)) {
             throw new IllegalArgumentException(PREVIOUS + " equals " + VARIABLE + ": set it only while the key is changed, to the key before");
         }
-        return current == null ? NONE : new StoreKey(current, previous);
+        return current == null ? Optional.empty() : Optional.of(new StoreKey(current, previous));
     }
 
     /** The key {@code current} and the previous one (null: none): tests. */
@@ -69,14 +67,9 @@ public final class StoreKey {
         return key;
     }
 
-    /** Whether the node holds a key. */
-    public boolean present() {
-        return current != null;
-    }
-
-    /** The key, which every seal of this node is under; empty without one. */
-    Optional<byte[]> current() {
-        return Optional.ofNullable(current).map(byte[]::clone);
+    /** The key, which every seal of this node is under. */
+    byte[] current() {
+        return current.clone();
     }
 
     /** The previous key, while the key is being changed. */
@@ -86,7 +79,7 @@ public final class StoreKey {
 
     /** Whether the key equals {@code other}'s bytes: the node refuses a store key equal to the journal's key. */
     public boolean equalsKey(byte[] other) {
-        return current != null && other != null && MessageDigest.isEqual(current, other);
+        return other != null && MessageDigest.isEqual(current, other);
     }
 
     /** This key without its previous one. */
@@ -107,7 +100,6 @@ public final class StoreKey {
     /** The ids of the keys, never a key. */
     @Override
     public String toString() {
-        if (current == null) return "StoreKey[none]";
         HexFormat hex = HexFormat.of();
         return "StoreKey[" + hex.formatHex(Seal.keyId(current)) + (previous == null ? "" : ", previous " + hex.formatHex(Seal.keyId(previous))) + "]";
     }

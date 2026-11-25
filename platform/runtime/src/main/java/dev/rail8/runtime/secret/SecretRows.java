@@ -35,10 +35,10 @@ interface SecretRows {
     record Snapshot(Head head, List<Meta> rows, Map<String, byte[]> sealed) { }
 
     /**
-     * A node's row of {@code nodes}: its epoch, the epoch of its last join to the store (null: never), the ids of the keys it
-     * holds (null: none) and the names of its {@code RAIL8_SECRET_*} variables (empty: none written).
+     * A node's row of {@code nodes}: its epoch, the epoch of its last join to the store (null: never) and the ids of the keys
+     * it holds (null: none).
      */
-    record NodeKeys(String node, long epoch, Long secretEpoch, byte[] key, byte[] previous, List<String> variables) {
+    record NodeKeys(String node, long epoch, Long secretEpoch, byte[] key, byte[] previous) {
 
         /** Whether its row was written by its current join: otherwise it counts as holding no key. */
         boolean joined() {
@@ -94,8 +94,11 @@ interface SecretRows {
         /** The packages whose records' uses are not known yet. */
         Future<List<String>> unknownRecords();
 
-        /** Writes the secret columns of {@code node}'s row: its keys' ids (null: none), its variables' names and its join's epoch. */
-        Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables);
+        /**
+         * Writes the secret columns of {@code node}'s row, its keys' ids (null: none) and its join's epoch, only while the row
+         * holds that epoch and a lease, as the lease's renewal asks: true when it wrote the one row, false when it wrote none.
+         */
+        Future<Boolean> joined(String node, long epoch, byte[] key, byte[] previous);
 
         /** Clears the previous key's id of {@code node}'s row. */
         Future<Void> clearPrevious(String node);
@@ -105,6 +108,9 @@ interface SecretRows {
 
         /** Writes an audit row of an act of the node {@code node} itself, by the way {@code local}; its failure fails the write. */
         Future<Void> auditByNode(String node, String action, String subject, JsonObject detail);
+
+        /** Writes an audit row of an act of {@code actor} with no user, by the way {@code local}; its failure fails the write. */
+        Future<Void> auditLocal(String actor, String action, String subject, JsonObject detail);
 
         /** Raises the generation, writes a new stamp and notifies every node: the head after. */
         Future<Head> changed();

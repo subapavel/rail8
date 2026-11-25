@@ -177,13 +177,14 @@ public final class LedgerMain {
 
     /**
      * A node's environment: env dev, the run's database, admin on 127.0.0.1:{@code adminPort} (0: any free port) and its data
-     * directory, the run's journal master key, the package repositories under {@code repos}, which both nodes are given.
+     * directory, the run's journal master key and secret store's key, the package repositories under {@code repos}, which both nodes are given.
      */
     static Map<String, String> nodeEnv(Options o, String nodeId, Path data, Path repos, int adminPort) {
         Map<String, String> env = new HashMap<>(Map.of("RAIL8_ENV", "dev", "RAIL8_NODE_ID", nodeId, "RAIL8_ADMIN_PORT", String.valueOf(adminPort),
                 "RAIL8_DATA_DIR", data.toString(), "RAIL8_PG_HOST", o.host(), "RAIL8_PG_PORT", String.valueOf(o.port()),
                 "RAIL8_PG_DATABASE", o.db(), "RAIL8_PG_USER", o.user(), "RAIL8_PG_PASSWORD", o.password()));
         env.put("RAIL8_JOURNAL_KEY", NodeBenchMain.JOURNAL_KEY);   // one key for both nodes: they share journal_keys (D-106)
+        env.put("RAIL8_SECRETS_KEY", NodeBenchMain.SECRETS_KEY);   // one secret store's key for both nodes, as every node of a pool
         env.put("RAIL8_PEER_PORT", "0");   // the peer link on any free port: two nodes, or two runs, on one host
         env.put("RAIL8_HTTP_PORT", "0");   // the node's HTTP port on any free port too, until the run picks the one both nodes take
         env.put("RAIL8_GIT_BASE", NodeBenchMain.gitBase(repos));

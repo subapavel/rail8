@@ -58,12 +58,11 @@ class StoreKeyTest {
 
     @Test
     void aKeyAndItsPreviousOneAreHeldAndNamedByTheirIdsOnly() {
-        StoreKey both = StoreKey.fromEnv(Map.of("RAIL8_SECRETS_KEY", KEY + "\n", "RAIL8_SECRETS_KEY_PREVIOUS", OTHER));
-        assertTrue(both.present());
+        StoreKey both = StoreKey.fromEnv(Map.of("RAIL8_SECRETS_KEY", KEY + "\n", "RAIL8_SECRETS_KEY_PREVIOUS", OTHER)).orElseThrow();
         assertTrue(both.equalsKey(Base64.getDecoder().decode(KEY)), "the key, its line end stripped");
         assertFalse(both.equalsKey(Base64.getDecoder().decode(OTHER)), "the previous key is not the key");
         assertFalse(both.toString().contains(KEY) || both.toString().contains(OTHER), both.toString());
-        assertFalse(StoreKey.fromEnv(Map.of("RAIL8_SECRETS_KEY", "")).present(), "an empty variable is not set");
-        assertFalse(StoreKey.fromEnv(Map.of()).present());
+        assertEquals(java.util.Optional.empty(), StoreKey.fromEnv(Map.of("RAIL8_SECRETS_KEY", "")), "an empty variable is not set");
+        assertEquals(java.util.Optional.empty(), StoreKey.fromEnv(Map.of()));
     }
 }

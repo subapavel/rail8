@@ -386,7 +386,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
             Migrations.Result r = Migrations.migrate(url, pg.getUsername(), pg.getPassword());
 
-            assertEquals("33", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
+            assertEquals("34", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
             PgDeploymentStore store = store(own, options);
             assertEquals(new DeploymentStore.Snapshot(0, List.of()), store.read().await(), "the row is deleted; the generation starts at 0");
             DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
@@ -414,18 +414,22 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
     }
 
     /**
-     * A store whose saves and deletes write the record of uses, checked against a node that holds the variable RAIL8_SECRET_FROM_ENV
-     * and no secret in the store.
+     * A store whose saves and deletes write the record of uses, checked against a secret store that holds the plain value
+     * {@code from-env} and nothing else.
      */
     static PgDeploymentStore storeWithUses() {
         pool.query("delete from secret_uses where user_kind in ('flow', 'drain')").execute().await();
-        return storeOn(List.of("RAIL8_SECRET_FROM_ENV"));
+        pool.query("delete from secrets").execute().await();
+        pool.query("insert into secrets values ('installation', 'from-env', 'value', 1, '\\x0000000000000000', '\\x000000000000000000000000',"
+                + " '\\x00', now(), now(), 'test')").execute().await();
+        return storeOn();
     }
 
-    /** A store whose saves and deletes write the record of uses, checked against a node that holds {@code variables}. */
-    static PgDeploymentStore storeOn(List<String> variables) {
+    /** A store whose saves and deletes write the record of uses, checked against the secret store's rows. */
+    static PgDeploymentStore storeOn() {
         FakeClock clock = FakeClock.at(Instant.parse("2026-10-27T09:30:00Z"));
-        SecretStore secrets = SecretStore.postgres(pool, StoreKey.NONE, "node-1", variables, clock, new FakeTimer(clock));
+        StoreKey key = StoreKey.fromEnv(Map.of(StoreKey.VARIABLE, java.util.Base64.getEncoder().encodeToString(new byte[32]))).orElseThrow();
+        SecretStore secrets = SecretStore.postgres(pool, key, "node-1", clock, new FakeTimer(clock));
         return new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connect).map(c -> (SqlConnection) c), secrets);
     }
 
@@ -439,8 +443,8 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
     /**
      * A flow left draining keeps its uses as {@code drain} rows: the save that marks it rewrites its flow rows, a save that runs it
-     * at-least-once again deletes them, and so does the end of its mark. A delete marks it on a node that does not hold its
-     * variable: a drain row carries a use checked at its deploy, and is not checked again.
+     * at-least-once again deletes them, and so does the end of its mark. A delete marks it once the store no longer holds the
+     * name: a drain row carries a use checked at its deploy, and is not checked again.
      */
     @Test
     void aFlowLeftDrainingKeepsItsUsesAsDrainUntilItsMarkEnds() {
@@ -458,7 +462,8 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         } finally {
             lock.close().await();
         }
-        DeploymentStore.PoolLock elsewhere = storeOn(List.of()).lock().await().orElseThrow();
+        pool.query("delete from secrets").execute().await();
+        DeploymentStore.PoolLock elsewhere = storeOn().lock().await().orElseThrow();
         try {
             elsewhere.delete("shop", BY, new JsonObject()).await();
             assertEquals(List.of("drain shop/orders:from-env:value"), flowAndDrainUses(), "the undeploy leaves orders draining with its uses");

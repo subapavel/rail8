@@ -57,10 +57,10 @@ final class PgSecretRows implements SecretRows {
     private static final String USES_OF = "select name, user_kind, user_id, kinds from secret_uses where scope = " + SCOPE + " and name = $1";
     private static final String USES = "select name, user_kind, user_id, kinds from secret_uses where scope = " + SCOPE + " order by name";
     private static final String UNKNOWN = "select package from deployments where not secret_uses_known order by package";
-    private static final String LIVE = "select node, epoch, secret_epoch, secret_key, secret_key_previous, secret_variables from nodes"
+    private static final String LIVE = "select node, epoch, secret_epoch, secret_key, secret_key_previous from nodes"
             + " where lease_until >= now() order by node";
-    private static final String JOINED = "update nodes set secret_key = $2, secret_key_previous = $3, secret_variables = $4, secret_epoch = $5"
-            + " where node = $1";
+    private static final String JOINED = "update nodes set secret_key = $2, secret_key_previous = $3, secret_epoch = $4"
+            + " where node = $1 and epoch = $4 and lease_until is not null";
     private static final String CLEAR_PREVIOUS = "update nodes set secret_key_previous = null where node = $1";
     /** The way of an act of the node itself, as the audit names it. */
     static final String LOCAL = "local";
@@ -194,10 +194,9 @@ final class PgSecretRows implements SecretRows {
             });
         }
 
-        @Override public Future<Void> joined(String node, long epoch, byte[] key, byte[] previous, List<String> variables) {
+        @Override public Future<Boolean> joined(String node, long epoch, byte[] key, byte[] previous) {
             return tx.preparedQuery(JOINED).execute(Tuple.of(node, key == null ? null : Buffer.buffer(key), previous == null ? null : Buffer.buffer(previous),
-                    variables.toArray(String[]::new), epoch)).compose(rows -> rows.rowCount() == 1 ? Future.<Void>succeededFuture()
-                    : Future.failedFuture(new IllegalStateException("the node " + node + " has no row of nodes: it joins the store after the pool")));
+                    epoch)).map(rows -> rows.rowCount() == 1);
         }
 
         @Override public Future<Void> clearPrevious(String node) {
@@ -213,6 +212,10 @@ final class PgSecretRows implements SecretRows {
             return tx.preparedQuery(AUDIT).execute(Tuple.of(node, action, subject, detail, null, LOCAL, null)).mapEmpty();
         }
 
+        @Override public Future<Void> auditLocal(String actor, String action, String subject, JsonObject detail) {
+            return tx.preparedQuery(AUDIT).execute(Tuple.of(actor, action, subject, detail, null, LOCAL, null)).mapEmpty();
+        }
+
         @Override public Future<Head> changed() {
             return tx.query(CHANGED).execute().map(rows -> PgSecretRows.head(rows.iterator().next()))
                     .compose(head -> tx.preparedQuery(NOTIFY).execute(Tuple.of(Long.toString(head.generation()))).map(head));
@@ -225,7 +228,7 @@ final class PgSecretRows implements SecretRows {
      * {@link SecretStore#replaceUses}'s rules for every user of {@code users}, in {@code tx}: the names' locks in ascending order of
      * their keys, the checks against the rows, then the rows replaced; nothing written with a problem.
      */
-    static Future<List<String>> replaceUses(SqlConnection tx, List<SecretStore.Uses> users, Set<String> variables) {
+    static Future<List<String>> replaceUses(SqlConnection tx, List<SecretStore.Uses> users) {
         String[] kinds = users.stream().map(SecretStore.Uses::userKind).toArray(String[]::new);
         String[] ids = users.stream().map(SecretStore.Uses::userId).toArray(String[]::new);
         return tx.preparedQuery(USED_BEFORE).execute(Tuple.tuple().addArrayOfString(kinds).addArrayOfString(ids)).compose(before -> {
@@ -247,9 +250,7 @@ final class PgSecretRows implements SecretRows {
                     }
                     Secret.Kind kind = kindOf.get(name);
                     if (kind == null) {
-                        if (takes.contains(Secret.Kind.VALUE) && variables.contains(SecretStore.variable(name))) return;
-                        problems.add(who + " uses secret://" + name + ", which is not set: the secret store holds no such secret"
-                                + (takes.contains(Secret.Kind.VALUE) ? ", nor does this node's " + SecretStore.variable(name) : ""));
+                        problems.add(who + " uses secret://" + name + ", which is not set: enter it in the secret store");
                     } else if (!takes.contains(kind)) {
                         problems.add(who + " takes secret://" + name + " as " + takes.stream().sorted().map(Secret.Kind::id).toList()
                                 + ", but the secret store holds it as " + kind.id());
@@ -332,9 +333,8 @@ final class PgSecretRows implements SecretRows {
         for (Row r : rows) {
             Buffer key = r.getBuffer(3);
             Buffer previous = r.getBuffer(4);
-            String[] variables = r.getArrayOfStrings(5);
             nodes.add(new NodeKeys(r.getString(0), r.getLong(1), r.getLong(2), key == null ? null : key.getBytes(),
-                    previous == null ? null : previous.getBytes(), variables == null ? List.of() : List.of(variables)));
+                    previous == null ? null : previous.getBytes()));
         }
         return nodes;
     }

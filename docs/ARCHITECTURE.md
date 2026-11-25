@@ -364,13 +364,14 @@ step modules: `xslt` (Saxon-HE), `xsd`, `jq` and `mapping`. Conditions are XPath
 
 An endpoint names its scheme, direction and options, with an optional overlay per environment
 (`environments.<env>.config`), so one flow file is the same in every environment. An option whose
-whole value is `secret://<name>` is a secret. In an option its component declares a secret field, a node
-reads it from its secret store, else from the environment variable `RAIL8_SECRET_<NAME>`; any other
-option reads its variable only. Tests and validation use a placeholder. A step's option is a secret in
+whole value is `secret://<name>` is a secret. A node reads it from its secret store, the only source, in
+any option, once, when the flow builds. Tests and validation use a placeholder. A step's option is a secret in
 the same way; its code takes it through the API for custom code (part 5). The store
 (`docs/SECRET-STORE.md`) keeps each secret sealed in Postgres under a key the nodes hold and Postgres
-never does; a change reaches every node without a restart, and a flow whose endpoints resolved it is
-built again.
+never does; a change reaches every node without a restart. No flow is built again for a secret: a flow
+of endpoint files takes a changed value at its next deploy, restore or the node's restart, and a
+deploy or restore keeps a running flow only when its files and the values its endpoints resolved are
+unchanged.
 
 ### Step names
 
@@ -598,8 +599,8 @@ its drain.
   they are entered in each environment, whose store (`docs/ENVIRONMENT-CONFIGURATION.md`) is built
   before a node reads it, with no file of the environment in between. How a flow names a system of
   another package and whether one release reads both shapes are settled by #443.
-- The secret store's screens, credentials and key pairs in adapters, the store as the only source, and
-  the git credentials from the store (`docs/SECRET-STORE.md`); today the store is written through the
+- The secret store's screens, credentials and key pairs in adapters, and the git credentials from the
+  store (`docs/SECRET-STORE.md`); today the store is written through the
   admin API.
 - Credentials of the callers of a flow and the check at the entry of every message
   (`docs/WHO-MAY-SEND.md`); today the HTTP adapter does not check its caller. A credential belongs to
@@ -877,7 +878,7 @@ script in SAP Integration Suite works with security material.
   `secret://<name>`, while the flow builds, and returns a `Secret`: its reference, and its value,
   read from the node each time the step asks for it and never kept in the flow. A literal value is
   refused without being shown. A secret that is not set refuses the deploy, naming the step, the
-  option and the variable `RAIL8_SECRET_<NAME>`; the deploy also checks every `secret://` value
+  option and the name to enter in the secret store; the deploy also checks every `secret://` value
   anywhere in a step's options. `rail8 validate` and `rail8 test` read every secret as
   `https://secret.invalid/`. In a flow whose steps took secrets, a failure of a step that a factory
   built has every one of those values replaced by its reference in what is recorded, parked, logged
@@ -1476,14 +1477,19 @@ orchestrator mounts secrets:
 | `RAIL8_VALKEY_URI` | `RAIL8_VALKEY_URI_FILE` | the Valkey URI, with its user and password |
 | `RAIL8_ADMIN_TOKEN` | `RAIL8_ADMIN_TOKEN_FILE` | the admin API's token |
 | `RAIL8_GIT_TOKEN` | `RAIL8_GIT_TOKEN_FILE` | the token for the package repositories |
-| `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>` |
+| `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>`, imported once |
 | `RAIL8_JOURNAL_KEY` | `RAIL8_JOURNAL_KEY_FILE` | the journal's master key (preferred as a file) |
+| `RAIL8_SECRETS_KEY` | `RAIL8_SECRETS_KEY_FILE` | the secret store's key, required (preferred as a file) |
 
 - A value given both ways, or a file that is missing, unreadable, empty, larger than 64 KiB or not
   UTF-8 text, refuses the start. The refusal names the variables and the path, never the value.
 - One trailing line end is dropped; nothing else of the content is changed. A variable set to the
   empty string counts as not set.
 - The files are read once at start: a new value takes a restart.
+- The secret store is the only source of `secret://<name>`. A node that joins a store that was never
+  written imports its `RAIL8_SECRET_<NAME>` variables, each as `<name>` in lower case with `_` as
+  `-`, and `RAIL8_GIT_USER` with `RAIL8_GIT_TOKEN` as `rail8.git`, all or none, and logs one INFO.
+  After that no node reads them: a node that finds one set logs one WARNING naming it.
 - A secret whose variable itself ends in `_FILE`, such as `secret://db-file`, is given as a file only:
   `RAIL8_SECRET_DB_FILE_FILE`. `RAIL8_SECRET_FILE` alone is the variable of `secret://file`.
 - The node reads no S3 or ClickHouse credentials today; a secret variable added later has the file

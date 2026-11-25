@@ -511,7 +511,10 @@ class ComposeStackTest {
         assertTrue(Files.isRegularFile(FILE), FILE + " must exist (the scan is vacuous without the stack)");
     }
 
-    /** The quickstart stack runs every demo flow: the node waits for the host key one-shot, reads its fingerprint and has no placeholder secret. */
+    /**
+     * The quickstart stack runs every demo flow: the node waits for the host key one-shot, is given its fingerprint as a secret
+     * file, runs the image's own command and has no placeholder secret.
+     */
     @Test
     void theQuickstartStackHasTheSftpServerTheDemoNeeds() throws IOException {
         JsonNode node = serviceIn(ROOT_FILE, "rail8");
@@ -521,10 +524,30 @@ class ComposeStackTest {
         assertEquals("service_completed_successfully", sftp.path("depends_on").path("sftp-keys").path("condition").asText(), "the server waits for the host key");
         assertEquals("${RAIL8_SFTP_PASSWORD:-demo}", environment(node).get("RAIL8_SECRET_SFTP_PASSWORD"), "the demo's password");
         assertFalse(environment(node).containsKey("RAIL8_SECRET_SFTP_HOST_KEY"), "the fingerprint is read from the one-shot's file, not fixed");
-        assertTrue(script(node).contains("RAIL8_SECRET_SFTP_HOST_KEY=$$(cat /sftp-fingerprint/host-key.fingerprint)"), script(node));
-        assertTrue(script(node).contains("exec java -jar /opt/rail8/rail8-node.jar"), "the wrapper starts the jar the image builds: " + script(node));
+        assertEquals("/sftp-fingerprint/host-key.fingerprint", environment(node).get("RAIL8_SECRET_SFTP_HOST_KEY_FILE"), "the file the one-shot writes");
+        assertEquals(java.util.Optional.of(new Mount("sftp-fingerprint", "/sftp-fingerprint", true)), mountOf(node, "sftp-fingerprint"), mounts(node).toString());
+        assertTrue(node.path("entrypoint").isMissingNode() && node.path("command").isMissingNode(), "the node runs the image's own command, no wrapper: " + script(node));
         assertTrue(script(sftp).contains("demo:${RAIL8_SFTP_PASSWORD:-demo}:1001:100:inbox"), script(sftp));
         assertFalse(Files.readString(ROOT_FILE).contains("placeholder"), "no placeholder secret is left in the quickstart stack");
+    }
+
+    /**
+     * Each stack passes the secret store's key from the shell, as it passes its admin token, and writes no key: the quickstart's
+     * empty when unset, so {@code docker compose down -v} runs without it; the gate stack's required, its refusal naming the key's
+     * file and the way to remove the stack without it.
+     */
+    @Test
+    void eachStackPassesTheSecretStoresKeyAsItPassesItsAdminToken() throws IOException {
+        JsonNode quickstart = serviceIn(ROOT_FILE, "rail8");
+        assertEquals("${RAIL8_SECRETS_KEY:-}", environment(quickstart).get("RAIL8_SECRETS_KEY"));
+        assertEquals("${RAIL8_ADMIN_TOKEN:-}", environment(quickstart).get("RAIL8_ADMIN_TOKEN"), "the same rule as its admin token");
+        String gate = environment(service("rail8")).get("RAIL8_SECRETS_KEY");
+        assertTrue(gate != null && gate.startsWith("${RAIL8_SECRETS_KEY:?") && gate.contains("~/.rail8-stack-secrets-key")
+                && gate.contains("RAIL8_SECRETS_KEY=x docker compose down -v"), "required, naming the key's file and the way out: " + gate);
+        assertTrue(environment(service("rail8")).get("RAIL8_ADMIN_TOKEN").startsWith("${RAIL8_ADMIN_TOKEN:?"), "the same rule as its admin token");
+        for (JsonNode node : List.of(quickstart, service("rail8"))) {
+            assertFalse(environment(node).containsKey("RAIL8_SECRETS_KEY_FILE"), "the image's user cannot read a file only the host's user may: " + environment(node));
+        }
     }
 
     /** The quickstart's node reads the working folder, mounted read-only, as the base of its package repositories. */

@@ -44,7 +44,10 @@ class DeploymentsSecretsListenerTest {
         if (deployments != null) OnVirtualThread.call(() -> { deployments.close(); return null; });
     }
 
-    /** A dev node whose admin API is on 127.0.0.1:8181, with {@code RAIL8_SECRET_LISTEN_HOST} 10.0.0.5 unless {@code host} is false. */
+    /**
+     * A dev node whose admin API is on 127.0.0.1:8181, its store holding {@code listen-host} 10.0.0.5, imported from its variable,
+     * unless {@code host} is false.
+     */
     Deployments node(boolean host) {
         Map<String, String> env = new HashMap<>();
         env.put("RAIL8_ENV", "dev");
@@ -53,7 +56,7 @@ class DeploymentsSecretsListenerTest {
         env.put("RAIL8_ADMIN_PORT", "8181");
         if (host) env.put("RAIL8_SECRET_LISTEN_HOST", "10.0.0.5");
         Map<String, Component> components = Map.of(Doors.SCHEME, doors);
-        deployments = new Deployments(NodeConfig.from(env), new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components),
+        deployments = new Deployments(dev.rail8.runtime.secret.MemorySecretStores.imported(NodeConfig.from(env), env, rt.clock(), rt.timer()), new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components),
                 components, rt.clock(), rt.timer(), List.of(), List.of(), new InMemoryMessageStore(), new InMemoryDlq(),
                 new InMemoryWorkQueue(rt.clock()), () -> 0L);
         return deployments;
@@ -83,7 +86,7 @@ class DeploymentsSecretsListenerTest {
 
     /**
      * An in endpoint whose reference is not set is not asked where it listens: its config lacks that value. Here the host would
-     * fall back to 127.0.0.1 on the admin API's port 8181 — the one problem is the missing variable, no overlap is made up.
+     * fall back to 127.0.0.1 on the admin API's port 8181: the one problem is the missing secret, no overlap is made up.
      */
     @Test
     void anUnresolvedEndpointIsNotAskedWhereItListens() {
@@ -91,7 +94,7 @@ class DeploymentsSecretsListenerTest {
 
         DeployRefusedException refused = refused(node(false), p);
 
-        assertEquals(List.of("endpoint 'a-in': secret 'secret://listen-host' is not set (RAIL8_SECRET_LISTEN_HOST)"), refused.problems());
+        assertEquals(List.of("endpoint 'a-in': secret 'secret://listen-host' is not set: enter it in the secret store"), refused.problems());
         assertEquals(List.of(), doors.listensOnAsked(), "the component was not asked");
     }
 }

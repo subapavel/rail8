@@ -300,9 +300,12 @@ public final class Node implements AutoCloseable {
                 refuseMocks(config.env(), built);
             }
 
-            // the master key before any Postgres statement: a node without one migrates nothing
+            // the secret store's key and the master key before any Postgres statement: a node without either migrates nothing
+            StoreKey storeKey = config.secrets().key().orElseThrow(() -> new IllegalStateException(StoreKey.VARIABLE
+                    + " is not set: a node starts only with the secret store's key, given as " + StoreKey.VARIABLE + "_FILE (preferred) or "
+                    + StoreKey.VARIABLE + ", the base64 of 256 random bits as openssl rand -base64 32 writes it"));
             SecretKey master = config.journalKey().load(config.journal().dir(), JournalFiles.real());
-            if (config.secrets().key().equalsKey(master.getEncoded())) {
+            if (storeKey.equalsKey(master.getEncoded())) {
                 throw new IllegalStateException(StoreKey.VARIABLE + " equals the journal's key: give the secret store a key of its own, "
                         + "as openssl rand -base64 32 writes it");
             }
@@ -325,11 +328,11 @@ public final class Node implements AutoCloseable {
             lease = new NodeLease(config.nodeId(), membership, config.nodeLease(), config.nodeLeaseRenew(), System::nanoTime, timer, Node::halt);
             lease.start().await();
             epoch.set(membership.epoch());
-            // the secret store's join, under its row lock: this node's key ids and variables' names, every row's key checked;
-            // its values held in memory before any flow is built
-            SecretStore store = SecretStore.postgres(pool, config.secrets().key(), config.nodeId(), config.secrets().variableNames(), clock, timer);
+            // the secret store's join, under its row lock: this node's key ids, every row's key checked, and the import of the
+            // node's variables into a store never written; its values held in memory before any flow is built
+            SecretStore store = SecretStore.postgres(pool, storeKey, config.nodeId(), clock, timer);
             closeSignals = store::close;
-            store.start(epoch.get()).await();
+            store.start(epoch.get(), config.secrets().imports()).await();
             NodeConfig withStore = config.withSecrets(config.secrets().withStore(store));
             // a body in another live node's journal is read through its link, at the address the last renew answered (S7)
             PgMembership members = membership;

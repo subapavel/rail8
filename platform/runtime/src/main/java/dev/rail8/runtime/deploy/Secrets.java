@@ -4,10 +4,8 @@ import dev.rail8.api.Secret;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.runtime.secret.StoreKey;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,13 +18,13 @@ import java.util.regex.Pattern;
 /**
  * Resolves a secret reference, {@code secret://<name>}, the name {@code [a-z0-9][a-z0-9._-]*} of at most 128 characters.
  *
- * <p>On a node ({@link #fromEnv}, then {@link #withStore}) the store wins: a name the node's secret store holds reads its row,
- * as this node opened it; a row it could not open counts as set but unreadable, gives no value and never falls back. For a
- * name the store does not hold, the value is the environment variable {@code RAIL8_SECRET_<NAME>}, the name upper-cased,
- * {@code .} and {@code -} as {@code _}, a plain value only; a variable set to the empty string counts as not set. Nothing here
- * asks Postgres: the store answers from the node's memory. Off the node ({@link #placeholder}: {@code rail8 validate},
- * {@code rail8 test}) every well-formed reference reads a placeholder of its kind: a plain value {@code https://secret.invalid/},
- * credentials user {@code rail8} and password {@code invalid}, and a key pair the testkit's EC secp256r1 pair named invalid.
+ * <p>On a node ({@link #fromEnv}, then {@link #withStore}) the secret store is the only source: a name the node's store holds
+ * reads its row, as this node opened it; a row it could not open counts as set but unreadable and gives no value; a name it
+ * does not hold is not set. No variable is read here: the node's {@code RAIL8_SECRET_*} variables are only the
+ * {@link SecretStore.Import} of a store never written. Nothing here asks Postgres: the store answers from the node's memory.
+ * Off the node ({@link #placeholder}: {@code rail8 validate}, {@code rail8 test}) every well-formed reference reads a
+ * placeholder of its kind: a plain value {@code https://secret.invalid/}, credentials user {@code rail8} and password
+ * {@code invalid}, and a key pair the testkit's EC secp256r1 pair named invalid. A node's resolver never reads the placeholder.
  *
  * <p>Every method refuses a malformed reference, and one under {@code rail8.}, which belongs to the platform, with an
  * {@link IllegalArgumentException} naming the reference. No text of this class carries a value.
@@ -42,38 +40,39 @@ public final class Secrets {
     /** The placeholder credentials. */
     static final Secret.Credentials PLACEHOLDER_CREDENTIALS = new Secret.Credentials("rail8", "invalid");
 
-    private static final String VARIABLE = "RAIL8_SECRET_";
-    /** What ends the file form of a variable. */
-    private static final String FILE = "_FILE";
     private static final int MAX_NAME = 128;
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9._-]*");
     private static final Set<Secret.Kind> VALUE = EnumSet.of(Secret.Kind.VALUE);
-    private static final Secrets PLACEHOLDERS = new Secrets(null, StoreKey.NONE, null);
+    private static final Secrets PLACEHOLDERS = new Secrets(true, null, SecretStore.Import.none(), null);
 
-    /** The {@code RAIL8_SECRET_*} variables by name; null for the placeholder. */
-    private final Map<String, String> variables;
+    /** Whether this is the dry build's placeholder, which reads every reference as its kind's placeholder. */
+    private final boolean placeholder;
+    /** The secret store's key the node was started with; null without one, and for the placeholder. */
     private final StoreKey key;
+    private final SecretStore.Import imports;
     /** The node's store; null before {@link #withStore}, and for the placeholder. */
     private final SecretStore store;
 
-    private Secrets(Map<String, String> variables, StoreKey key, SecretStore store) {
-        this.variables = variables;
+    private Secrets(boolean placeholder, StoreKey key, SecretStore.Import imports, SecretStore store) {
+        this.placeholder = placeholder;
         this.key = key;
+        this.imports = imports;
         this.store = store;
     }
 
     /**
-     * The node's: every {@code RAIL8_SECRET_*} variable of {@code env}, read now (a change needs a restart), and the secret store's
-     * key; nothing else of it is kept. The store's rows join with {@link #withStore}.
+     * The node's: the secret store's key of {@code env}, and the {@link SecretStore.Import} of its variables, read now; nothing
+     * else of it is kept. Until {@link #withStore} no reference is set.
      *
      * @throws IllegalArgumentException the store's key is malformed; the message names the variable, never a value
      */
     public static Secrets fromEnv(Map<String, String> env) {
-        Map<String, String> variables = new HashMap<>();
-        env.forEach((key, value) -> {
-            if (key.startsWith(VARIABLE)) variables.put(key, value);
-        });
-        return new Secrets(Map.copyOf(variables), StoreKey.fromEnv(env), null);
+        return of(StoreKey.fromEnv(env), SecretStore.Import.fromEnv(env));
+    }
+
+    /** The node's: the secret store's {@code key}, and the variables {@code imports} the join of a store never written imports. */
+    public static Secrets of(Optional<StoreKey> key, SecretStore.Import imports) {
+        return new Secrets(false, key.orElse(null), Objects.requireNonNull(imports, "imports"), null);
     }
 
     /** The dry build's: syntax checked, every well-formed reference read as its kind's placeholder, no env read. */
@@ -81,21 +80,20 @@ public final class Secrets {
         return PLACEHOLDERS;
     }
 
-    /** These variables, with the rows of {@code store} winning over them. */
+    /** This node's resolver over the rows of {@code store} alone. */
     public Secrets withStore(SecretStore store) {
-        if (variables == null) throw new IllegalStateException("the placeholder reads no store");
-        return new Secrets(variables, key, Objects.requireNonNull(store, "store"));
+        if (placeholder) throw new IllegalStateException("the placeholder reads no store");
+        return new Secrets(false, key, imports, Objects.requireNonNull(store, "store"));
     }
 
-    /** The secret store's key the node was started with; {@link StoreKey#NONE} without one. */
-    public StoreKey key() {
-        return key;
+    /** The secret store's key the node was started with; empty without one. */
+    public Optional<StoreKey> key() {
+        return Optional.ofNullable(key);
     }
 
-    /** The names of the {@code RAIL8_SECRET_*} variables set to a value, never a value. */
-    public List<String> variableNames() {
-        if (variables == null) return List.of();
-        return variables.entrySet().stream().filter(e -> !e.getValue().isEmpty()).map(Map.Entry::getKey).sorted().toList();
+    /** The variables the join of a store never written imports. */
+    public SecretStore.Import imports() {
+        return imports;
     }
 
     /** The node's store, once joined. */
@@ -104,37 +102,24 @@ public final class Secrets {
     }
 
     /**
-     * The plain value of {@code reference} now: the store's row of kind {@code value}, else, for a name the store does not
-     * hold, its variable; empty when it is not set, its row does not open, or its row is of another kind.
+     * The plain value of {@code reference} now: the store's row of kind {@code value}; empty when the store does not hold it,
+     * its row does not open, or its row is of another kind.
      *
      * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
      */
     public Optional<String> resolve(String reference) {
         String name = name(reference);
-        if (variables == null) return Optional.of(PLACEHOLDER);
+        if (placeholder) return Optional.of(PLACEHOLDER);
         return Optional.ofNullable((String) read(name, Secret.Kind.VALUE));
     }
 
     /**
-     * The value of {@code reference} from its variable alone, as before the store: an endpoint option that is no secret field
-     * reads only that, whatever the store holds. Empty when the variable is not set; the placeholder off the node.
-     *
-     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
-     */
-    public Optional<String> variableOnly(String reference) {
-        String name = name(reference);
-        if (variables == null) return Optional.of(PLACEHOLDER);
-        return Optional.ofNullable(variableValue(name));
-    }
-
-    /**
      * The values the scrubber of the platform's own texts replaces for {@code references}, by reference: the value of each that
-     * the store holds readable now, of whatever kind, and its variable's; none for a malformed reference, and none for the
-     * placeholder.
+     * the store holds readable now, of whatever kind; none for a malformed reference, and none for the placeholder.
      */
     public Map<String, List<Object>> scrubbed(Collection<String> references) {
         Map<String, List<Object>> values = new LinkedHashMap<>();
-        if (variables == null) return values;
+        if (store == null) return values;
         for (String reference : references) {
             String name;
             try {
@@ -142,52 +127,39 @@ public final class Secrets {
             } catch (IllegalArgumentException malformed) {
                 continue;
             }
-            List<Object> each = new ArrayList<>();
-            if (store != null) store.held(name).map(SecretStore.Held::value).ifPresent(each::add);
-            String variable = variableValue(name);
-            if (variable != null) each.add(variable);
-            if (!each.isEmpty()) values.put(reference, each);
+            store.held(name).map(SecretStore.Held::value).ifPresent(v -> values.put(reference, List.of(v)));
         }
         return values;
     }
 
     /**
-     * Why {@code reference} cannot be read as one of {@code kinds} now, naming the reference and its source, never a value;
-     * empty when it can.
+     * Why {@code reference} cannot be read as one of {@code kinds} now, naming the reference, never a value; empty when it can.
      *
      * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
      */
     public Optional<String> problem(String reference, Set<Secret.Kind> kinds) {
         String name = name(reference);
-        if (variables == null) return Optional.empty();
+        if (placeholder) return Optional.empty();
         Optional<SecretStore.Held> held = store == null ? Optional.empty() : store.held(name);
-        if (held.isPresent()) {
-            SecretStore.Held h = held.get();
-            if (!kinds.contains(h.kind())) {
-                return Optional.of("secret '" + reference + "' is a secret of kind " + h.kind().id() + " in the secret store, taken here as "
-                        + ids(kinds));
-            }
-            if (!h.readable()) return Optional.of("secret '" + reference + "' does not open on this node: it is sealed under the key " + h.keyId());
-            return Optional.empty();
+        if (held.isEmpty()) return Optional.of("secret '" + reference + "' is not set: enter it in the secret store");
+        SecretStore.Held h = held.get();
+        if (!kinds.contains(h.kind())) {
+            return Optional.of("secret '" + reference + "' is a secret of kind " + h.kind().id() + " in the secret store, taken here as " + ids(kinds));
         }
-        if (kinds.contains(Secret.Kind.VALUE) && variableValue(name) != null) return Optional.empty();
-        if (kinds.contains(Secret.Kind.VALUE)) {
-            return Optional.of("secret '" + reference + "' is not set (" + (store == null ? "" : "in the secret store, or ") + where(reference) + ")");
-        }
-        return Optional.of("secret '" + reference + "' is not set (in the secret store, which alone holds " + ids(kinds) + ")");
+        if (!h.readable()) return Optional.of("secret '" + reference + "' does not open on this node: it is sealed under the key " + h.keyId());
+        return Optional.empty();
     }
 
     /**
-     * A live handle of {@code reference}, a secret of one of {@code kinds}: each read follows the sources now, the store's row
-     * first, else the variable (a plain value only), else no value.
+     * A live handle of {@code reference}, a secret of one of {@code kinds}: each read follows the store's row now, else no value.
      *
      * @throws IllegalArgumentException {@code reference} is malformed, under {@code rail8.}, not set, unreadable or of a kind
-     *                                  {@code kinds} does not name; the message names the reference and its source
+     *                                  {@code kinds} does not name; the message names the reference
      */
     public Secret handle(String reference, Set<Secret.Kind> kinds) {
         String name = name(reference);
         if (kinds.isEmpty()) throw new IllegalArgumentException("no kind of secret is asked for " + reference);
-        if (variables == null) {
+        if (placeholder) {
             if (kinds.contains(Secret.Kind.VALUE)) return Secret.of(reference, () -> PLACEHOLDER);
             if (kinds.contains(Secret.Kind.CREDENTIALS)) return Secret.credentials(reference, () -> PLACEHOLDER_CREDENTIALS);
             Secret.KeyPair pair = SecretStore.placeholderKeyPair();
@@ -195,7 +167,7 @@ public final class Secrets {
         }
         Optional<String> problem = problem(reference, kinds);
         if (problem.isPresent()) throw new IllegalArgumentException(problem.get());
-        return typed(reference, name, store == null ? Secret.Kind.VALUE : store.held(name).map(SecretStore.Held::kind).orElse(Secret.Kind.VALUE));
+        return typed(reference, name, store.held(name).map(SecretStore.Held::kind).orElseThrow());
     }
 
     /**
@@ -208,7 +180,7 @@ public final class Secrets {
      */
     public Secret live(String reference, Set<Secret.Kind> kinds) {
         String name = name(reference);
-        if (variables == null || kinds.isEmpty()) return handle(reference, kinds);
+        if (placeholder || kinds.isEmpty()) return handle(reference, kinds);
         Secret.Kind kind = store == null ? null : store.held(name).map(SecretStore.Held::kind).filter(kinds::contains).orElse(null);
         if (kind == null) kind = kinds.contains(Secret.Kind.VALUE) ? Secret.Kind.VALUE : kinds.iterator().next();
         return typed(reference, name, kind);
@@ -239,7 +211,7 @@ public final class Secrets {
 
     /** Whether this is the placeholder of {@code rail8 validate} and {@code rail8 test}, rather than a node's. */
     boolean placeholders() {
-        return variables == null;
+        return placeholder;
     }
 
     /** A plain value's handle of {@code reference}: {@link #handle} of the kind {@code value}. */
@@ -247,16 +219,10 @@ public final class Secrets {
         return handle(reference, VALUE);
     }
 
-    /** The value of {@code name} as {@code kind} now: the store's readable row of that kind, else for a plain value the variable. */
+    /** The value of {@code name} as {@code kind} now: the store's readable row of that kind, else null. */
     private Object read(String name, Secret.Kind kind) {
         Optional<SecretStore.Held> held = store == null ? Optional.empty() : store.held(name);
-        if (held.isPresent()) return held.get().kind() == kind ? held.get().value() : null;
-        return kind == Secret.Kind.VALUE ? variableValue(name) : null;
-    }
-
-    private String variableValue(String name) {
-        String value = variables.get(SecretStore.variable(name));
-        return value == null || value.isEmpty() ? null : value;
+        return held.isPresent() && held.get().kind() == kind ? held.get().value() : null;
     }
 
     /**
@@ -277,47 +243,26 @@ public final class Secrets {
         return name;
     }
 
-    /**
-     * The environment variable {@code reference} names: {@code RAIL8_SECRET_} and its name upper-cased, {@code .} and {@code -}
-     * as {@code _}.
-     *
-     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
-     */
-    static String variable(String reference) {
-        return SecretStore.variable(name(reference));
-    }
-
-    /**
-     * Where a node is given the value of {@code reference}: its variable; for a variable that ends in {@code _FILE} below its
-     * prefix, which a node reads as the file form of another secret, its own file form, the variable with {@code _FILE} once more.
-     *
-     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
-     */
-    static String where(String reference) {
-        String variable = variable(reference);
-        return variable.endsWith(FILE) && variable.length() > VARIABLE.length() + FILE.length()
-                ? variable + FILE + ", the path of a file that holds it" : variable;
-    }
-
     private static List<String> ids(Set<Secret.Kind> kinds) {
         return new TreeSet<>(kinds).stream().map(Secret.Kind::id).toList();
     }
 
-    /** Equal when both are the placeholder, or both hold the same variables, key and store. */
+    /** Equal when both are the placeholder, or both hold the same key, the same variables' names and the same store. */
     @Override
     public boolean equals(Object other) {
-        return other instanceof Secrets s && Objects.equals(variables, s.variables) && key.equals(s.key) && store == s.store;
+        return other instanceof Secrets s && placeholder == s.placeholder && Objects.equals(key, s.key) && imports.equals(s.imports) && store == s.store;
     }
 
+    /** Of the variables' names only. */
     @Override
     public int hashCode() {
-        return Objects.hash(variables, key);
+        return Objects.hash(placeholder, imports);
     }
 
-    /** The names of the variables held, the store's key ids when it has a key, never a value. */
+    /** The variables' names, the store's key ids when it has a key, never a value. */
     @Override
     public String toString() {
-        return variables == null ? "Secrets[placeholder " + PLACEHOLDER + "]"
-                : "Secrets[env " + new TreeSet<>(variables.keySet()) + (key.present() ? ", " + key : "") + (store == null ? "" : ", store") + "]";
+        return placeholder ? "Secrets[placeholder " + PLACEHOLDER + "]"
+                : "Secrets[" + imports + (key == null ? "" : ", " + key) + (store == null ? "" : ", store") + "]";
     }
 }

@@ -23,8 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * A node's secret variables can each be given as a file, {@code X_FILE} beside {@code X}: read once into {@code X}, one trailing
- * line end dropped. Both forms at once, a path that is not absolute, a file that is missing, unreadable, empty, too large or not
+ * A node's own secret variables can each be given as a file, {@code X_FILE} beside {@code X}: read once into {@code X}, one
+ * trailing line end dropped. The file forms of {@code RAIL8_SECRET_<NAME>} and {@code RAIL8_GIT_USER} are left as given: the
+ * import of a secret store never written alone reads them. Both forms at once, a path that is not absolute, a file that is missing, unreadable, empty, too large or not
  * UTF-8 text refuse the configuration, naming the variable and never the value.
  */
 class SecretFilesTest {
@@ -46,7 +47,10 @@ class SecretFilesTest {
         return Files.writeString(dir.resolve(name), content, StandardCharsets.UTF_8);
     }
 
-    /** Every secret variable of the node takes its file form; the configuration holds the files' contents. */
+    /**
+     * Every secret variable of the node takes its file form; the configuration holds the files' contents. A secret's file form
+     * is kept as given, the path of a file the configuration never reads.
+     */
     @Test
     void everySecretIsReadFromItsFile() throws IOException {
         Map<String, String> env = minimal();
@@ -56,7 +60,7 @@ class SecretFilesTest {
         env.put("RAIL8_GIT_USER", "rail8");
         env.put("RAIL8_GIT_TOKEN_FILE", file("git", "git-token").toString());
         env.put("RAIL8_VALKEY_URI_FILE", file("valkey", "redis://user:pw@valkey:6379\n").toString());
-        env.put("RAIL8_SECRET_PARTNER_TOKEN_FILE", file("partner", "partner-token\n").toString());
+        env.put("RAIL8_SECRET_PARTNER_TOKEN_FILE", dir.resolve("partner-not-read").toString());
 
         NodeConfig c = NodeConfig.from(env);
 
@@ -65,11 +69,29 @@ class SecretFilesTest {
                 () -> assertEquals(Optional.of("admin-token"), c.admin().token()),
                 () -> assertEquals("git-token", c.git().orElseThrow().credentials().orElseThrow().token()),
                 () -> assertEquals(Optional.of(URI.create("redis://user:pw@valkey:6379")), c.leases().valkey()),
-                () -> assertEquals(Optional.of("partner-token"), c.secrets().resolve("secret://partner-token")),
-                () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token-file"),
-                        "the file form's own key is gone: no path is held as a secret's value"),
-                () -> assertEquals(java.util.List.of("RAIL8_SECRET_PARTNER_TOKEN"), c.secrets().variableNames(),
-                        "the store is told the effective variable, not its file form"));
+                () -> assertEquals(List.of("RAIL8_GIT_TOKEN", "RAIL8_GIT_USER", "RAIL8_SECRET_PARTNER_TOKEN_FILE"), c.secrets().imports().names(),
+                        "the import is given the secret's file form as set, and the git token as read"),
+                () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token"), "no variable is a secret's value"));
+    }
+
+    /**
+     * Both git variables given as files, with no base: the node starts, has no git cache, and its first join imports the files'
+     * contents as the credentials {@code rail8.git}, the token as the configuration read it.
+     */
+    @Test
+    void bothGitVariablesAsFilesWithNoBaseImportTheGitCredentials() throws IOException {
+        Map<String, String> env = minimal();
+        env.put("RAIL8_GIT_USER_FILE", file("git-user", "rail8\n").toString());
+        env.put("RAIL8_GIT_TOKEN_FILE", file("git-token", "git-token\n").toString());
+
+        NodeConfig c = NodeConfig.from(env);
+
+        assertEquals(Optional.empty(), c.git(), "no base, no git cache");
+        assertEquals(List.of("RAIL8_GIT_TOKEN", "RAIL8_GIT_USER_FILE"), c.secrets().imports().names());
+        dev.rail8.testkit.FakeRuntime rt = dev.rail8.testkit.FakeRuntime.create();
+        dev.rail8.runtime.secret.SecretStore store = new dev.rail8.runtime.secret.MemorySecretStores().start("node-1", c.secrets(), rt.clock(), rt.timer());
+        assertEquals(new dev.rail8.api.Secret.Credentials("rail8", "git-token"),
+                store.platform(dev.rail8.runtime.secret.SecretStore.GIT).orElseThrow().value());
     }
 
     /** The secret store's key and its previous one are read from their files, as {@code openssl rand -base64 32 > file} writes them. */
@@ -85,9 +107,8 @@ class SecretFilesTest {
 
         NodeConfig c = NodeConfig.from(env);
 
-        assertTrue(c.secrets().key().present(), "the key is held");
-        assertTrue(c.secrets().key().equalsKey(key), "the key is the file's");
-        assertFalse(c.secrets().key().equalsKey(previous), "the previous key is not taken for the key");
+        assertTrue(c.secrets().key().orElseThrow().equalsKey(key), "the key is the file's");
+        assertFalse(c.secrets().key().orElseThrow().equalsKey(previous), "the previous key is not taken for the key");
     }
 
     /** One trailing \n or \r\n is dropped, nothing else: a second line end, inner lines and spaces stay. */
@@ -104,8 +125,8 @@ class SecretFilesTest {
         int i = 0;
         for (Map.Entry<String, String> c : cases.entrySet()) {
             Path f = file("case" + i++, c.getKey());
-            Map<String, String> resolved = SecretFiles.resolve(Map.of("RAIL8_SECRET_X_FILE", f.toString()));
-            assertEquals(Map.of("RAIL8_SECRET_X", c.getValue()), resolved, "content " + c.getKey().replace("\r", "\\r").replace("\n", "\\n"));
+            Map<String, String> resolved = SecretFiles.resolve(Map.of("RAIL8_ADMIN_TOKEN_FILE", f.toString()));
+            assertEquals(Map.of("RAIL8_ADMIN_TOKEN", c.getValue()), resolved, "content " + c.getKey().replace("\r", "\\r").replace("\n", "\\n"));
         }
     }
 
@@ -159,27 +180,27 @@ class SecretFilesTest {
     @Test
     void aFileLargerThanTheLimitIsRefused() throws IOException {
         Path atLimit = file("at-limit", "a".repeat(LIMIT));
-        assertEquals(SecretFiles.MAX_BYTES, SecretFiles.resolve(Map.of("RAIL8_SECRET_KEY_FILE", atLimit.toString())).get("RAIL8_SECRET_KEY").length());
+        assertEquals(SecretFiles.MAX_BYTES, SecretFiles.resolve(Map.of("RAIL8_ADMIN_TOKEN_FILE", atLimit.toString())).get("RAIL8_ADMIN_TOKEN").length());
 
         Path tooLarge = file("too-large", "a".repeat(LIMIT + 1));
-        IllegalArgumentException refused = refused("RAIL8_SECRET_KEY_FILE", tooLarge.toString());
-        assertEquals("RAIL8_SECRET_KEY_FILE names a file of more than 65536 bytes: " + tooLarge, refused.getMessage());
+        IllegalArgumentException refused = refused("RAIL8_ADMIN_TOKEN_FILE", tooLarge.toString());
+        assertEquals("RAIL8_ADMIN_TOKEN_FILE names a file of more than 65536 bytes: " + tooLarge, refused.getMessage());
     }
 
     /** A path that is not absolute is refused naming the variable only: it may be a secret given under the wrong name. */
     @ParameterizedTest
     @ValueSource(strings = {VALUE, "relative/path", "nul\u0000byte"})
     void aPathThatIsNotAbsoluteIsRefused(String raw) {
-        IllegalArgumentException refused = refused("RAIL8_SECRET_DB_FILE", raw);
-        assertEquals("RAIL8_SECRET_DB_FILE must be the absolute path of a file (the value is not shown)", refused.getMessage());
+        IllegalArgumentException refused = refused("RAIL8_PG_PASSWORD_FILE", raw);
+        assertEquals("RAIL8_PG_PASSWORD_FILE must be the absolute path of a file (the value is not shown)", refused.getMessage());
     }
 
     /** Content that is not UTF-8 is refused without showing it. */
     @Test
     void contentThatIsNotUtf8IsRefused() throws IOException {
         Path f = Files.write(dir.resolve("latin1"), (VALUE + "\u00e9").getBytes(StandardCharsets.ISO_8859_1));
-        IllegalArgumentException refused = refused("RAIL8_SECRET_DB_FILE", f.toString());
-        assertEquals("RAIL8_SECRET_DB_FILE names a file that is not UTF-8 text (the content is not shown): " + f, refused.getMessage());
+        IllegalArgumentException refused = refused("RAIL8_PG_PASSWORD_FILE", f.toString());
+        assertEquals("RAIL8_PG_PASSWORD_FILE names a file that is not UTF-8 text (the content is not shown): " + f, refused.getMessage());
     }
 
     /** No refusal shows the value or the file's content, nor does a cause of it. */
@@ -199,27 +220,20 @@ class SecretFilesTest {
     }
 
     /**
-     * Only the listed variables and {@code RAIL8_SECRET_<NAME>} have a file form: {@code RAIL8_JOURNAL_KEY_FILE} stays for the
-     * journal's key source, {@code RAIL8_SECRET_FILE} is the plain variable of {@code secret://file}, and another
-     * {@code _FILE} variable is kept as it is.
+     * Only the listed variables have a file form here: {@code RAIL8_JOURNAL_KEY_FILE} stays for the journal's key source, and
+     * every other {@code _FILE} variable, a secret's and the git user's among them, is kept as it is.
      */
     @Test
-    void onlyTheNodesSecretsHaveAFileForm() throws IOException {
+    void onlyTheNodesOwnSecretsHaveAFileFormHere() {
         Map<String, String> env = Map.of(
                 "RAIL8_JOURNAL_KEY_FILE", "/run/secrets/journal-key",
                 "RAIL8_SECRET_FILE", "the value of secret://file",
                 "RAIL8_PG_USER_FILE", "/run/secrets/pg-user",
-                "RAIL8_SECRET_DB_FILE_FILE", file("db-file", "db-file-value\n").toString());
+                "RAIL8_GIT_USER_FILE", "/run/secrets/git-user",
+                "RAIL8_SECRET_DB_FILE_FILE", "/run/secrets/db-file");
 
-        Map<String, String> resolved = SecretFiles.resolve(env);
-
-        assertEquals(Map.of(
-                "RAIL8_JOURNAL_KEY_FILE", "/run/secrets/journal-key",
-                "RAIL8_SECRET_FILE", "the value of secret://file",
-                "RAIL8_PG_USER_FILE", "/run/secrets/pg-user",
-                "RAIL8_SECRET_DB_FILE", "db-file-value"), resolved);
-        assertEquals(Optional.of("db-file-value"), Secrets.fromEnv(resolved).resolve("secret://db-file"),
-                "a secret whose variable ends in _FILE is given as its file form");
+        assertEquals(env, SecretFiles.resolve(env));
+        assertEquals(Optional.empty(), Secrets.fromEnv(env).resolve("secret://file"), "a variable is never a secret's value on the node");
     }
 
     private static IllegalArgumentException refused(String key, String value) {

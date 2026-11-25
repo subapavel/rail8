@@ -62,8 +62,8 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Custom code on a node, deployed as a package. The sample plugin step {@code hmac-sign} takes the secret its config names from the
- * node's {@code RAIL8_SECRET_*} variables and the node's cache, and signs each message of a deployed flow; a secret that is not set
- * refuses the deploy, naming the step, the key and the variable. A step that fails with a secret's value in its failure shows only
+ * node's secret store and the node's cache, and signs each message of a deployed flow; a secret that is not set refuses the
+ * deploy, naming the step, the key and the store. A step that fails with a secret's value in its failure shows only
  * the reference: in the answer the sender gets, in the recorded step, in the parked row and in the node's log. The line the sample
  * step logs is kept in the message's history, and so is a line a step logs through SLF4J, with only the reference of a secret's
  * value. The node's cache is shared by the steps of one type in one package, and kept across a redeploy.
@@ -176,7 +176,8 @@ class DeploymentsCustomCodeTest {
         steps.add(REFUSE);
         steps.add(counting("count"));
         steps.add(counting("count-too"));
-        NodeConfig config = placeholders ? NodeConfig.from(env).withSecrets(Secrets.placeholder()) : NodeConfig.from(env);
+        NodeConfig config = placeholders ? NodeConfig.from(env).withSecrets(Secrets.placeholder())
+                : dev.rail8.runtime.secret.MemorySecretStores.imported(NodeConfig.from(env), env, rt.clock(), rt.timer());
         deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), steps, List.of(), messages, dlq,
                 new CountingQueue(rt.clock()), () -> 0L);
         return deployments;
@@ -272,12 +273,12 @@ class DeploymentsCustomCodeTest {
     }
 
     @Test
-    void aSecretThatIsNotSetRefusesTheDeployNamingTheStepTheKeyAndTheVariable() throws Exception {
+    void aSecretThatIsNotSetRefusesTheDeployNamingTheStepTheKeyAndTheStore() throws Exception {
         node(Map.of());
         DeployRefusedException refused = assertThrows(DeployRefusedException.class, () -> deploy(shop("sync", HmacSign.TYPE, REFERENCE)));
         assertEquals(Kind.INVALID, refused.kind(), refused.problems().toString());
         assertTrue(refused.problems().stream().anyMatch(l -> l.startsWith("flow 'orders' does not build: ") && l.contains("step 'sign'")
-                && l.contains("'key'") && l.contains("RAIL8_SECRET_PARTNER_HMAC")), refused.problems().toString());
+                && l.contains("'key'") && l.contains("secret 'secret://partner-hmac' is not set: enter it in the secret store")), refused.problems().toString());
         assertEquals(List.of(), doors.doors(), "no consumer built");
     }
 
