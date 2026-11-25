@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { chooseLanguage, type Language } from '../language';
 import { httpAuditApi, httpTokensApi, httpUsersApi, UsersError, type User } from './api';
+
+/** Runs `check` with the UI shown in `language`, and shows it in English again after. */
+async function inLanguage(language: Language, check: () => Promise<void>) {
+  vi.stubGlobal('document', { documentElement: {} });
+  chooseLanguage(language);
+  try {
+    await check();
+  } finally {
+    chooseLanguage('en');
+    vi.unstubAllGlobals();
+  }
+}
 
 /** A fetch that records every call and answers each with the next of `answers`. */
 function fakeFetch(...answers: Response[]) {
@@ -68,15 +81,27 @@ describe('httpUsersApi', () => {
     for (const call of calls) expect(call.init).toEqual({ headers: { accept: 'application/json' }, method: 'POST' });
   });
 
+  it("shows a refusal in the UI's language by its code, and one of an unknown code in the node's English", async () => {
+    const { send } = fakeFetch(
+      json(404, { error: 'no user zoe', code: 'no-user', values: { name: 'zoe' } }),
+      json(409, { error: 'the node says no', code: 'not-a-code-of-the-ui', values: {} }),
+    );
+    const api = httpUsersApi(send);
+    await inLanguage('cs', async () => {
+      await expect(api.block('zoe')).rejects.toEqual(new UsersError(404, 'Uživatel zoe neexistuje.'));
+      await expect(api.block('zoe')).rejects.toEqual(new UsersError(409, 'the node says no'));
+    });
+  });
+
   it('rejects with the status and the text of a refusal', async () => {
     const { send } = fakeFetch(
       json(409, { error: 'at least one unblocked person holds the administrator role' }),
-      json(403, { error: 'roles.change needs a session', code: 'session-required', needs: ['administrator'] }),
+      json(403, { error: 'roles.change needs a session', code: 'session-required', values: { action: 'roles.change' }, needs: ['administrator'] }),
       new Response('gateway', { status: 502 }),
     );
     const api = httpUsersApi(send);
     await expect(api.block('alice')).rejects.toEqual(new UsersError(409, 'at least one unblocked person holds the administrator role'));
-    await expect(api.changeRoles('anna', ['developer'], [])).rejects.toEqual(new UsersError(403, 'roles.change needs a session'));
+    await expect(api.changeRoles('anna', ['developer'], [])).rejects.toEqual(new UsersError(403, 'roles.change needs a person logged in, not a token.'));
     await expect(api.list()).rejects.toMatchObject({ status: 502, message: 'the node answered 502' });
   });
 });
@@ -128,7 +153,7 @@ describe('httpTokensApi', () => {
   it('rejects with the status and the text of a refusal', async () => {
     const { send } = fakeFetch(json(403, { error: 'the password is wrong', code: 'wrong-password', needs: [] }), json(404, { error: 'no token abc' }));
     const api = httpTokensApi(send);
-    await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'the password is wrong'));
+    await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'The password is wrong.'));
     await expect(api.revoke('abc')).rejects.toEqual(new UsersError(404, 'no token abc'));
   });
 });

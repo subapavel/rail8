@@ -48,6 +48,7 @@ import dev.rail8.runtime.git.PackageRepositories;
 import dev.rail8.runtime.lease.InMemoryPollerLeases;
 import dev.rail8.runtime.lease.PollerLeases;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.refusal.RefusalCode;
 import dev.rail8.schemas.Package;
 import dev.rail8.schemas.Schemas;
 import io.vertx.core.Future;
@@ -828,12 +829,13 @@ public final class Deployments {
         try {
             PackageRepositories.checkNames(repository, commitOrRef, config.deployed());
         } catch (IllegalArgumentException refused) {
-            throw refused(Kind.BAD_REQUEST, refused.getMessage());
+            throw refused(Kind.BAD_REQUEST, RefusalCode.BAD_REQUEST, refused.getMessage(), Map.of());
         }
         if (!EXPECT.matcher(expect).matches()) {
-            throw refused(Kind.BAD_REQUEST, "expect is the commit of the package's record as 40 lower-case hex digits, none or any, was '" + expect + "'");
+            throw refused(Kind.BAD_REQUEST, RefusalCode.BAD_REQUEST,
+                    "expect is the commit of the package's record as 40 lower-case hex digits, none or any, was '" + expect + "'", Map.of());
         }
-        GitCache cache = git.orElseThrow(() -> refused(Kind.FORBIDDEN, "the node has no RAIL8_GIT_BASE: it deploys nothing"));
+        GitCache cache = git.orElseThrow(() -> refused(Kind.FORBIDDEN, RefusalCode.NO_GIT_BASE, "the node has no RAIL8_GIT_BASE: it deploys nothing", Map.of()));
         // closing is read where the lock decides: a close that holds the lock (stopping) or took it before this deploy (closed)
         // has set it first, so no deploy starts a flow after close stopped them all
         lockForChange();
@@ -887,15 +889,16 @@ public final class Deployments {
             Deployed listed = deployed.get(name);
             Optional<String> recorded = listed == null ? Optional.empty() : listed.pkg().repository();
             if (recorded.isPresent() && !recorded.get().equals(repository)) {
-                throw refused(Kind.CONFLICT, "package '" + name + "' is deployed from the repository '" + recorded.get() + "', not '" + repository
-                        + "': a package comes from one repository; undeploy it first to deploy it from another");
+                throw refused(Kind.CONFLICT, RefusalCode.PACKAGE_OTHER_REPOSITORY, "package '" + name + "' is deployed from the repository '" + recorded.get()
+                        + "', not '" + repository + "': a package comes from one repository; undeploy it first to deploy it from another",
+                        Map.of("package", name, "recorded", recorded.get(), "repository", repository));
             }
             String replaces = replaces(name, check);
             if (!expect.equals(ANY) && !expect.equals(replaces)) throw stale(name, expect, replaces, commit.id());
             List<String> lagging = behind.keySet().stream().filter(other -> !other.equals(name) && runs(other)).toList();
             if (!check && !lagging.isEmpty()) {   // the checks would run against a version the pool no longer records
-                throw refused(Kind.BUSY, "this node does not run what the pool recorded for " + lagging + ": " + lagging.stream().map(behind::get).toList()
-                        + "; try again once it does");
+                throw refused(Kind.BUSY, RefusalCode.POOL_LAGGING, "this node does not run what the pool recorded for " + lagging + ": "
+                        + lagging.stream().map(behind::get).toList() + "; try again once it does", Map.of("packages", String.join(", ", lagging)));
             }
             return install(name, Optional.of(new Origin(repository, commit.id(), by, commit.author(), expect, replaces)), folder,
                     hex(Package.content(folder)), repos::forDeploy, repos, null, check);
@@ -929,8 +932,9 @@ public final class Deployments {
     private static DeployRefusedException stale(String name, String expect, String replaces, String commit) {
         String records = replaces.equals(NONE) ? "the pool records no package '" + name + "'" : "the pool records package '" + name + "' at " + replaces;
         String landed = replaces.equals(commit) ? "; that is the commit this deploy names: an earlier try of it may have landed" : "";
-        return new DeployRefusedException(Kind.STALE, records + ", but this deploy expects " + expect + landed
-                + "; check again, and deploy expecting what the pool records", List.of(), Optional.of(replaces));
+        return new DeployRefusedException(Kind.STALE, RefusalCode.DEPLOY_STALE, records + ", but this deploy expects " + expect + landed
+                + "; check again, and deploy expecting what the pool records", Map.of("package", name, "expect", expect, "records", replaces),
+                List.of(), Optional.of(replaces));
     }
 
     /**
@@ -943,12 +947,14 @@ public final class Deployments {
         try {
             name = Package.load(folder).manifest().getValue("name");
         } catch (IllegalArgumentException unreadable) {
-            throw new DeployRefusedException(Kind.INVALID, "the package of " + commit.repository() + " at " + commit.id() + " cannot be read",
+            throw new DeployRefusedException(Kind.INVALID, RefusalCode.PACKAGE_UNREADABLE, "the package of " + commit.repository() + " at " + commit.id()
+                    + " cannot be read", Map.of("repository", commit.repository(), "commit", commit.id()),
                     List.of(unreadable.getMessage()));
         }
         if (!(name instanceof String n) || !NAME.matcher(n).matches()) {
-            throw refused(Kind.INVALID, "the package.yaml of " + commit.repository() + " at " + commit.id() + " names the package '" + name
-                    + "': a package name is a lower-case letter, then at most 63 lower-case letters, digits and dashes");
+            throw refused(Kind.INVALID, RefusalCode.PACKAGE_NAME_INVALID, "the package.yaml of " + commit.repository() + " at " + commit.id()
+                    + " names the package '" + name + "': a package name is a lower-case letter, then at most 63 lower-case letters, digits and dashes",
+                    Map.of("repository", commit.repository(), "commit", commit.id(), "name", String.valueOf(name)));
         }
         return n;
     }
@@ -965,7 +971,8 @@ public final class Deployments {
             } catch (GitFailure failed) {
                 throw refused(failed, of);
             } catch (IllegalArgumentException refused) {
-                throw refused(Kind.INVALID, of + commit.repository() + " at " + commit.id() + " is refused: " + refused.getMessage());
+                throw refused(Kind.INVALID, RefusalCode.PACKAGE_TREE_REFUSED, of + commit.repository() + " at " + commit.id() + " is refused: " + refused.getMessage(),
+                        Map.of("repository", commit.repository(), "commit", commit.id()));
             } catch (UncheckedIOException disk) {
                 throw disk.getCause();
             }
@@ -982,7 +989,20 @@ public final class Deployments {
             case NOT_FOUND, NOT_REACHABLE, HISTORY_INCOMPLETE -> Kind.INVALID;
             case CREDENTIALS_REFUSED, TIMED_OUT, CACHE_FULL, TRANSPORT_FAILED -> Kind.FAILED;
         };
-        return refused(kind, of + failed.getMessage());
+        return refused(kind, code(failed), of + failed.getMessage(), Map.of());
+    }
+
+    /** The code of a git failure: one for each of its reasons. */
+    private static RefusalCode code(GitFailure failed) {
+        return switch (failed.reason()) {
+            case NOT_FOUND -> RefusalCode.GIT_NOT_FOUND;
+            case NOT_REACHABLE -> RefusalCode.GIT_NOT_REACHABLE;
+            case HISTORY_INCOMPLETE -> RefusalCode.GIT_HISTORY_INCOMPLETE;
+            case CREDENTIALS_REFUSED -> RefusalCode.GIT_CREDENTIALS_REFUSED;
+            case TIMED_OUT -> RefusalCode.GIT_TIMED_OUT;
+            case CACHE_FULL -> RefusalCode.GIT_CACHE_FULL;
+            case TRANSPORT_FAILED -> RefusalCode.GIT_TRANSPORT_FAILED;
+        };
     }
 
     /**
@@ -1022,7 +1042,7 @@ public final class Deployments {
     public DeployResult deploy(String name, Path folder) throws DeployRefusedException, IOException {
         Objects.requireNonNull(folder, "folder");
         if (!NAME.matcher(name).matches()) throw badName(name);
-        if (config.deployed()) throw refused(Kind.FORBIDDEN, "a deploy with no origin is dev and ci only: it writes no record");
+        if (config.deployed()) throw refused(Kind.FORBIDDEN, RefusalCode.DEPLOY_WITHOUT_ORIGIN, "a deploy with no origin is dev and ci only: it writes no record", Map.of());
         lockForChange();
         try {
             if (closing) throw stopping();
@@ -1074,7 +1094,7 @@ public final class Deployments {
             try {
                 poolLocked();
                 Deployed listed = deployed.get(name);
-                if (listed == null) throw refused(Kind.NOT_FOUND, "no package '" + name + "' is deployed");
+                if (listed == null) throw refused(Kind.NOT_FOUND, RefusalCode.PACKAGE_NOT_DEPLOYED, "no package '" + name + "' is deployed", Map.of("package", name));
                 String version = listed.pkg().version();
                 List<Flow> running = listed.flows().stream().filter(Flow::runs).toList();
                 if (listed.record() != null) {   // a deploy with no origin wrote none
@@ -1146,7 +1166,7 @@ public final class Deployments {
         if (tick == null) throw busy();
         Future<Void> ended = bounded(tick, "the tick that follows the pool's records");
         ended.otherwiseEmpty().await();
-        if (ended.failed()) throw refused(Kind.BUSY, "this node is following the pool's records: try again once it is done");
+        if (ended.failed()) throw refused(Kind.BUSY, RefusalCode.POOL_FOLLOWING, "this node is following the pool's records: try again once it is done", Map.of());
         if (!deploying.tryLock()) throw busy();
     }
 
@@ -1161,9 +1181,10 @@ public final class Deployments {
         taken.otherwiseEmpty().await();
         if (taken.failed()) {
             asked.onSuccess(late -> late.ifPresent(PoolLock::close));
-            throw refused(Kind.BUSY, "the pool's lock could not be taken: " + reason(taken.cause()));
+            throw refused(Kind.BUSY, RefusalCode.POOL_LOCK_FAILED, "the pool's lock could not be taken: " + reason(taken.cause()), Map.of());
         }
-        poolLock = taken.result().orElseThrow(() -> refused(Kind.CONFLICT, "another deploy or undeploy of the pool is running: try again once it is done"));
+        poolLock = taken.result().orElseThrow(() -> refused(Kind.CONFLICT, RefusalCode.POOL_DEPLOY_RUNNING,
+                "another deploy or undeploy of the pool is running: try again once it is done", Map.of()));
         reconcile(poolLock.snapshot());
     }
 
@@ -1535,7 +1556,7 @@ public final class Deployments {
     public Listings listings() throws DeployRefusedException {
         Future<Listings> read = bounded(records.listings(), "the read of what each node runs");
         read.otherwiseEmpty().await();
-        if (read.failed()) throw refused(Kind.FAILED, "what each node runs could not be read: " + reason(read.cause()));
+        if (read.failed()) throw refused(Kind.FAILED, RefusalCode.LISTINGS_UNREADABLE, "what each node runs could not be read: " + reason(read.cause()), Map.of());
         return read.result();
     }
 
@@ -1619,20 +1640,21 @@ public final class Deployments {
     private boolean restore(DeploymentRecord row) throws IOException {
         Path folder = null;
         try {
-            GitCache cache = git.orElseThrow(() -> refused(Kind.FAILED, "the node has no RAIL8_GIT_BASE: it reads no commit"));
+            GitCache cache = git.orElseThrow(() -> refused(Kind.FAILED, RefusalCode.NO_GIT_BASE, "the node has no RAIL8_GIT_BASE: it reads no commit", Map.of()));
             try (PackageRepositories repos = fetching(cache.open())) {
                 Commits commits = (repository, commit) -> restored(cache, repos, repository, commit);
                 Commit commit;
                 try {
                     commit = commits.read(row.repository(), row.commit());
                 } catch (GitFailure failed) {
-                    throw refused(Kind.FAILED, failed.getMessage());
+                    throw refused(Kind.FAILED, code(failed), failed.getMessage(), Map.of());
                 }
                 folder = checkout(commit, "");
                 String content = Package.content(folder);
                 if (!content.equals(row.content())) {   // other files under the record's commit: nothing of them runs
-                    throw refused(Kind.FAILED, row.repository() + " at " + row.commit() + " holds the content " + content + ", its record " + row.content()
-                            + ": the node reads another RAIL8_GIT_BASE or RAIL8_GIT_PATH than the deploy did");
+                    throw refused(Kind.FAILED, RefusalCode.CONTENT_MISMATCH, row.repository() + " at " + row.commit() + " holds the content " + content
+                            + ", its record " + row.content() + ": the node reads another RAIL8_GIT_BASE or RAIL8_GIT_PATH than the deploy did",
+                            Map.of("repository", row.repository(), "commit", row.commit()));
                 }
                 install(row.name(), Optional.of(new Origin(row.repository(), row.commit(), null, null, null, null)), folder, hex(content), commits, repos, row, false);
                 behind.remove(row.name());
@@ -1786,8 +1808,11 @@ public final class Deployments {
             List<Start> started = start(starting, restoring != null);   // a restore tries a consumer that did not start again
             List<Start> failed = started.stream().filter(s -> s.failure() != null).toList();
             if (!failed.isEmpty()) {
-                if (restoring == null && running == null) throw refused(Kind.FAILED, problem(failed.getFirst(), "did not start"));   // a first deploy: the cleanup stops them all
-                if (restoring == null) throw rollBack(Kind.FAILED, version, "did not start", List.of(), running, retiring, started, packageDir, built, again);
+                if (restoring == null && running == null) {   // a first deploy: the cleanup stops them all
+                    throw refused(Kind.FAILED, RefusalCode.FLOW_DID_NOT_START, problem(failed.getFirst(), "did not start"),
+                            Map.of("flow", failed.getFirst().flow().id()));
+                }
+                if (restoring == null) throw rollBack(Kind.FAILED, RefusalCode.ROLLED_BACK_UNSTARTED, version, "did not start", List.of(), running, retiring, started, packageDir, built, again);
                 unstarted(name, failed, now);   // a restore: those are listed FAILED, the others run
             }
             DeploymentRecord record = restoring;   // a restore or a follow installs the record it read
@@ -1804,10 +1829,13 @@ public final class Deployments {
                 saved.otherwiseEmpty().await();
                 if (saved.failed()) {
                     // the generation this node applied stays behind: its next tick installs whatever the pool holds
-                    String unrecorded = (saved.cause() instanceof TimeoutException ? "whether the deploy record was written is unknown: "
-                            : "the deploy record was not written: ") + reason(saved.cause());
-                    if (running == null) throw refused(Kind.FAILED, unrecorded);   // a first deploy: the cleanup stops the flows that started
-                    throw rollBack(Kind.FAILED, version, "was not recorded", List.of(unrecorded), running, retiring, started, packageDir, built, again);
+                    boolean unknown = saved.cause() instanceof TimeoutException;
+                    String unrecorded = (unknown ? "whether the deploy record was written is unknown: " : "the deploy record was not written: ")
+                            + reason(saved.cause());
+                    if (running == null) {   // a first deploy: the cleanup stops the flows that started
+                        throw refused(Kind.FAILED, unknown ? RefusalCode.DEPLOY_RECORD_UNKNOWN : RefusalCode.DEPLOY_UNRECORDED, unrecorded, Map.of());
+                    }
+                    throw rollBack(Kind.FAILED, RefusalCode.ROLLED_BACK_UNRECORDED, version, "was not recorded", List.of(unrecorded), running, retiring, started, packageDir, built, again);
                 }
                 record = saving;
                 applied = saved.result();
@@ -1890,7 +1918,7 @@ public final class Deployments {
      * holds what a throw would leave to stop wherever one can happen: discard never throws, so a list it stopped is cleared before
      * anything that may throw runs.
      */
-    private DeployRefusedException rollBack(Kind kind, String version, String why, List<String> causes, Deployed running, List<Flow> retired, List<Start> phaseB,
+    private DeployRefusedException rollBack(Kind kind, RefusalCode code, String version, String why, List<String> causes, Deployed running, List<Flow> retired, List<Start> phaseB,
                                             Path packageDir, List<Flow> built, List<Flow> again) {
         List<String> problems = new ArrayList<>(causes);
         List<Flow> started = new ArrayList<>();
@@ -1941,8 +1969,9 @@ public final class Deployments {
             unstopped.add(broke);
         }
         List<String> failed = afterFailure(running, retired, again).flows().stream().filter(f -> !f.runs()).map(Flow::id).sorted().toList();
-        DeployRefusedException refusal = new DeployRefusedException(kind, "version " + version + " " + why + "; " + running.pkg().version() + " runs again"
-                + (failed.isEmpty() ? "" : "; flows " + failed + " FAILED"), problems);
+        DeployRefusedException refusal = new DeployRefusedException(kind, code, "version " + version + " " + why + "; " + running.pkg().version()
+                + " runs again" + (failed.isEmpty() ? "" : "; flows " + failed + " FAILED"), Map.of("version", version, "running", running.pkg().version()),
+                problems);
         unstopped.stream().filter(Objects::nonNull).forEach(refusal::addSuppressed);
         return refusal;
     }
@@ -2002,8 +2031,8 @@ public final class Deployments {
                 } else if (Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
                     Files.copy(p, target, LinkOption.NOFOLLOW_LINKS);
                 } else {
-                    throw refused(Kind.BAD_REQUEST, "the package folder is refused: '" + from.relativize(p).toString().replace(File.separatorChar, '/')
-                            + "' is neither a regular file nor a directory");
+                    throw refused(Kind.BAD_REQUEST, RefusalCode.BAD_REQUEST, "the package folder is refused: '"
+                            + from.relativize(p).toString().replace(File.separatorChar, '/') + "' is neither a regular file nor a directory", Map.of());
                 }
             }
         });
@@ -2031,7 +2060,8 @@ public final class Deployments {
         try {
             return Package.load(dir);
         } catch (IllegalArgumentException unreadable) {
-            throw new DeployRefusedException(Kind.INVALID, "package '" + name + "' cannot be read", List.of(unreadable.getMessage()));
+            throw new DeployRefusedException(Kind.INVALID, RefusalCode.PACKAGE_FOLDER_UNREADABLE, "package '" + name + "' cannot be read",
+                    Map.of("package", name), List.of(unreadable.getMessage()));
         }
     }
 
@@ -2983,25 +3013,27 @@ public final class Deployments {
 
     // --- helpers
 
-    private static DeployRefusedException refused(Kind kind, String error) {
-        return new DeployRefusedException(kind, error, List.of());
+    private static DeployRefusedException refused(Kind kind, RefusalCode code, String error, Map<String, Object> values) {
+        return new DeployRefusedException(kind, code, error, values, List.of());
     }
 
     private static DeployRefusedException badName(String name) {
-        return refused(Kind.BAD_REQUEST, "the package name '" + name + "' must be a lower-case letter, then at most 63 lower-case letters, digits and dashes");
+        return refused(Kind.BAD_REQUEST, RefusalCode.BAD_REQUEST,
+                "the package name '" + name + "' must be a lower-case letter, then at most 63 lower-case letters, digits and dashes", Map.of());
     }
 
     private static DeployRefusedException stopping() {
-        return refused(Kind.STOPPING, "the node is closing: it takes no deploy or undeploy");
+        return refused(Kind.STOPPING, RefusalCode.NODE_CLOSING, "the node is closing: it takes no deploy or undeploy", Map.of());
     }
 
     /** The refusal of a deploy or undeploy that finds the node's lock held: {@link #stopping} while closing, else {@link Kind#CONFLICT}. */
     private DeployRefusedException busy() {
-        return closing ? stopping() : refused(Kind.CONFLICT, "another deploy or undeploy is running: try again once it is done");
+        return closing ? stopping() : refused(Kind.CONFLICT, RefusalCode.DEPLOY_RUNNING, "another deploy or undeploy is running: try again once it is done", Map.of());
     }
 
     private static DeployRefusedException invalid(String name, List<String> problems) {
-        return new DeployRefusedException(Kind.INVALID, "package '" + name + "' is invalid: " + problems.size() + " problem(s)", problems);
+        return new DeployRefusedException(Kind.INVALID, RefusalCode.PACKAGE_INVALID, "package '" + name + "' is invalid: " + problems.size() + " problem(s)",
+                Map.of("package", name, "count", problems.size()), problems);
     }
 
     /** The flow's id within its package: the qualified id without {@code <package>/}, as the package's problem lines name it. */

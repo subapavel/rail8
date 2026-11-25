@@ -121,19 +121,11 @@ abstract class AccessContract {
         return login(a, name, NEW_PASSWORD);
     }
 
-    static AccessRefused refused(int status, Optional<String> code, Executable act) {
+    static AccessRefused refused(int status, String code, Executable act) {
         AccessRefused refused = assertThrows(AccessRefused.class, act);
         assertEquals(status, refused.status(), refused.getMessage());
-        assertEquals(code, refused.code(), refused.getMessage());
+        assertEquals(code, refused.code().code(), refused.getMessage());
         return refused;
-    }
-
-    static AccessRefused refused(int status, String code, Executable act) {
-        return refused(status, Optional.of(code), act);
-    }
-
-    static AccessRefused refused(int status, Executable act) {
-        return refused(status, Optional.empty(), act);
     }
 
     List<JsonObject> audit(String action) {
@@ -238,7 +230,7 @@ abstract class AccessContract {
         assertEquals("unknown", open.authenticate(Optional.empty(), Optional.empty()).name());
         assertTrue(ops.may(Action.MESSAGE_READ, PackageRef.ANY) && ops.may(Action.PACKAGE_DEPLOY, PackageRef.ANY), "today's actions");
         assertFalse(ops.may(Action.USER_CREATE, PackageRef.ANY), "none of the users'");
-        refused(400, () -> open.authenticate(Optional.empty(), Optional.of("x".repeat(129))));
+        refused(400, "bad-request", () -> open.authenticate(Optional.empty(), Optional.of("x".repeat(129))));
         assertEquals(128, open.authenticate(Optional.empty(), Optional.of("x".repeat(128))).name().length());
 
         refused(401, "no-credential", () -> a.authenticate(Optional.empty(), Optional.empty()));   // a node with a key: no open API
@@ -295,10 +287,10 @@ abstract class AccessContract {
         assertFalse(audit().toString().contains(first), "never a password in the audit");
 
         Actor by = key(a).acting(Action.USER_CREATE, PackageRef.ANY, REMOTE);
-        refused(409, () -> a.createUser(by, "alice", Kind.PERSON, Set.of()));
-        refused(400, () -> a.createUser(by, "Alice", Kind.PERSON, Set.of()));
-        refused(400, () -> a.createUser(by, "a", Kind.PERSON, Set.of()));
-        refused(409, () -> a.createUser(by, "ci-deploy", Kind.TECHNICAL, Set.of(Role.ADMINISTRATOR)));
+        refused(409, "name-taken", () -> a.createUser(by, "alice", Kind.PERSON, Set.of()));
+        refused(400, "bad-user-name", () -> a.createUser(by, "Alice", Kind.PERSON, Set.of()));
+        refused(400, "bad-user-name", () -> a.createUser(by, "a", Kind.PERSON, Set.of()));
+        refused(409, "technical-administrator", () -> a.createUser(by, "ci-deploy", Kind.TECHNICAL, Set.of(Role.ADMINISTRATOR)));
         assertEquals(Optional.empty(), a.createUser(by, "ci-deploy", Kind.TECHNICAL, Set.of()), "a technical account has no password");
     }
 
@@ -314,9 +306,9 @@ abstract class AccessContract {
         assertEquals(Set.of(Role.ADMINISTRATOR), needs.needs());
 
         Actor self = anna.acting(Action.SELF_PASSWORD, PackageRef.ANY, REMOTE);
-        refused(400, () -> a.changePassword(self, first, "too short"));
-        refused(400, () -> a.changePassword(self, first, "with anna inside"));
-        refused(400, () -> a.changePassword(self, first, first));
+        refused(400, "password-length", () -> a.changePassword(self, first, "too short"));
+        refused(400, "password-contains-name", () -> a.changePassword(self, first, "with anna inside"));
+        refused(400, "password-unchanged", () -> a.changePassword(self, first, first));
         refused(403, "wrong-password", () -> a.changePassword(self, "not the first password", NEW_PASSWORD));
         a.changePassword(self, first, NEW_PASSWORD);
 
@@ -966,8 +958,8 @@ abstract class AccessContract {
         assertTrue(a.user("anna").orElseThrow().blockedAt().isPresent());
         a.unblock(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "anna");
         assertFalse(login(a, "anna", NEW_PASSWORD).isEmpty());
-        refused(409, () -> a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "root"));
-        refused(404, () -> a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "nobody"));
+        refused(409, "block-self", () -> a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "root"));
+        refused(404, "no-user", () -> a.block(root.acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "nobody"));
     }
 
     @Test
@@ -992,8 +984,8 @@ abstract class AccessContract {
         refused(401, "unknown-credential", () -> a.authenticate(bearer(session), Optional.empty()));
         assertTrue(a.authenticate(bearer(login(a, "anna", first)), Optional.empty()).firstPassword(), "no wait: the limit's rows are gone");
         a.createUser(root.acting(Action.USER_CREATE, PackageRef.ANY, REMOTE), "ci-deploy", Kind.TECHNICAL, Set.of());
-        refused(409, () -> a.resetPassword(root.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "ci-deploy"));
-        refused(404, () -> a.resetPassword(root.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "nobody"));
+        refused(409, "technical-has-no-password", () -> a.resetPassword(root.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "ci-deploy"));
+        refused(404, "no-user", () -> a.resetPassword(root.acting(Action.USER_PASSWORD_RESET, PackageRef.ANY, REMOTE), "nobody"));
         assertEquals(1, audit("user.password-reset").size());
     }
 
@@ -1016,10 +1008,10 @@ abstract class AccessContract {
         a.changeRoles(by, "bob", Set.of(Role.DEVELOPER), Set.of(Role.OPERATOR));
         assertEquals(rows, audit().size(), "a change that changes nothing writes nothing");
 
-        refused(400, () -> a.changeRoles(by, "bob", Set.of(Role.OPERATOR), Set.of(Role.OPERATOR)));
-        refused(404, () -> a.changeRoles(by, "nobody", Set.of(Role.OPERATOR), Set.of()));
+        refused(400, "bad-request", () -> a.changeRoles(by, "bob", Set.of(Role.OPERATOR), Set.of(Role.OPERATOR)));
+        refused(404, "no-user", () -> a.changeRoles(by, "nobody", Set.of(Role.OPERATOR), Set.of()));
         a.createUser(by, "ci-deploy", Kind.TECHNICAL, Set.of(Role.DEVELOPER));
-        refused(409, () -> a.changeRoles(by, "ci-deploy", Set.of(Role.ADMINISTRATOR), Set.of()));
+        refused(409, "technical-administrator", () -> a.changeRoles(by, "ci-deploy", Set.of(Role.ADMINISTRATOR), Set.of()));
         Access.Grant grant = a.user("bob").orElseThrow().roles().getFirst();
         assertEquals(List.of(Role.DEVELOPER, "root", "session"), List.of(grant.role(), grant.grantedBy(), grant.grantedVia()));
     }
@@ -1037,9 +1029,9 @@ abstract class AccessContract {
     @Test
     void theLastUnblockedAdministratorStays() {
         Caller root = a.authenticate(bearer(session("root", Role.ADMINISTRATOR)), Optional.empty());
-        refused(409, () -> a.changeRoles(root.acting(Action.ADMINISTRATORS_CHANGE, PackageRef.ANY, REMOTE), "root", Set.of(),
+        refused(409, "last-administrator", () -> a.changeRoles(root.acting(Action.ADMINISTRATORS_CHANGE, PackageRef.ANY, REMOTE), "root", Set.of(),
                 Set.of(Role.ADMINISTRATOR)));
-        refused(409, () -> a.block(key(a).acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "root"));
+        refused(409, "last-administrator", () -> a.block(key(a).acting(Action.USER_BLOCK, PackageRef.ANY, REMOTE), "root"));
     }
 
     /**
@@ -1117,11 +1109,11 @@ abstract class AccessContract {
                 ((Accounts) a).query(tx -> tx.token(issued.id())).map(t -> t.token().fingerprint()), "only its fingerprint is kept");
 
         assertEquals(T0.plus(Duration.ofDays(365)), a.issueOwnToken(self, NEW_PASSWORD, "a-year", OptionalInt.of(365)).expiresAt());
-        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "beyond", OptionalInt.of(366)));
-        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "never", OptionalInt.of(0)));
-        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "Laptop", OptionalInt.empty()));
-        refused(400, () -> a.issueOwnToken(self, NEW_PASSWORD, "-laptop", OptionalInt.empty()));
-        refused(409, () -> b.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        refused(400, "token-life", () -> a.issueOwnToken(self, NEW_PASSWORD, "beyond", OptionalInt.of(366)));
+        refused(400, "token-life", () -> a.issueOwnToken(self, NEW_PASSWORD, "never", OptionalInt.of(0)));
+        refused(400, "bad-token-name", () -> a.issueOwnToken(self, NEW_PASSWORD, "Laptop", OptionalInt.empty()));
+        refused(400, "bad-token-name", () -> a.issueOwnToken(self, NEW_PASSWORD, "-laptop", OptionalInt.empty()));
+        refused(409, "token-name-taken", () -> b.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
         assertEquals(2, audit("token.issue").size());
     }
 
@@ -1149,7 +1141,7 @@ abstract class AccessContract {
         Actor self = anna.acting(Action.SELF_TOKEN_ISSUE, PackageRef.ANY, REMOTE);
         String other = "another password of mine";
         hash.duringNextMatch(() -> b.changePassword(anna.acting(Action.SELF_PASSWORD, PackageRef.ANY, REMOTE), NEW_PASSWORD, other));
-        refused(409, () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
+        refused(409, "account-changed", () -> a.issueOwnToken(self, NEW_PASSWORD, "laptop", OptionalInt.empty()));
         hash.duringNextMatch(() -> b.endSessions(key(b).acting(Action.SESSION_END, PackageRef.ANY, REMOTE), "anna"));
         refused(401, "session-ended", () -> a.issueOwnToken(self, other, "laptop", OptionalInt.empty()));
         assertEquals(List.of(), a.ownTokens(anna).tokens(), "no token was made");
@@ -1190,12 +1182,12 @@ abstract class AccessContract {
         assertEquals(List.of("keeper", "user/ci-deploy"), List.of(row.getString("actor"), row.getString("subject")));
 
         Actor root = admin(Action.TOKEN_ISSUE);
-        refused(409, () -> a.issueToken(root, "keeper", "laptop", OptionalInt.empty()));   // a person issues their own
-        refused(404, () -> a.issueToken(root, "nobody", "pipeline", OptionalInt.empty()));
-        refused(409, () -> b.issueToken(root, "ci-deploy", "pipeline", OptionalInt.empty()));
-        refused(400, () -> a.issueToken(root, "ci-deploy", "x".repeat(65), OptionalInt.empty()));
+        refused(409, "person-issues-own-tokens", () -> a.issueToken(root, "keeper", "laptop", OptionalInt.empty()));   // a person issues their own
+        refused(404, "no-user", () -> a.issueToken(root, "nobody", "pipeline", OptionalInt.empty()));
+        refused(409, "token-name-taken", () -> b.issueToken(root, "ci-deploy", "pipeline", OptionalInt.empty()));
+        refused(400, "bad-token-name", () -> a.issueToken(root, "ci-deploy", "x".repeat(65), OptionalInt.empty()));
         a.block(admin(Action.USER_BLOCK), "ci-deploy");
-        refused(409, () -> a.issueToken(root, "ci-deploy", "another", OptionalInt.empty()));
+        refused(409, "user-blocked", () -> a.issueToken(root, "ci-deploy", "another", OptionalInt.empty()));
     }
 
     @Test
@@ -1218,7 +1210,7 @@ abstract class AccessContract {
         Access.Issued old = issue("ci-deploy", "pipeline", 1);
         clockA.advance(Duration.ofDays(1).minusMillis(1));
         a.authenticate(bearer(old.token()), Optional.empty());
-        refused(409, () -> issue("ci-deploy", "pipeline", 1));
+        refused(409, "token-name-taken", () -> issue("ci-deploy", "pipeline", 1));
         clockA.advance(Duration.ofMillis(1));
         refused(401, "token-expired", () -> a.authenticate(bearer(old.token()), Optional.empty()));
 
@@ -1234,10 +1226,10 @@ abstract class AccessContract {
         issue("ci-deploy", "t-0", 1);
         List<Access.Issued> held = new ArrayList<>();
         for (int i = 1; i < 20; i++) held.add(issue("ci-deploy", "t-" + i, 90));
-        refused(409, () -> issue("ci-deploy", "t-20", 90));
+        refused(409, "tokens-full", () -> issue("ci-deploy", "t-20", 90));
         clockA.advance(Duration.ofDays(1));
         issue("ci-deploy", "t-20", 90);   // t-0 expired: it no longer counts
-        refused(409, () -> issue("ci-deploy", "t-21", 90));
+        refused(409, "tokens-full", () -> issue("ci-deploy", "t-21", 90));
         a.revokeToken(admin(Action.TOKEN_REVOKE), held.getFirst().id());
         issue("ci-deploy", "t-21", 90);
         assertEquals(20, held("ci-deploy").size());
@@ -1281,15 +1273,15 @@ abstract class AccessContract {
         assertEquals(new JsonObject().put("token", laptop.id()).put("name", "laptop").put("remote", REMOTE), row.getJsonObject("detail"));
 
         Actor bob = b.authenticate(bearer(session("bob")), Optional.empty()).acting(Action.SELF_TOKENS, PackageRef.ANY, REMOTE);
-        refused(404, () -> b.revokeOwnToken(bob, phone.id()));
-        refused(404, () -> a.revokeOwnToken(own, "0123456789abcdef"));
-        refused(404, () -> a.revokeOwnToken(own, "not an id"));
+        refused(404, "no-token", () -> b.revokeOwnToken(bob, phone.id()));
+        refused(404, "no-token", () -> a.revokeOwnToken(own, "0123456789abcdef"));
+        refused(404, "no-token", () -> a.revokeOwnToken(own, "not an id"));
         a.authenticate(bearer(phone.token()), Optional.empty());
 
         b.revokeToken(key(b).acting(Action.TOKEN_REVOKE, PackageRef.ANY, REMOTE), phone.id());
         refused(401, "token-revoked", () -> a.authenticate(bearer(phone.token()), Optional.empty()));
         assertEquals(Caller.EMERGENCY_KEY, audit("token.revoke").getLast().getString("actor"));
-        refused(404, () -> a.revokeToken(admin(Action.TOKEN_REVOKE), "0123456789abcdef"));
+        refused(404, "no-token", () -> a.revokeToken(admin(Action.TOKEN_REVOKE), "0123456789abcdef"));
     }
 
     @Test
@@ -1325,7 +1317,7 @@ abstract class AccessContract {
         assertEquals(List.of(T0.plus(Duration.ofDays(25)), T0.plus(Duration.ofDays(27))),
                 listed.tokens().stream().map(Access.Token::expiresAt).toList(), "a token shorter than the ceiling keeps its end");
         assertEquals(new Access.Ceiling(15, 15), listed.ceiling());
-        refused(400, () -> issue("ci-deploy", "sixteen", 16));
+        refused(400, "token-life", () -> issue("ci-deploy", "sixteen", 16));
         assertEquals(clockA.instant().plus(Duration.ofDays(15)),
                 a.issueToken(admin(Action.TOKEN_ISSUE), "ci-deploy", "default", OptionalInt.empty()).expiresAt(), "the default is the ceiling below 90");
 
@@ -1335,8 +1327,8 @@ abstract class AccessContract {
         int rows = audit().size();
         a.changeCeiling(root, 365);
         assertEquals(rows, audit().size(), "the same ceiling writes nothing");
-        refused(400, () -> a.changeCeiling(root, 0));
-        refused(400, () -> a.changeCeiling(root, 366));
+        refused(400, "ceiling-range", () -> a.changeCeiling(root, 0));
+        refused(400, "ceiling-range", () -> a.changeCeiling(root, 366));
         assertEquals(List.of(new JsonObject().put("from", 365).put("to", 15).put("shortened", 2).put("remote", REMOTE),
                 new JsonObject().put("from", 15).put("to", 365).put("shortened", 0).put("remote", REMOTE)),
                 audit("token.ceiling").stream().map(r -> r.getJsonObject("detail")).toList(), "a token that lives less than the ceiling keeps its end");
@@ -1377,9 +1369,9 @@ abstract class AccessContract {
         assertEquals(List.of(new Access.Token(laptop.id(), "anna", "laptop", T0, "anna", T0.plus(Duration.ofDays(30)), Optional.empty())),
                 b.ownTokens(anna).tokens());
         assertEquals(List.of(pipeline.id(), nightly.id()), a.user("ci-deploy").orElseThrow().tokens().stream().map(Access.Token::id).toList());
-        refused(400, () -> a.tokens(Optional.of(Duration.ZERO)));
-        refused(400, () -> a.tokens(Optional.of(Duration.ofDays(365).plusSeconds(1))));
-        refused(400, () -> a.ownTokens(key(a)));   // only a user holds tokens
+        refused(400, "bad-request", () -> a.tokens(Optional.of(Duration.ZERO)));
+        refused(400, "bad-request", () -> a.tokens(Optional.of(Duration.ofDays(365).plusSeconds(1))));
+        refused(400, "tokens-need-user", () -> a.ownTokens(key(a)));   // only a user holds tokens
     }
 
     @Test

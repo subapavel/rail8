@@ -203,7 +203,7 @@ class AdminServerCancelTest {
         String body = "{\"reason\": \"" + "x".repeat(AdminServer.CANCEL_BODY_MAX) + "\"}";
         HttpResponse<String> res = cancel("k1", body);
         assertEquals(413, res.statusCode(), res.body());
-        assertEquals(new JsonObject().put("error", "the request body is above 8192 bytes"), new JsonObject(res.body()));
+        assertEquals(new JsonObject().put("error", "the request body is above 8192 bytes").put("code", "too-large").put("values", new JsonObject().put("max", 8192)), new JsonObject(res.body()));
         assertEquals(List.of(), asked, "no act was asked");
         assertTrue(dlq.get("k1").await().isPresent(), "k1 stays parked");
     }
@@ -238,7 +238,7 @@ class AdminServerCancelTest {
         start(Optional.empty());
         HttpResponse<String> res = send("POST", "/admin/dlq/m-1/retry", null, Map.of());
         assertEquals(404, res.statusCode(), res.body());
-        assertEquals(new JsonObject().put("error", "no such route"), new JsonObject(res.body()));
+        assertEquals(new JsonObject().put("error", "no such route").put("code", "no-route").put("values", new JsonObject()), new JsonObject(res.body()));
     }
 
     @Test

@@ -1125,8 +1125,16 @@ and English is the default. Every text has a key, and the texts of each module a
 `ui/locales/<language>/`, read by react-intl as ICU messages, so dates, numbers and the plural forms of Czech and
 Russian follow the language; a key a language lacks shows the English text. Ant Design and ProComponents switch with
 it. The frame, the login and the Users, Tokens, My tokens and Audit screens are translated, and the titles of every
-screen; the other screens still show English. Names from data, the terms of `ui/locales/<language>/terms.md`, the
-node's refusals, logs, the audit's rows, files in git and the command line stay as they are.
+screen; the other screens still show English. Names from data, the terms of `ui/locales/<language>/terms.md`, logs,
+the audit's rows, files in git and the command line stay as they are.
+
+Every refusal of the node and of the UI's server carries a stable code and the values its text names beside its
+English text: `{error, code, values}`, or an RFC 9457 problem with `code` and `values` beside its `detail`. The UI
+shows a refusal in the user's language by its code, from `ui/locales/<language>/refusal.json` or the words of the
+module that asked, filled with its values; a code the UI does not know, or a refusal that lacks a value the text
+names, shows the English text it carries. A code that no screen can cause, or whose text carries what a parser or
+git said, is on one list of codes left untranslated, and a test holds that every other code has a text in every
+language.
 
 The Messages screen opens on the list of recent messages, newest first, a page at a time: each row has
 the message's start, flow, status (completed, failed, running or cancelled), duration and business keys,
@@ -1230,7 +1238,7 @@ The Users screen lists every user of the node with their kind, roles, block, liv
 each role and how, never a secret. An administrator logged in creates a person, whose first password shows once, or a
 technical account, changes roles by difference, blocks and unblocks a user, resets a person's password and ends a user's
 sessions. What the caller may not do is disabled with the reason `GET /admin/me` gives; a change the node refuses, such
-as one that would leave no administrator, shows the node's reason. A role a user gives themselves is marked as their
+as one that would leave no administrator, shows the node's reason in the user's language. A role a user gives themselves is marked as their
 own, and while the node holds the emergency key the screen says to unset it. There an administrator also issues a
 technical account's tokens and revokes any user's token. The Tokens screen shows the installation's ceiling of a token's
 life, which an administrator changes, and every user's tokens that expire within 14 days. On My tokens a person lists
@@ -1315,8 +1323,15 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 
 - A user is a person or a technical account and holds roles: `administrator`, `developer`,
   `operator`, `message-bodies` and `secret-administrator`. Every route is mounted with its action,
-  and a caller passes when a role it holds grants it; else 403 `{error, code, needs}`, `needs` the
-  roles that would. Each refusal carries a `code`; a 401 carries `WWW-Authenticate: Bearer`.
+  and a caller passes when a role it holds grants it; else 403 `{error, code, values, needs}`, `needs`
+  the roles that would. A 401 is `{error, code, values}` and carries `WWW-Authenticate: Bearer`.
+- Every refusal carries `error`, its English text for logs and the command line, `code`, and
+  `values`, the raw values its text names as strings and numbers (`{}` when it names none). The
+  codes are kebab-case, listed once in `RefusalCode`, and never renamed once shipped; the UI shows
+  a refusal in the user's language by its code. An RFC 9457 problem carries them too, its `code`
+  the last part of its `type`, except the 401 and 403 of a module's routes, whose `type` is
+  `unauthenticated` or `forbidden` and whose `code` names the refusal (`not-allowed`,
+  `session-required`). The OpenAPI contracts name the codes.
 - A login, `POST /admin/sessions {name, password}`, gives a session of 12 hours that ends after 2
   hours without a request, at its logout, at a block of its user, at a reset of the password, at the
   user's own password change (the other sessions) and at an administrator's end of the user's

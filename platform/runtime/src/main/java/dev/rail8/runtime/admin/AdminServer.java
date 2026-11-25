@@ -43,6 +43,7 @@ import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.pg.PgTx;
 import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.queue.NotAdmittedException;
+import dev.rail8.runtime.refusal.RefusalCode;
 import dev.rail8.runtime.store.PgMessageList;
 import dev.rail8.runtime.store.StepLogJson;
 import io.vertx.core.Context;
@@ -115,7 +116,8 @@ import java.util.stream.Collectors;
  * {@code /health} is open and shows status only, never a check's detail. {@code /live} and {@code /ready} are open too:
  * {@code /live} answers 200 {@code {"status":"UP"}} while the server runs and reads nothing; {@code /ready} reads its
  * {@link Readiness} inputs on the request, awaits nothing, and answers 200 {@code {"status":"UP","checks":{..}}} when every
- * one is UP, else 503 {@code {"status":"DOWN","checks":{..}}}. Every error body is {@code {error}}: 400 for a
+ * one is UP, else 503 {@code {"status":"DOWN","checks":{..}}}. Every error body is {@code {error, code, values}}, the English
+ * text, its {@link RefusalCode} and the values the text names (in this description {@code {error}} stands for them): 400 for a
  * parameter that does not parse or a limit or cursor a page store refuses, 404 for what is not
  * there (a message, a step, a body recorded as metadata only, bytes no longer stored), 405 for a method a route does not
  * take, 503 for a request the node's Postgres pool refused a connection (its wait elapsed, its wait queue full, or the
@@ -223,9 +225,9 @@ import java.util.stream.Collectors;
  * ({@link Access#authenticate}) from {@code Authorization: Bearer <credential>} before the router looks at its path, so a
  * path no route takes is authenticated too: a session; the emergency key, a {@code RAIL8_ADMIN_TOKEN} of its form; and while
  * the bridge is open, the shared token, a {@code RAIL8_ADMIN_TOKEN} of another form, and on a node without one a request
- * without a credential. A refusal is 401 {@code {error, code}} with {@code WWW-Authenticate: Bearer}, or 503. Then the
+ * without a credential. A refusal is 401 {@code {error, code, values}} with {@code WWW-Authenticate: Bearer}, or 503. Then the
  * router's 404 and 405, and the door: the caller must be allowed the route's action ({@link Caller#require}, 403
- * {@code {error, code, needs}}, {@code needs} the roles that grant it), before any body is read. Then the body (400, 413) and
+ * {@code {error, code, values, needs}}, {@code needs} the roles that grant it), before any body is read. Then the body (400, 413) and
  * the route, which asks {@link Caller#acting} for the {@link Actor} of its audit row. A request with the emergency key, a
  * 404 or 405 included, and one with the shared token for an action of the key's other than {@code self.read}, is written to
  * the audit before anything runs, 503 when it cannot be. A plugin's service answers these refusals as problems of type
@@ -299,8 +301,9 @@ public final class AdminServer {
     private static final String PLAIN_HTTP = "the admin API on this address serves plain HTTP: it takes no login, no session and no named token here until"
             + " the node has a certificate (RAIL8_ADMIN_TLS_CERT and RAIL8_ADMIN_TLS_KEY) or RAIL8_ADMIN_TLS=off";
     /** What the router answers itself: no route, a method the route does not take, a request it cannot read, a handler that threw. */
-    private static final Map<Integer, String> ROUTER_ERRORS = Map.of(400, "bad request", 404, "no such route", 405, "method not allowed",
-            500, "internal error");
+    private static final Map<Integer, Map.Entry<RefusalCode, String>> ROUTER_ERRORS = Map.of(400, Map.entry(RefusalCode.BAD_REQUEST, "bad request"),
+            404, Map.entry(RefusalCode.NO_ROUTE, "no such route"), 405, Map.entry(RefusalCode.METHOD_NOT_ALLOWED, "method not allowed"),
+            500, Map.entry(RefusalCode.INTERNAL_ERROR, "internal error"));
 
     /**
      * Where the API listens, the token {@code /admin/**} needs and how the listener is encrypted. A blank token is no token; a
@@ -725,10 +728,13 @@ public final class AdminServer {
                 admin.post("/admin/dlq/:id/cancel", Action.MESSAGE_CANCEL, CANCEL_BODY_MAX, (c, who) -> cancel(c, who, f));
                 admin.post("/admin/messages/:id/cancel", Action.MESSAGE_CANCEL, CANCEL_BODY_MAX, (c, who) -> end(c, who, f));
             });
-            ROUTER_ERRORS.forEach((status, reason) -> routes.errorHandler(status, ctx -> unrouted(ctx, status, Json.of(status, error(reason)))));
+            ROUTER_ERRORS.forEach((status, reason) -> routes.errorHandler(status,
+                    ctx -> unrouted(ctx, status, Json.of(status, error(reason.getKey(), reason.getValue(), Map.of())))));
             // the door names the limit of its route's body; the login is the one route that reads a body without a door
-            routes.errorHandler(413, ctx -> answer(ctx.response(), Json.of(413, error("the request body is above "
-                    + Objects.requireNonNullElse(ctx.<Integer>get(BODY_MAX), LOGIN_BODY_MAX) + " bytes"))));
+            routes.errorHandler(413, ctx -> {
+                int max = Objects.requireNonNullElse(ctx.<Integer>get(BODY_MAX), LOGIN_BODY_MAX);
+                answer(ctx.response(), Json.of(413, error(RefusalCode.TOO_LARGE, "the request body is above " + max + " bytes", Map.of("max", max))));
+            });
             router = routes;
             HttpServerOptions plain = new HttpServerOptions().setHost(config.host()).setPort(config.port());
             return vertx.createHttpServer(config.tls().map(c -> c.secure(plain)).orElse(plain)).requestHandler(routes).listen()
@@ -951,18 +957,18 @@ public final class AdminServer {
      * number or body; an {@link AccessRefused} as {@link #refusal} answers it; the pool's refusal 503; anything else 500, logged.
      */
     private static Reply failed(Throwable failure, RoutingContext ctx) {
-        if (failure instanceof Refused refused) return Json.of(400, error("bad request: " + refused.getMessage()));
+        if (failure instanceof Refused refused) return Json.of(400, error(refused.code, "bad request: " + refused.getMessage(), Map.of()));
         if (failure instanceof AccessRefused refused) return refusal(refused, ctx.request().path().startsWith(MODULES));
         if (PgTx.refusedByThePool(failure)) return busy();
         LOG.log(System.Logger.Level.WARNING, "admin request " + Access.redacted(ctx.request().path()) + " failed", failure);
-        return Json.of(500, error("internal error"));
+        return Json.of(500, error(RefusalCode.INTERNAL_ERROR, "internal error", Map.of()));
     }
 
     /**
-     * An {@link AccessRefused} as the API answers it: {@code {error}} and its {@code code} when it has one; a 401 with
+     * An {@link AccessRefused} as the API answers it: {@code {error, code, values}}; a 401 with
      * {@code WWW-Authenticate: Bearer}; a 403 with {@code needs}, the ids of the roles that grant the refused action; a 429 and a
      * busy 503 with {@code Retry-After}. With {@code problem} — a plugin's service — a 401 or 403 is instead a problem of type
-     * {@code urn:rail8:admin:problem:unauthenticated} or {@code forbidden} with the same members.
+     * {@code urn:rail8:admin:problem:unauthenticated} or {@code forbidden} with {@code detail} for {@code error} and the same other members.
      */
     private static Reply refusal(AccessRefused refused, boolean problem) {
         int status = refused.status();
@@ -973,8 +979,8 @@ public final class AdminServer {
         JsonObject body = asProblem
                 ? new JsonObject().put("type", "urn:rail8:admin:problem:" + (status == 401 ? "unauthenticated" : "forbidden"))
                         .put("title", status == 401 ? "Unauthenticated" : "Forbidden").put("status", status).put("detail", refused.getMessage())
-                : error(refused.getMessage());
-        refused.code().ifPresent(code -> body.put("code", code));
+                : new JsonObject().put("error", refused.getMessage());
+        body.put("code", refused.code().code()).put("values", new JsonObject(new TreeMap<>(refused.values())));
         if (status == 403) body.put("needs", ids(refused.needs()));
         return new Json(status, asProblem ? PROBLEM : JSON, body.toBuffer(), headers);
     }
@@ -995,7 +1001,7 @@ public final class AdminServer {
     /** Ends a response that cannot be answered as meant: a 500 {@code {error}} while the head is not out, otherwise a reset. */
     private static Future<?> fail(HttpServerResponse res) {
         if (res.headWritten()) return res.reset();
-        return Json.of(500, error("internal error")).send(res);
+        return Json.of(500, error(RefusalCode.INTERNAL_ERROR, "internal error", Map.of())).send(res);
     }
 
     /**
@@ -1008,14 +1014,14 @@ public final class AdminServer {
         if (req.getHeader(HttpHeaders.ORIGIN) == null && (site == null || site.equals("none"))) {
             ctx.next();
         } else {
-            answer(ctx.response(), refusal(AccessRefused.forbidden("browser",
-                    "the admin API does not answer a browser: a request with Origin or Sec-Fetch-Site other than none is refused", Set.of()), false));
+            answer(ctx.response(), refusal(AccessRefused.forbidden(RefusalCode.BROWSER,
+                    "the admin API does not answer a browser: a request with Origin or Sec-Fetch-Site other than none is refused", Map.of(), Set.of()), false));
         }
     }
 
     /** 403 {@code tls-required}: a login, a session or a named token on a listener that {@link Config#refusesLogins refuses them}. */
     private static AccessRefused plainHttp() {
-        return AccessRefused.forbidden("tls-required", PLAIN_HTTP, Set.of());
+        return AccessRefused.forbidden(RefusalCode.TLS_REQUIRED, PLAIN_HTTP, Map.of(), Set.of());
     }
 
     /** The address the request came from, for the audit. */
@@ -1023,10 +1029,20 @@ public final class AdminServer {
         return ctx.request().remoteAddress().hostAddress();
     }
 
-    /** A request the API refuses: a 400 naming the reason. Only a bad parameter becomes one, never a store's other failure. */
+    /**
+     * A request the API refuses: a 400 naming the reason, {@code bad-request} unless it has a code of its own. Only a bad parameter
+     * becomes one, never a store's other failure.
+     */
     private static final class Refused extends RuntimeException {
+        private final transient RefusalCode code;
+
         Refused(String reason) {
+            this(RefusalCode.BAD_REQUEST, reason);
+        }
+
+        Refused(RefusalCode code, String reason) {
             super(reason, null, false, false);
+            this.code = code;
         }
     }
 
@@ -1083,7 +1099,7 @@ public final class AdminServer {
     private Reply timeline(RoutingContext ctx) {
         String id = ctx.pathParam("id");
         List<Snapshot> timeline = messages.timeline(id).await();
-        if (timeline.isEmpty()) return Json.of(404, error("no message " + id + " recorded"));
+        if (timeline.isEmpty()) return Json.of(404, error(RefusalCode.NO_MESSAGE, "no message " + id + " recorded", Map.of("id", id)));
         JsonArray steps = new JsonArray();
         for (Snapshot s : timeline) steps.add(step(s));
         return Json.of(200, new JsonObject().put("id", id).put("flow", timeline.getFirst().flow()).put("steps", steps));
@@ -1123,13 +1139,18 @@ public final class AdminServer {
         Snapshot at = messages.timeline(id).await().stream().filter(s -> s.step() == n && (attempt.isEmpty() || s.attempt() == attempt.getAsInt()))
                 .reduce((earlier, later) -> later).orElse(null);
         if (at == null) {
-            return Json.of(404, error(attempt.isEmpty() ? "no step " + n + " recorded for message " + id
-                    : "no step " + n + " of attempt " + attempt.getAsInt() + " recorded for message " + id));
+            return Json.of(404, attempt.isEmpty() ? error(RefusalCode.NO_STEP, "no step " + n + " recorded for message " + id, Map.of("id", id, "step", n))
+                    : error(RefusalCode.NO_STEP_ATTEMPT, "no step " + n + " of attempt " + attempt.getAsInt() + " recorded for message " + id,
+                            Map.of("id", id, "step", n, "attempt", attempt.getAsInt())));
         }
-        if (at.bodyKey().isEmpty()) return Json.of(404, error("step " + n + " of message " + id + " was recorded as metadata only: hash and size, no bytes"));
+        if (at.bodyKey().isEmpty()) {
+            return Json.of(404, error(RefusalCode.BODY_NOT_KEPT, "step " + n + " of message " + id + " was recorded as metadata only: hash and size, no bytes",
+                    Map.of("id", id, "step", n)));
+        }
         // the head first: a recorded content-type no response may carry is refused here (IllegalArgumentException, a 500), before any stream is opened
         MultiMap head = HttpHeaders.headers().set("content-type", at.headers().getOrDefault("content-type", OCTETS)).set("content-length", Long.toString(at.bodySize()));
-        String gone = "the bytes of step " + n + " of message " + id + " are no longer stored (removed by retention)";
+        JsonObject gone = error(RefusalCode.BODY_REMOVED, "the bytes of step " + n + " of message " + id + " are no longer stored (removed by retention)",
+                Map.of("id", id, "step", n));
         BlobKey key = at.bodyKey().get();
         // existence as Postgres names it, never a node's location index: no object is retention's removal;
         // bytes that go after this check are gone too — an open that throws (a store that finds the key synchronously) or a
@@ -1138,16 +1159,17 @@ public final class AdminServer {
         try {
             stored = blobs.exists(key).await();
         } catch (BodyLostException lost) {   // given up by an accepted loss: stored once, never readable again
-            return Json.of(410, error("the bytes of step " + n + " of message " + id + " are gone for good: " + lost.getMessage()));
+            return Json.of(410, error(RefusalCode.BODY_LOST, "the bytes of step " + n + " of message " + id + " are gone for good: " + lost.getMessage(),
+                    Map.of("id", id, "step", n)));
         }
-        if (!stored) return Json.of(404, error(gone));
+        if (!stored) return Json.of(404, gone);
         // the view is in the audit before any byte of it is sent: a row not written is 503, and nothing is opened
         access.bodyViewed(who.acting(Action.MESSAGE_BODY, PackageRef.ofFlow(at.flow()), remote(ctx)), id, n);
         ReadStream<Buffer> bytes;
         try {
             bytes = blobs.open(key);
         } catch (BlobNotFoundException missing) {   // removed between the check and the open
-            return Json.of(404, error(gone));
+            return Json.of(404, gone);
         }
         return new Bytes(head, bytes, gone);
     }
@@ -1179,7 +1201,7 @@ public final class AdminServer {
 
     /** The list of recent messages: {@code from} and {@code to}, and the optional {@code flow}, {@code status}, {@code key} and {@code step}. */
     private Reply recent(RoutingContext ctx) {
-        PgMessageList recent = list.orElseThrow(() -> new Refused("this server does not list messages by time"));
+        PgMessageList recent = list.orElseThrow(() -> new Refused(RefusalCode.NO_MESSAGE_LIST, "this server does not list messages by time"));
         Optional<PgMessageList.Status> status = given(ctx, "status").map(s -> switch (s) {
             case "completed" -> PgMessageList.Status.COMPLETED;
             case "failed" -> PgMessageList.Status.FAILED;
@@ -1199,7 +1221,7 @@ public final class AdminServer {
 
     /** How many messages of the list of recent messages are in each status: {@code from} and {@code to}, and the optional {@code flow}. */
     private Reply counts(RoutingContext ctx) {
-        PgMessageList recent = list.orElseThrow(() -> new Refused("this server does not count messages by time"));
+        PgMessageList recent = list.orElseThrow(() -> new Refused(RefusalCode.NO_MESSAGE_LIST, "this server does not count messages by time"));
         Map<PgMessageList.Status, Long> counts = refusable(() -> recent.counts(instant(ctx, "from"), instant(ctx, "to"), given(ctx, "flow")).await());
         JsonObject answer = new JsonObject();
         counts.forEach((status, n) -> answer.put(status.name().toLowerCase(Locale.ROOT), n));
@@ -1241,7 +1263,7 @@ public final class AdminServer {
     private static Reply release(RoutingContext ctx, Caller who, WorkQueue work, Workers workers, WorkSignals signals) {
         long seq = refusable(() -> Long.parseLong(ctx.pathParam("seq")));
         Optional<WorkQueue.Released> released = work.releaseRow(seq, who.acting(Action.WORK_RELEASE, PackageRef.ANY, remote(ctx))).await();
-        if (released.isEmpty()) return Json.of(404, error("no held work item " + seq));
+        if (released.isEmpty()) return Json.of(404, error(RefusalCode.NO_HELD_WORK, "no held work item " + seq, Map.of("seq", seq)));
         WorkQueue.Released row = released.get();
         row.flow().ifPresentOrElse(workers::wake, workers::wakeAll);
         announce(signals, row.bodyNode().orElse(null), row.flow().orElse(null), "released work item " + seq);
@@ -1269,7 +1291,7 @@ public final class AdminServer {
     private static Reply discard(RoutingContext ctx, Caller who, WorkQueue work, Workers workers, WorkSignals signals) {
         long seq = refusable(() -> Long.parseLong(ctx.pathParam("seq")));
         Optional<WorkQueue.Discarded> discarded = work.discard(seq, who.acting(Action.WORK_DISCARD, PackageRef.ANY, remote(ctx))).await();
-        if (discarded.isEmpty()) return Json.of(404, error("no lost work item " + seq));
+        if (discarded.isEmpty()) return Json.of(404, error(RefusalCode.NO_LOST_WORK, "no lost work item " + seq, Map.of("seq", seq)));
         WorkQueue.Discarded d = discarded.get();
         workers.wake(d.flow());
         d.nextNode().ifPresent(node -> announce(signals, node, d.flow(), "the key's next row after discarded work item " + seq));
@@ -1291,36 +1313,42 @@ public final class AdminServer {
     private Reply retry(RoutingContext ctx, Caller who, Deployments deployments, FailedMessages failed) {
         String id = ctx.pathParam("id");
         Optional<Parked> found = dlq.get(id).await();
-        if (found.isEmpty()) return Json.of(404, error("no DLQ row for message " + id));
+        if (found.isEmpty()) return Json.of(404, error(RefusalCode.NO_DLQ_ROW, "no DLQ row for message " + id, Map.of("id", id)));
         Parked row = found.get();
         String flow = row.flow();
         Actor by = who.acting(Action.MESSAGE_RETRY, PackageRef.ofFlow(flow), remote(ctx));
         Optional<FlowDefinition> def = deployments.definition(flow);
-        if (def.isEmpty()) return Json.of(409, error("flow " + flow + " is not deployed on this node; message " + id + " is not restarted"));
+        if (def.isEmpty()) {
+            return Json.of(409, error(RefusalCode.RESTART_FLOW_NOT_DEPLOYED, "flow " + flow + " is not deployed on this node; message " + id + " is not restarted",
+                    Map.of("flow", flow, "id", id)));
+        }
         if (!"at-least-once".equals(def.get().deliveryMode())) {
-            return Json.of(422, error("message " + id + " of flow " + flow + " is not restarted: the flow is " + def.get().deliveryMode()
-                    + ", only an at-least-once flow's worker runs a restart"));
+            return Json.of(422, error(RefusalCode.RESTART_NOT_AT_LEAST_ONCE, "message " + id + " of flow " + flow + " is not restarted: the flow is "
+                    + def.get().deliveryMode() + ", only an at-least-once flow's worker runs a restart",
+                    Map.of("id", id, "flow", flow, "mode", def.get().deliveryMode())));
         }
         Object attempt = row.props().asMap().get(Envelope.ATTEMPT.name());
         if (row.step() != 1 || !(attempt instanceof Integer k) || k < 1) {
-            return Json.of(422, error("message " + id + " was not parked by its flow's worker (step " + row.step() + ", attempt " + attempt
-                    + "): it cannot be restarted"));
+            return Json.of(422, error(RefusalCode.RESTART_NOT_PARKED_BY_WORKER, "message " + id + " was not parked by its flow's worker (step " + row.step()
+                    + ", attempt " + attempt + "): it cannot be restarted", Map.of("id", id, "step", row.step(), "attempt", String.valueOf(attempt))));
         }
         if (def.get().partitionBy().isPresent() && row.partitionKey().isEmpty()) {
-            return Json.of(422, error("message " + id + " of the keyed flow " + flow + " was parked before its key was kept"));
+            return Json.of(422, error(RefusalCode.RESTART_KEY_NOT_KEPT, "message " + id + " of the keyed flow " + flow + " was parked before its key was kept",
+                    Map.of("id", id, "flow", flow)));
         }
         FailedMessages.Act act;
         try {
             act = failed.retry(id, flow, row.partitionKey().orElse(null), k, by).await();
         } catch (BlobNotFoundException | BodyLostException gone) {
-            return Json.of(409, error("message " + id + " is not restarted: its ingress body is no longer kept (" + gone.getMessage() + ")"));
+            return Json.of(409, error(RefusalCode.RESTART_BODY_GONE, "message " + id + " is not restarted: its ingress body is no longer kept ("
+                    + gone.getMessage() + ")", Map.of("id", id)));
         } catch (NotAdmittedException retired) {
-            return Json.of(409, error("message " + id + " is not restarted: " + retired.getMessage()));
+            return Json.of(409, error(RefusalCode.RESTART_NOT_ADMITTED, "message " + id + " is not restarted: " + retired.getMessage(), Map.of("id", id)));
         }
         return switch (act) {
-            case FailedMessages.Unsettled u -> Json.of(409, error("message " + id + " is not restarted: its work item " + u.seq()
-                    + " is not settled yet, or its body is lost"));
-            case FailedMessages.NotParked n -> Json.of(404, error("no DLQ row for message " + id + " any more"));
+            case FailedMessages.Unsettled u -> Json.of(409, error(RefusalCode.RESTART_UNSETTLED, "message " + id + " is not restarted: its work item " + u.seq()
+                    + " is not settled yet, or its body is lost", Map.of("id", id, "seq", u.seq())));
+            case FailedMessages.NotParked n -> Json.of(404, error(RefusalCode.NO_DLQ_ROW, "no DLQ row for message " + id + " any more", Map.of("id", id)));
             case FailedMessages.Stopping s -> throw new IllegalStateException("a retry answered " + s);
             case FailedMessages.Done done -> {
                 workers.wake(flow);
@@ -1346,8 +1374,9 @@ public final class AdminServer {
         Optional<String> reason = reason(ctx.request(), ctx.body());
         FailedMessages.Act act = failed.cancel(id, by, reason).await();
         return switch (act) {
-            case FailedMessages.Unsettled u -> Json.of(409, error("message " + id + " is not cancelled: its work item " + u.seq() + " is not settled yet"));
-            case FailedMessages.NotParked n -> Json.of(404, error("no DLQ row for message " + id));
+            case FailedMessages.Unsettled u -> Json.of(409, error(RefusalCode.CANCEL_UNSETTLED, "message " + id + " is not cancelled: its work item " + u.seq()
+                    + " is not settled yet", Map.of("id", id, "seq", u.seq())));
+            case FailedMessages.NotParked n -> Json.of(404, error(RefusalCode.NO_DLQ_ROW, "no DLQ row for message " + id, Map.of("id", id)));
             case FailedMessages.Stopping s -> throw new IllegalStateException("a DLQ cancel answered " + s);
             case FailedMessages.Done done -> Json.of(200, cancelled(id, done));
         };
@@ -1380,10 +1409,10 @@ public final class AdminServer {
         Optional<String> reason = reason(ctx.request(), ctx.body());
         FailedMessages.Act act = failed.end(id, by, reason).await();
         return switch (act) {
-            case FailedMessages.Unsettled u -> Json.of(409, error("message " + id + " is not cancelled: its work item " + u.seq()
-                    + " is held, lost, or not settled yet"));
-            case FailedMessages.NotParked n -> Json.of(404, error("no queued, running or parked at-least-once message " + id
-                    + ": sync and at-most-once runs are not cancelled; their time limit ends them"));
+            case FailedMessages.Unsettled u -> Json.of(409, error(RefusalCode.END_UNSETTLED, "message " + id + " is not cancelled: its work item " + u.seq()
+                    + " is held, lost, or not settled yet", Map.of("id", id, "seq", u.seq())));
+            case FailedMessages.NotParked n -> Json.of(404, error(RefusalCode.NOT_CANCELLABLE, "no queued, running or parked at-least-once message " + id
+                    + ": sync and at-most-once runs are not cancelled; their time limit ends them", Map.of("id", id)));
             case FailedMessages.Done done -> Json.of(200, cancelled(id, done).put("state", "ended"));
             case FailedMessages.Stopping s -> {
                 FailedMessages.Event e = s.event();
@@ -1477,7 +1506,7 @@ public final class AdminServer {
         for (Action action : Action.values()) {
             Optional<AccessRefused> refusal = who.refusal(action, PackageRef.ANY);
             if (refusal.isEmpty()) actions.add(action.id());
-            else refused.put(action.id(), new JsonObject().put("code", refusal.get().code().orElseThrow()).put("needs", ids(refusal.get().needs())));
+            else refused.put(action.id(), new JsonObject().put("code", refusal.get().code().code()).put("needs", ids(refusal.get().needs())));
         }
         return new JsonObject().put("name", who.name()).put("kind", who.kind() == Kind.NONE ? null : who.kind().id())
                 .put("roles", ids(who.roles())).put("actions", actions).put("refused", refused).put("via", who.via().id()).put("firstPassword", who.firstPassword())
@@ -1502,7 +1531,7 @@ public final class AdminServer {
 
     /** {@code GET /admin/users/{name}}: the user, or 404. */
     private Reply user(String name) {
-        return access.user(name).map(u -> Json.of(200, user(u))).orElseGet(() -> Json.of(404, error("no user " + name)));
+        return access.user(name).map(u -> Json.of(200, user(u))).orElseGet(() -> Json.of(404, error(RefusalCode.NO_USER, "no user " + name, Map.of("name", name))));
     }
 
     /**
@@ -1662,7 +1691,9 @@ public final class AdminServer {
      */
     private Reply cpu(RoutingContext ctx, Deployments deployments) {
         String flow = ctx.pathParam("flow");
-        if (deployments.flows().stream().noneMatch(f -> f.id().equals(flow))) return Json.of(404, error("no flow " + flow + " deployed on this node"));
+        if (deployments.flows().stream().noneMatch(f -> f.id().equals(flow))) {
+            return Json.of(404, error(RefusalCode.NO_FLOW, "no flow " + flow + " deployed on this node", Map.of("flow", flow)));
+        }
         JsonObject answer = new JsonObject().put("flow", flow);
         if (sampling.isEmpty()) return Json.of(200, answer.put("sampling", "off").put("items", new JsonArray()));
         StepCpu cpu = sampling.get().cpu();
@@ -1853,7 +1884,7 @@ public final class AdminServer {
             case NOT_FOUND -> 404;
             case STALE -> 412;
         };
-        JsonObject body = error(refused.error());
+        JsonObject body = error(refused.code(), refused.error(), refused.values());
         if (!refused.problems().isEmpty()) body.put("problems", new JsonArray(refused.problems()));
         refused.replaces().ifPresent(replaces -> body.put("replaces", replaces));
         return Json.of(status, body);
@@ -1861,7 +1892,7 @@ public final class AdminServer {
 
     /** 503 for a request the node's Postgres pool refused a connection: a fixed text, the client's message not shown. */
     private static Reply busy() {
-        return Json.of(503, error("the database pool is busy; retry"));
+        return Json.of(503, error(RefusalCode.POOL_BUSY, "the database pool is busy; retry", Map.of()));
     }
 
     private static <T> JsonObject page(Page<T> page, Function<T, Object> item) {
@@ -1962,8 +1993,9 @@ public final class AdminServer {
         return o;
     }
 
-    private static JsonObject error(String message) {
-        return new JsonObject().put("error", message);
+    /** A refusal's body: {@code {error, code, values}}, the English text, its code and the values it names. */
+    private static JsonObject error(RefusalCode code, String message, Map<String, Object> values) {
+        return new JsonObject().put("error", message).put("code", code.code()).put("values", new JsonObject(new TreeMap<>(values)));
     }
 
     /** The ids of {@code roles}, in the order of {@link Role}. */
@@ -2044,13 +2076,13 @@ public final class AdminServer {
      * with a {@link BlobNotFoundException}, the store holding nothing under the key (a durable tier opens lazily and finds
      * no row only when read), the 404 {@code gone} — after it a reset, whatever the failure.
      */
-    private record Bytes(MultiMap head, ReadStream<Buffer> bytes, String gone) implements Reply {
+    private record Bytes(MultiMap head, ReadStream<Buffer> bytes, JsonObject gone) implements Reply {
         @Override
         public Future<?> send(HttpServerResponse res) {
             res.setStatusCode(200).headers().setAll(head);
             return bytes.pipe().endOnFailure(false).to(res).onFailure(failed -> {
                 if (failed instanceof BlobNotFoundException && !res.headWritten()) {
-                    Json.of(404, error(gone)).send(res);
+                    Json.of(404, gone).send(res);
                     return;
                 }
                 LOG.log(System.Logger.Level.WARNING, "streaming a stored body failed", failed);

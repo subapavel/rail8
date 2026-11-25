@@ -1,6 +1,6 @@
 import { Refusal } from '../../../server/workingFolder.ts';
 import type { Commit } from '../api.ts';
-import { GIT_MISSING, gitTooOld, OLDEST_GIT, type StatusEntry } from '../rules.ts';
+import { GIT_REFUSALS, OLDEST_GIT, type Refused, type StatusEntry } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import type { Runner } from './runner.ts';
 
@@ -34,19 +34,19 @@ export async function holds(git: Runner, clone: string, args: readonly string[],
  * Why the development server's git cannot serve the git half, or null when it can: git is missing from its PATH, or
  * older than 2.30. A failure of the check itself says what failed.
  */
-export async function checkGit(git: Runner): Promise<string | null> {
+export async function checkGit(git: Runner): Promise<Refused | null> {
   let said: string;
   try {
     const ran = await git.run({ args: ['--version'], mode: 'read' });
     said = ran.stdout.toString('utf8').trim();
   } catch (error) {
-    if (error instanceof Refusal && error.status === 503) return GIT_MISSING;
-    return `git --version failed: ${error instanceof Error ? error.message : String(error)}`;
+    if (error instanceof Refusal && error.status === 503) return GIT_REFUSALS.missing;
+    return GIT_REFUSALS.versionFailed(error instanceof Error ? error.message : String(error));
   }
   const version = /^git version (\d+)\.(\d+)\S*/.exec(said);
-  if (version === null) return `git --version answered ${formatted(said)}, which names no version`;
+  if (version === null) return GIT_REFUSALS.noVersion(formatted(said));
   const [major, minor] = [Number(version[1]), Number(version[2])];
-  if (major < OLDEST_GIT[0] || (major === OLDEST_GIT[0] && minor < OLDEST_GIT[1])) return gitTooOld(version[0].slice('git version '.length));
+  if (major < OLDEST_GIT[0] || (major === OLDEST_GIT[0] && minor < OLDEST_GIT[1])) return GIT_REFUSALS.tooOld({ version: version[0].slice('git version '.length) });
   return null;
 }
 

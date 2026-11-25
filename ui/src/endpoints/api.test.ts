@@ -1,5 +1,18 @@
 import { describe, expect, test, vi } from 'vitest';
+import { chooseLanguage, type Language } from '../language';
 import { EndpointsError, httpEndpointsApi } from './api';
+
+/** Runs `check` with the UI shown in `language`, and shows it in English again after. */
+async function inLanguage(language: Language, check: () => Promise<void>) {
+  vi.stubGlobal('document', { documentElement: {} });
+  chooseLanguage(language);
+  try {
+    await check();
+  } finally {
+    chooseLanguage('en');
+    vi.unstubAllGlobals();
+  }
+}
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -42,6 +55,18 @@ describe('httpEndpointsApi', () => {
 
   test("rejects with the server's status and error, or status 0 when it does not answer", async () => {
     await expect(httpEndpointsApi(async () => json(412, { error: 'the file changed' })).read('a.yaml')).rejects.toEqual(new EndpointsError(412, 'the file changed'));
+  });
+
+  test("shows a refusal in the UI's language by its code, and one of an unknown code in the server's English", async () => {
+    await inLanguage('cs', async () => {
+      const refused = { error: 'demo/x.yaml is not an endpoint file', code: 'not-endpoint-file', values: { path: 'demo/x.yaml' } };
+      await expect(httpEndpointsApi(async () => json(404, refused)).read('demo/x.yaml')).rejects.toEqual(new EndpointsError(404, 'demo/x.yaml není soubor koncového bodu.'));
+      const unknown = { error: 'the server says no', code: 'not-a-code-of-the-ui', values: {} };
+      await expect(httpEndpointsApi(async () => json(409, unknown)).read('demo/x.yaml')).rejects.toEqual(new EndpointsError(409, 'the server says no'));
+    });
+  });
+
+  test('rejects with the status line when the server gives no text, or status 0 when it does not answer', async () => {
     await expect(httpEndpointsApi(async () => new Response('down', { status: 502, statusText: 'Bad Gateway' })).list()).rejects.toMatchObject({ status: 502, message: '502 Bad Gateway' });
     await expect(httpEndpointsApi(async () => Promise.reject(new TypeError('failed'))).list()).rejects.toMatchObject({ status: 0 });
   });

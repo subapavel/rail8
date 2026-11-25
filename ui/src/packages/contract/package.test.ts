@@ -251,7 +251,7 @@ describe.each<[string, Build]>([
   test('a folder that is no package, or no repository name, is refused', async () => {
     const { api } = await open({ clones: [{ folder: 'loose', manifest: null }], plain: ['plain'] });
 
-    expect(await refusalOf(api.get('loose'))).toMatchObject({ status: 404, message: `loose is no package: ${REASONS.noManifest}` });
+    expect(await refusalOf(api.get('loose'))).toMatchObject({ status: 404, message: `loose is no package: ${REASONS.noManifest.error}` });
     expect((await refusalOf(api.get('plain'))).status).toBe(404);
     expect((await refusalOf(api.get('none'))).status).toBe(404);
     for (const name of ['-x', '.git', ':(glob)*']) expect((await refusalOf(api.get(name))).status, name).toBe(400);

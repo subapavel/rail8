@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { chooseLanguage, type Language } from '../../language';
 import { FlowsError, httpFlowsApi } from './api';
+
+/** Runs `check` with the UI shown in `language`, and shows it in English again after. */
+async function inLanguage(language: Language, check: () => Promise<void>) {
+  vi.stubGlobal('document', { documentElement: {} });
+  chooseLanguage(language);
+  try {
+    await check();
+  } finally {
+    chooseLanguage('en');
+    vi.unstubAllGlobals();
+  }
+}
 
 const answer = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -46,6 +59,15 @@ describe('httpFlowsApi', () => {
       method: 'PUT',
       headers: { accept: 'application/json', 'content-type': 'application/json', 'if-none-match': '*' },
       body: JSON.stringify({ text: 'z' }),
+    });
+  });
+
+  it("shows a refusal in the UI's language by its code, and one of an unknown code in the server's English", async () => {
+    await inLanguage('cs', async () => {
+      const refused = { error: 'demo/x.yaml is not a flow file', code: 'not-flow-file', values: { path: 'demo/x.yaml' } };
+      await expect(httpFlowsApi(async () => answer(404, refused)).read('demo/x.yaml')).rejects.toEqual(new FlowsError(404, 'demo/x.yaml není soubor toku.'));
+      const unknown = { error: 'the server says no', code: 'not-a-code-of-the-ui', values: {} };
+      await expect(httpFlowsApi(async () => answer(409, unknown)).read('demo/x.yaml')).rejects.toEqual(new FlowsError(409, 'the server says no'));
     });
   });
 

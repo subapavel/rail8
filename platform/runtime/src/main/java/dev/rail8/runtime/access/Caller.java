@@ -1,9 +1,11 @@
 package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
+import dev.rail8.runtime.refusal.RefusalCode;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -85,12 +87,15 @@ public record Caller(OptionalLong user, String name, Kind kind, Set<Role> roles,
         if (may(action, pkg)) return Optional.empty();
         boolean account = via == Via.SESSION || via == Via.TOKEN;
         if (account && firstPassword) {
-            return Optional.of(AccessRefused.forbidden("password-change-required", "change the first password before " + action.id(), action.roles()));
+            return Optional.of(AccessRefused.forbidden(RefusalCode.PASSWORD_CHANGE_REQUIRED, "change the first password before " + action.id(),
+                    Map.of("action", action.id()), action.roles()));
         }
         if (via == Via.TOKEN && action.needsSession()) {
-            return Optional.of(AccessRefused.forbidden("session-required", action.id() + " needs a person logged in, not a token", action.roles()));
+            return Optional.of(AccessRefused.forbidden(RefusalCode.SESSION_REQUIRED, action.id() + " needs a person logged in, not a token",
+                    Map.of("action", action.id()), action.roles()));
         }
-        return Optional.of(AccessRefused.forbidden("not-allowed", action.id() + " is not allowed to " + name + needs(action), action.roles()));
+        return Optional.of(AccessRefused.forbidden(RefusalCode.NOT_ALLOWED, action.id() + " is not allowed to " + name + needs(action),
+                Map.of("action", action.id(), "caller", name), action.roles()));
     }
 
     /** {@link #may}, else the 403 of {@link #refusal}. */

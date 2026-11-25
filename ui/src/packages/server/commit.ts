@@ -3,11 +3,12 @@ import { access, lstat, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { CommitBody, Committed } from '../api.ts';
-import { commitBodyOf as commitBodyRules, indexFrom, inPackage, staleChoice, statusCompared, unstageCommand } from '../rules.ts';
+import { COMMIT_REFUSALS, commitBodyOf as commitBodyRules, indexFrom, inPackage, staleChoice, statusCompared, unstageCommand, type Refused } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import { catFile, GitSaid, LOG_FORMAT, parseDiffTree, parseLog, read } from './git.ts';
 import { diskAt, identityOf } from './package.ts';
 import { busyOf, statusOf } from './packages.ts';
+import { refusal } from './refused.ts';
 import type { Limits, Ran, Runner } from './runner.ts';
 
 /** A commit with its hooks, and the `add` before it: 60 s, and 1 MiB on each stream. */
@@ -16,16 +17,16 @@ export const COMMIT_LIMITS: Limits = { ms: 60_000, bytes: 1024 * 1024 };
 /** `body` as a commit of the package `repository` takes it, refused as {@link commitBodyRules} refuses it. */
 export function commitBodyOf(repository: string, body: unknown): CommitBody {
   const found = commitBodyRules(repository, body);
-  if ('error' in found) throw new Refusal(found.status, found.error);
+  if ('error' in found) throw refusal(found.status, found);
   return found;
 }
 
-/** A refused commit: its status, its error, and what git and the hooks said. */
+/** A refused commit: its status, its refusal, and what git and the hooks said. */
 export class CommitRefused extends Refusal {
   readonly output: string;
 
-  constructor(status: number, message: string, output: string) {
-    super(status, message);
+  constructor(status: number, refused: Refused, output: string) {
+    super(status, refused.code, refused.error, refused.values);
     this.output = output;
   }
 }
@@ -37,27 +38,54 @@ export interface CommitDone {
   problem?: string;
 }
 
-/** What keeps a busy clone busy, in words. */
-export const BUSY = {
-  merge: 'a merge is in progress',
-  rebase: 'a rebase is in progress',
-  'cherry-pick': 'a cherry-pick is in progress',
-  revert: 'a revert is in progress',
-  bisect: 'a bisect is in progress',
-  conflict: 'a path is in conflict',
-} as const;
-
 const literal = (inside: string) => `:(literal)${inside}`;
 const saidBy = (ran: { stdout: Buffer; stderr: Buffer }) =>
   formatted([ran.stdout.toString('utf8'), ran.stderr.toString('utf8')].filter((t) => t.trim() !== '').join('\n'));
 const textOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** `failure` with `note` added to its error text, and `said`, what git said meanwhile, to its output. */
-function noted(failure: unknown, note: string, said: string): Error {
-  const status = failure instanceof Refusal ? failure.status : 500;
-  const message = `${failure instanceof Refusal ? failure.message : textOf(failure)}; ${note}`;
-  const output = [failure instanceof CommitRefused ? failure.output : '', said].filter((t) => t !== '').join('\n');
-  return failure instanceof CommitRefused || output !== '' ? new CommitRefused(status, message, output) : new Refusal(status, message);
+/** A step of the commit that git or a hook refused, `git add` or `git commit`, and what they said. */
+class GitFailed extends Error {
+  readonly step: 'add' | 'commit';
+  readonly said: string;
+
+  constructor(step: 'add' | 'commit', said: string) {
+    super(step === 'add' ? 'git add failed' : 'git commit failed, as git and the hooks say');
+    this.step = step;
+    this.said = said;
+  }
+}
+
+/**
+ * Where `HEAD` was once the undo of a failed commit ran: where git commit started on it, not read again, or moved to
+ * another commit (null: to no commit).
+ */
+type HeadAfter = { kind: 'unchanged' } | { kind: 'unread' } | { kind: 'moved'; head: string | null };
+
+/**
+ * The refusal of the failed commit: the refusal of the step git refused, as `HEAD` was after it, or `failure`'s own text
+ * with what `HEAD` did and `staged`, the notes on the paths left staged. `said`, what git said during the undo, joins
+ * what git and the hooks said.
+ */
+function noted(failure: unknown, head: HeadAfter, staged: readonly string[], said: string): Error {
+  const status = failure instanceof GitFailed ? 422 : failure instanceof Refusal ? failure.status : 500;
+  const output = [failure instanceof GitFailed ? failure.said : '', said].filter((t) => t !== '').join('\n');
+  // git add runs before HEAD is read, so HEAD is where it was when it fails
+  const step = failure instanceof GitFailed && staged.length === 0 ? failure.step : null;
+  let refused: Refused;
+  if (step === 'add') refused = COMMIT_REFUSALS.addFailed;
+  else if (step === 'commit' && head.kind === 'unchanged') refused = COMMIT_REFUSALS.failed;
+  else if (step === 'commit' && head.kind === 'unread') refused = COMMIT_REFUSALS.failedHeadUnread;
+  else if (step === 'commit' && head.kind === 'moved' && head.head !== null) refused = COMMIT_REFUSALS.failedHeadMoved({ head: head.head });
+  else {
+    const headNote =
+      head.kind === 'unchanged'
+        ? 'nothing was committed'
+        : head.kind === 'unread'
+          ? "HEAD could not be read again, so git may have committed: the package's history shows it"
+          : `HEAD moved to ${head.head ?? 'no commit'} meanwhile, so git may have committed: the package's history shows it`;
+    refused = COMMIT_REFUSALS.failedNoted([failure instanceof Error ? failure.message : textOf(failure), headNote, ...staged].join('; '));
+  }
+  return failure instanceof GitFailed || output !== '' ? new CommitRefused(status, refused, output) : refusal(status, refused);
 }
 
 /**
@@ -88,26 +116,24 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
   return lock(async () => {
     const status = await statusOf(git, clone);
     const busy = await busyOf(clone, status);
-    if (busy !== null) throw new Refusal(409, `the clone is busy: ${BUSY[busy]}; finish it in a terminal, then commit`);
-    if (await indexLocked(clone)) throw new Refusal(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
-    if (status.branch === null) throw new Refusal(409, 'HEAD is detached: commit on a branch, which a terminal can switch to');
-    if ((await identityOf(git, clone)) === null) {
-      throw new Refusal(422, 'git gives no author identity in this clone: set it in a terminal with git config user.name and git config user.email');
-    }
+    if (busy !== null) throw refusal(409, COMMIT_REFUSALS.busy({ busy }));
+    if (await indexLocked(clone)) throw refusal(409, COMMIT_REFUSALS.indexLocked);
+    if (status.branch === null) throw refusal(409, COMMIT_REFUSALS.detached);
+    if ((await identityOf(git, clone)) === null) throw refusal(422, COMMIT_REFUSALS.noIdentity);
     if (status.branch !== body.branch || status.oid !== body.head) {
-      throw new Refusal(412, `the clone is now at ${status.branch} ${status.oid ?? '(no commit yet)'}, not at the branch and HEAD you reviewed; nothing was committed`);
+      throw refusal(412, status.oid === null ? COMMIT_REFUSALS.movedUnborn({ branch: status.branch }) : COMMIT_REFUSALS.moved({ branch: status.branch, head: status.oid }));
     }
     const indexOf = indexFrom(status.entries);
     const named = body.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
     const disk = await Promise.all(named.map((inside) => diskAt(clone, inside)));
-    const stale = staleChoice(repository, body.paths.map((p, n) => ({ path: p.path, inside: named[n]!, tag: p.tag, onDisk: disk[n] !== null })), statusCompared(status.entries), 'nothing was committed');
-    if (stale !== null) throw new Refusal(412, stale);
+    const stale = staleChoice(repository, body.paths.map((p, n) => ({ path: p.path, inside: named[n]!, tag: p.tag, onDisk: disk[n] !== null })), statusCompared(status.entries), COMMIT_REFUSALS);
+    if (stale !== null) throw refusal(412, stale);
     body.paths.forEach((p, n) => {
-      if ((disk[n]?.tag ?? null) !== p.tag) throw new Refusal(412, `${p.path} changed since you reviewed it; nothing was committed`);
+      if ((disk[n]?.tag ?? null) !== p.tag) throw refusal(412, COMMIT_REFUSALS.changed({ path: p.path }));
     });
     body.paths.forEach((p, n) => {
       if (indexOf(named[n]!, disk[n] !== null) === 'differs') {
-        throw new Refusal(409, `${p.path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`);
+        throw refusal(409, COMMIT_REFUSALS.staged({ path: p.path }));
       }
     });
 
@@ -131,11 +157,11 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
         async () => {
           if (added.length > 0) {
             const adding = await git.run({ args: ['add', '--', ...added.map(literal)], clone, mode: 'write', limits: COMMIT_LIMITS });
-            if (adding.code !== 0) throw new CommitRefused(422, 'git add failed', saidBy(adding));
+            if (adding.code !== 0) throw new GitFailed('add', saidBy(adding));
           }
           before = (await catFile(git, clone, ['HEAD^{commit}'], true))[0]?.oid ?? null;
           const committing = await git.run({ args: ['commit', '--only', '-F', '-', '--', ...named.map(literal)], clone, mode: 'write', stdin: body.message, limits: COMMIT_LIMITS });
-          if (committing.code !== 0) throw new CommitRefused(422, 'git commit failed, as git and the hooks say', saidBy(committing));
+          if (committing.code !== 0) throw new GitFailed('commit', saidBy(committing));
           return committing;
         },
         // an added path leaves the index again while HEAD lacks it and its entry is the blob the request checked; the
@@ -175,16 +201,17 @@ export async function commitPaths(git: Runner, lock: WorkingFolderLock, clone: s
       );
     } catch (failure) {
       const pathsOf = (insides: readonly string[]) => insides.map((inside) => `${repository}/${inside}`).join(', ');
-      const notes = [
+      const head: HeadAfter =
         before === undefined || (after !== undefined && after === before)
-          ? 'nothing was committed'
+          ? { kind: 'unchanged' }
           : after === undefined
-            ? "HEAD could not be read again, so git may have committed: the package's history shows it"
-            : `HEAD moved to ${after === null ? 'no commit' : after.slice(0, 7)} meanwhile, so git may have committed: the package's history shows it`,
+            ? { kind: 'unread' }
+            : { kind: 'moved', head: after === null ? null : after.slice(0, 7) };
+      const staged = [
         ...(kept.length === 0 ? [] : [`${pathsOf(kept)} stay staged, as another git staged them meanwhile`]),
         ...(stuck.length === 0 ? [] : [`${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, (after === undefined ? status.oid : after) === null)}`]),
       ];
-      throw noted(failure, notes.join('; '), said);
+      throw noted(failure, head, staged, said);
     }
 
     try {

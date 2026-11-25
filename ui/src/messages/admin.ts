@@ -1,4 +1,5 @@
 import type { AuditRow } from '../audit';
+import { refusalText } from '../refusal';
 import { uiFetch } from '../session';
 
 /** How a recorded step ended: it handed a message on, it handed nothing on, or it threw. */
@@ -128,8 +129,7 @@ export const PAYLOAD_SHOWN = 1024 * 1024;
 async function refusal(res: Response): Promise<AdminError> {
   let text = `${res.status} ${res.statusText}`.trim();
   try {
-    const body: unknown = await res.json();
-    if (typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string') text = body.error;
+    text = refusalText(await res.json()) ?? text;
   } catch {
     // not JSON: the status line stands
   }

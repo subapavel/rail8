@@ -104,7 +104,7 @@ describe('the runner on a fake process', () => {
     const processes = fakeProcesses();
     const timer = new FakeTimer();
     const runs = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
-    const program = { file: '/rail8/bin/rail8', name: 'rail8 lock', missing: 'no command line' };
+    const program = { file: '/rail8/bin/rail8', name: 'rail8 lock', missing: { code: 'cli-missing', error: 'no command line', values: {} } };
 
     const ran = runs.run({ args: ['lock', '/work/orders', '--deps', '/work'], mode: 'write', program, limits: { ms: 1000, bytes: 1024 } });
     const child = processes.children[0]!;
@@ -113,17 +113,17 @@ describe('the runner on a fake process', () => {
 
     expect(child.command).toBe('/rail8/bin/rail8');
     expect(child.args).toEqual(['lock', '/work/orders', '--deps', '/work']);
-    expect(await refusalOf(ran)).toMatchObject({ status: 504, message: 'rail8 lock took longer than 1 s and was stopped' });
+    expect(await refusalOf(ran)).toMatchObject({ status: 504, code: 'program-timed-out', message: 'rail8 lock took longer than 1 s and was stopped', values: { program: 'rail8 lock', seconds: 1 } });
   });
 
   test('refuses a program that cannot be found with 503 and what its call says', async () => {
     const processes = fakeProcesses();
     const runs = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
 
-    const ran = runs.run({ args: ['lock'], mode: 'write', program: { file: '/nowhere/rail8', name: 'rail8 lock', missing: 'build the command line first' } });
+    const ran = runs.run({ args: ['lock'], mode: 'write', program: { file: '/nowhere/rail8', name: 'rail8 lock', missing: { code: 'cli-missing', error: 'build the command line first', values: { cli: '/nowhere/rail8' } } } });
     processes.children[0]!.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
 
-    expect(await refusalOf(ran)).toMatchObject({ status: 503, message: 'build the command line first' });
+    expect(await refusalOf(ran)).toMatchObject({ status: 503, code: 'cli-missing', message: 'build the command line first', values: { cli: '/nowhere/rail8' } });
   });
 
   test('removes every GIT_ and RAIL8_ variable, turns prompts off, and sets the C locale and no optional locks for reads only', async () => {
@@ -322,7 +322,7 @@ describe('the runner on a fake process', () => {
     const timer = new FakeTimer();
     const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
     const stop = new AbortController();
-    const why = new Refusal(422, 'over the limit');
+    const why = new Refusal(422, 'test-refusal', 'over the limit');
 
     const ran = git.run({ args: ['status'], clone: '/work/orders', mode: 'read', signal: stop.signal });
     stop.abort(why);
@@ -337,7 +337,7 @@ describe('the runner on a fake process', () => {
   test('a signal aborted before the call starts, or while it waits, starts no process', async () => {
     const processes = fakeProcesses();
     const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
-    const why = new Refusal(422, 'stopped');
+    const why = new Refusal(422, 'test-refusal', 'stopped');
 
     expect(await refusalOf(git.run({ args: ['clone'], mode: 'clone', signal: AbortSignal.abort(why) }))).toBe(why);
     const first = git.run({ args: ['clone-0'], mode: 'clone' });
@@ -361,7 +361,7 @@ describe('the runner on a fake process', () => {
 
     const ran = git.run({ args: ['clone'], mode: 'clone', signal: stop.signal });
     void ran.catch(() => (ended = true));
-    stop.abort(new Refusal(422, 'over the limit'));
+    stop.abort(new Refusal(422, 'test-refusal', 'over the limit'));
     processes.children[0]!.exit(null);
     await settle();
     await settle();
@@ -449,7 +449,7 @@ describe('an undoable work of the runner', () => {
     const processes = fakeProcesses();
     const git = runner({ env: {}, timer: new FakeTimer(), spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
     const undone: unknown[] = [];
-    const failure = new Refusal(422, 'the hook refused');
+    const failure = new Refusal(422, 'test-refusal', 'the hook refused');
 
     const failing = git.undoable(
       async () => {
@@ -472,11 +472,11 @@ describe('an undoable work of the runner', () => {
 
   test('fails with the undo’s own failure when the undo fails', async () => {
     const git = runner({ env: {}, timer: new FakeTimer(), spawn: fakeProcesses().spawn, signals: new FakeSignals() });
-    const own = new Refusal(422, 'the hook refused; orders/new.txt stays staged');
+    const own = new Refusal(422, 'test-refusal', 'the hook refused; orders/new.txt stays staged');
 
     const failed = git.undoable(
       async () => {
-        throw new Refusal(422, 'the hook refused');
+        throw new Refusal(422, 'test-refusal', 'the hook refused');
       },
       async () => {
         throw own;
@@ -525,7 +525,7 @@ describe('an undoable work of the runner', () => {
     const git = runner({ env: {}, timer, spawn: processes.spawn, kill: processes.kill, signals: new FakeSignals() });
 
     const failing = git.undoable(
-      () => Promise.reject(new Refusal(422, 'the hook refused')),
+      () => Promise.reject(new Refusal(422, 'test-refusal', 'the hook refused')),
       async (run) => {
         await run(write(['rm', '--cached']));
       },
@@ -550,7 +550,7 @@ describe('an undoable work of the runner', () => {
 
     const failed = git.undoable(
       async () => {
-        throw new Refusal(422, 'the hook refused');
+        throw new Refusal(422, 'test-refusal', 'the hook refused');
       },
       async (run) => {
         await run({ ...write(['rm', '--cached']), limits: { ms: 3_600_000, bytes: 1 } });
@@ -571,7 +571,7 @@ describe('an undoable work of the runner', () => {
 
     const failed = git.undoable(
       async () => {
-        throw new Refusal(422, 'the hook refused');
+        throw new Refusal(422, 'test-refusal', 'the hook refused');
       },
       async (run) => {
         await run(write(['rm', '--cached']));
@@ -633,7 +633,7 @@ describe('an undoable work of the runner', () => {
     let refused: unknown;
 
     const failing = git.undoable(
-      () => Promise.reject(new Refusal(422, 'the hook refused')),
+      () => Promise.reject(new Refusal(422, 'test-refusal', 'the hook refused')),
       async (run) => {
         for (let n = 0; n < UNDO_CALLS; n++) {
           const ran = run(read(['ls-files']));

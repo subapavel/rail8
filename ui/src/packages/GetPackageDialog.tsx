@@ -3,8 +3,8 @@ import { useId, useState } from 'react';
 import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { PackagesError, type CloneAnswer, type PackagesApi } from './api';
-import { ADDRESS_TEXTS, refusalIn } from './refusals';
-import { ADDRESS_REFUSALS, cloneSourceOf } from './rules';
+import { refusedIn } from './refusals';
+import { cloneSourceOf } from './rules';
 
 export interface GetPackageDialogProps {
   api: PackagesApi;
@@ -120,7 +120,7 @@ export function GetPackageDialog({ api, onPackage, onCloned, onClose }: GetPacka
               source === null
                 ? t('packages.get.address.help')
                 : 'error' in source
-                  ? refusalIn(texts, ADDRESS_REFUSALS, ADDRESS_TEXTS, source.error)
+                  ? refusedIn(texts, source)
                   : t('packages.get.into', { folder: source.repository })
             }
           >

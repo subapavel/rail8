@@ -1,11 +1,17 @@
 import type { components } from '../generated/api';
 import type { FunctionCatalogue } from '../generated/function-catalogue';
 import type { MappingModel } from '../generated/mapping-model';
+import { ownRefusalText } from '../../refusal';
 
 type Schemas = components['schemas'];
 
 export type Diagnostic = Schemas['DiagnosticDto'];
-export type Problem = Schemas['Problem'] | Schemas['RefusedProblem'];
+/**
+ * An RFC 9457 problem of the service. Its `code` and `values` are optional here, since a call can also be refused by what
+ * stands before the service (a body over Vert.x's limit), whose answer carries neither.
+ */
+export type Problem = Loose<Schemas['Problem']> | Loose<Schemas['RefusedProblem']>;
+type Loose<P extends { code: string; values: unknown }> = Omit<P, 'code' | 'values'> & { code?: string; values?: P['values'] };
 export type StructureRequest = Schemas['StructureRequest'];
 export type StructureResponse = Schemas['StructureResponse'];
 export type StructureLoaded = Schemas['StructureLoaded'];
@@ -58,11 +64,16 @@ export function isSaveConflict(error: unknown): boolean {
   return error instanceof ApiProblem && error.problem.type === 'urn:rail8:mapping:problem:mapping-changed';
 }
 
-/** What the editor shows for a failed call: an `ApiProblem`'s title, detail and diagnostics, or another error's message. */
+/**
+ * What the editor shows for a failed call: an `ApiProblem`'s text in the UI's language by its code, or its English title
+ * and detail when the UI does not know the code, with its diagnostics; or another error's message.
+ */
 export function describeError(error: unknown): { title: string; detail: string; diagnostics: Diagnostic[] } {
   if (error instanceof ApiProblem) {
     const { problem } = error;
-    return { title: problem.title, detail: problem.detail, diagnostics: 'diagnostics' in problem ? problem.diagnostics : [] };
+    const diagnostics = 'diagnostics' in problem ? problem.diagnostics : [];
+    const own = ownRefusalText(problem);
+    return own === undefined ? { title: problem.title, detail: problem.detail, diagnostics } : { title: own, detail: '', diagnostics };
   }
   return { title: error instanceof Error ? error.message : String(error), detail: '', diagnostics: [] };
 }

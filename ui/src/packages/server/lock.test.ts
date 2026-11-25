@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { etagOf } from '../../../server/workingFolder.ts';
-import { LOCK_REFUSALS } from '../rules.ts';
+import { BUILD_CLI, LOCK_REFUSALS } from '../rules.ts';
 import { lockPackage } from './lock.ts';
 import type { Ran, Runner } from './runner.ts';
 
@@ -28,11 +28,15 @@ describe('a lock', () => {
   test('says how to build the command line when bin/rail8 finds no jar, and not when the command line refuses its arguments', async () => {
     await expect(lockEndingWith({ code: 2, stdout: Buffer.alloc(0), stderr: Buffer.from('rail8: no cli jar in /rail8/platform/cli/target; build it first\n') })).rejects.toMatchObject({
       status: 503,
-      message: LOCK_REFUSALS.missing('/rail8/bin/rail8'),
+      code: 'cli-missing',
+      message: LOCK_REFUSALS.missing({ cli: '/rail8/bin/rail8', build: BUILD_CLI }).error,
+      values: { cli: '/rail8/bin/rail8', build: BUILD_CLI },
     });
     await expect(lockEndingWith({ code: 2, stdout: Buffer.alloc(0), stderr: Buffer.from('usage: rail8 lock <dir>\n') })).rejects.toMatchObject({
       status: 500,
-      message: LOCK_REFUSALS.failed(2),
+      code: 'lock-failed',
+      message: LOCK_REFUSALS.failed({ exitCode: 2 }).error,
+      values: { exitCode: 2 },
       output: 'usage: rail8 lock <dir>',
     });
   });

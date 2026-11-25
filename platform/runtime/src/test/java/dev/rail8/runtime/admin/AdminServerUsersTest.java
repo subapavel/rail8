@@ -291,6 +291,6 @@ class AdminServerUsersTest extends AdminAccessFixture {
         assertEquals("not-allowed", forbidden.code());
         assertEquals(new JsonArray().add("developer"), forbidden.json().getJsonArray("needs"));
         assertEquals(new JsonObject().put("pong", true), get("/admin/modules/demo/ping", developer).json());
-        assertNull(send(key, "GET", "/admin/dlq", Optional.empty(), null).json().getString("type"), "the node's own routes answer {error, code}");
+        assertNull(send(key, "GET", "/admin/dlq", Optional.empty(), null).json().getString("type"), "the node's own routes answer {error, code, values}");
     }
 }

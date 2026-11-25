@@ -6,7 +6,7 @@ import { Shell } from '../Shell';
 import { fakeStateOf, type Seed } from './contract/seed';
 import type { PackagesApi } from './api';
 import { fakePackagesApi, type FakeState } from './fake';
-import { GIT_MISSING, NEW_PACKAGE_REFUSALS, REASONS } from './rules';
+import { GIT_REFUSALS, NEW_PACKAGE_REFUSALS, REASONS } from './rules';
 import { packagesScreen } from './screen';
 
 /** The fake world's seeded commits are made from 09:01 on 1 November 2026; deploys at 10:00 on 20 November. */
@@ -179,9 +179,9 @@ describe('the Packages screen', () => {
 
     const others = page.getByRole('table', { name: 'Folders that are no package' });
     await expect.element(page.getByRole('heading', { level: 2, name: 'Folders that are no package' })).toBeVisible();
-    await expect.element(others.getByRole('row').filter({ hasText: 'docs' })).toMatchTextContent(REASONS.noClone);
-    await expect.element(others.getByRole('row').filter({ hasText: 'loose' })).toMatchTextContent(REASONS.noManifest);
-    await expect.element(others.getByRole('row').filter({ hasText: 'tree' })).toMatchTextContent(REASONS.worktree);
+    await expect.element(others.getByRole('row').filter({ hasText: 'docs' })).toMatchTextContent(REASONS.noClone.error);
+    await expect.element(others.getByRole('row').filter({ hasText: 'loose' })).toMatchTextContent(REASONS.noManifest.error);
+    await expect.element(others.getByRole('row').filter({ hasText: 'tree' })).toMatchTextContent(REASONS.worktree.error);
     expect(packages().getByRole('row').elements()).toHaveLength(2);
   });
 
@@ -200,7 +200,7 @@ describe('the Packages screen', () => {
   test('says when git is missing', async () => {
     open({ clones: [{ folder: 'orders' }], git: 'missing' });
 
-    await expect.element(page.getByRole('alert').filter({ hasText: 'The packages could not be read' })).toMatchTextContent(GIT_MISSING);
+    await expect.element(page.getByRole('alert').filter({ hasText: 'The packages could not be read' })).toMatchTextContent(GIT_REFUSALS.missing.error);
   });
 
   test('without a working folder it says how to set one', async () => {
@@ -277,7 +277,7 @@ describe('Get a package', () => {
 
     const got = page.getByRole('dialog', { name: 'Got orders' });
     await expect.element(got.getByText('The folder orders holds the clone, but it is no package')).toBeVisible();
-    await expect.element(got).toMatchTextContent(REASONS.noManifest);
+    await expect.element(got).toMatchTextContent(REASONS.noManifest.error);
     await got.getByRole('button', { name: 'Close' }).last().click();
     await expect.element(page.getByRole('table', { name: 'Folders that are no package' }).getByText('orders')).toBeVisible();
   });
@@ -304,10 +304,10 @@ describe('New package', () => {
     await expect.element(dialog().getByText('A deployed environment needs the repository on the git host first', { exact: false })).toBeVisible();
     await expect.element(create()).toBeDisabled();
     await repositoryField().fill('.hidden');
-    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.repository)).toBeVisible();
+    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.repository.error)).toBeVisible();
     await repositoryField().fill('orders');
     await nameField().fill('Orders');
-    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.name)).toBeVisible();
+    await expect.element(dialog().getByText(NEW_PACKAGE_REFUSALS.name.error)).toBeVisible();
     await expect.element(create()).toBeDisabled();
     await nameField().fill('orders-app');
     await create().click();
@@ -327,7 +327,7 @@ describe('New package', () => {
     await nameField().fill('orders');
     await create().click();
 
-    await expect.element(dialog().getByRole('alert').filter({ hasText: 'The package was not made' })).toMatchTextContent(NEW_PACKAGE_REFUSALS.exists);
+    await expect.element(dialog().getByRole('alert').filter({ hasText: 'The package was not made' })).toMatchTextContent(NEW_PACKAGE_REFUSALS.exists.error);
     await expect.element(repositoryField()).toHaveValue('orders');
   });
 

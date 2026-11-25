@@ -2,9 +2,10 @@ import { realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
 import { isSessionRefused, nodeFor, refusedSession } from '../../../server/session.ts';
-import { admitted, jsonBody, Refusal, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
+import { refusalBody } from '../../../server/refusal.ts';
+import { admitted, jsonBody, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import type { CloneAnswer, NewPackageAnswer, PackageList, PackageState } from '../api.ts';
-import { cloneSourceOf, CLONE_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS, newPackageBodyOf, REMOTE_REFUSALS } from '../rules.ts';
+import { cloneSourceOf, CLONE_REFUSALS, COMMIT_REFUSALS, DEPLOY_REFUSALS, DISCARD_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS, newPackageBodyOf, PACKAGE_REFUSALS, REMOTE_REFUSALS, type Refused } from '../rules.ts';
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
@@ -14,6 +15,7 @@ import { createPackage } from './newPackage.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
 import { hostOf, readNode, readPool, type NodeRead, type NodeTarget } from './node.ts';
+import { refusal } from './refused.ts';
 import { fetchRemote, pullRemote, pushRemote, remoteBodyOf, RemoteRefused } from './remote.ts';
 import type { Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
@@ -32,7 +34,7 @@ export interface GitPackagesOptions {
   node: NodeTarget;
   git: Runner;
   /** The check of git made when the development server started: null when git serves, else why it does not. */
-  ready: Promise<string | null>;
+  ready: Promise<Refused | null>;
   timer: Timer;
   /** What calls the node, under each request's credential; the runtime's `fetch` by default. */
   fetch?: typeof fetch;
@@ -105,7 +107,8 @@ const PREFIX = '/git';
  *
  * Every call to the node goes through the client of the request, as the session gate admitted it. The session's refusal
  * by the node is answered as the gate answers it (401), but after a commit, which was made: its 200 then carries
- * `package: null` and the reason. Every other refusal is `{error}`, `{error, output}` or `{error, problems}`. Every
+ * `package: null` and the reason. Every other refusal is `{error, code, values}`, with `output` or `problems` where it
+ * carries them: its English text, its stable code, and the values the text names. Every
  * other path goes to `next`.
  */
 export function gitPackages(options: GitPackagesOptions) {
@@ -115,7 +118,7 @@ export function gitPackages(options: GitPackagesOptions) {
     try {
       return await realpath(workspace);
     } catch {
-      throw new Refusal(404, `the working folder ${workspace} does not exist`);
+      throw refusal(404, PACKAGE_REFUSALS.workspaceGone({ folder: workspace }));
     }
   };
   const nodeState = (req: IncomingMessage): NodeState => {
@@ -132,12 +135,12 @@ export function gitPackages(options: GitPackagesOptions) {
   };
 
   const cloneIn = async (repository: string) => {
-    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+    if (options.workspace === undefined) throw refusal(404, PACKAGE_REFUSALS.noWorkspace);
     return cloneOf(options.git, await rootOf(options.workspace), repository);
   };
 
   const commit = (req: IncomingMessage, repository: string) => {
-    if (!options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was committed');
+    if (!options.writable) throw refusal(403, COMMIT_REFUSALS.readOnly);
     return admitted(options.writes, async (lock) => {
       const body = commitBodyOf(repository, await jsonBody(req));
       const clone = await cloneIn(repository);
@@ -152,7 +155,7 @@ export function gitPackages(options: GitPackagesOptions) {
   };
 
   const discard = (req: IncomingMessage, repository: string) => {
-    if (!options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was discarded');
+    if (!options.writable) throw refusal(403, DISCARD_REFUSALS.readOnly);
     return admitted(options.writes, async (lock) => {
       const body = discardBodyOf(repository, await jsonBody(req));
       const clone = await cloneIn(repository);
@@ -172,7 +175,7 @@ export function gitPackages(options: GitPackagesOptions) {
   };
 
   const remote = async (req: IncomingMessage, repository: string, route: 'fetch' | 'pull' | 'push') => {
-    if (!options.writable) throw new Refusal(403, REMOTE_REFUSALS.readOnly(route === 'fetch' ? 'fetched' : route === 'pull' ? 'pulled' : 'pushed'));
+    if (!options.writable) throw refusal(403, route === 'fetch' ? REMOTE_REFUSALS.fetchReadOnly : route === 'pull' ? REMOTE_REFUSALS.pullReadOnly : REMOTE_REFUSALS.pushReadOnly);
     if (route === 'pull') {
       return admitted(options.writes, async (lock) => {
         const body = remoteBodyOf(await jsonBody(req));
@@ -192,7 +195,7 @@ export function gitPackages(options: GitPackagesOptions) {
   };
 
   const lock = (req: IncomingMessage, repository: string) => {
-    if (!options.writable) throw new Refusal(403, LOCK_REFUSALS.readOnly);
+    if (!options.writable) throw refusal(403, LOCK_REFUSALS.readOnly);
     return admitted(options.writes, async (held) => {
       const body = lockBodyOf(await jsonBody(req));
       const clone = await cloneIn(repository);
@@ -203,15 +206,15 @@ export function gitPackages(options: GitPackagesOptions) {
 
   let cloning = false;
   const clone = (req: IncomingMessage): Promise<CloneAnswer> => {
-    if (!options.writable) throw new Refusal(403, CLONE_REFUSALS.readOnly);
+    if (!options.writable) throw refusal(403, CLONE_REFUSALS.readOnly);
     return admitted(options.writes, async (lock) => {
-      if (cloning) throw new Refusal(409, CLONE_REFUSALS.another);
+      if (cloning) throw refusal(409, CLONE_REFUSALS.another);
       cloning = true;
       try {
         const body = await jsonBody(req);
         const source = cloneSourceOf(typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as { address?: unknown }).address : undefined);
-        if ('error' in source) throw new Refusal(source.status, source.error);
-        if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+        if ('error' in source) throw refusal(source.status, source);
+        if (options.workspace === undefined) throw refusal(404, PACKAGE_REFUSALS.noWorkspace);
         const root = await rootOf(options.workspace);
         const { repository } = source;
         const done = await cloneInto(options.git, options.timer, lock, root, source.address, repository);
@@ -221,7 +224,7 @@ export function gitPackages(options: GitPackagesOptions) {
         };
         try {
           const found = await folderOf(options.git, root, { name: repository, isSymbolicLink: () => false });
-          if ('reason' in found) return done.problem === undefined ? { repository, package: null, reason: found.reason } : problem(new Error(found.reason));
+          if ('reason' in found) return done.problem === undefined ? { repository, package: null, reason: found.reason.error } : problem(new Error(found.reason.error));
           const state = await stateOf(options.git, found.clone, repository, nodeState(req));
           return done.problem === undefined ? { repository, package: state } : { repository, package: null, problem: done.problem };
         } catch (error) {
@@ -234,11 +237,11 @@ export function gitPackages(options: GitPackagesOptions) {
   };
 
   const create = (req: IncomingMessage): Promise<NewPackageAnswer> => {
-    if (!options.writable) throw new Refusal(403, NEW_PACKAGE_REFUSALS.readOnly);
+    if (!options.writable) throw refusal(403, NEW_PACKAGE_REFUSALS.readOnly);
     return admitted(options.writes, async (lock) => {
       const body = newPackageBodyOf(await jsonBody(req));
-      if ('error' in body) throw new Refusal(body.status, body.error);
-      if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+      if ('error' in body) throw refusal(body.status, body);
+      if (options.workspace === undefined) throw refusal(404, PACKAGE_REFUSALS.noWorkspace);
       const { repository } = body;
       const done = await createPackage(options.git, lock, await rootOf(options.workspace), repository, body.name);
       try {
@@ -253,7 +256,7 @@ export function gitPackages(options: GitPackagesOptions) {
 
   const deploy = async (req: IncomingMessage, repository: string) => {
     const body = deployBodyFrom(await jsonBody(req));
-    if (!body.check && !options.writable) throw new Refusal(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
+    if (!body.check && !options.writable) throw refusal(403, DEPLOY_REFUSALS.readOnly);
     const clone = await cloneIn(repository);
     const done = await deployCommit(options.git, clone, repository, body, nodeFor(req, options.node.target, options.fetch), options.timer);
     try {
@@ -268,7 +271,7 @@ export function gitPackages(options: GitPackagesOptions) {
     const param = (name: string) => query.get(name) ?? undefined;
     const required = (name: string) => {
       const value = query.get(name);
-      if (value === null) throw new Refusal(400, `the query names no ${name}`);
+      if (value === null) throw refusal(400, PACKAGE_REFUSALS.noQuery({ name }));
       return value;
     };
     switch (route) {
@@ -285,31 +288,31 @@ export function gitPackages(options: GitPackagesOptions) {
       case 'log':
         return { value: await logOf(options.git, clone, repository, nodeState(req), param('before'), param('limit')) };
       default:
-        throw new Refusal(404, `the git half has no route ${route} of a package`);
+        throw refusal(404, PACKAGE_REFUSALS.noPackageRoute({ route }));
     }
   };
 
   const answer = async (req: IncomingMessage, url: URL): Promise<{ value: unknown; etag?: string; status?: number }> => {
     const unfit = await options.ready;
-    if (unfit !== null) throw new Refusal(503, unfit);
+    if (unfit !== null) throw refusal(503, unfit);
     const path = url.pathname;
     if (path === '/git/clone') {
-      if (req.method !== 'POST') throw new Refusal(405, `POST is the only way to call ${path}`);
+      if (req.method !== 'POST') throw refusal(405, PACKAGE_REFUSALS.onlyMethod({ method: 'POST', path }));
       return { value: await clone(req), status: 201 };
     }
     if (path === '/git/packages' && req.method === 'POST') return { value: await create(req), status: 201 };
-    if (path === '/git/packages' && req.method !== 'GET') throw new Refusal(405, `GET and POST are the only ways to call ${path}`);
+    if (path === '/git/packages' && req.method !== 'GET') throw refusal(405, PACKAGE_REFUSALS.onlyGetAndPost({ path }));
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
-    if (path !== '/git/packages' && under === null) throw new Refusal(404, `the git half has no route ${path}`);
+    if (path !== '/git/packages' && under === null) throw refusal(404, PACKAGE_REFUSALS.noRoute({ path }));
     const writes = ['commit', 'discard', 'deploy', 'lock', 'fetch', 'pull', 'push'];
     const method = under?.[2] !== undefined && writes.includes(under[2]) ? 'POST' : 'GET';
-    if (req.method !== method) throw new Refusal(405, `${method} is the only way to call ${path}`);
+    if (req.method !== method) throw refusal(405, PACKAGE_REFUSALS.onlyMethod({ method, path }));
     if (under === null) return { value: await list(req) };
     let repository: string;
     try {
       repository = decodeURIComponent(under[1]!);
     } catch {
-      throw new Refusal(400, 'the repository name is not well encoded');
+      throw refusal(400, PACKAGE_REFUSALS.notEncoded);
     }
     if (under[2] === 'fetch' || under[2] === 'pull' || under[2] === 'push') return { value: await remote(req, repository, under[2]) };
     if (under[2] === 'lock') return { value: await lock(req, repository) };
@@ -327,7 +330,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     const refused = foreign(req.headers, options.origins, 'the git half');
     if (refused !== undefined) {
-      send(res, 403, { error: refused });
+      send(res, 403, refusalBody('foreign-origin', refused));
       return;
     }
     answer(req, url).then(
@@ -335,10 +338,10 @@ export function gitPackages(options: GitPackagesOptions) {
       (error: unknown) => {
         if (res.headersSent) sendFailure(res, error);
         else if (isSessionRefused(error)) refusedSession(res, error);
-        else if (error instanceof CommitRefused || error instanceof DiscardRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { error: error.message, output: error.output });
+        else if (error instanceof CommitRefused || error instanceof DiscardRefused || error instanceof CloneRefused || error instanceof RemoteRefused) send(res, error.status, { ...error.body(), output: error.output });
         else if (error instanceof LockRefused)
-          send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }), ...(error.output === undefined ? {} : { output: error.output }) });
-        else if (error instanceof DeployRefused) send(res, error.status, { error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) });
+          send(res, error.status, { ...error.body(), ...(error.problems === undefined ? {} : { problems: error.problems }), ...(error.output === undefined ? {} : { output: error.output }) });
+        else if (error instanceof DeployRefused) send(res, error.status, { ...error.body(), ...(error.problems === undefined ? {} : { problems: error.problems }) });
         else sendFailure(res, error);
       },
     );

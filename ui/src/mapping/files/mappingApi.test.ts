@@ -50,7 +50,7 @@ const filesNeeded = (...references: string[]): NodeAnswer => ({
 const studioProblem = (status: number, slug: string, members: Record<string, unknown> = {}): NodeAnswer => ({
   status,
   type: 'application/problem+json',
-  json: { type: `${STUDIO}${slug}`, title: slug, status, detail: `the node says ${slug}`, ...members },
+  json: { type: `${STUDIO}${slug}`, title: slug, status, detail: `the node says ${slug}`, code: slug, values: {}, ...members },
 });
 
 let temp: string;
@@ -550,7 +550,7 @@ describe('saving a mapping', () => {
   });
 
   test('passes on 503 busy unchanged and writes nothing', async () => {
-    const busy = { type: 'urn:rail8:admin:problem:busy', title: 'Busy', status: 503, detail: '4 calls of this plugin run already; try again later' };
+    const busy = { type: 'urn:rail8:admin:problem:busy', title: 'Busy', status: 503, detail: '4 calls of this plugin run already; try again later', code: 'busy', values: {} };
     handler = () => ({ status: 503, type: 'application/problem+json', json: busy });
 
     const reply = await call('PUT', '/api/mappings/mappings/order', '{}');
@@ -731,7 +731,9 @@ describe('the bundle files a call sends', () => {
   test('is 413 too-large, with no call to the node, for a body over 12 MiB', async () => {
     await mkdir(join(root, 'mappings'));
 
-    expectProblem(await call('POST', '/api/mappings/mappings/m/test', ' '.repeat(12 * 1024 * 1024 + 1)), 413, `${STUDIO}too-large`);
+    const reply = await call('POST', '/api/mappings/mappings/m/test', ' '.repeat(12 * 1024 * 1024 + 1));
+    expectProblem(reply, 413, `${STUDIO}too-large`);
+    expect(reply.json).toMatchObject({ code: 'too-large', values: { max: 12 * 1024 * 1024 } });
     expect(calls).toEqual([]);
   });
 
@@ -846,7 +848,7 @@ describe('the node', () => {
     const forbidden: NodeAnswer = {
       status: 403,
       type: 'application/problem+json',
-      json: { type: 'urn:rail8:admin:problem:forbidden', title: 'Forbidden', status: 403, detail: 'module.call needs the role developer', code: 'not-allowed', needs: ['developer'] },
+      json: { type: 'urn:rail8:admin:problem:forbidden', title: 'Forbidden', status: 403, detail: 'module.call needs the role developer', code: 'not-allowed', values: { action: 'module.call', caller: 'alice' }, needs: ['developer'] },
     };
     handler = () => forbidden;
 
@@ -967,7 +969,7 @@ describe('the replies', () => {
   };
   const studio: Handler = (c) =>
     c.op === 'canonical' ? { status: 200, text: c.reads === 'stored' ? c.request : canonical(2) } : (answers[c.op] ?? { status: 500, text: `no answer for ${c.op}` });
-  const busy: Handler = () => ({ status: 503, type: 'application/problem+json', json: { type: 'urn:rail8:admin:problem:busy', title: 'Busy', status: 503, detail: 'try again later' } });
+  const busy: Handler = () => ({ status: 503, type: 'application/problem+json', json: { type: 'urn:rail8:admin:problem:busy', title: 'Busy', status: 503, detail: 'try again later', code: 'busy', values: {} } });
   const refused: Handler = () => studioProblem(422, 'model-refused', diagnostics);
   const malformed: Handler = () => studioProblem(400, 'malformed-json');
 

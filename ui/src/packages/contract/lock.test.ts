@@ -106,7 +106,7 @@ describe.each<[string, Build]>([
 
     const refusal = await refusalOf(api.lock('orders', bodyOf(before)));
 
-    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale]);
+    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale.error]);
     expect(await lockOnDisk(api)).toBeNull();
   });
 
@@ -121,7 +121,7 @@ describe.each<[string, Build]>([
 
     const refusal = await refusalOf(api.lock('orders', bodyOf(before)));
 
-    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale]);
+    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale.error]);
     expect(await lockOnDisk(api)).toBeNull();
   });
 
@@ -133,7 +133,7 @@ describe.each<[string, Build]>([
 
     const refusal = await refusalOf(api.lock('orders', bodyOf(before)));
 
-    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale]);
+    expect([refusal.status, refusal.message]).toEqual([412, LOCK_REFUSALS.stale.error]);
     expect(await lockOnDisk(api)).toBeNull();
   });
 
@@ -148,7 +148,7 @@ describe.each<[string, Build]>([
 
     const refusal = await refusalOf(api.lock('orders', bodyOf(before)));
 
-    expect([refusal.status, refusal.message]).toEqual([409, LOCK_REFUSALS.several('inventory@1.0.0', ['inventory', 'inventory-copy'])]);
+    expect([refusal.status, refusal.message]).toEqual([409, LOCK_REFUSALS.several({ dependency: 'inventory@1.0.0', folders: 'inventory, inventory-copy' }).error]);
     expect(await lockOnDisk(api)).toBeNull();
   });
 
@@ -159,7 +159,7 @@ describe.each<[string, Build]>([
     expect(before.dependencies[0]).toMatchObject({ candidate: { folder: 'inventory', head }, state: 'changed' });
 
     const refusal = await refusalOf(api.lock('orders', bodyOf(before)));
-    expect([refusal.status, refusal.message, refusal.problems]).toEqual([422, LOCK_REFUSALS.problems, [`dependency inventory@1.0.0: inventory differs from its HEAD ${head}: commit it first`]]);
+    expect([refusal.status, refusal.message, refusal.problems]).toEqual([422, LOCK_REFUSALS.problems.error, [`dependency inventory@1.0.0: inventory differs from its HEAD ${head}: commit it first`]]);
     expect(await lockOnDisk(api)).toBeNull();
   });
 
@@ -178,7 +178,7 @@ describe.each<[string, Build]>([
   test('is refused with 403 on a read-only working folder', async () => {
     const { api } = await orders([{ folder: 'inventory' }], { readOnly: true });
     const refusal = await refusalOf(api.lock('orders', bodyOf(await api.get('orders'))));
-    expect([refusal.status, refusal.message]).toEqual([403, LOCK_REFUSALS.readOnly]);
+    expect([refusal.status, refusal.message]).toEqual([403, LOCK_REFUSALS.readOnly.error]);
   });
 
   test('is refused with 403 from a page of another site', async () => {

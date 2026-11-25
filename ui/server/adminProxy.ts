@@ -4,6 +4,7 @@ import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import tls from 'node:tls';
+import { refusalBody, type RefusalValues } from './refusal.ts';
 import { foreign, isJson, isLoopbackName, isSessionRefused, nodeFor, refusedSession } from './session.ts';
 
 export { foreign } from './session.ts';
@@ -157,17 +158,17 @@ function isAdmin(url: string): boolean {
   return url === '/admin' || url.startsWith('/admin/') || url.startsWith('/admin?');
 }
 
-function refuse(res: ServerResponse, status: number, error: string, code?: string) {
-  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(code === undefined ? { error } : { error, code }));
+function refuse(res: ServerResponse, status: number, code: string, error: string, values: RefusalValues = {}) {
+  res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(refusalBody(code, error, values)));
 }
 
 /** The body of a POST: none, or JSON of at most {@link PROXY_BODY_MAX_BYTES} bytes, counted while it is read. */
-async function bodyOf(req: IncomingMessage): Promise<{ body: Buffer | undefined } | { status: number; code: string; error: string }> {
+async function bodyOf(req: IncomingMessage): Promise<{ body: Buffer | undefined } | { status: number; code: string; error: string; values?: RefusalValues }> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > PROXY_BODY_MAX_BYTES) return { status: 413, code: 'too-large', error: `this server passes bodies of at most ${PROXY_BODY_MAX_BYTES} bytes on to the admin API` };
+    if (size > PROXY_BODY_MAX_BYTES) return { status: 413, code: 'too-large', error: `this server passes bodies of at most ${PROXY_BODY_MAX_BYTES} bytes on to the admin API`, values: { max: PROXY_BODY_MAX_BYTES } };
     chunks.push(chunk);
   }
   if (size === 0) return { body: undefined };
@@ -192,12 +193,12 @@ export function adminProxy(options: AdminProxyOptions) {
       return;
     }
     if (req.method !== 'GET' && req.method !== 'POST') {
-      refuse(res, 405, 'this server passes only GET and POST on to the admin API');
+      refuse(res, 405, 'method-not-allowed', 'this server passes only GET and POST on to the admin API');
       return;
     }
     const decided = forward(url, req.headers, options);
     if ('refused' in decided) {
-      refuse(res, decided.refused.status, decided.refused.error, decided.refused.code);
+      refuse(res, decided.refused.status, decided.refused.code, decided.refused.error);
       return;
     }
     const stop = new AbortController();
@@ -207,7 +208,7 @@ export function adminProxy(options: AdminProxyOptions) {
       let body: Buffer | undefined;
       if (req.method === 'POST') {
         const read = await bodyOf(req);
-        if ('status' in read) return refuse(res, read.status, read.error, read.code);
+        if ('status' in read) return refuse(res, read.status, read.code, read.error, read.values);
         body = read.body;
       }
       const headers = { ...decided.headers };
@@ -225,7 +226,7 @@ export function adminProxy(options: AdminProxyOptions) {
     sent().catch((failed: unknown) => {
       if (res.headersSent) res.destroy();
       else if (isSessionRefused(failed)) refusedSession(res, failed);
-      else refuse(res, 502, `the node's admin API at ${options.target} does not answer: ${String(failed)}`);
+      else refuse(res, 502, 'node-unavailable', `the node's admin API at ${options.target} does not answer: ${String(failed)}`);
     });
   };
 }

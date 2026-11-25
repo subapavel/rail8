@@ -1,7 +1,10 @@
 package dev.rail8.runtime.access;
 
+import dev.rail8.runtime.refusal.RefusalCode;
+
 import java.text.Normalizer;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.random.RandomGenerator;
 
@@ -24,11 +27,16 @@ final class Passwords {
      * Why {@code next}, normalized, is refused as {@code name}'s new password: shorter than 12 or longer than 128 characters,
      * containing the name in any letter case, or the same as {@code current}; empty when it is fine.
      */
-    static Optional<String> refusal(String next, String name, String current) {
+    static Optional<AccessRefused> refusal(String next, String name, String current) {
         int length = next.codePointCount(0, next.length());
-        if (length < MIN || length > MAX) return Optional.of("a password has " + MIN + " to " + MAX + " characters");
-        if (next.toLowerCase(Locale.ROOT).contains(name.toLowerCase(Locale.ROOT))) return Optional.of("a password does not contain the name");
-        if (next.equals(current)) return Optional.of("the new password is the current one");
+        if (length < MIN || length > MAX) {
+            return Optional.of(AccessRefused.of(400, RefusalCode.PASSWORD_LENGTH, "a password has " + MIN + " to " + MAX + " characters",
+                    Map.of("min", MIN, "max", MAX)));
+        }
+        if (next.toLowerCase(Locale.ROOT).contains(name.toLowerCase(Locale.ROOT))) {
+            return Optional.of(AccessRefused.of(400, RefusalCode.PASSWORD_CONTAINS_NAME, "a password does not contain the name", Map.of()));
+        }
+        if (next.equals(current)) return Optional.of(AccessRefused.of(400, RefusalCode.PASSWORD_UNCHANGED, "the new password is the current one", Map.of()));
         return Optional.empty();
     }
 

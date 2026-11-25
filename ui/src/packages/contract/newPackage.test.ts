@@ -63,12 +63,12 @@ describe.each<[string, Build]>([
 
   test.each([
     ['a package', { clones: [{ folder: 'orders' }] }, { packages: ['orders'], others: [] }],
-    ['a folder that is no package', { plain: ['orders'] }, { packages: [], others: [{ folder: 'orders', reason: REASONS.noClone }] }],
+    ['a folder that is no package', { plain: ['orders'] }, { packages: [], others: [{ folder: 'orders', reason: REASONS.noClone.error }] }],
   ])('a new package over %s of that name is refused with 409, and the folder stays as it was', async (_, seed, listed) => {
     const { api } = await open(seed);
     const before = await api.list();
 
-    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 409, message: NEW_PACKAGE_REFUSALS.exists });
+    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 409, message: NEW_PACKAGE_REFUSALS.exists.error });
     const after = await api.list();
     expect(after).toEqual(before);
     expect({ packages: after.packages.map((p) => p.repository), others: after.others }).toEqual(listed);
@@ -77,21 +77,21 @@ describe.each<[string, Build]>([
   test('without a git identity it is refused with 422, and nothing is made', async () => {
     const { api } = await open({ identity: null });
 
-    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.noIdentity });
+    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.noIdentity.error });
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
   });
 
   test.each(['-x', '..', '.hidden', '.', '', 'a/b', 'x'.repeat(101)])('the repository name %j is refused with 400, and nothing is made', async (repository) => {
     const { api } = await open({});
 
-    expect(await refusalOf(api.create(repository, 'orders'))).toMatchObject({ status: 400, message: NEW_PACKAGE_REFUSALS.repository });
+    expect(await refusalOf(api.create(repository, 'orders'))).toMatchObject({ status: 400, message: NEW_PACKAGE_REFUSALS.repository.error });
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
   });
 
   test.each(['-x', '..', '.hidden', 'Orders', '1orders', 'orders_app', '', 'x'.repeat(65)])('the package name %j is refused with 422, and nothing is made', async (name) => {
     const { api } = await open({});
 
-    expect(await refusalOf(api.create('orders', name))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.name });
+    expect(await refusalOf(api.create('orders', name))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.name.error });
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
   });
 
@@ -103,7 +103,7 @@ describe.each<[string, Build]>([
 
   test('a read-only server refuses it with 403, and so does the page of another site', async () => {
     const readOnly = await open({ readOnly: true });
-    expect(await refusalOf(readOnly.api.create('orders', 'orders'))).toMatchObject({ status: 403, message: NEW_PACKAGE_REFUSALS.readOnly });
+    expect(await refusalOf(readOnly.api.create('orders', 'orders'))).toMatchObject({ status: 403, message: NEW_PACKAGE_REFUSALS.readOnly.error });
     await readOnly.close();
     world = undefined;
 
@@ -149,7 +149,7 @@ describe('New package on the real git half', () => {
   test.each([[null], [[]], [{ repository: 'orders' }], [{ repository: 'orders', name: 7 }], [{ repository: 1, name: 'orders' }]])('the body %j is refused with 400', async (body) => {
     const { wire, workingFolder } = await open({});
 
-    expect(await wire!('/git/packages', body)).toEqual({ status: 400, body: { error: NEW_PACKAGE_REFUSALS.body } });
+    expect(await wire!('/git/packages', body)).toEqual({ status: 400, body: NEW_PACKAGE_REFUSALS.body });
     expect(await readdir(workingFolder!)).toEqual([]);
   });
 
@@ -159,7 +159,7 @@ describe('New package on the real git half', () => {
     await chmod(join(dir, 'pre-commit'), 0o755);
     const { api, workingFolder } = await open({ author: { config: `[core]\n\thooksPath = ${dir}` } });
 
-    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.gitFailed, output: expect.stringContaining('no commits today') });
+    expect(await refusalOf(api.create('orders', 'orders'))).toMatchObject({ status: 422, message: NEW_PACKAGE_REFUSALS.gitFailed.error, output: expect.stringContaining('no commits today') });
     expect(await readdir(workingFolder!)).toEqual([]);
   });
 

@@ -1,6 +1,7 @@
 import { currentLanguage, textsIn } from '../language';
 import type { NodeIngress } from './inbound';
 import type { Options, SettingsDescription } from './settings';
+import { refusalText } from '../refusal';
 import { uiFetch } from '../session';
 
 /** One endpoint file of the working folder: its path relative to the folder, and its envelope or why it cannot be read. */
@@ -72,8 +73,7 @@ export class EndpointsError extends Error {
 async function refusal(res: Response): Promise<EndpointsError> {
   let text = `${res.status} ${res.statusText}`.trim();
   try {
-    const body: unknown = await res.json();
-    if (typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string') text = body.error;
+    text = refusalText(await res.json()) ?? text;
   } catch {
     // not JSON: the status line stands
   }

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, readFile, realpath, stat } from 'node:fs/promises';
 import { join, sep } from 'node:path';
-import { etagOf, Refusal, walk } from '../../../server/workingFolder.ts';
+import { etagOf, walk } from '../../../server/workingFolder.ts';
 import type { Artifact, Change, ChangeStatus, FileVersion, LogPage, PackageState } from '../api.ts';
 import {
   artifactsOf,
@@ -15,7 +15,9 @@ import {
   LOG_MAX,
   LOG_PAGE,
   MAX_LISTED,
+  notPackage,
   oncePerPath,
+  PACKAGE_REFUSALS,
   readForKind,
   READ_LIMIT,
   statusCompared,
@@ -27,6 +29,7 @@ import { formatted } from './formatter.ts';
 import { catFile, GitSaid, holds, LOG_FORMAT, parseDiffTree, parseLog, parseNameStatus, parseTree, read, type Diffed } from './git.ts';
 import { dependenciesOf } from './lock.ts';
 import { folderOf, rowOf, statusOf, type NodeState } from './packages.ts';
+import { refusal } from './refused.ts';
 import type { Runner } from './runner.ts';
 
 /** How many bytes of blobs one `cat-file --batch` reads at most, well within a read's 4 MiB of output. */
@@ -39,28 +42,28 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'E
  * when `repository` is no repository name, and 404 when there is no such folder, or it is no package.
  */
 export async function cloneOf(git: Runner, root: string, repository: string): Promise<string> {
-  if (!isRepositoryName(repository)) throw new Refusal(400, `${JSON.stringify(repository)} is no repository name`);
+  if (!isRepositoryName(repository)) throw refusal(400, PACKAGE_REFUSALS.badRepository({ repository }));
   const info = await lstat(join(root, repository)).catch((error: unknown) => (missing(error) ? null : Promise.reject(error)));
-  if (info === null) throw new Refusal(404, `no package ${repository} in the working folder`);
+  if (info === null) throw refusal(404, PACKAGE_REFUSALS.noPackage({ repository }));
   const found = await folderOf(git, root, { name: repository, isSymbolicLink: () => info.isSymbolicLink() });
-  if ('reason' in found) throw new Refusal(404, `${repository} is no package: ${found.reason}`);
+  if ('reason' in found) throw refusal(404, notPackage(repository, found.reason));
   return found.clone;
 }
 
 /** Refused with 400 unless `rev` is a revision, and with 404 when it is a commit the clone at `clone` lacks. */
 async function revisionIn(git: Runner, clone: string, rev: string, name: string, commitOnly = false): Promise<void> {
   if (commitOnly ? !isCommitId(rev) : !isRevision(rev)) {
-    throw new Refusal(400, `${name} ${JSON.stringify(rev)} is no revision: ${commitOnly ? '' : 'work, or '}a commit of 40 hex digits`);
+    throw refusal(400, (commitOnly ? PACKAGE_REFUSALS.noCommitId : PACKAGE_REFUSALS.noRevision)({ name, rev }));
   }
   if (rev === 'work') return;
   // cat-file -e exits with 1, or 128 for an object it cannot name, when the clone lacks the commit
-  if (!(await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${rev}^{commit}`], [1, 128]))) throw new Refusal(404, `the clone holds no commit ${rev}`);
+  if (!(await holds(git, clone, ['cat-file', '-e', '--end-of-options', `${rev}^{commit}`], [1, 128]))) throw refusal(404, PACKAGE_REFUSALS.noCommit({ commit: rev }));
 }
 
 /** The path within the package of `path`, relative to the working folder; refused with 400 or 404 as {@link inPackage} says. */
 function insideOf(repository: string, path: string): string {
   const found = inPackage(repository, path);
-  if ('error' in found) throw new Refusal(found.status, found.error);
+  if ('error' in found) throw refusal(found.status, found);
   return found.inside;
 }
 
@@ -251,17 +254,17 @@ export async function fileOf(git: Runner, clone: string, repository: string, rev
   let bytes: Buffer;
   if (rev === 'work') {
     const real = await realpath(join(clone, ...inside.split('/'))).catch(() => null);
-    if (real === null) throw new Refusal(404, `no file ${path} on disk`);
-    if (!inClone(clone, real)) throw new Refusal(403, `${path} leads out of the package's folder or into its .git folder`);
+    if (real === null) throw refusal(404, PACKAGE_REFUSALS.noFileOnDisk({ path }));
+    if (!inClone(clone, real)) throw refusal(403, PACKAGE_REFUSALS.leadsOut({ path }));
     const info = await stat(real);
-    if (!info.isFile()) throw new Refusal(404, `no file ${path} on disk`);
-    if (info.size > READ_LIMIT) throw new Refusal(413, `${path} is over 1 MiB, the read limit`);
+    if (!info.isFile()) throw refusal(404, PACKAGE_REFUSALS.noFileOnDisk({ path }));
+    if (info.size > READ_LIMIT) throw refusal(413, PACKAGE_REFUSALS.overReadLimit({ path }));
     bytes = await readFile(real);
   } else {
     const name = `${rev}:${inside}`;
     const [found] = await catFile(git, clone, [name], true);
-    if (found === null || found === undefined || found.type !== 'blob') throw new Refusal(404, `no file ${path} in the commit ${rev}`);
-    if (found.size > READ_LIMIT) throw new Refusal(413, `${path} is over 1 MiB, the read limit`);
+    if (found === null || found === undefined || found.type !== 'blob') throw refusal(404, PACKAGE_REFUSALS.noFileInCommit({ path, commit: rev }));
+    if (found.size > READ_LIMIT) throw refusal(413, PACKAGE_REFUSALS.overReadLimit({ path }));
     bytes = (await blobsOf(git, clone, [{ name, size: found.size }])).get(name) ?? Buffer.alloc(0);
   }
   return { ...(isBinary(bytes) ? { binary: true as const, size: bytes.length } : { text: bytes.toString('utf8') }), etag: etagOf(bytes) };
@@ -337,7 +340,7 @@ export async function artifactsAt(git: Runner, clone: string, repository: string
  * default, at most 100), the commit the node runs marked, and the commit the next page starts at.
  */
 export async function logOf(git: Runner, clone: string, repository: string, node: NodeState, before: string | undefined, limit: string | undefined): Promise<LogPage> {
-  if (limit !== undefined && (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > LOG_MAX)) throw new Refusal(400, `limit ${JSON.stringify(limit)} is no number from 1 to ${LOG_MAX}`);
+  if (limit !== undefined && (!/^\d{1,3}$/.test(limit) || Number(limit) < 1 || Number(limit) > LOG_MAX)) throw refusal(400, PACKAGE_REFUSALS.badLimit({ limit, max: LOG_MAX }));
   const count = limit === undefined ? LOG_PAGE : Number(limit);
   if (before !== undefined) await revisionIn(git, clone, before, 'before', true);
   else if (!(await holds(git, clone, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], [1]))) return { items: [], next: null };

@@ -51,11 +51,11 @@ describe('workingFolderWrites', () => {
     const writes = workingFolderWrites();
     const failed = admitted(writes, (lock) =>
       lock(async () => {
-        throw new Refusal(412, 'the file changed');
+        throw new Refusal(412, 'file-changed', 'the file changed');
       }),
     );
     const next = admitted(writes, (lock) => lock(async () => 'next'));
-    await expect(failed).rejects.toThrow(new Refusal(412, 'the file changed'));
+    await expect(failed).rejects.toThrow(new Refusal(412, 'file-changed', 'the file changed'));
     expect(await next).toBe('next');
   });
 
@@ -66,7 +66,7 @@ describe('workingFolderWrites', () => {
     const underWay = Array.from({ length: MAX_WAITING_WRITES + 1 }, (_, i) =>
       admitted(writes, async () => {
         await elsewhere.shut;
-        if (i === 0) throw new Refusal(412, 'the file changed');
+        if (i === 0) throw new Refusal(412, 'file-changed', 'the file changed');
         return i;
       }),
     );
@@ -95,7 +95,7 @@ describe('admitted', () => {
     const refused = admitted(writes, async () => {
       ran = true;
     });
-    await expect(refused).rejects.toThrow(new Refusal(503, 'the working folder is busy: 8 writes wait already; nothing was written, try again'));
+    await expect(refused).rejects.toThrow(new Refusal(503, 'working-folder-busy', 'the working folder is busy: 8 writes wait already; nothing was written, try again'));
     expect(await refused.catch((error: Refusal) => error.status)).toBe(503);
     release();
     await Promise.all(waiting);
@@ -120,7 +120,7 @@ describe('replaceFile', () => {
     const changed = async () => {
       seen.push(...(await readdir(root)).filter((f) => f.endsWith('.tmp')).map(() => 'temporary file written'));
       await writeFile(file, 'changed by another program\n');
-      throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+      throw new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved');
     };
     await expect(admitted(workingFolderWrites(), (lock) => replaceFile(lock, file, 'new\n', changed))).rejects.toThrow('the file changed since it was read');
     expect(seen).toEqual(['temporary file written']);
@@ -146,7 +146,7 @@ describe('replaceFile', () => {
     const file = join(root, 'flow.yaml');
     await writeFile(file, 'old\n');
     const { writes, waiting, release } = heldWrites();
-    const gone = new Refusal(412, 'the file changed since it was read; nothing was saved');
+    const gone = new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved');
     const replacing = admitted(writes, (lock) =>
       replaceFile(lock, file, 'new\n', async () => {
         throw gone;
@@ -186,13 +186,13 @@ describe('createFile', () => {
     await waiting;
     await rm(join(root, 'flows'), { recursive: true });
     release();
-    await expect(creating).rejects.toThrow(new Refusal(404, 'no folder flows in the working folder'));
+    await expect(creating).rejects.toThrow(new Refusal(404, 'no-folder', 'no folder flows in the working folder', { path: 'flows' }));
     expect(await readdir(root)).toEqual([]);
   });
 
   it('refuses a malformed path before it asks for the lock', async () => {
     const { writes, release } = heldWrites();
-    await expect(admitted(writes, (lock) => createFile(lock, root, 'flows/../x.yaml', isYaml, 'flow file', ''))).rejects.toThrow(new Refusal(400, 'the path names no flow file of the working folder'));
+    await expect(admitted(writes, (lock) => createFile(lock, root, 'flows/../x.yaml', isYaml, 'flow file', ''))).rejects.toThrow(new Refusal(400, 'path-refused', 'the path names no flow file of the working folder'));
     release();
   });
 });

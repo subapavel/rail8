@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { PackagesError, type PackageList, type PackageRow } from '../api';
-import { GIT_MISSING, gitTooOld, MAX_PACKAGES, REASONS } from '../rules';
+import { GIT_REFUSALS, MAX_PACKAGES, REASONS } from '../rules';
 import { httpWorld } from './httpWorld';
 import { DEPLOYED_AT, fakeWorld, OLD_GIT, POOL_FAILS, type Build, type Seed, type World } from './seed';
 
@@ -91,13 +91,13 @@ describe.each<[string, Build]>([
 
     expect(listed.packages.map((p) => p.repository)).toEqual(['orders']);
     expect(listed.others).toEqual([
-      { folder: 'alias', reason: REASONS.link },
-      { folder: 'bad name', reason: REASONS.name },
-      { folder: 'deep', reason: REASONS.noManifest },
-      { folder: 'inner', reason: REASONS.nested },
-      { folder: 'loose', reason: REASONS.noManifest },
-      { folder: 'plain', reason: REASONS.noClone },
-      { folder: 'tree', reason: REASONS.worktree },
+      { folder: 'alias', reason: REASONS.link.error },
+      { folder: 'bad name', reason: REASONS.name.error },
+      { folder: 'deep', reason: REASONS.noManifest.error },
+      { folder: 'inner', reason: REASONS.nested.error },
+      { folder: 'loose', reason: REASONS.noManifest.error },
+      { folder: 'plain', reason: REASONS.noClone.error },
+      { folder: 'tree', reason: REASONS.worktree.error },
     ]);
   });
 
@@ -334,12 +334,12 @@ describe.each<[string, Build]>([
   });
 
   test.each([
-    ['missing', GIT_MISSING],
-    ['old', gitTooOld(OLD_GIT)],
+    ['missing', GIT_REFUSALS.missing],
+    ['old', GIT_REFUSALS.tooOld({ version: OLD_GIT })],
   ] as const)('with git %s every call answers 503 with why', async (git, said) => {
     const refused = await refusalOf({ git, clones: [{ folder: 'orders' }] });
 
     expect(refused.status).toBe(503);
-    expect(refused.message).toBe(said);
+    expect(refused).toMatchObject({ code: said.code, message: said.error, values: said.values });
   });
 });

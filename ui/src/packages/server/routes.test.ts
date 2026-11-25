@@ -12,7 +12,7 @@ import { FakeTimer } from './fakeTimer.ts';
 import { gitPackages, type GitPackagesOptions } from './routes.ts';
 import { runner, type Runner } from './runner.ts';
 import { realTimer } from './timer.ts';
-import { LOCK_REFUSALS, NEW_PACKAGE_REFUSALS } from '../rules.ts';
+import { GIT_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS } from '../rules.ts';
 
 const ORIGIN = 'http://localhost:5173';
 const idle: Runner = { run: () => Promise.reject(new Error('no git in this test')), undoable: () => Promise.reject(new Error('no git in this test')), close: async () => {} };
@@ -110,7 +110,7 @@ describe('the routes of the git half', () => {
     expect(await call('/git/packages/orders/lock', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
     await new Promise<void>((done) => server!.close(() => done()));
     server = undefined;
-    expect(await (await serve({ writable: false }))('/git/packages/orders/lock', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: LOCK_REFUSALS.readOnly } });
+    expect(await (await serve({ writable: false }))('/git/packages/orders/lock', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: LOCK_REFUSALS.readOnly.error } });
   });
 
   test('take a new package by POST, among the writes of the working folder, and refuse it with 403 while the working folder is read-only, before its body is read', async () => {
@@ -119,7 +119,7 @@ describe('the routes of the git half', () => {
     expect(await call('/git/packages', 'POST', '{}')).toMatchObject({ status: 503, body: { error: 'the working folder is busy: 8 writes wait already; nothing was written, try again' } });
     await new Promise<void>((done) => server!.close(() => done()));
     server = undefined;
-    expect(await (await serve({ writable: false }))('/git/packages', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: NEW_PACKAGE_REFUSALS.readOnly } });
+    expect(await (await serve({ writable: false }))('/git/packages', 'POST', 'not json')).toMatchObject({ status: 403, body: { error: NEW_PACKAGE_REFUSALS.readOnly.error } });
   });
 
   test('refuse a commit with 403 while the working folder is read-only, before its body is read', async () => {
@@ -151,9 +151,10 @@ describe('the routes of the git half', () => {
   });
 
   test('answer 503 with why on every path while git does not serve', async () => {
-    const call = await serve({ ready: Promise.resolve('git is too old') });
-    expect(await call('/git/packages')).toMatchObject({ status: 503, body: { error: 'git is too old' } });
-    expect(await call('/git/nothing')).toMatchObject({ status: 503, body: { error: 'git is too old' } });
+    const tooOld = GIT_REFUSALS.tooOld({ version: '2.29.2' });
+    const call = await serve({ ready: Promise.resolve(tooOld) });
+    expect(await call('/git/packages')).toMatchObject({ status: 503, body: tooOld });
+    expect(await call('/git/nothing')).toMatchObject({ status: 503, body: tooOld });
   });
 
   test('answer a deploy the node made as made, with package null and why, when the package cannot be read after it', async () => {

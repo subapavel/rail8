@@ -313,13 +313,24 @@ class StudioContractTest {
   void theCheckRefusesAnAnswerTheContractDoesNotAllow() {
     String problem =
         "{\"type\": \"urn:rail8:mapping:problem:malformed-json\", \"title\": \"t\", \"status\": 400,"
-            + " \"detail\": \"d\"";
+            + " \"detail\": \"d\", \"code\": \"malformed-json\", \"values\": {}";
 
     assertThat(contract.violations("compile", 400, problem + "}")).isEmpty();
     assertThat(contract.violations("compile", 400, problem + ", \"extra\": 1}"))
         .containsExactly("$: extra is no member of Problem");
     assertThat(contract.violations("compile", 400, "{\"title\": \"t\", \"status\": 400}"))
-        .containsExactly("$: type is missing", "$: detail is missing");
+        .containsExactly(
+            "$: type is missing",
+            "$: detail is missing",
+            "$: code is missing",
+            "$: values is missing");
+    assertThat(
+            contract.violations(
+                "compile",
+                400,
+                problem.replace("\"code\": \"malformed-json\"", "\"code\": \"busy\"") + "}"))
+        .containsExactly(
+            "$.code: \"busy\" is not the slug of urn:rail8:mapping:problem:malformed-json");
     assertThat(contract.violations("compile", 422, problem + "}"))
         .singleElement()
         .asString()

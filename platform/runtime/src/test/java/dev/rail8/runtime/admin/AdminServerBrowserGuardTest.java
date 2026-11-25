@@ -178,14 +178,14 @@ class AdminServerBrowserGuardTest {
     /** The retry route's own answer for a message without a DLQ row: 404 naming it, never the router's "no such route". */
     static void assertRetryAnswered(Answer a, String what) {
         assertEquals(404, a.status(), what + ": " + a.body());
-        assertEquals(new JsonObject().put("error", "no DLQ row for message m-404"), a.json(), what + ": the route's own 404, not the router's: " + a.body());
+        assertEquals(new JsonObject().put("error", "no DLQ row for message m-404").put("code", "no-dlq-row").put("values", new JsonObject().put("id", "m-404")), a.json(), what + ": the route's own 404, not the router's: " + a.body());
     }
 
     static void assertRefused(Answer a, String what) {
         assertEquals(403, a.status(), what + ": " + a.body());
         String type = a.headers().get("content-type");
         assertTrue(type != null && type.startsWith("application/json"), what + ": " + type);
-        assertEquals(Set.of("error", "code", "needs"), a.json().fieldNames(), what + ": {error, code, needs} only: " + a.body());
+        assertEquals(Set.of("error", "code", "values", "needs"), a.json().fieldNames(), what + ": {error, code, values, needs} only: " + a.body());
         assertEquals("browser", a.json().getString("code"), what + ": " + a.body());
         assertEquals(new JsonArray(), a.json().getJsonArray("needs"), what + ": no action would let a browser in: " + a.body());
         String error = a.json().getString("error");

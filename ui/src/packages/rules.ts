@@ -1,5 +1,6 @@
 import { parse } from 'yaml';
-import type { Artifact, Change, ChangeStatus, CommitBody, DeployBody, DiscardBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
+import type { RefusalValues } from '../refusal';
+import type { Artifact, Busy, Change, ChangeStatus, CommitBody, DeployBody, DiscardBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -7,24 +8,71 @@ export const MAX_PACKAGES = 100;
 /** The oldest git the git half runs: older ones lack what it relies on. */
 export const OLDEST_GIT = [2, 30] as const;
 
-/** Why a folder directly in the working folder is no package. */
+/**
+ * A refusal as the records below word it: its stable code, its English text and the values that text names. The
+ * development server answers it as `{error, code, values}`, and the UI shows it in the user's language by its code. A
+ * code is kebab-case and named by one entry of one record, but for a code of the UI's server that means the same, such
+ * as `bad-request`; once shipped it is never renamed. A value is raw data, a name, an id, a count or a limit, never words.
+ */
+export interface Refused {
+  code: string;
+  error: string;
+  values: RefusalValues;
+}
+
+/** A refusal of a record whose text names values: the refusal with the values given, and its code. */
+export type Worded<V extends RefusalValues> = ((values: V) => Refused) & { readonly code: string };
+
+/** A refusal whose text is the same every time; `values` are the limits it names, if any. */
+const fixed = (code: string, error: string, values: RefusalValues = {}): Refused => ({ code, error, values });
+
+/** A refusal whose text, made by `text`, names the values it is given. */
+function worded<V extends RefusalValues>(code: string, text: (values: V) => string): Worded<V> {
+  return Object.assign((values: V) => ({ code, error: text(values), values }), { code });
+}
+
+/**
+ * A refusal whose text also carries what git, another program or the system said, which no fixed text can word: the
+ * values are those its text names besides, never what was said. Such a code is left in English.
+ */
+function saying<V extends RefusalValues = Record<string, never>>(code: string, text: (said: string, values: V) => string): ((said: string, values?: V) => Refused) & { readonly code: string } {
+  return Object.assign((said: string, values: V = {} as V) => ({ code, error: text(said, values), values }), { code });
+}
+
+/** A request of a shape no screen of the UI sends, refused with 400 and the code of the UI's server for it. */
+const badRequest = (error: string): Refused & { status: 400 } => ({ status: 400, code: 'bad-request', error, values: {} });
+
+/** Why a folder directly in the working folder is no package; a request for it as a package is refused with its code. */
 export const REASONS = {
-  name: "its name is no repository name: at most 100 letters, digits, '.', '_' and '-', starting with neither '.' nor '-'",
-  link: 'a symbolic link: a package is a folder itself',
-  noClone: 'it holds no clone of its own: it has no .git folder',
-  worktree: 'its .git is a file: a worktree or a submodule is not supported',
-  nested: 'git takes it for a folder of another repository, not for a clone of its own',
-  noManifest: 'its clone has no package.yaml at its root',
+  name: fixed('not-package-name', "its name is no repository name: at most 100 letters, digits, '.', '_' and '-', starting with neither '.' nor '-'"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  link: fixed('not-package-link', 'a symbolic link: a package is a folder itself'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noClone: fixed('not-package-no-clone', 'it holds no clone of its own: it has no .git folder'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  worktree: fixed('not-package-worktree', 'its .git is a file: a worktree or a submodule is not supported'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  nested: fixed('not-package-nested', 'git takes it for a folder of another repository, not for a clone of its own'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noManifest: fixed('not-package-no-manifest', 'its clone has no package.yaml at its root'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 } as const;
 
-/** What every route answers, with 503, when git is not on the development server's PATH, which is checked when the server starts. */
-export const GIT_MISSING =
-  'git is not installed or not on the PATH of the development server: the Packages screen needs git 2.30 or later; install it, then restart the development server';
-
-/** What every route answers, with 503, when the development server's git is older than 2.30. */
-export function gitTooOld(version: string): string {
-  return `git ${version} is older than 2.30, which the Packages screen needs: install a newer git, then restart the development server`;
+/** The refusal (404) of the folder `repository` as a package, for `reason`, one of {@link REASONS}: the reason's code, and the folder's name. */
+export function notPackage(repository: string, reason: Refused): Refused {
+  return { code: reason.code, error: `${repository} is no package: ${reason.error}`, values: { repository } }; // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 }
+
+/** Why the git half does not serve, as every route answers it with 503: git is missing, too old, or its check failed. */
+export const GIT_REFUSALS = {
+  /** git is not on the development server's PATH, which is checked when the server starts. */
+  missing: fixed(
+    'git-missing',
+    'git is not installed or not on the PATH of the development server: the Packages screen needs git 2.30 or later; install it, then restart the development server', // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  /** The development server's git is older than 2.30. */
+  tooOld: worded<{ version: string }>('git-too-old', ({ version }) => `git ${version} is older than 2.30, which the Packages screen needs: install a newer git, then restart the development server`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** `git --version` failed, as the error says. */
+  versionFailed: saying('git-version-failed', (said) => `git --version failed: ${said}`),
+  /** `git --version` answered no version, as it says. */
+  noVersion: saying('git-version-unknown', (said) => `git --version answered ${said}, which names no version`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** git went missing from the PATH after the start. */
+  notFound: fixed('git-not-on-path', 'git is not installed or not on the PATH of the development server'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+} as const;
 
 /** Whether `name` is a repository name: one segment of at most 100 letters, digits, `.`, `_` and `-`, starting with neither `.` nor `-`. */
 export function isRepositoryName(name: string): boolean {
@@ -79,33 +127,161 @@ export const MAX_MESSAGE_BYTES = 8 * 1024;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** What keeps a busy clone busy, in words: `busy` is the operation git left open, or `conflict`. */
+const busyWords = (busy: Exclude<Busy, null>) => (busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+
+/** What the routes answer when a request names no package of the working folder, or no part of one, or no route. */
+export const PACKAGE_REFUSALS = {
+  noWorkspace: fixed('no-workspace', 'no working folder is set: start the UI with RAIL8_WORKSPACE'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  workspaceGone: worded<{ folder: string }>('working-folder-missing', ({ folder }) => `the working folder ${folder} does not exist`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  badRepository: worded<{ repository: string }>('bad-request', ({ repository }) => `${JSON.stringify(repository)} is no repository name`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noPackage: worded<{ repository: string }>('no-package', ({ repository }) => `no package ${repository} in the working folder`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noCommit: worded<{ commit: string }>('no-commit', ({ commit }) => `the clone holds no commit ${commit}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noFileOnDisk: worded<{ path: string }>('no-file-on-disk', ({ path }) => `no file ${path} on disk`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noFileInCommit: worded<{ path: string; commit: string }>('no-file-in-commit', ({ path, commit }) => `no file ${path} in the commit ${commit}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  leadsOut: worded<{ path: string }>('path-leads-out', ({ path }) => `${path} leads out of the package's folder or into its .git folder`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  overReadLimit: worded<{ path: string }>('over-read-limit', ({ path }) => `${path} is over 1 MiB, the read limit`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  outside: worded<{ path: string; repository: string }>('path-outside-package', ({ path, repository }) => `${path} lies outside the package ${repository}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  notEncoded: fixed('bad-path', 'the repository name is not well encoded'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noRoute: worded<{ path: string }>('no-route', ({ path }) => `the git half has no route ${path}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noPackageRoute: worded<{ route: string }>('no-route', ({ route }) => `the git half has no route ${route} of a package`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  onlyMethod: worded<{ method: string; path: string }>('method-not-allowed', ({ method, path }) => `${method} is the only way to call ${path}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  onlyGetAndPost: worded<{ path: string }>('method-not-allowed', ({ path }) => `GET and POST are the only ways to call ${path}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noQuery: worded<{ name: string }>('bad-request', ({ name }) => `the query names no ${name}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noRevision: worded<{ name: string; rev: string }>('bad-request', ({ name, rev }) => `${name} ${JSON.stringify(rev)} is no revision: work, or a commit of 40 hex digits`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noCommitId: worded<{ name: string; rev: string }>('bad-request', ({ name, rev }) => `${name} ${JSON.stringify(rev)} is no revision: a commit of 40 hex digits`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  badLimit: worded<{ limit: string; max: number }>('bad-request', ({ limit, max }) => `limit ${JSON.stringify(limit)} is no number from 1 to ${max}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+} as const;
+
+/** What a run of git, or of another program, answers when the runner stops it or cannot run it. */
+export const RUNNER_REFUSALS = {
+  notStarted: saying<{ program: string }>('program-not-started', (said, { program }) => `${program} could not be started: ${said}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  timedOut: worded<{ program: string; seconds: number }>('program-timed-out', ({ program, seconds }) => `${program} took longer than ${seconds} s and was stopped`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  tooMuchOutput: worded<{ program: string; mib: number; stream: string }>('program-output-too-large', ({ program, mib, stream }) => `${program} wrote more than ${mib} MiB on its ${stream} and was stopped`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  closing: fixed('server-closing', 'the development server is closing'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  closed: fixed('server-closed', 'the development server closed while git ran'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  queueFull: worded<{ mode: string }>('git-queue-full', ({ mode }) => `too many git ${mode}s are waiting: try again`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  undoCalls: worded<{ max: number }>('undo-calls', ({ max }) => `an undo makes at most ${max} git calls`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+} as const;
+
+/** What a commit answers when it is refused, in both halves. */
+export const COMMIT_REFUSALS = {
+  readOnly: fixed('commit-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was committed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  busy: worded<{ busy: Exclude<Busy, null> }>('commit-clone-busy', ({ busy }) => `the clone is busy: ${busyWords(busy)}; finish it in a terminal, then commit`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** Another git holds the index: a commit, a fetch, a pull and a push answer it alike. */
+  indexLocked: fixed('index-locked', 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  detached: fixed('commit-detached', 'HEAD is detached: commit on a branch, which a terminal can switch to'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noIdentity: fixed('commit-no-identity', 'git gives no author identity in this clone: set it in a terminal with git config user.name and git config user.email'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  moved: worded<{ branch: string; head: string }>('commit-stale-head', ({ branch, head }) => `the clone is now at ${branch} ${head}, not at the branch and HEAD you reviewed; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  movedUnborn: worded<{ branch: string }>('commit-stale-unborn', ({ branch }) => `the clone is now at ${branch} (no commit yet), not at the branch and HEAD you reviewed; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  gone: worded<{ path: string }>('commit-path-gone', ({ path }) => `${path} is no longer among the package's changes; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  renameAlone: worded<{ path: string; from: string }>('commit-rename-alone', ({ path, from }) => `${path} is renamed from ${from}, which is not among the paths chosen with it; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  renameOnDisk: worded<{ path: string; from: string }>('commit-rename-on-disk', ({ path, from }) => `${from}, which ${path} was renamed from, is on disk: choose it too; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  changed: worded<{ path: string }>('commit-path-changed', ({ path }) => `${path} changed since you reviewed it; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  staged: worded<{ path: string }>('commit-path-staged', ({ path }) => `${path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  nothingChosen: fixed('commit-nothing-chosen', 'nothing to commit: no path is chosen'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  addFailed: fixed('add-failed', 'git add failed; nothing was committed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  failed: fixed('commit-failed', 'git commit failed, as git and the hooks say; nothing was committed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  failedHeadMoved: worded<{ head: string }>(
+    'commit-failed-head-moved',
+    ({ head }) => `git commit failed, as git and the hooks say; HEAD moved to ${head} meanwhile, so git may have committed: the package's history shows it`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  failedHeadUnread: fixed('commit-failed-head-unread', "git commit failed, as git and the hooks say; HEAD could not be read again, so git may have committed: the package's history shows it"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** A failure of git, of a hook or of the runner, with what the undo found: whether git may have committed, and the paths left staged. */
+  failedNoted: saying('commit-failed-noted', (said) => said),
+} as const;
+
+/** What a discard answers when it is refused, in both halves; each refusal changed nothing. */
+export const DISCARD_REFUSALS = {
+  readOnly: fixed('discard-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was discarded'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  busy: worded<{ busy: Exclude<Busy, null> }>('discard-clone-busy', ({ busy }) => `the clone is busy: ${busyWords(busy)}; finish it in a terminal, then discard`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  moved: worded<{ head: string }>('discard-stale-head', ({ head }) => `HEAD is now ${head}, not the HEAD you saw; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  movedUnborn: fixed('discard-stale-unborn', 'HEAD is now (no commit yet), not the HEAD you saw; nothing was discarded'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  gone: worded<{ path: string }>('discard-path-gone', ({ path }) => `${path} is no longer among the package's changes; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  renameAlone: worded<{ path: string; from: string }>('discard-rename-alone', ({ path, from }) => `${path} is renamed from ${from}, which is not among the paths chosen with it; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  renameOnDisk: worded<{ path: string; from: string }>('discard-rename-on-disk', ({ path, from }) => `${from}, which ${path} was renamed from, is on disk: choose it too; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  restaged: worded<{ path: string }>('discard-path-restaged', ({ path }) => `${path} was staged or unstaged since you saw it; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  leadsOut: worded<{ path: string }>('discard-path-leads-out', ({ path }) => `${path} leads out of the package's folder, or into its .git folder; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  changed: worded<{ path: string }>('discard-path-changed', ({ path }) => `${path} changed since you saw it; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  staged: worded<{ path: string }>('discard-path-staged', ({ path }) => `${path} is staged in a terminal with other content: discard or unstage it there; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  intentToAdd: worded<{ path: string }>('discard-intent-to-add', ({ path }) => `git holds ${path} as intent to add (git add -N): discard it in a terminal; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  symbolicLink: worded<{ path: string }>('discard-symbolic-link', ({ path }) => `${path} is a symbolic link on disk: discard it in a terminal; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  submodule: worded<{ path: string }>('discard-submodule', ({ path }) => `${path} is a submodule: discard it in a terminal; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  sparse: worded<{ path: string }>('discard-sparse', ({ path }) => `${path} is outside the sparse checkout (skip-worktree): discard it in a terminal; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  letterCase: worded<{ path: string; other: string }>('discard-letter-case', ({ path, other }) => `${path} and ${other} are the same but for letter case: discard them in a terminal; nothing was discarded`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  fileAndFolder: worded<{ path: string; other: string }>(
+    'discard-file-and-folder',
+    ({ path, other }) => `${path} and ${other} are a file and a folder of the same name: discard them one at a time, or in a terminal; nothing was discarded`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  indexLocked: fixed('discard-index-locked', 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends; nothing was discarded'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  updateIndexFailed: fixed('discard-update-index-failed', 'git update-index failed, as git says; nothing was discarded'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  unread: saying('discard-unread', (said) => `the discard ran, but what it changed could not be read: ${said}; the package's Changes show it`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  nothingChosen: fixed('discard-nothing-chosen', 'nothing to discard: no path is chosen'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+} as const;
+
+/** What a deploy and its check answer when they are refused before the node answers, or the node's answer is no answer. */
+export const DEPLOY_REFUSALS = {
+  readOnly: fixed('deploy-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  checkLost: worded<{ host: string; minutes: number }>('check-no-answer', ({ host, minutes }) => `the node at ${host} gave no answer to the check within ${minutes} min; the check changes nothing`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployLost: worded<{ host: string; minutes: number }>(
+    'deploy-no-answer',
+    ({ host, minutes }) => `the node at ${host} gave no answer within ${minutes} min, so the outcome of the deploy is unknown: read what it runs before you try again`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  checkBroken: worded<{ host: string }>('check-answer-broken', ({ host }) => `the node at ${host} broke off its answer to the check`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployBroken: worded<{ host: string }>(
+    'deploy-answer-broken',
+    ({ host }) => `the node at ${host} broke off its answer to the deploy, so the outcome of the deploy is unknown: read what it runs before you try again`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  checkTooLarge: worded<{ host: string }>('check-answer-too-large', ({ host }) => `the node at ${host} answered the check with more than 8 MiB`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployTooLarge: worded<{ host: string }>(
+    'deploy-answer-too-large',
+    ({ host }) => `the node at ${host} answered the deploy with more than 8 MiB, so the outcome of the deploy is unknown: read what it runs before you try again`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  checkUnreadable: worded<{ host: string; status: number }>('check-answer-unreadable', ({ host, status }) => `the node at ${host} answered the check with ${status}, but with no deploy the UI can read`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployUnreadable: worded<{ host: string; status: number }>(
+    'deploy-answer-unreadable',
+    ({ host, status }) =>
+      `the node at ${host} answered the deploy with ${status}, but with no deploy the UI can read, so the outcome of the deploy is unknown: read what it runs before you try again`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  checkTokenRefused: worded<{ host: string }>('check-token-refused', ({ host }) => `the node at ${host} refuses the UI server's token (401); the check changes nothing`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployTokenRefused: worded<{ host: string }>('deploy-token-refused', ({ host }) => `the node at ${host} refuses the UI server's token (401); nothing was deployed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** No connection to the node: what the connection's failure said. */
+  checkUnreachable: saying<{ host: string }>('check-node-unreachable', (said, { host }) => `the node at ${host} does not answer (is it running?): ${said}; the check changes nothing`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  deployUnreachable: saying<{ host: string }>('deploy-node-unreachable', (said, { host }) => `the node at ${host} does not answer (is it running?): ${said}; nothing was deployed`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** A refusal of the node that names no code of its own: its text, or its status. */
+  nodeRefused: saying('node-refused', (said) => said),
+} as const;
+
+/** The English text of the node's 412 to a deploy, the pool's record changed since its check: the node's own text, `error`. */
+export const staleDeploy = (error: string) => `the node's commit changed since the check: ${error}; nothing was deployed`; // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+
 /**
  * `body` as a commit of the package `repository` takes it, or its refusal: 400 when it is malformed (a message that is
  * blank, over 8 KiB or holds a NUL; a branch that is no text; a head that is neither null nor 40 hex digits; more than
  * 1000 paths, a path twice, or a path that is malformed or has a `.git` segment), 404 for a path outside the package,
  * and 422 for no path at all, since there is nothing to commit.
  */
-export function commitBodyOf(repository: string, body: unknown): CommitBody | { status: 400 | 404 | 422; error: string } {
-  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+export function commitBodyOf(repository: string, body: unknown): CommitBody | (Refused & { status: 400 | 404 | 422 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const { message, branch, head, paths } = body;
-  if (typeof message !== 'string' || message.trim() === '') return { status: 400, error: 'the commit needs a message' };
-  if (new TextEncoder().encode(message).length > MAX_MESSAGE_BYTES) return { status: 400, error: 'the message is over 8 KiB' };
-  if (message.includes('\0')) return { status: 400, error: 'the message holds a NUL character' };
-  if (typeof branch !== 'string' || branch === '') return { status: 400, error: 'the request names no branch' };
-  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return { status: 400, error: 'head is neither null nor a commit of 40 hex digits' };
-  if (!Array.isArray(paths)) return { status: 400, error: 'paths is no list' };
-  if (paths.length > MAX_CHOSEN) return { status: 400, error: `a commit takes at most ${MAX_CHOSEN} paths` };
+  if (typeof message !== 'string' || message.trim() === '') return badRequest('the commit needs a message'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (new TextEncoder().encode(message).length > MAX_MESSAGE_BYTES) return badRequest('the message is over 8 KiB'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (message.includes('\0')) return badRequest('the message holds a NUL character'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (typeof branch !== 'string' || branch === '') return badRequest('the request names no branch'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return badRequest('head is neither null nor a commit of 40 hex digits'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (!Array.isArray(paths)) return badRequest('paths is no list'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (paths.length > MAX_CHOSEN) return badRequest(`a commit takes at most ${MAX_CHOSEN} paths`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const chosen: CommitBody['paths'] = [];
   for (const entry of paths as unknown[]) {
     if (!isRecord(entry) || typeof entry.path !== 'string' || (entry.tag !== null && typeof entry.tag !== 'string')) {
-      return { status: 400, error: 'each path is {path, tag}, its tag a text or null' };
+      return badRequest('each path is {path, tag}, its tag a text or null'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     }
     const found = inPackage(repository, entry.path);
     if ('error' in found) return found;
-    if (chosen.some((c) => c.path === entry.path)) return { status: 400, error: `${entry.path} is chosen twice` };
+    if (chosen.some((c) => c.path === entry.path)) return badRequest(`${entry.path} is chosen twice`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     chosen.push({ path: entry.path, tag: entry.tag });
   }
-  if (chosen.length === 0) return { status: 422, error: 'nothing to commit: no path is chosen' };
+  if (chosen.length === 0) return { status: 422, ...COMMIT_REFUSALS.nothingChosen };
   return { message, branch, head, paths: chosen };
 }
 
@@ -114,12 +290,12 @@ export function commitBodyOf(repository: string, body: unknown): CommitBody | { 
  * neither null nor 40 hex digits; an index other than `clean`, `staged` or null; more than 1000 paths, a path twice, or a
  * path that is malformed or has a `.git` segment), 404 for a path outside the package, and 422 for no path at all.
  */
-export function discardBodyOf(repository: string, body: unknown): DiscardBody | { status: 400 | 404 | 422; error: string } {
-  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+export function discardBodyOf(repository: string, body: unknown): DiscardBody | (Refused & { status: 400 | 404 | 422 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const { head, paths } = body;
-  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return { status: 400, error: 'head is neither null nor a commit of 40 hex digits' };
-  if (!Array.isArray(paths)) return { status: 400, error: 'paths is no list' };
-  if (paths.length > MAX_CHOSEN) return { status: 400, error: `a discard takes at most ${MAX_CHOSEN} paths` };
+  if (head !== null && (typeof head !== 'string' || !isCommitId(head))) return badRequest('head is neither null nor a commit of 40 hex digits'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (!Array.isArray(paths)) return badRequest('paths is no list'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (paths.length > MAX_CHOSEN) return badRequest(`a discard takes at most ${MAX_CHOSEN} paths`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const chosen: DiscardBody['paths'] = [];
   for (const entry of paths as unknown[]) {
     if (
@@ -128,14 +304,14 @@ export function discardBodyOf(repository: string, body: unknown): DiscardBody | 
       (entry.tag !== null && typeof entry.tag !== 'string') ||
       (entry.index !== null && entry.index !== 'clean' && entry.index !== 'staged')
     ) {
-      return { status: 400, error: 'each path is {path, tag, index}, its tag a text or null, its index clean, staged or null' };
+      return badRequest('each path is {path, tag, index}, its tag a text or null, its index clean, staged or null'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     }
     const found = inPackage(repository, entry.path);
     if ('error' in found) return found;
-    if (chosen.some((c) => c.path === entry.path)) return { status: 400, error: `${entry.path} is chosen twice` };
+    if (chosen.some((c) => c.path === entry.path)) return badRequest(`${entry.path} is chosen twice`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     chosen.push({ path: entry.path, tag: entry.tag, index: entry.index });
   }
-  if (chosen.length === 0) return { status: 422, error: 'nothing to discard: no path is chosen' };
+  if (chosen.length === 0) return { status: 422, ...DISCARD_REFUSALS.nothingChosen };
   return { head, paths: chosen };
 }
 
@@ -169,13 +345,18 @@ export interface Chosen {
 }
 
 /**
- * Why a commit or a discard of `chosen` is stale (412), as `compared`, the paths that differ from `HEAD` now, shows it;
- * null when it is not: a path no longer among the changes; a renamed change named without the path it was renamed from;
- * or that path named as not on disk while it is on disk. Each reason ends with `nothing`, such as "nothing was committed".
+ * Why a commit or a discard of `chosen` is stale (412), as `compared`, the paths that differ from `HEAD` now, shows it,
+ * in the words of `refusals`, the commit's or the discard's; null when it is not: a path no longer among the changes; a
+ * renamed change named without the path it was renamed from; or that path named as not on disk while it is on disk.
  */
-export function staleChoice(repository: string, chosen: readonly Chosen[], compared: readonly Compared[], nothing: string): string | null {
+export function staleChoice(
+  repository: string,
+  chosen: readonly Chosen[],
+  compared: readonly Compared[],
+  refusals: Pick<typeof COMMIT_REFUSALS | typeof DISCARD_REFUSALS, 'gone' | 'renameAlone' | 'renameOnDisk'>,
+): Refused | null {
   const changed = new Set(compared.flatMap((c) => [c.inside, ...(c.renamedFrom === undefined ? [] : [c.renamedFrom])]));
-  for (const c of chosen) if (!changed.has(c.inside)) return `${c.path} is no longer among the package's changes; ${nothing}`;
+  for (const c of chosen) if (!changed.has(c.inside)) return refusals.gone({ path: c.path });
   // a renamed change is chosen with the path it was renamed from, as the author saw it: not on disk, unless the request
   // names that path with a tag of its own
   const renamedFrom = new Map(compared.flatMap((c) => (c.renamedFrom === undefined ? [] : [[c.inside, c.renamedFrom] as const])));
@@ -183,8 +364,8 @@ export function staleChoice(repository: string, chosen: readonly Chosen[], compa
     const from = renamedFrom.get(c.inside);
     if (from === undefined) continue;
     const source = chosen.find((s) => s.inside === from);
-    if (source === undefined) return `${c.path} is renamed from ${repository}/${from}, which is not among the paths chosen with it; ${nothing}`;
-    if (source.tag === null && source.onDisk) return `${repository}/${from}, which ${c.path} was renamed from, is on disk: choose it too; ${nothing}`;
+    if (source === undefined) return refusals.renameAlone({ path: c.path, from: `${repository}/${from}` });
+    if (source.tag === null && source.onDisk) return refusals.renameOnDisk({ path: c.path, from: `${repository}/${from}` });
   }
   return null;
 }
@@ -196,14 +377,14 @@ export const DEPLOY_MS = 5 * 60_000;
  * `body` as a deploy or its check takes it, or its refusal (400): the commit is 40 hex digits; a deploy names the state
  * it expects, a commit of 40 hex digits or `none`, and never `any`, the blind overwrite; a check names none.
  */
-export function deployBodyOf(body: unknown): DeployBody | { status: 400; error: string } {
-  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+export function deployBodyOf(body: unknown): DeployBody | (Refused & { status: 400 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const { commit, check, expect } = body;
-  if (typeof commit !== 'string' || !isCommitId(commit)) return { status: 400, error: 'commit is no commit of 40 hex digits' };
-  if (typeof check !== 'boolean') return { status: 400, error: 'check is neither true nor false' };
-  if (check) return expect === undefined ? { commit, check } : { status: 400, error: 'a check names no expect' };
+  if (typeof commit !== 'string' || !isCommitId(commit)) return badRequest('commit is no commit of 40 hex digits'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (typeof check !== 'boolean') return badRequest('check is neither true nor false'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (check) return expect === undefined ? { commit, check } : badRequest('a check names no expect'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   if (typeof expect !== 'string' || (expect !== 'none' && !isCommitId(expect))) {
-    return { status: 400, error: 'a deploy names the state it expects to replace, as its check answered it: a commit of 40 hex digits, or none' };
+    return badRequest('a deploy names the state it expects to replace, as its check answered it: a commit of 40 hex digits, or none'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   }
   return { commit, check, expect };
 }
@@ -212,26 +393,38 @@ export function deployBodyOf(body: unknown): DeployBody | { status: 400; error: 
  * `body` as a pull or a push takes it, or its refusal (400): the branch is text; `head` is 40 hex digits; `upstream` is
  * the upstream's name as the package's state gave it, such as `origin/main`, or null when it gave none.
  */
-export function remoteBodyOf(body: unknown): RemoteBody | { status: 400; error: string } {
-  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+export function remoteBodyOf(body: unknown): RemoteBody | (Refused & { status: 400 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const { branch, head, upstream } = body;
-  if (typeof branch !== 'string' || branch === '') return { status: 400, error: 'the request names no branch' };
-  if (typeof head !== 'string' || !isCommitId(head)) return { status: 400, error: 'head is no commit of 40 hex digits' };
-  if (upstream !== null && (typeof upstream !== 'string' || upstream === '')) return { status: 400, error: 'upstream is neither null nor a name' };
+  if (typeof branch !== 'string' || branch === '') return badRequest('the request names no branch'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (typeof head !== 'string' || !isCommitId(head)) return badRequest('head is no commit of 40 hex digits'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (upstream !== null && (typeof upstream !== 'string' || upstream === '')) return badRequest('upstream is neither null nor a name'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   return { branch, head, upstream };
 }
 
 /** What a fetch, a pull and a push answer when they are refused, in both halves. */
 export const REMOTE_REFUSALS = {
-  readOnly: (what: 'fetched' | 'pulled' | 'pushed') => `this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was ${what}`,
-  detached: 'HEAD is detached: fetch, pull and push work on a branch, which a terminal can switch to',
-  stale: 'the clone is no longer at the branch, HEAD and upstream you saw; nothing was done',
-  noUpstream: 'the branch has no upstream: push it once in a terminal with git push -u <remote> <branch>, then fetch, pull and push here',
-  diverged: 'the branch and its upstream have diverged: merge or rebase in a terminal; nothing was pulled',
-  overwrites: 'git would not fast-forward, as git says, as when it would overwrite a file on disk: commit, move or remove that file, then pull again; nothing was pulled',
-  rejected: 'the remote rejected the push, as git says; nothing was pushed',
-  failed: (what: 'fetch' | 'push') =>
-    `git could not ${what}, as git says: if git could not sign in or does not know the host's key, run git ${what} in a terminal, where it can ask, then try again`,
+  fetchReadOnly: fixed('fetch-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was fetched'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  pullReadOnly: fixed('pull-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was pulled'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  pushReadOnly: fixed('push-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was pushed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  busy: worded<{ busy: Exclude<Busy, null> }>('remote-clone-busy', ({ busy }) => `the clone is busy: ${busyWords(busy)}; finish it in a terminal first`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  detached: fixed('remote-detached', 'HEAD is detached: fetch, pull and push work on a branch, which a terminal can switch to'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  stale: fixed('remote-stale', 'the clone is no longer at the branch, HEAD and upstream you saw; nothing was done'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noUpstream: fixed('no-upstream', 'the branch has no upstream: push it once in a terminal with git push -u <remote> <branch>, then fetch, pull and push here'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  diverged: fixed('pull-diverged', 'the branch and its upstream have diverged: merge or rebase in a terminal; nothing was pulled'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  overwrites: fixed(
+    'pull-overwrites',
+    'git would not fast-forward, as git says, as when it would overwrite a file on disk: commit, move or remove that file, then pull again; nothing was pulled', // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  rejected: fixed('push-rejected', 'the remote rejected the push, as git says; nothing was pushed'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  fetchFailed: fixed(
+    'fetch-failed',
+    "git could not fetch, as git says: if git could not sign in or does not know the host's key, run git fetch in a terminal, where it can ask, then try again", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  pushFailed: fixed(
+    'push-failed',
+    "git could not push, as git says: if git could not sign in or does not know the host's key, run git push in a terminal, where it can ask, then try again", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
 } as const;
 
 /** The longest actor a header names, as the node takes it. */
@@ -260,12 +453,12 @@ export function unstageCommand(insides: readonly string[], unborn: boolean): str
  * The path within the package `repository` of `path`, a path relative to the working folder with `/`; or the refusal
  * of it: 400 when it is malformed or has a `.git` segment, 404 when it lies outside the package's folder.
  */
-export function inPackage(repository: string, path: string): { inside: string } | { status: 400 | 404; error: string } {
+export function inPackage(repository: string, path: string): { inside: string } | (Refused & { status: 400 | 404 }) {
   const segments = path.split('/');
   // eslint-disable-next-line no-control-regex
-  if (segments.some((s) => s === '' || s === '.' || s === '..' || /[\\\u0000-\u001f\u007f]/.test(s))) return { status: 400, error: `the path ${JSON.stringify(path)} is malformed` };
-  if (segments.some((s) => s.toLowerCase() === '.git')) return { status: 400, error: 'a path with a .git segment names git’s own files, never a file of the package' };
-  if (segments[0] !== repository || segments.length < 2) return { status: 404, error: `${path} lies outside the package ${repository}` };
+  if (segments.some((s) => s === '' || s === '.' || s === '..' || /[\\\u0000-\u001f\u007f]/.test(s))) return badRequest(`the path ${JSON.stringify(path)} is malformed`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (segments.some((s) => s.toLowerCase() === '.git')) return badRequest('a path with a .git segment names git’s own files, never a file of the package'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (segments[0] !== repository || segments.length < 2) return { status: 404, ...PACKAGE_REFUSALS.outside({ path, repository }) };
   return { inside: segments.slice(1).join('/') };
 }
 
@@ -430,27 +623,33 @@ export const MAX_ADDRESS = 1000;
 
 /** Why an address is not taken, one line each, saying what to do. None repeats the address or any part of it. */
 export const ADDRESS_REFUSALS = {
-  notText: 'the request is no {address} of text',
-  empty: "paste the address of a repository, as its git host's Clone button gives it",
-  space: 'paste only the address: it holds white space',
-  long: `the address is over ${MAX_ADDRESS} characters: paste only the address`,
-  character: "the address holds a character outside printable ASCII: paste it as its git host's Clone button gives it",
-  option: "an address never starts with '-': paste the address of the repository",
-  transport: "an address with '::' names a transport of its own, which is not taken: use the repository's https or ssh address",
-  scheme: "only https:// and ssh:// addresses are taken: use the repository's https or ssh address",
-  local: "a repository on this machine is not taken: clone it in a terminal, or use its git host's address",
-  httpsUser: "remove the part before '@': your credential helper chooses the account",
-  password: "the address holds a password: remove it; your credential helper or your ssh key signs in",
-  user: "the user name before '@' is malformed: letters, digits, '.', '_' and '-', starting with a letter, a digit or '_'",
-  host: "the host is malformed: labels of letters, digits, '-' and '_' joined by '.'; an IPv6 address is not taken, use the host's name",
-  driveLetter: "a host of one letter is a drive letter to git on Windows: use the host's full name, or an ssh:// address",
-  port: 'the port is no number from 1 to 65535',
-  path: "the path of the address is malformed: segments of letters, digits, '.', '_', '~', '+' and '-' joined by '/', none of them '.' or '..' or starting with '-'",
-  noRepository: 'the address names no repository: paste the address its git host gives',
-  folderCharacter: "the repository's name holds a character a package's folder cannot have, such as a space: a package's folder takes letters, digits, '.', '_' and '-'",
-  name: `the repository's name is no name of a package's folder: ${REASONS.name.slice('its name is no repository name: '.length)}`,
-  trailingDot: "the repository's name ends with '.', which a folder on Windows cannot keep",
-  device: "the repository's name is a device name on Windows, such as con or nul, which no folder can have",
+  notText: fixed('bad-request', 'the request is no {address} of text'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  empty: fixed('address-empty', "paste the address of a repository, as its git host's Clone button gives it"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  space: fixed('address-space', 'paste only the address: it holds white space'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  long: fixed('address-too-long', `the address is over ${MAX_ADDRESS} characters: paste only the address`, { max: MAX_ADDRESS }), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  character: fixed('address-character', "the address holds a character outside printable ASCII: paste it as its git host's Clone button gives it"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  option: fixed('address-option', "an address never starts with '-': paste the address of the repository"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  transport: fixed('address-transport', "an address with '::' names a transport of its own, which is not taken: use the repository's https or ssh address"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  scheme: fixed('address-scheme', "only https:// and ssh:// addresses are taken: use the repository's https or ssh address"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  local: fixed('address-local', "a repository on this machine is not taken: clone it in a terminal, or use its git host's address"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  httpsUser: fixed('address-https-user', "remove the part before '@': your credential helper chooses the account"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  password: fixed('address-password', 'the address holds a password: remove it; your credential helper or your ssh key signs in'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  user: fixed('address-user', "the user name before '@' is malformed: letters, digits, '.', '_' and '-', starting with a letter, a digit or '_'"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  host: fixed('address-host', "the host is malformed: labels of letters, digits, '-' and '_' joined by '.'; an IPv6 address is not taken, use the host's name"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  driveLetter: fixed('address-drive-letter', "a host of one letter is a drive letter to git on Windows: use the host's full name, or an ssh:// address"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  port: fixed('address-port', 'the port is no number from 1 to 65535'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  path: fixed(
+    'address-path',
+    "the path of the address is malformed: segments of letters, digits, '.', '_', '~', '+' and '-' joined by '/', none of them '.' or '..' or starting with '-'", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  noRepository: fixed('address-no-repository', 'the address names no repository: paste the address its git host gives'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  folderCharacter: fixed(
+    'address-folder-character',
+    "the repository's name holds a character a package's folder cannot have, such as a space: a package's folder takes letters, digits, '.', '_' and '-'", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  name: fixed('address-folder-name', `the repository's name is no name of a package's folder: ${REASONS.name.error.slice('its name is no repository name: '.length)}`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  trailingDot: fixed('address-trailing-dot', "the repository's name ends with '.', which a folder on Windows cannot keep"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  device: fixed('address-device', "the repository's name is a device name on Windows, such as con or nul, which no folder can have"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 } as const;
 
 /** A label of a host: letters, digits, `-` and `_`, not starting with `-`, 1 to 63 characters. */
@@ -463,8 +662,7 @@ const ENCODED_SEGMENT = /^(?:[A-Za-z0-9._~+-]|%[0-9A-Fa-f]{2})+$/;
 /** The names Windows keeps for its devices, with or without an extension. */
 const DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
-type Refused = { status: 400; error: string };
-const refused = (error: string): Refused => ({ status: 400, error });
+const refused = (refusal: Refused): Refused & { status: 400 } => ({ status: 400, ...refusal });
 
 /** Whether `host` is a host name or a dotted IPv4 address: labels joined by `.`, at most 253 characters in all. */
 function isHost(host: string): boolean {
@@ -509,7 +707,7 @@ function segmentsOf(path: string, encoded: boolean): string[] | null {
  *
  * The address answered is the text as it stands after step 1, so that `origin` is what a terminal would store.
  */
-export function cloneSourceOf(text: unknown): { address: string; repository: string } | Refused {
+export function cloneSourceOf(text: unknown): { address: string; repository: string } | (Refused & { status: 400 }) {
   if (typeof text !== 'string') return refused(ADDRESS_REFUSALS.notText);
   const address = text.trim().replace(/^git\s+clone\s+/, '');
   if (/\s/.test(address)) return refused(ADDRESS_REFUSALS.space);
@@ -579,23 +777,40 @@ export const CLONE_MAX_ENTRIES = 20_000;
 
 /** What Get a package answers, besides the address rule's own lines. */
 export const CLONE_REFUSALS = {
-  another: 'another package is being got: wait for it to end',
-  exists: "the working folder holds an entry of the repository's name already: nothing was written; rename or remove it, or get the package in another working folder",
-  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was got',
-  gitFailed:
-    'git could not clone the repository, and nothing was written: if git could not sign in or does not know the host’s key, run git ls-remote with this address in a terminal, where it can ask, then try again',
-  tooLarge: `the repository is over ${CLONE_MAX_BYTES / (1024 * 1024 * 1024)} GiB or ${CLONE_MAX_ENTRIES.toLocaleString('en-US')} files and folders on disk, so nothing was written: clone it in a terminal`,
+  another: fixed('clone-under-way', 'another package is being got: wait for it to end'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  exists: fixed(
+    'clone-exists',
+    "the working folder holds an entry of the repository's name already: nothing was written; rename or remove it, or get the package in another working folder", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  readOnly: fixed('clone-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was got'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  gitFailed: fixed(
+    'clone-failed',
+    'git could not clone the repository, and nothing was written: if git could not sign in or does not know the host’s key, run git ls-remote with this address in a terminal, where it can ask, then try again', // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  tooLarge: fixed(
+    'clone-too-large',
+    `the repository is over ${CLONE_MAX_BYTES / (1024 * 1024 * 1024)} GiB or ${CLONE_MAX_ENTRIES.toLocaleString('en-US')} files and folders on disk, so nothing was written: clone it in a terminal`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+    { gib: CLONE_MAX_BYTES / (1024 * 1024 * 1024), entries: CLONE_MAX_ENTRIES },
+  ),
+  cleanupFailed: saying<{ folder: string }>('clone-cleanup-failed', (said, { folder }) => `the clone failed, and the hidden folder ${folder} it was made in could not be removed: ${said}; delete it`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 } as const;
 
 /** What New package answers when it is refused, in both halves. */
 export const NEW_PACKAGE_REFUSALS = {
-  body: 'the request is no {repository, name} of two texts',
-  repository: "the repository name must be one segment of at most 100 letters, digits, '.', '_' and '-', starting with neither '.' nor '-'",
-  name: "the package name must be at most 64 lowercase letters, digits and '-', starting with a letter",
-  exists: "the working folder holds an entry of the repository's name already: nothing was written; choose another name, or rename or remove that entry",
-  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was made',
-  noIdentity: 'git gives no author identity: set it in a terminal with git config user.name and git config user.email; nothing was made',
-  gitFailed: 'git could not make the first commit, as git and the hooks say; nothing was made',
+  body: fixed('bad-request', 'the request is no {repository, name} of two texts'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  repository: fixed('new-package-repository', "the repository name must be one segment of at most 100 letters, digits, '.', '_' and '-', starting with neither '.' nor '-'"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  name: fixed('new-package-name', "the package name must be at most 64 lowercase letters, digits and '-', starting with a letter"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  exists: fixed(
+    'new-package-exists',
+    "the working folder holds an entry of the repository's name already: nothing was written; choose another name, or rename or remove that entry", // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  readOnly: fixed('new-package-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was made'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noIdentity: fixed('new-package-no-identity', 'git gives no author identity: set it in a terminal with git config user.name and git config user.email; nothing was made'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  gitFailed: fixed('new-package-failed', 'git could not make the first commit, as git and the hooks say; nothing was made'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  cleanupFailed: saying<{ folder: string }>(
+    'new-package-cleanup-failed',
+    (said, { folder }) => `the new package failed, and the hidden folder ${folder} it was made in could not be removed: ${said}; delete it`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
 } as const;
 
 /** Whether `name` is a package name, as `package.yaml`'s schema takes it: lowercase letters, digits and `-`, starting with a letter, at most 64 characters. */
@@ -607,10 +822,10 @@ export function isPackageName(name: string): boolean {
  * `body` as New package takes it, or its refusal: 400 when it is no `{repository, name}` of two texts, or the
  * repository name is no name of a package's folder; 422 when `package.yaml`'s schema refuses the package name.
  */
-export function newPackageBodyOf(body: unknown): { repository: string; name: string } | { status: 400 | 422; error: string } {
-  if (!isRecord(body) || typeof body.repository !== 'string' || typeof body.name !== 'string') return { status: 400, error: NEW_PACKAGE_REFUSALS.body };
-  if (!isRepositoryName(body.repository)) return { status: 400, error: NEW_PACKAGE_REFUSALS.repository };
-  if (!isPackageName(body.name)) return { status: 422, error: NEW_PACKAGE_REFUSALS.name };
+export function newPackageBodyOf(body: unknown): { repository: string; name: string } | (Refused & { status: 400 | 422 }) {
+  if (!isRecord(body) || typeof body.repository !== 'string' || typeof body.name !== 'string') return { status: 400, ...NEW_PACKAGE_REFUSALS.body };
+  if (!isRepositoryName(body.repository)) return { status: 400, ...NEW_PACKAGE_REFUSALS.repository };
+  if (!isPackageName(body.name)) return { status: 422, ...NEW_PACKAGE_REFUSALS.name };
   return { repository: body.repository, name: body.name };
 }
 
@@ -638,15 +853,42 @@ export const BUILD_CLI = './mvnw -B -ntp -q package -DskipTests -pl :rail8-cli -
 
 /** What a lock answers when it is refused, in both halves. */
 export const LOCK_REFUSALS = {
-  readOnly: 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was locked',
-  stale: 'package.yaml, package.lock or a dependency’s folder is no longer what you saw: look at the dependencies again; nothing was locked',
-  several: (dependency: string, folders: readonly string[]) =>
-    `several folders of the working folder hold ${dependency}: ${folders.join(', ')}; rail8 lock could pin any of them, so remove or rename all but one; nothing was locked`,
-  problems: 'rail8 lock refused the lock, for the problems it names; nothing was written',
-  missing: (cli: string) =>
-    `the Rail8 command line ${cli} is missing or cannot run: build it with ${BUILD_CLI} from the root of the Rail8 checkout (it needs JDK 25), or set RAIL8_CLI to it, then lock again`,
-  failed: (code: number | null) => `rail8 lock ended with ${code === null ? 'a signal' : `exit code ${code}`}, as it says; nothing may have been written`,
+  readOnly: fixed('lock-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was locked'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  stale: fixed('lock-stale', 'package.yaml, package.lock or a dependency’s folder is no longer what you saw: look at the dependencies again; nothing was locked'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** `folders` are the folders' names, joined by `, `. */
+  several: worded<{ dependency: string; folders: string }>(
+    'lock-several-candidates',
+    ({ dependency, folders }) => `several folders of the working folder hold ${dependency}: ${folders}; rail8 lock could pin any of them, so remove or rename all but one; nothing was locked`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  problems: fixed('lock-problems', 'rail8 lock refused the lock, for the problems it names; nothing was written'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  /** `build` is the command that builds the command line, {@link BUILD_CLI}. */
+  missing: worded<{ cli: string; build: string }>(
+    'cli-missing',
+    ({ cli, build }) => `the Rail8 command line ${cli} is missing or cannot run: build it with ${build} from the root of the Rail8 checkout (it needs JDK 25), or set RAIL8_CLI to it, then lock again`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  failed: worded<{ exitCode: number }>('lock-failed', ({ exitCode }) => `rail8 lock ended with exit code ${exitCode}, as it says; nothing may have been written`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  killed: fixed('lock-killed', 'rail8 lock ended with a signal, as it says; nothing may have been written'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  noPins: fixed('lock-no-pins', 'rail8 lock printed lines that are no pins: the command line may be another version than this UI'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 } as const;
+
+/**
+ * The code of every entry of the records of the packages, in the order of the records: a code of the UI's server that an
+ * entry shares, such as `bad-request`, once for each entry that gives it.
+ */
+export const PACKAGE_REFUSAL_CODES: readonly string[] = [
+  REASONS,
+  GIT_REFUSALS,
+  PACKAGE_REFUSALS,
+  RUNNER_REFUSALS,
+  COMMIT_REFUSALS,
+  DISCARD_REFUSALS,
+  DEPLOY_REFUSALS,
+  REMOTE_REFUSALS,
+  ADDRESS_REFUSALS,
+  CLONE_REFUSALS,
+  NEW_PACKAGE_REFUSALS,
+  LOCK_REFUSALS,
+].flatMap((record): string[] => Object.values(record).map((entry: { code: string }) => entry.code));
 
 /** The dependencies a `package.yaml` of `text` declares, the first declaration of each name, sorted by name; none when it cannot be read. */
 export function declaredOf(text: string): { name: string; version: string }[] {
@@ -724,13 +966,13 @@ export function dependencyOf(
  * `{name, folder, head}`, its name text, its folder a repository name or null, and its head 40 hex digits or null, each
  * name once.
  */
-export function lockBodyOf(body: unknown): LockBody | { status: 400; error: string } {
-  if (!isRecord(body)) return { status: 400, error: 'the request is no JSON object' };
+export function lockBodyOf(body: unknown): LockBody | (Refused & { status: 400 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const { manifestTag, lockTag, dependencies } = body;
   const tag = (value: unknown) => value === null || typeof value === 'string';
-  if (!tag(manifestTag) || !tag(lockTag)) return { status: 400, error: 'manifestTag and lockTag are each a tag or null' };
-  if (!Array.isArray(dependencies)) return { status: 400, error: 'dependencies is no list' };
-  if (dependencies.length > MAX_LISTED) return { status: 400, error: `a lock names at most ${MAX_LISTED} dependencies` };
+  if (!tag(manifestTag) || !tag(lockTag)) return badRequest('manifestTag and lockTag are each a tag or null'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (!Array.isArray(dependencies)) return badRequest('dependencies is no list'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  if (dependencies.length > MAX_LISTED) return badRequest(`a lock names at most ${MAX_LISTED} dependencies`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
   const named: LockBody['dependencies'] = [];
   for (const d of dependencies as unknown[]) {
     if (
@@ -739,9 +981,9 @@ export function lockBodyOf(body: unknown): LockBody | { status: 400; error: stri
       (d.folder !== null && (typeof d.folder !== 'string' || !isRepositoryName(d.folder))) ||
       (d.head !== null && (typeof d.head !== 'string' || !isCommitId(d.head)))
     ) {
-      return { status: 400, error: 'each dependency is {name, folder, head}: its folder a repository name or null, its head a commit of 40 hex digits or null' };
+      return badRequest('each dependency is {name, folder, head}: its folder a repository name or null, its head a commit of 40 hex digits or null'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     }
-    if (named.some((n) => n.name === d.name)) return { status: 400, error: `the dependency ${d.name} is named twice` };
+    if (named.some((n) => n.name === d.name)) return badRequest(`the dependency ${d.name} is named twice`); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     named.push({ name: d.name, folder: d.folder, head: d.head });
   }
   return { manifestTag: manifestTag as string | null, lockTag: lockTag as string | null, dependencies: named };

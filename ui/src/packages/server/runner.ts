@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
-import { Refusal } from '../../../server/workingFolder.ts';
+import { GIT_REFUSALS, RUNNER_REFUSALS, type Refused } from '../rules.ts';
+import { refusal } from './refused.ts';
 import type { Timer } from './timer.ts';
 
 /**
@@ -51,7 +52,7 @@ export interface Call {
    * Another program to run instead of git, such as the Rail8 command line: its file, the name the call's refusals give
    * it, and what a refusal says when the file cannot be found. Its arguments are `args` alone, with no `--no-pager` or `-C`.
    */
-  program?: { file: string; name: string; missing: string };
+  program?: { file: string; name: string; missing: Refused };
 }
 
 /** How a call's process ended: its exit code (null when a signal ended it) and what it wrote, each stream at most its limit. */
@@ -102,7 +103,7 @@ export interface RunnerOptions {
 export interface Runner {
   /**
    * Runs `call` once a slot is free, and answers how its process ended, whatever its exit code. Rejects with a
-   * {@link Refusal}: 503 when git cannot be found, when too many calls wait or when the runner closes; 504 when the
+   * refusal of the UI server: 503 when git cannot be found, when too many calls wait or when the runner closes; 504 when the
    * call passed its deadline and 500 when it wrote more than its limit, both after its process was stopped.
    */
   run(call: Call): Promise<Ran>;
@@ -156,7 +157,7 @@ function killGroup(pid: number, signal: NodeJS.Signals) {
   }
 }
 
-const mib = (bytes: number) => `${bytes / (1024 * 1024)} MiB`;
+const mib = (bytes: number) => bytes / (1024 * 1024);
 
 /** What a call is while its process runs: whether it is an undo's, how to stop it, and when it has exited. */
 interface Live {
@@ -240,7 +241,7 @@ export function runner(options: RunnerOptions): Runner {
           stdio: [call.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         });
       } catch (error) {
-        reject(new Refusal(500, `${name} could not be started: ${String(error)}`));
+        reject(refusal(500, RUNNER_REFUSALS.notStarted(String(error), { program: name })));
         return;
       }
 
@@ -285,7 +286,7 @@ export function runner(options: RunnerOptions): Runner {
 
       const cancelDeadline = timer.after(limits.ms, () => {
         if (exited) endDrain?.();
-        else entry.stop(new Refusal(504, `${name} took longer than ${limits.ms / 1000} s and was stopped`));
+        else entry.stop(refusal(504, RUNNER_REFUSALS.timedOut({ program: name, seconds: limits.ms / 1000 })));
       });
       const aborted = () => entry.stop(call.signal!.reason);
       call.signal?.addEventListener('abort', aborted);
@@ -310,7 +311,7 @@ export function runner(options: RunnerOptions): Runner {
           const room = limits.bytes - sizes[stream];
           if (room > 0) output[stream].push(chunk.subarray(0, room));
           sizes[stream] += chunk.length;
-          if (sizes[stream] > limits.bytes) entry.stop(new Refusal(500, `${name} wrote more than ${mib(limits.bytes)} on its ${stream} and was stopped`));
+          if (sizes[stream] > limits.bytes) entry.stop(refusal(500, RUNNER_REFUSALS.tooMuchOutput({ program: name, mib: mib(limits.bytes), stream })));
         });
         child[stream]?.on('error', () => {});
       }
@@ -324,8 +325,8 @@ export function runner(options: RunnerOptions): Runner {
         exited = true;
         finish(
           error.code === 'ENOENT'
-            ? new Refusal(503, call.program?.missing ?? 'git is not installed or not on the PATH of the development server')
-            : new Refusal(500, `${name} could not be started: ${error.message}`),
+            ? refusal(503, call.program?.missing ?? GIT_REFUSALS.notFound)
+            : refusal(500, RUNNER_REFUSALS.notStarted(error.message, { program: name })),
           null,
         );
       });
@@ -379,12 +380,12 @@ export function runner(options: RunnerOptions): Runner {
   };
 
   const submit = (call: Call, undo: boolean): Promise<Ran> => {
-    if (closing !== null && !undo) return Promise.reject(new Refusal(503, 'the development server is closing'));
+    if (closing !== null && !undo) return Promise.reject(refusal(503, RUNNER_REFUSALS.closing));
     if (call.signal?.aborted) return Promise.reject(call.signal.reason);
     return new Promise<Ran>((resolve, reject) => {
       if (canStart(call.mode)) launch(call, undo, resolve, reject);
       else if (!undo && waiting.filter((w) => w.call.mode === call.mode).length >= MAX_WAITING[call.mode]) {
-        reject(new Refusal(503, `too many git ${call.mode}s are waiting: try again`));
+        reject(refusal(503, RUNNER_REFUSALS.queueFull({ mode: call.mode })));
       } else {
         const waits = { call, undo, resolve, reject };
         waiting.push(waits);
@@ -408,9 +409,9 @@ export function runner(options: RunnerOptions): Runner {
     if (closing !== null) return closing;
     for (let i = 0; i < waiting.length; ) {
       if (waiting[i]!.undo) i++;
-      else waiting.splice(i, 1)[0]!.reject(new Refusal(503, 'the development server is closing'));
+      else waiting.splice(i, 1)[0]!.reject(refusal(503, RUNNER_REFUSALS.closing));
     }
-    for (const entry of live) if (!entry.undo) entry.stop(new Refusal(503, 'the development server closed while git ran'));
+    for (const entry of live) if (!entry.undo) entry.stop(refusal(503, RUNNER_REFUSALS.closed));
     closing = Promise.all([...[...live].map((entry) => entry.exited), ...[...undoables].map((u) => u.catch(() => undefined))]).then(() => {});
     return closing;
   };
@@ -418,13 +419,13 @@ export function runner(options: RunnerOptions): Runner {
   return {
     run: (call) => submit(call, false),
     undoable(work, undo) {
-      if (closing !== null) return Promise.reject(new Refusal(503, 'the development server is closing'));
+      if (closing !== null) return Promise.reject(refusal(503, RUNNER_REFUSALS.closing));
       const done = (async () => {
         try {
           return await work();
         } catch (failure) {
           let calls = 0;
-          await undo((call) => (++calls > UNDO_CALLS ? Promise.reject(new Refusal(503, `an undo makes at most ${UNDO_CALLS} git calls`)) : submit(call, true)), failure);
+          await undo((call) => (++calls > UNDO_CALLS ? Promise.reject(refusal(503, RUNNER_REFUSALS.undoCalls({ max: UNDO_CALLS }))) : submit(call, true)), failure);
           throw failure;
         }
       })();

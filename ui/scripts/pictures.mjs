@@ -103,6 +103,13 @@ const SCENES = {
   'users-roles': [visit('admin'), menu('Users'), row('alice', 'Roles…'), check('Message bodies')],
   'users-new': [visit('admin'), menu('Users'), press('New user'), fill('Name', 'dana'), check('Operator'), press('Create')],
   'users-refused': [visit('admin'), menu('Users'), row('alice', 'Block'), confirmIn('alice', 'Block')],
+  'users-refused-cs': [
+    visit('admin'),
+    menu('Users'),
+    speak('Čeština'),
+    (page) => shown(page).getByRole('row').filter({ hasText: 'alice' }).first().getByRole('button', { name: 'Zablokovat', exact: true }).click(),
+    confirmIn('alice', 'Zablokovat'),
+  ],
   'users-tokens': [visit('admin'), menu('Users'), expand('Users', 'ci-deploy')],
   'users-token-new': [visit('admin'), menu('Users'), row('ci-deploy', 'New token…'), fill('Name', 'release')],
   'my-tokens': [visit('admin'), menu('My tokens')],

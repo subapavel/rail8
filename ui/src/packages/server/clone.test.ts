@@ -140,7 +140,7 @@ describe('the clone of Get a package', () => {
     await running;
     timer.advance(WATCH_MS);
 
-    await expect(cloned).rejects.toMatchObject({ status: 422, message: CLONE_REFUSALS.tooLarge });
+    await expect(cloned).rejects.toMatchObject({ status: 422, message: CLONE_REFUSALS.tooLarge.error });
     expect(asked?.signal?.aborted).toBe(true);
     expect(await readdir(dir)).toEqual([]);
   });

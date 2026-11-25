@@ -28,8 +28,10 @@ import {
   type RemoteBody,
   type UsedBy,
 } from './api';
+import type { RefusalValues } from '../refusal';
 import {
   actorOf,
+  BUILD_CLI,
   artifactsOf,
   candidateOf,
   declaredOf,
@@ -39,9 +41,13 @@ import {
   lockStillHolds,
   pinsOf,
   CLONE_REFUSALS,
+  COMMIT_REFUSALS,
   cloneSourceOf,
   commitBodyOf,
   deployBodyOf,
+  DEPLOY_MS,
+  DEPLOY_REFUSALS,
+  DISCARD_REFUSALS,
   discardBodyOf,
   indexFrom,
   inPackage,
@@ -57,20 +63,24 @@ import {
   newPackageBodyOf,
   newPackageFiles,
   newPackageMessage,
+  notPackage,
   MAX_LISTED,
   MAX_PACKAGES,
   oncePerPath,
+  PACKAGE_REFUSALS,
   READ_LIMIT,
   readForKind,
   REASONS,
   REMOTE_REFUSALS,
   remoteBodyOf,
+  staleDeploy,
   staleChoice,
   statusCompared,
   unstageCommand,
   statusOf,
   walked,
   type Compared,
+  type Refused,
   type StatusEntry,
 } from './rules';
 
@@ -169,7 +179,7 @@ export interface FakeState {
   /** True when the calls come from a page of another site, which every route refuses. */
   foreignPage: boolean;
   /** Why git cannot serve, as every route answers it with 503; null when it serves. */
-  git: string | null;
+  git: Refused | null;
   /** The author identity git gives; null when it gives none, and a commit is refused. */
   identity: { name: string; email: string } | null;
   /**
@@ -222,12 +232,17 @@ export interface FakeSource {
   waits?: () => void;
 }
 
-/** A refusal the fake node gives: its status, its error and its problems. */
+/** A refusal the fake node gives: its status, its error, its code and values (none: a refusal with no code), and its problems. */
 export interface FakeNodeRefusal {
   status: number;
   error: string;
+  code?: string;
+  values?: RefusalValues;
   problems?: string[];
 }
+
+/** The refusal of a page of another site, as every route of the git half answers it. */
+const FOREIGN: Refused = { code: 'foreign-origin', error: "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)", values: {} };
 
 /** What the fake node was sent for a deploy or its check. */
 export interface FakeSent {
@@ -268,7 +283,7 @@ function beyond(folder: FakeFolder, from: string, to: string): number {
   return [...reach(folder, from)].filter((id) => !other.has(id)).length;
 }
 
-function whyNot(folder: FakeFolder): string | null {
+function whyNot(folder: FakeFolder): Refused | null {
   if (!isRepositoryName(folder.name)) return REASONS.name;
   if (folder.link) return REASONS.link;
   if (folder.git === 'none') return REASONS.noClone;
@@ -500,22 +515,23 @@ function artifactsIn(folder: FakeFolder, files: Record<string, string>, changes:
  * holds `lock`, the fake working folder's, from its check to its end.
  */
 export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): PackagesApi {
-  const refused = (status: number, error: string) => new PackagesError(status, error);
+  /** The refusal `refusal` with `status`, as the client takes the real half's answer of it, with its problems or output. */
+  const refused = (status: number, refusal: Refused, more: { problems?: string[]; output?: string } = {}) => PackagesError.of(status, { ...refusal, ...more });
   /** The package `repository`, refused as the real half refuses it. */
   const packageOf = (repository: string): FakeFolder => {
-    if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+    if (state.foreignPage) throw refused(403, FOREIGN);
     if (state.git !== null) throw refused(503, state.git);
-    if (!state.workspace) throw refused(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
-    if (!isRepositoryName(repository)) throw refused(400, `${JSON.stringify(repository)} is no repository name`);
+    if (!state.workspace) throw refused(404, PACKAGE_REFUSALS.noWorkspace);
+    if (!isRepositoryName(repository)) throw refused(400, PACKAGE_REFUSALS.badRepository({ repository }));
     const folder = state.folders.find((f) => f.name === repository);
-    if (folder === undefined) throw refused(404, `no package ${repository} in the working folder`);
+    if (folder === undefined) throw refused(404, PACKAGE_REFUSALS.noPackage({ repository }));
     const reason = whyNot(folder);
-    if (reason !== null) throw refused(404, `${repository} is no package: ${reason}`);
+    if (reason !== null) throw refused(404, notPackage(repository, reason));
     return folder;
   };
   const revisionIn = (folder: FakeFolder, rev: string, name: string, commitOnly = false) => {
-    if (commitOnly ? !isCommitId(rev) : !isRevision(rev)) throw refused(400, `${name} ${JSON.stringify(rev)} is no revision: ${commitOnly ? '' : 'work, or '}a commit of 40 hex digits`);
-    if (rev !== 'work' && !folder.commits.some((c) => c.id === rev)) throw refused(404, `the clone holds no commit ${rev}`);
+    if (commitOnly ? !isCommitId(rev) : !isRevision(rev)) throw refused(400, (commitOnly ? PACKAGE_REFUSALS.noCommitId : PACKAGE_REFUSALS.noRevision)({ name, rev }));
+    if (rev !== 'work' && !folder.commits.some((c) => c.id === rev)) throw refused(404, PACKAGE_REFUSALS.noCommit({ commit: rev }));
   };
   /**
    * The dependencies of `folder`, as the real half finds them: each candidate among the other folders whose
@@ -570,16 +586,16 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
 
   /** The package `repository` for a fetch, a pull or a push, refused as the real half refuses it before it reads the clone. */
   const remoteOf = (repository: string, what: 'fetched' | 'pulled' | 'pushed'): FakeFolder => {
-    if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+    if (state.foreignPage) throw refused(403, FOREIGN);
     if (state.git !== null) throw refused(503, state.git);
-    if (!state.writable) throw refused(403, REMOTE_REFUSALS.readOnly(what));
+    if (!state.writable) throw refused(403, what === 'fetched' ? REMOTE_REFUSALS.fetchReadOnly : what === 'pulled' ? REMOTE_REFUSALS.pullReadOnly : REMOTE_REFUSALS.pushReadOnly);
     return packageOf(repository);
   };
   /** The remote of `folder`'s upstream once the clone is checked as the real half checks it, with the body of a pull or a push. */
   const remoteChecked = (folder: FakeFolder, body: RemoteBody | null): FakeRemote => {
     const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
-    if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal first`);
-    if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
+    if (busy !== null) throw refused(409, REMOTE_REFUSALS.busy({ busy }));
+    if (folder.indexLocked) throw refused(409, COMMIT_REFUSALS.indexLocked);
     if (folder.head.branch === null) throw refused(409, REMOTE_REFUSALS.detached);
     const upstream = folder.head.commit === null ? null : folder.upstream;
     if (body !== null && (folder.head.branch !== body.branch || folder.head.commit !== body.head || (upstream?.name ?? null) !== body.upstream)) throw refused(412, REMOTE_REFUSALS.stale);
@@ -591,7 +607,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
    * fetch is dated one minute after the newest commit the folder knows, as each fake commit is a minute after its parent.
    */
   const fetched = (folder: FakeFolder, remote: FakeRemote) => {
-    if (remote.signIn) throw new PackagesError(422, REMOTE_REFUSALS.failed('fetch'), undefined, "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled");
+    if (remote.signIn) throw refused(422, REMOTE_REFUSALS.fetchFailed, { output: "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled" });
     for (const commit of remote.commits.splice(0)) if (!folder.commits.some((c) => c.id === commit.id)) folder.commits.push(commit);
     const newest = Math.max(...folder.commits.map((c) => Date.parse(c.at)));
     folder.upstream = { ...folder.upstream!, commit: remote.commit, fetchedAt: new Date(newest + 60_000).toISOString() };
@@ -604,15 +620,15 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       return stateOf(packageOf(repository));
     },
     async clone(address): Promise<CloneAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
       if (!state.writable) throw refused(403, CLONE_REFUSALS.readOnly);
       if (cloning) throw refused(409, CLONE_REFUSALS.another);
       cloning = true;
       try {
         const asked = cloneSourceOf(JSON.parse(JSON.stringify({ address })).address as unknown);
-        if ('error' in asked) throw refused(asked.status, asked.error);
-        if (!state.workspace) throw refused(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+        if ('error' in asked) throw refused(asked.status, asked);
+        if (!state.workspace) throw refused(404, PACKAGE_REFUSALS.noWorkspace);
         const { repository } = asked;
         if (state.folders.some((f) => f.name === repository)) throw refused(409, CLONE_REFUSALS.exists);
         const source = state.sources?.find((s) => s.address === asked.address.replace(/\/$/, ''));
@@ -620,7 +636,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
           source.waits?.();
           await source.held;
         }
-        const failed = (said: string) => new PackagesError(422, CLONE_REFUSALS.gitFailed, undefined, said);
+        const failed = (said: string) => refused(422, CLONE_REFUSALS.gitFailed, { output: said });
         if (source === undefined) throw failed('remote: Repository not found.\nfatal: repository not found');
         if (source.fails === 'credentials') throw failed('fatal: could not read Username: terminal prompts disabled');
         if (source.fails === 'broken') throw failed('error: RPC failed; curl 18 transfer closed with outstanding read data remaining\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output');
@@ -644,18 +660,18 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         };
         state.folders.push(folder);
         const reason = whyNot(folder);
-        return reason === null ? { repository, package: await stateOf(folder) } : { repository, package: null, reason };
+        return reason === null ? { repository, package: await stateOf(folder) } : { repository, package: null, reason: reason.error };
       } finally {
         cloning = false;
       }
     },
     async create(repository, name): Promise<NewPackageAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
       if (!state.writable) throw refused(403, NEW_PACKAGE_REFUSALS.readOnly);
       const asked = newPackageBodyOf(JSON.parse(JSON.stringify({ repository, name })) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
-      if (!state.workspace) throw refused(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+      if ('error' in asked) throw refused(asked.status, asked);
+      if (!state.workspace) throw refused(404, PACKAGE_REFUSALS.noWorkspace);
       return lock(async () => {
         if (state.folders.some((f) => f.name === repository)) throw refused(409, NEW_PACKAGE_REFUSALS.exists);
         if (state.identity === null) throw refused(422, NEW_PACKAGE_REFUSALS.noIdentity);
@@ -680,11 +696,11 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       const folder = packageOf(repository);
       revisionIn(folder, rev, 'rev');
       const found = inPackage(repository, path);
-      if ('error' in found) throw refused(found.status, found.error);
-      if (rev === 'work' && folder.escapes?.some((e) => found.inside === e || found.inside.startsWith(`${e}/`))) throw refused(403, `${path} leads out of the package's folder`);
+      if ('error' in found) throw refused(found.status, found);
+      if (rev === 'work' && folder.escapes?.some((e) => found.inside === e || found.inside.startsWith(`${e}/`))) throw refused(403, PACKAGE_REFUSALS.leadsOut({ path }));
       const text = rev === 'work' ? folder.disk[found.inside] : filesOf(folder, rev)[found.inside];
-      if (text === undefined) throw refused(404, rev === 'work' ? `no file ${path} on disk` : `no file ${path} in the commit ${rev}`);
-      if (sizeOf(text) > READ_LIMIT) throw refused(413, `${path} is over 1 MiB, the read limit`);
+      if (text === undefined) throw refused(404, rev === 'work' ? PACKAGE_REFUSALS.noFileOnDisk({ path }) : PACKAGE_REFUSALS.noFileInCommit({ path, commit: rev }));
+      if (sizeOf(text) > READ_LIMIT) throw refused(413, PACKAGE_REFUSALS.overReadLimit({ path }));
       return { ...(text.includes('\0') ? { binary: true as const, size: sizeOf(text) } : { text }), etag: await tagOf(text) };
     },
     async changes(repository, from, to) {
@@ -727,7 +743,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     async log(repository, page = {}) {
       const folder = packageOf(repository);
       const limit = page.limit ?? LOG_PAGE;
-      if (!Number.isInteger(limit) || limit < 1 || limit > LOG_MAX) throw refused(400, `limit ${JSON.stringify(String(limit))} is no number from 1 to ${LOG_MAX}`);
+      if (!Number.isInteger(limit) || limit < 1 || limit > LOG_MAX) throw refused(400, PACKAGE_REFUSALS.badLimit({ limit: String(limit), max: LOG_MAX }));
       if (page.before !== undefined) revisionIn(folder, page.before, 'before', true);
       const running = state.node.answers ? state.node.running.find((r) => r.repository === folder.name)?.commit : undefined;
       const items: Commit[] = [];
@@ -741,20 +757,20 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       return { items: items.slice(0, limit), next: items[limit]?.id ?? null };
     },
     async lock(repository, body): Promise<LockAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
       if (!state.writable) throw refused(403, LOCK_REFUSALS.readOnly);
       const asked = lockBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
+      if ('error' in asked) throw refused(asked.status, asked);
       const folder = packageOf(repository);
       return lock(async () => {
         const now = await dependenciesOf(folder);
         if (!lockStillHolds(asked, now)) throw refused(412, LOCK_REFUSALS.stale);
         for (const d of now.dependencies) {
           const several = now.several.get(d.name);
-          if (several !== undefined) throw refused(409, LOCK_REFUSALS.several(`${d.name}@${d.version}`, several));
+          if (several !== undefined) throw refused(409, LOCK_REFUSALS.several({ dependency: `${d.name}@${d.version}`, folders: several.join(', ') }));
         }
-        if (state.cliMissing) throw refused(503, LOCK_REFUSALS.missing(FAKE_CLI));
+        if (state.cliMissing) throw refused(503, LOCK_REFUSALS.missing({ cli: FAKE_CLI, build: BUILD_CLI }));
         const problems: string[] = [];
         const pins: LockedPin[] = [];
         for (const d of now.dependencies) {
@@ -769,28 +785,27 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
             pins.push({ name: d.name, version: d.version, repository: other.name, commit: other.head.commit!, content });
           }
         }
-        if (problems.length > 0) throw new PackagesError(422, LOCK_REFUSALS.problems, problems);
+        if (problems.length > 0) throw refused(422, LOCK_REFUSALS.problems, { problems });
         folder.disk['package.lock'] = lockText(pins);
         return { pins, package: await stateOf(folder) };
       });
     },
     async discard(repository, body): Promise<DiscardAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
-      if (!state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was discarded');
+      if (!state.writable) throw refused(403, DISCARD_REFUSALS.readOnly);
       const asked = discardBodyOf(repository, JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
+      if ('error' in asked) throw refused(asked.status, asked);
       const folder = packageOf(repository);
-      const nothing = 'nothing was discarded';
       return lock(async () => {
         const entries = statusEntries(folder);
         const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
-        if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal, then discard`);
-        if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
-        if (folder.head.commit !== asked.head) throw refused(412, `HEAD is now ${folder.head.commit ?? '(no commit yet)'}, not the HEAD you saw; ${nothing}`);
+        if (busy !== null) throw refused(409, DISCARD_REFUSALS.busy({ busy }));
+        if (folder.indexLocked) throw refused(409, COMMIT_REFUSALS.indexLocked);
+        if (folder.head.commit !== asked.head) throw refused(412, folder.head.commit === null ? DISCARD_REFUSALS.movedUnborn : DISCARD_REFUSALS.moved({ head: folder.head.commit }));
         const insides = asked.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
         const compared = statusCompared(entries);
-        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), compared, nothing);
+        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), compared, DISCARD_REFUSALS);
         if (stale !== null) throw refused(412, stale);
         const rows = new Set(compared.map((c) => c.inside));
         const fromChosen = new Set(compared.filter((c) => c.renamedFrom !== undefined && insides.includes(c.inside)).map((c) => c.renamedFrom!));
@@ -799,17 +814,17 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         asked.paths.forEach((p, n) => {
           const at = now[n]!;
           const moved = at === null ? p.index !== null || !fromChosen.has(insides[n]!) : p.index === null || (at !== 'differs' && at !== p.index);
-          if (moved) throw refused(412, `${p.path} was staged or unstaged since you saw it; ${nothing}`);
+          if (moved) throw refused(412, DISCARD_REFUSALS.restaged({ path: p.path }));
         });
         asked.paths.forEach((p, n) => {
-          if (folder.escapes?.some((e) => insides[n] === e || insides[n]!.startsWith(`${e}/`))) throw refused(403, `${p.path} leads out of the package's folder, or into its .git folder; ${nothing}`);
+          if (folder.escapes?.some((e) => insides[n] === e || insides[n]!.startsWith(`${e}/`))) throw refused(403, DISCARD_REFUSALS.leadsOut({ path: p.path }));
         });
         const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
         asked.paths.forEach((p, n) => {
-          if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you saw it; ${nothing}`);
+          if (tags[n] !== p.tag) throw refused(412, DISCARD_REFUSALS.changed({ path: p.path }));
         });
         asked.paths.forEach((p, n) => {
-          if (now[n] === 'differs') throw refused(409, `${p.path} is staged in a terminal with other content: discard or unstage it there; ${nothing}`);
+          if (now[n] === 'differs') throw refused(409, DISCARD_REFUSALS.staged({ path: p.path }));
         });
         // a file and a folder of the same name meet where one path is a folder of the other
         const head = filesOf(folder, folder.head.commit);
@@ -817,7 +832,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         const below = (files: Record<string, string>, inside: string) => Object.keys(files).find((k) => k.startsWith(`${inside}/`));
         asked.paths.forEach((p, n) => {
           const inside = insides[n]!;
-          const meet = (other: string) => refused(409, `${p.path} and ${folder.name}/${other} are a file and a folder of the same name: discard them one at a time, or in a terminal; ${nothing}`);
+          const meet = (other: string) => refused(409, DISCARD_REFUSALS.fileAndFolder({ path: p.path, other: `${folder.name}/${other}` }));
           const file = leading(inside).find((f) => f in folder.disk);
           if (file !== undefined) throw meet(file);
           const held = below(folder.disk, inside);
@@ -847,30 +862,33 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       });
     },
     async commit(repository, body): Promise<CommitAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
-      if (!state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was committed');
+      if (!state.writable) throw refused(403, COMMIT_REFUSALS.readOnly);
       const asked = commitBodyOf(repository, JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
+      if ('error' in asked) throw refused(asked.status, asked);
       const folder = packageOf(repository);
       return lock(async () => {
         const entries = statusEntries(folder);
         const busy = folder.operation ?? (folder.conflicts.length > 0 ? 'conflict' : null);
-        if (busy !== null) throw refused(409, `the clone is busy: ${busy === 'conflict' ? 'a path is in conflict' : `a ${busy} is in progress`}; finish it in a terminal, then commit`);
-        if (folder.indexLocked) throw refused(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
-        if (folder.head.branch === null) throw refused(409, 'HEAD is detached: commit on a branch, which a terminal can switch to');
-        if (state.identity === null) throw refused(422, 'git gives no author identity in this clone: set it in a terminal with git config user.name and git config user.email');
-        if (folder.head.branch !== asked.branch || folder.head.commit !== asked.head) throw refused(412, 'the clone is not at the branch and HEAD you reviewed; nothing was committed');
+        if (busy !== null) throw refused(409, COMMIT_REFUSALS.busy({ busy }));
+        if (folder.indexLocked) throw refused(409, COMMIT_REFUSALS.indexLocked);
+        if (folder.head.branch === null) throw refused(409, COMMIT_REFUSALS.detached);
+        if (state.identity === null) throw refused(422, COMMIT_REFUSALS.noIdentity);
+        if (folder.head.branch !== asked.branch || folder.head.commit !== asked.head) {
+          const branch = folder.head.branch;
+          throw refused(412, folder.head.commit === null ? COMMIT_REFUSALS.movedUnborn({ branch }) : COMMIT_REFUSALS.moved({ branch, head: folder.head.commit }));
+        }
         const index = indexFrom(entries);
         const insides = asked.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
-        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), statusCompared(entries), 'nothing was committed');
+        const stale = staleChoice(repository, asked.paths.map((p, n) => ({ path: p.path, inside: insides[n]!, tag: p.tag, onDisk: insides[n]! in folder.disk })), statusCompared(entries), COMMIT_REFUSALS);
         if (stale !== null) throw refused(412, stale);
         const tags = await Promise.all(insides.map((inside) => (inside in folder.disk ? tagOf(folder.disk[inside]!) : null)));
         asked.paths.forEach((p, n) => {
-          if (tags[n] !== p.tag) throw refused(412, `${p.path} changed since you reviewed it; nothing was committed`);
+          if (tags[n] !== p.tag) throw refused(412, COMMIT_REFUSALS.changed({ path: p.path }));
         });
         insides.forEach((inside, n) => {
-          if (index(inside, inside in folder.disk) === 'differs') throw refused(409, `${asked.paths[n]!.path} is staged in a terminal with other content: commit or unstage it there; nothing was committed`);
+          if (index(inside, inside in folder.disk) === 'differs') throw refused(409, COMMIT_REFUSALS.staged({ path: asked.paths[n]!.path }));
         });
         const checked = Object.fromEntries(insides.map((inside) => [inside, folder.disk[inside]]));
         if (folder.meanwhile !== undefined) {
@@ -929,11 +947,12 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
           }
           const pathsOf = (insides: string[]) => insides.map((k) => `${folder.name}/${k}`).join(', ');
           const stay = [
-            ...(kept.length === 0 ? [] : [`; ${pathsOf(kept)} stay staged, as another git staged them meanwhile`]),
-            ...(stuck.length === 0 ? [] : [`; ${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, parent === null)}`]),
-          ].join('');
+            ...(kept.length === 0 ? [] : [`${pathsOf(kept)} stay staged, as another git staged them meanwhile`]),
+            ...(stuck.length === 0 ? [] : [`${pathsOf(stuck)} stay staged, since git would not take them out of the index: unstage them in a terminal with ${unstageCommand(stuck, parent === null)}`]),
+          ];
           const rm = stuck.length === 0 ? [] : [`error: the following files have staged content different from both the\nfile and the HEAD:\n${stuck.map((k) => `    ${k}\n`).join('')}(use -f to force removal)`];
-          throw new PackagesError(422, `git commit failed, as git and the hooks say; nothing was committed${stay}`, undefined, [...says, ...rm].join('\n'));
+          const failed = stay.length === 0 ? COMMIT_REFUSALS.failed : COMMIT_REFUSALS.failedNoted(['git commit failed, as git and the hooks say', 'nothing was committed', ...stay].join('; '));
+          throw refused(422, failed, { output: [...says, ...rm].join('\n') });
         }
         const made = await commitOf(folder, tree, asked.message, state.identity.name);
         for (const inside of insides) {
@@ -941,7 +960,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
           else folder.index[inside] = checked[inside];
         }
         if (folder.hook?.stopsGit) {
-          throw new PackagesError(422, `git commit failed, as git and the hooks say; HEAD moved to ${made.id.slice(0, 7)} meanwhile, so git may have committed: the package's history shows it`, undefined, says.join('\n'));
+          throw refused(422, COMMIT_REFUSALS.failedHeadMoved({ head: made.id.slice(0, 7) }), { output: says.join('\n') });
         }
         await terminal();
         if (folder.head.commit !== made.id) {
@@ -973,32 +992,36 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       });
     },
     async deploy(repository, body): Promise<DeployAnswer> {
-      if (state.foreignPage) throw refused(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
+      if (state.foreignPage) throw refused(403, FOREIGN);
       if (state.git !== null) throw refused(503, state.git);
       const asked = deployBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
-      if (!asked.check && !state.writable) throw refused(403, 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was deployed');
+      if ('error' in asked) throw refused(asked.status, asked);
+      if (!asked.check && !state.writable) throw refused(403, DEPLOY_REFUSALS.readOnly);
       const folder = packageOf(repository);
-      if (!folder.commits.some((c) => c.id === asked.commit)) throw refused(404, `the clone holds no commit ${asked.commit}`);
+      if (!folder.commits.some((c) => c.id === asked.commit)) throw refused(404, PACKAGE_REFUSALS.noCommit({ commit: asked.commit }));
       const node = state.node;
-      const nothing = asked.check ? 'the check changes nothing' : 'nothing was deployed';
-      if (!node.answers) throw refused(502, node.refusesToken ? `the node at ${node.host} refuses the UI server's token (401); ${nothing}` : `${node.error}; ${nothing}`);
+      const { host } = node;
+      if (!node.answers && node.refusesToken) throw refused(502, (asked.check ? DEPLOY_REFUSALS.checkTokenRefused : DEPLOY_REFUSALS.deployTokenRefused)({ host }));
+      // as the runtime's fetch fails when nothing listens at the node's address
+      if (!node.answers) throw refused(502, (asked.check ? DEPLOY_REFUSALS.checkUnreachable : DEPLOY_REFUSALS.deployUnreachable)('TypeError: fetch failed', { host }));
       state.sent.push({
         check: asked.check,
         body: asked.check ? { repository, commit: asked.commit } : { repository, commit: asked.commit, expect: asked.expect! },
         actor: actorOf(state.identity),
       });
       if (typeof node.deploys === 'object') {
-        const { status, error, problems } = node.deploys;
-        throw new PackagesError(status, status === 412 ? `the node's commit changed since the check: ${error}; ${nothing}` : error, problems);
+        const { status, error, code, values = {}, problems } = node.deploys;
+        const stated = status === 412 && !asked.check ? staleDeploy(error) : error;
+        throw refused(status, code === undefined ? DEPLOY_REFUSALS.nodeRefused(stated) : { code, error: stated, values }, problems === undefined ? {} : { problems });
       }
       const record = node.running.find((r) => r.repository === repository);
       const replaces = record?.commit ?? 'none';
       if (!asked.check && asked.expect !== replaces) {
-        throw new PackagesError(412, `the node's commit changed since the check: the pool records ${replaces}, not ${asked.expect!}; ${nothing}`);
+        const name = manifestOf(filesOf(folder, asked.commit)['package.yaml'] ?? '').package?.name ?? repository;
+        throw refused(412, { code: 'deploy-stale', error: staleDeploy(`the pool records ${replaces}, not ${asked.expect!}`), values: { package: name, expect: asked.expect!, records: replaces } });
       }
       if (!asked.check && node.deploys === 'silent') {
-        throw refused(504, `the node at ${node.host} gave no answer within 5 min, so the outcome of the deploy is unknown: read what it runs before you try again`);
+        throw refused(504, DEPLOY_REFUSALS.deployLost({ host, minutes: DEPLOY_MS / 60_000 }));
       }
       const files = filesOf(folder, asked.commit);
       const shown = manifestOf(files['package.yaml'] ?? '').package ?? { name: repository, version: '' };
@@ -1036,7 +1059,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     async pull(repository, body): Promise<PullAnswer> {
       const folder = remoteOf(repository, 'pulled');
       const asked = remoteBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
+      if ('error' in asked) throw refused(asked.status, asked);
       fetched(folder, remoteChecked(folder, asked));
       return lock(async () => {
         remoteChecked(folder, asked);
@@ -1054,7 +1077,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
             ...(inTheWay.length === 0 ? [] : ['error: The following untracked working tree files would be overwritten by merge:', ...inTheWay.map((p) => `\t${p}`), 'Please move or remove them before you merge.']),
             'Aborting',
           ];
-          throw new PackagesError(409, REMOTE_REFUSALS.overwrites, undefined, said.join('\n'));
+          throw refused(409, REMOTE_REFUSALS.overwrites, { output: said.join('\n') });
         }
         for (const p of paths) {
           if (p in newer) {
@@ -1072,14 +1095,14 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
     async push(repository, body): Promise<PushAnswer> {
       const folder = remoteOf(repository, 'pushed');
       const asked = remoteBodyOf(JSON.parse(JSON.stringify(body)) as unknown);
-      if ('error' in asked) throw refused(asked.status, asked.error);
+      if ('error' in asked) throw refused(asked.status, asked);
       const remote = remoteChecked(folder, asked);
       const upstream = folder.upstream!;
       const ref = `refs/heads/${upstream.name.slice(upstream.name.indexOf('/') + 1)}`;
-      if (remote.signIn) throw new PackagesError(422, REMOTE_REFUSALS.failed('push'), undefined, "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled");
+      if (remote.signIn) throw refused(422, REMOTE_REFUSALS.pushFailed, { output: "fatal: could not read Username for 'https://git.example.com': terminal prompts disabled" });
       if (!reach(withRemote(folder), asked.head).has(remote.commit)) {
         const why = remote.commit === upstream.commit ? 'non-fast-forward' : 'fetch first';
-        throw new PackagesError(409, REMOTE_REFUSALS.rejected, undefined, `To https://git.example.com/${folder.name}.git\n!\t${asked.head}:${ref}\t[rejected] (${why})\nDone\nerror: failed to push some refs to 'https://git.example.com/${folder.name}.git'`);
+        throw refused(409, REMOTE_REFUSALS.rejected, { output: `To https://git.example.com/${folder.name}.git\n!\t${asked.head}:${ref}\t[rejected] (${why})\nDone\nerror: failed to push some refs to 'https://git.example.com/${folder.name}.git'` });
       }
       const from = upstream.commit;
       remote.commit = asked.head;
@@ -1087,8 +1110,8 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       return { pushed: { ref, from, to: asked.head }, package: await stateOf(folder) };
     },
     async list(): Promise<PackageList> {
-      if (state.foreignPage) throw new PackagesError(403, "only this server's own pages may call the git half through it (Sec-Fetch-Site must be same-origin)");
-      if (state.git !== null) throw new PackagesError(503, state.git);
+      if (state.foreignPage) throw refused(403, FOREIGN);
+      if (state.git !== null) throw refused(503, state.git);
       const shown = { writable: state.writable, node: state.node.host };
       if (!state.workspace) return { configured: false, ...shown, packages: [], others: [], truncated: false };
       const folders = state.folders.filter((f) => !f.name.startsWith('.')).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -1102,7 +1125,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
         }
         const reason = whyNot(folder);
         if (reason === null) packages.push(rowOf(state, folder));
-        else if (others.length < MAX_PACKAGES) others.push({ folder: folder.name, reason });
+        else if (others.length < MAX_PACKAGES) others.push({ folder: folder.name, reason: reason.error });
         else truncated = true;
       }
       return { configured: true, ...shown, packages, others, truncated };

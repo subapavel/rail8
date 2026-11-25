@@ -354,14 +354,14 @@ describe('uiSession', () => {
     },
   );
 
-  it('refuses under /api as problem+json, elsewhere as {error, code}, setting no cookie', async () => {
+  it('refuses under /api as problem+json, elsewhere as {error, code, values}, setting no cookie', async () => {
     const { call } = await gate(SESSION_MODE);
     const api = await call('GET', '/api/mappings');
     expect(api.headers['content-type']).toBe('application/problem+json');
-    expect(api.json).toMatchObject({ type: 'urn:rail8:ui:problem:no-credential', status: 401, title: expect.any(String), detail: expect.any(String) });
+    expect(api.json).toEqual({ type: 'urn:rail8:ui:problem:no-credential', status: 401, title: expect.any(String), detail: expect.any(String), code: 'no-credential', values: {} });
     const git = await call('POST', '/git/packages/x/commit', holding);
     expect(git.headers['content-type']).toBe('application/json');
-    expect(git.json).toEqual({ error: expect.any(String), code: 'session-changed' });
+    expect(git.json).toEqual({ error: expect.any(String), code: 'session-changed', values: {} });
     expect(git.headers['set-cookie']).toBeUndefined();
   });
 

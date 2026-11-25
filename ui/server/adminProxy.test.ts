@@ -257,7 +257,9 @@ describe('adminProxy', () => {
   it('answers 405 to a method other than GET and POST', async () => {
     const target = await node();
     const base = await proxy(target.url);
-    expect((await send(base, 'DELETE', '/admin/packages/demo', browser)).status).toBe(405);
+    const refused = await send(base, 'DELETE', '/admin/packages/demo', browser);
+    expect(refused.status).toBe(405);
+    expect(JSON.parse(refused.body)).toEqual({ error: expect.any(String), code: 'method-not-allowed', values: {} });
     expect(target.seen).toHaveLength(0);
   });
 
@@ -324,6 +326,7 @@ describe('adminProxy', () => {
     const answer = await send(base, 'GET', '/admin/messages/m-1', browser);
     expect(answer.status).toBe(502);
     expect(JSON.parse(answer.body).error).toContain('http://127.0.0.1:1');
+    expect(JSON.parse(answer.body)).toMatchObject({ code: 'node-unavailable', values: {} });
   });
 
   it('leaves every other path to the next handler', async () => {
@@ -353,8 +356,10 @@ describe('adminProxy', () => {
     expect(bodies.slice(0, 2)).toEqual([{ type: 'application/json', body: '{"name":"anna"}' }, { type: undefined, body: '' }]);
     const tooLarge = await send(base, 'POST', '/admin/users', json, Buffer.alloc(PROXY_BODY_MAX_BYTES + 1, 0x20));
     expect(tooLarge.status).toBe(413);
+    expect(JSON.parse(tooLarge.body)).toMatchObject({ code: 'too-large', values: { max: PROXY_BODY_MAX_BYTES } });
     const text = await send(base, 'POST', '/admin/users', { ...browser, 'content-type': 'text/plain' }, 'name=anna');
     expect(text.status).toBe(415);
+    expect(JSON.parse(text.body)).toMatchObject({ code: 'unsupported-media-type', values: {} });
     expect(bodies).toHaveLength(3);
   });
 

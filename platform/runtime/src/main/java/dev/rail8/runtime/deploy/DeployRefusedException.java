@@ -1,14 +1,17 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.runtime.refusal.RefusalCode;
+
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 /**
  * Why {@link Deployments#deploy} refused a package, or {@link Deployments#undeploy} an undeploy: its {@link Kind} — the admin API
- * answers each with its own status — the error line, and for {@link Kind#INVALID} every problem found, one line each, none with
- * an absolute path; for a redeploy that did not start and rolled back ({@link Kind#FAILED} or {@link Kind#BUSY}) every flow that
- * did not start, build or start again; for {@link Kind#STALE} the state the pool records.
+ * answers each with its own status — its code, the error line and the values the line names, and for {@link Kind#INVALID} every
+ * problem found, one line each, none with an absolute path; for a redeploy that did not start and rolled back ({@link Kind#FAILED}
+ * or {@link Kind#BUSY}) every flow that did not start, build or start again; for {@link Kind#STALE} the state the pool records.
  *
  * @since 0.1
  */
@@ -53,28 +56,39 @@ public final class DeployRefusedException extends Exception {
     }
 
     private final Kind kind;
+    private final RefusalCode code;
     private final String error;
+    private final Map<String, Object> values;
     private final List<String> problems;
     private final Optional<String> replaces;
 
     /** No stack trace is kept; suppression is on: a cleanup that fails after the refusal is added to it, never in its place. */
-    public DeployRefusedException(Kind kind, String error, List<String> problems) {
-        this(kind, error, problems, Optional.empty());
+    public DeployRefusedException(Kind kind, RefusalCode code, String error, Map<String, Object> values, List<String> problems) {
+        this(kind, code, error, values, problems, Optional.empty());
     }
 
     /** As the constructor above, with the state the pool records of the package ({@link #replaces()}). */
-    public DeployRefusedException(Kind kind, String error, List<String> problems, Optional<String> replaces) {
+    public DeployRefusedException(Kind kind, RefusalCode code, String error, Map<String, Object> values, List<String> problems,
+                                  Optional<String> replaces) {
         super(kind + ": " + error + (problems.isEmpty() ? "" : " " + problems), null, true, false);
         this.kind = Objects.requireNonNull(kind, "kind");
+        this.code = Objects.requireNonNull(code, "code");
         this.error = Objects.requireNonNull(error, "error");
+        this.values = Map.copyOf(values);
         this.problems = List.copyOf(problems);
         this.replaces = Objects.requireNonNull(replaces, "replaces");
     }
 
     public Kind kind() { return kind; }
 
+    /** The refusal's code. */
+    public RefusalCode code() { return code; }
+
     /** The error line. */
     public String error() { return error; }
+
+    /** The values the error line names, strings or numbers, by name. */
+    public Map<String, Object> values() { return values; }
 
     /** Every problem of an {@link Kind#INVALID} package, or of a {@link Kind#FAILED} or {@link Kind#BUSY} redeploy, one line each; otherwise empty. */
     public List<String> problems() { return problems; }

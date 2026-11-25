@@ -1,8 +1,9 @@
 import { lstat, mkdtemp, readdir, rm, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { moveIntoPlace, Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
-import { CLONE_MAX_BYTES, CLONE_MAX_ENTRIES, CLONE_REFUSALS } from '../rules.ts';
+import { CLONE_MAX_BYTES, CLONE_MAX_ENTRIES, CLONE_REFUSALS, type Refused } from '../rules.ts';
 import { formatted } from './formatter.ts';
+import { refusal } from './refused.ts';
 import type { Call, Limits, Runner } from './runner.ts';
 import type { Timer } from './timer.ts';
 
@@ -15,12 +16,12 @@ export const WATCH_MS = 1_000;
 /** The name of a hidden folder a clone is made in, before the six random characters mkdtemp adds. */
 export const HIDDEN_PREFIX = '.rail8-clone-';
 
-/** A refused clone: its status, its error, and what git said. */
+/** A refused clone: its status, its refusal, and what git said. */
 export class CloneRefused extends Refusal {
   readonly output: string;
 
-  constructor(status: number, message: string, output: string) {
-    super(status, message);
+  constructor(status: number, refused: Refused, output: string) {
+    super(status, refused.code, refused.error, refused.values);
     this.output = output;
   }
 }
@@ -151,13 +152,13 @@ export async function cloneInto(git: Runner, timer: Timer, lock: WorkingFolderLo
     () => false,
     (error: unknown) => ((error as NodeJS.ErrnoException).code === 'ENOENT' ? true : Promise.reject(error)),
   );
-  if (!free) throw new Refusal(409, CLONE_REFUSALS.exists);
+  if (!free) throw refusal(409, CLONE_REFUSALS.exists);
 
   let temp: string | undefined;
   return git.undoable(
     async () => {
       temp = await mkdtemp(join(root, HIDDEN_PREFIX));
-      const tooLarge = () => new Refusal(422, CLONE_REFUSALS.tooLarge);
+      const tooLarge = () => refusal(422, CLONE_REFUSALS.tooLarge);
       const stop = new AbortController();
       const watch = watchSize(temp, timer, () => stop.abort(tooLarge()));
       let ran;
@@ -169,7 +170,7 @@ export async function cloneInto(git: Runner, timer: Timer, lock: WorkingFolderLo
       if (ran.code !== 0) throw new CloneRefused(422, CLONE_REFUSALS.gitFailed, formatted(ran.stderr.toString('utf8')));
       if (await isOver(temp, CLONE_MAX_BYTES, CLONE_MAX_ENTRIES)) throw tooLarge();
       const made = join(temp, repository);
-      if (!(await lock(() => moveIntoPlace(made, target)))) throw new Refusal(409, CLONE_REFUSALS.exists);
+      if (!(await lock(() => moveIntoPlace(made, target)))) throw refusal(409, CLONE_REFUSALS.exists);
       try {
         await rmdir(temp);
         return { clone: target };
@@ -182,7 +183,7 @@ export async function cloneInto(git: Runner, timer: Timer, lock: WorkingFolderLo
       try {
         await rm(temp, { recursive: true, force: true, maxRetries: 3 });
       } catch (error) {
-        throw new Refusal(500, `the clone failed, and the hidden folder ${temp} it was made in could not be removed: ${error instanceof Error ? error.message : String(error)}; delete it`);
+        throw refusal(500, CLONE_REFUSALS.cleanupFailed(error instanceof Error ? error.message : String(error), { folder: temp }));
       }
     },
   );

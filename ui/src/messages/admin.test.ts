@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { chooseLanguage, type Language } from '../language';
 import { AdminError, httpAdminApi, PAYLOAD_SHOWN } from './admin';
+
+/** Runs `check` with the UI shown in `language`, and shows it in English again after. */
+async function inLanguage(language: Language, check: () => Promise<void>) {
+  vi.stubGlobal('document', { documentElement: {} });
+  chooseLanguage(language);
+  try {
+    await check();
+  } finally {
+    chooseLanguage('en');
+    vi.unstubAllGlobals();
+  }
+}
 
 /** A fetch that records every call and answers each with the next of `answers`. */
 function fakeFetch(...answers: Response[]) {
@@ -57,6 +70,18 @@ describe('httpAdminApi', () => {
     expect(await api.timeline('a/b')).toEqual(timeline);
     expect(await api.timeline('x')).toBeNull();
     expect(calls[0]?.url).toBe('/admin/messages/a%2Fb');
+  });
+
+  it("shows a refusal in the UI's language by its code, and one of an unknown code in the node's English", async () => {
+    const { send } = fakeFetch(
+      json(409, { error: 'message m-1 is not queued, running or parked', code: 'not-cancellable', values: { id: 'm-1' } }),
+      json(409, { error: 'the node says no', code: 'not-a-code-of-the-ui', values: {} }),
+    );
+    const api = httpAdminApi(send);
+    await inLanguage('cs', async () => {
+      await expect(api.timeline('m-1')).rejects.toEqual(new AdminError(409, 'Zpráva m-1 není ve frontě, neběží ani není odstavená, takže ji nelze zrušit.'));
+      await expect(api.timeline('m-1')).rejects.toEqual(new AdminError(409, 'the node says no'));
+    });
   });
 
   it("rejects with the node's error text and status", async () => {

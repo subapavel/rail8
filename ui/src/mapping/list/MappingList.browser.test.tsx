@@ -345,8 +345,7 @@ describe('the New mapping modal', () => {
     await field('Package').fill('mappings');
     await modal().getByRole('button', { name: 'Create' }).click();
 
-    await expect.element(modal().getByRole('heading', { name: /Mapping exists/ })).toBeVisible();
-    await expect.element(modal().getByText('a mapping with this id exists')).toBeVisible();
+    await expect.element(modal().getByRole('heading', { name: 'A mapping with this id exists.' })).toBeVisible();
     expect(onCreated).not.toHaveBeenCalled();
   });
 

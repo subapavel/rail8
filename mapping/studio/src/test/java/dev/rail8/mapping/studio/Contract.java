@@ -29,13 +29,13 @@ import java.util.TreeSet;
  * The browser's contract, {@code contract/openapi.json}, as a strict check of the studio's answers.
  * An answer meets it when the operation's contract lists its status, with {@code application/json}
  * below 400 and {@code application/problem+json} from 400, and its JSON is an instance of that
- * status's schema: an object has every required member and no member its schema does not name,
- * unless {@code additionalProperties} gives the schema of the others; a union's member is the one
- * its discriminator picks; an {@code int32} or {@code int64} fits; a {@code uri} is absolute; a
- * mapping model and the catalogue meet their JSON Schemas, checked with json-sKema, the catalogue
- * also entry by entry, since json-sKema checks only the first member of a {@code patternProperties}
- * map. A schema keyword the check does not know fails it, so the contract cannot grow past what is
- * checked.
+ * status's schema, and a problem's {@code code} is the slug of its {@code type}: an object has
+ * every required member and no member its schema does not name, unless {@code additionalProperties}
+ * gives the schema of the others; a union's member is the one its discriminator picks; an {@code
+ * int32} or {@code int64} fits; a {@code uri} is absolute; a mapping model and the catalogue meet
+ * their JSON Schemas, checked with json-sKema, the catalogue also entry by entry, since json-sKema
+ * checks only the first member of a {@code patternProperties} map. A schema keyword the check does
+ * not know fails it, so the contract cannot grow past what is checked.
  *
  * <p>Each check notes what it reached: the statuses of each operation, the members of each named
  * schema, the kinds of each union and the problem types. A test reads them to see whether a set of
@@ -155,7 +155,12 @@ final class Contract {
     answered.add(operation + " " + status);
     JsonNode value = Wire.read(json.getBytes(UTF_8));
     if (status >= 400 && value.path("type").isTextual()) {
-      problems.add(value.path("type").textValue());
+      String problem = value.path("type").textValue();
+      problems.add(problem);
+      String slug = problem.substring(problem.lastIndexOf(':') + 1);
+      if (!slug.equals(value.path("code").textValue())) {
+        violations.add("$.code: " + value.path("code") + " is not the slug of " + problem);
+      }
     }
     check(value, content.path(type).path("schema"), "$", violations);
     return violations;

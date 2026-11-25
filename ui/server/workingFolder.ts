@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { refusalBody, type RefusalValues } from './refusal.ts';
 
 /** At most this many files of the kind a walk looks for are looked at, this deep, and none longer than this is read. */
 export const MAX_FILES = 1000;
@@ -10,13 +11,25 @@ const READ_BATCH_SIZE = 8;
 export const MAX_FILE_BYTES = 1024 * 1024;
 const SKIPPED = new Set(['node_modules', 'target']);
 
-/** A request the working folder's routes refuse: the HTTP status and the error text the answer carries. */
+/**
+ * A request the working folder's routes refuse: the HTTP status, the refusal's stable code, its English text and the
+ * values that text names, which the answer carries as `{error, code, values}`.
+ */
 export class Refusal extends Error {
   readonly status: number;
+  readonly code: string;
+  readonly values: RefusalValues;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, code: string, message: string, values: RefusalValues = {}) {
     super(message);
     this.status = status;
+    this.code = code;
+    this.values = values;
+  }
+
+  /** The answer's body, `{error, code, values}`. */
+  body() {
+    return refusalBody(this.code, this.message, this.values);
   }
 }
 
@@ -69,7 +82,7 @@ export function workingFolderWrites(): WorkingFolderWrites {
  */
 export async function admitted<T>(writes: WorkingFolderWrites, write: (lock: WorkingFolderLock) => Promise<T>): Promise<T> {
   const done = writes(write);
-  if (done === undefined) throw new Refusal(503, `the working folder is busy: ${MAX_WAITING_WRITES} writes wait already; nothing was written, try again`);
+  if (done === undefined) throw new Refusal(503, 'working-folder-busy', `the working folder is busy: ${MAX_WAITING_WRITES} writes wait already; nothing was written, try again`);
   return done;
 }
 
@@ -147,12 +160,12 @@ export async function locate(root: string, path: string, takes: (name: string) =
   try {
     real = await realpath(join(root, ...segments));
   } catch {
-    throw new Refusal(404, `no file ${segments.join('/')} in the working folder`);
+    throw new Refusal(404, 'no-file', `no file ${segments.join('/')} in the working folder`, { path: segments.join('/') });
   }
-  if (real !== join(root, ...segments)) throw new Refusal(403, 'the path leaves the working folder');
+  if (real !== join(root, ...segments)) throw new Refusal(403, 'path-leaves-folder', 'the path leaves the working folder');
   const info = await stat(real);
-  if (!info.isFile()) throw new Refusal(404, `no file ${segments.join('/')} in the working folder`);
-  if (info.size > MAX_FILE_BYTES) throw new Refusal(413, 'the file is over 1 MiB');
+  if (!info.isFile()) throw new Refusal(404, 'no-file', `no file ${segments.join('/')} in the working folder`, { path: segments.join('/') });
+  if (info.size > MAX_FILE_BYTES) throw new Refusal(413, 'file-too-large', 'the file is over 1 MiB', { max: MAX_FILE_BYTES });
   return real;
 }
 
@@ -167,18 +180,18 @@ export async function locate(root: string, path: string, takes: (name: string) =
 export async function createFile(lock: WorkingFolderLock, root: string, path: string, takes: (name: string) => boolean, what: string, text: string): Promise<string> {
   const segments = segmentsOf(path, takes, what);
   const folders = segments.slice(0, -1);
-  if (folders.length > MAX_DEPTH || segments.some((s) => s.startsWith('.') || SKIPPED.has(s))) throw new Refusal(400, `the path names no ${what} of the working folder`);
+  if (folders.length > MAX_DEPTH || segments.some((s) => s.startsWith('.') || SKIPPED.has(s))) throw new Refusal(400, 'path-refused', `the path names no ${what} of the working folder`);
   return lock(async () => {
     let folder: string;
     try {
       folder = await realpath(join(root, ...folders));
     } catch {
-      throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
+      throw new Refusal(404, 'no-folder', `no folder ${folders.join('/')} in the working folder`, { path: folders.join('/') });
     }
-    if (folder !== join(root, ...folders)) throw new Refusal(403, 'the path leaves the working folder');
-    if (!(await stat(folder)).isDirectory()) throw new Refusal(404, `no folder ${folders.join('/')} in the working folder`);
+    if (folder !== join(root, ...folders)) throw new Refusal(403, 'path-leaves-folder', 'the path leaves the working folder');
+    if (!(await stat(folder)).isDirectory()) throw new Refusal(404, 'no-folder', `no folder ${folders.join('/')} in the working folder`, { path: folders.join('/') });
     const file = join(folder, segments.at(-1)!);
-    if (!(await linkNew(file, text))) throw new Refusal(412, 'the file exists already; nothing was written');
+    if (!(await linkNew(file, text))) throw new Refusal(412, 'file-exists', 'the file exists already; nothing was written');
     return file;
   });
 }
@@ -261,11 +274,11 @@ function segmentsOf(path: string, takes: (name: string) => boolean, what: string
     try {
       return decodeURIComponent(s);
     } catch {
-      throw new Refusal(400, 'the path is not well encoded');
+      throw new Refusal(400, 'bad-path', 'the path is not well encoded');
     }
   });
   if (segments.some((s) => s === '' || s === '.' || s === '..' || /[/\\\0]/.test(s)) || !takes(segments.at(-1)!)) {
-    throw new Refusal(400, `the path names no ${what} of the working folder`);
+    throw new Refusal(400, 'path-refused', `the path names no ${what} of the working folder`);
   }
   return segments;
 }
@@ -297,13 +310,13 @@ export async function jsonBody(req: IncomingMessage): Promise<unknown> {
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > MAX_FILE_BYTES) throw new Refusal(413, 'the request is over 1 MiB');
+    if (size > MAX_FILE_BYTES) throw new Refusal(413, 'too-large', 'the request is over 1 MiB', { max: MAX_FILE_BYTES });
     chunks.push(chunk);
   }
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    throw new Refusal(400, 'the request is not JSON');
+    throw new Refusal(400, 'bad-request', 'the request is not JSON');
   }
 }
 
@@ -317,6 +330,6 @@ export function send(res: ServerResponse, status: number, value: unknown, etag?:
 /** Answers what `answer` failed with: a {@link Refusal} with its status, anything else as 500; a started answer is cut. */
 export function sendFailure(res: ServerResponse, error: unknown) {
   if (res.headersSent) res.destroy();
-  else if (error instanceof Refusal) send(res, error.status, { error: error.message });
-  else send(res, 500, { error: `the working folder could not be read or written: ${String(error)}` });
+  else if (error instanceof Refusal) send(res, error.status, error.body());
+  else send(res, 500, refusalBody('internal-error', `the working folder could not be read or written: ${String(error)}`));
 }

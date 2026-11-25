@@ -12,6 +12,7 @@ import dev.rail8.mapping.runtime.MalformedInputException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The mapping studio's operations on bytes: the answers the browser gets, each a status and its
@@ -41,10 +42,10 @@ import java.util.List;
  * request needs that answer at most once.
  *
  * <p>A refused request answers a problem (RFC 9457) of type {@code
- * urn:rail8:mapping:problem:<slug>}: 400 {@code invalid-workspace-path}, {@code malformed-json},
- * {@code invalid-request} or {@code malformed-input}, 409 {@code files-needed}, or 422 {@code
- * model-refused} with its diagnostics. A call that is not of the studio's shape is 400 {@code
- * invalid-request}.
+ * urn:rail8:mapping:problem:<slug>}, with that slug as its {@code code} and no {@code values}: 400
+ * {@code invalid-workspace-path}, {@code malformed-json}, {@code invalid-request} or {@code
+ * malformed-input}, 409 {@code files-needed}, or 422 {@code model-refused} with its diagnostics. A
+ * call that is not of the studio's shape is 400 {@code invalid-request}.
  *
  * <p>The engine's work runs on the caller's thread, except a test run's, which runs on a platform
  * thread of its own that has ended once {@link #answer} returns. An interrupt of the caller stops a
@@ -122,6 +123,8 @@ public final class Studio {
                   409,
                   "send the file of each reference in files, or the reference in escaping when it"
                       + " is no workspace path",
+                  "files-needed",
+                  Map.of(),
                   needed)));
     }
     return reply;
@@ -198,10 +201,17 @@ public final class Studio {
         422,
         Json.write(
             new RefusedProblem(
-                TYPE + "model-refused", "Model refused", 422, e.getMessage(), e.diagnostics())));
+                TYPE + "model-refused",
+                "Model refused",
+                422,
+                e.getMessage(),
+                "model-refused",
+                Map.of(),
+                e.diagnostics())));
   }
 
   private static Reply problem(int status, String slug, String title, String detail) {
-    return new Reply(status, Json.write(new Problem(TYPE + slug, title, status, detail)));
+    return new Reply(
+        status, Json.write(new Problem(TYPE + slug, title, status, detail, slug, Map.of())));
   }
 }

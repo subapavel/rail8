@@ -175,7 +175,7 @@ class AdminServerTargetsTest {
                 """), listed.json(), "A (an override) before B (the defaults), sorted by target; the unshared limit is not listed");
     }
 
-    /** Without the token, with a wrong one or without the Bearer scheme the route is 401 {error, code}, naming no target; with it 200. */
+    /** Without the token, with a wrong one or without the Bearer scheme the route is 401 {error, code, values}, naming no target; with it 200. */
     @Test
     void targetsRouteIs401WithoutTheToken() throws Exception {
         int port = serve();

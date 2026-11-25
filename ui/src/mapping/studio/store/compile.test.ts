@@ -142,7 +142,7 @@ describe('the compile scheduler of the working-copy store', () => {
     await vi.advanceTimersByTimeAsync(COMPILE_DELAY_MS);
     port.calls[0]!.reject(new ApiProblem({ type: 'urn:rail8:mapping:problem:not-found', title: 'Not found', status: 404, detail: '' }));
     await settled();
-    expect(store.getState().compileFailure).toBe('Not found');
+    expect(store.getState().compileFailure).toBe('No such mapping or folder in the working folder.');
 
     store.getState().link(NOTE, NOTE);
     await vi.advanceTimersByTimeAsync(COMPILE_DELAY_MS);
