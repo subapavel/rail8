@@ -16,6 +16,7 @@ import {
   type LockedPin,
   type FetchAnswer,
   type FileVersion,
+  type FolderAnswer,
   type PackageList,
   type PackageRow,
   type PackagesApi,
@@ -38,6 +39,11 @@ import {
   dependencyOf,
   LOCK_REFUSALS,
   lockBodyOf,
+  FOLDER_REFUSALS,
+  folderBodyOf,
+  folderFieldsOf,
+  folderText,
+  namespaceTaken,
   lockStillHolds,
   pinsOf,
   CLONE_REFUSALS,
@@ -1108,6 +1114,35 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       remote.commit = asked.head;
       upstream.commit = asked.head;
       return { pushed: { ref, from, to: asked.head }, package: await stateOf(folder) };
+    },
+    async folder(repository, body): Promise<FolderAnswer> {
+      if (state.foreignPage) throw refused(403, FOREIGN);
+      if (state.git !== null) throw refused(503, state.git);
+      if (!state.writable) throw refused(403, FOLDER_REFUSALS.readOnly);
+      const asked = folderBodyOf(repository, JSON.parse(JSON.stringify(body)) as unknown);
+      if ('error' in asked) throw refused(asked.status, asked);
+      const folder = packageOf(repository);
+      return lock(async () => {
+        if (asked.namespace !== null) {
+          const folders = Object.entries(folder.disk)
+            .filter(([inside]) => (inside === 'folder.yaml' || inside.endsWith('/folder.yaml')) && walked(inside))
+            .map(([inside, text]) => ({ inside: inside.slice(0, -'/folder.yaml'.length), ...folderFieldsOf(text) }));
+          const taken = namespaceTaken(asked.namespace, asked.inside, folders);
+          if (taken !== null) throw refused(422, taken);
+        }
+        const names = asked.inside.split('/');
+        for (let n = 1; n <= names.length; n++) {
+          const on = names.slice(0, n).join('/');
+          if (folder.disk[on] !== undefined) throw refused(409, FOLDER_REFUSALS.inTheWay({ path: `${repository}/${on}` }));
+        }
+        const file = `${asked.inside}/folder.yaml`;
+        const before = folder.disk[file];
+        if (asked.tag === null ? before !== undefined : before === undefined || (await tagOf(before)) !== asked.tag) {
+          throw refused(412, asked.tag === null ? FOLDER_REFUSALS.exists : FOLDER_REFUSALS.stale);
+        }
+        folder.disk[file] = folderText(before ?? null, asked.namespace, asked.description);
+        return { package: await stateOf(folder) };
+      });
     },
     async list(): Promise<PackageList> {
       if (state.foreignPage) throw refused(403, FOREIGN);

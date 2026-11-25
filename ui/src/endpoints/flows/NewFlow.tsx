@@ -46,11 +46,11 @@ export const newFlowText = (id: string, from: string, to: string) =>
   });
 
 /**
- * New flow, and the dialog it opens: the flow's id, its file's path within `folder`, made from the id beside the file
- * `beside`, else in `flows/`, until the path is typed, the endpoint it arrives at and the one its step sends to. Create
+ * New flow, and the dialog it opens: the flow's id, its file's path within `folder`, made from the id in the folder
+ * `within`, else in `flows/`, until the path is typed, the endpoint it arrives at and the one its step sends to. Create
  * writes a flow file that does not exist yet in `folder`, then tells `onCreated` and opens it with `openFlow`.
  */
-export function NewFlow({ api, folder, beside, onCreated, openFlow }: Pick<NewArtifactProps, 'folder' | 'beside' | 'onCreated'> & {
+export function NewFlow({ api, folder, within: chosen, onCreated, openFlow }: Pick<NewArtifactProps, 'folder' | 'within' | 'onCreated'> & {
   api: FlowsApi;
   /** Opens the flow file at `path`, relative to the working folder, whose id is `id`. */
   openFlow: (path: string, id: string) => void;
@@ -61,8 +61,8 @@ export function NewFlow({ api, folder, beside, onCreated, openFlow }: Pick<NewAr
   const [creating, setCreating] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const ids = useId();
-  // the folder within `folder` a new flow goes in: the one of the flow beside it, else flows/
-  const within = beside === undefined ? 'flows/' : beside.slice(folder.length + 1, beside.lastIndexOf('/') + 1);
+  // the folder within `folder` a new flow goes in, with its slash: the one chosen, its root for '', else flows/
+  const within = chosen === undefined ? 'flows/' : chosen === '' ? '' : `${chosen}/`;
   const wrong = draft === null ? {} : wrongOf(texts, draft);
   const create = async () => {
     if (draft === null || Object.keys(wrong).length > 0) return;

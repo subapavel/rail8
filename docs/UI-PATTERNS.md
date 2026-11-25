@@ -73,6 +73,11 @@ Reference: Pro's Advanced Profile; in Rail8, a package's tab (`package-*.png`).
 - The object's views in `tabList`. A view stays mounted once shown, so it keeps its open rows and the pages it read.
 - Below, the shown view's sections, each a titled card. Two cards stand side by side from the `xl` breakpoint on
   (`Row` with the `marginLG` gutter, `Col xs={24} xl={12}`).
+- Objects that live in folders, such as a package's artifacts, are one tree in one card: a `Table` with tree data,
+  folders first, each row with its kind's icon and word. Above it, a `Segmented` filter by kind with each kind's count,
+  a search box, and Expand all and Collapse all. Choosing a folder's name (a text `Button` with `aria-pressed`) chooses
+  it for the New actions in the card's `extra`, where a closable `Tag` names the chosen folder; the chosen row has the
+  primary background token.
 
 ## A canvas page
 

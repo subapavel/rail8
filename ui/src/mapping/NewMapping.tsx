@@ -32,16 +32,16 @@ function descriptionError(description: string, { t }: Texts): string | undefined
 
 /**
  * New mapping, and the modal it opens: Name, Folder and Description, and no message choice; the messages are chosen
- * on the Signature tab. The mapping goes in `folder`, in the folders typed below it, which start as those of the
- * mapping `beside`, else `mappings`; its id is `folder`, those folders and the name. Each field says what it allows;
+ * on the Signature tab. The mapping goes in `folder`, in the folders typed below it, which start as `within`, else
+ * `mappings`; its id is `folder`, those folders and the name. Each field says what it allows;
  * the service checks again, and its refusal (400, 409 `mapping-exists`) shows above the fields. Once the service
  * created it, `onCreated` is told, then `openMapping` is given its id.
  */
-export function NewMapping({ api, folder, beside, onCreated, openMapping }: Pick<NewArtifactProps, 'folder' | 'beside' | 'onCreated'> & {
+export function NewMapping({ api, folder, within: chosen, onCreated, openMapping }: Pick<NewArtifactProps, 'folder' | 'within' | 'onCreated'> & {
   api: ApiClient;
   openMapping: (id: string) => void;
 }) {
-  const within = beside === undefined ? 'mappings' : beside.slice(folder.length + 1, Math.max(beside.lastIndexOf('/'), folder.length + 1));
+  const within = chosen ?? 'mappings';
   const [creating, setCreating] = useState(false);
   const { t } = useText();
   return (

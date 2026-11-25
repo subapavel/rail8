@@ -1,16 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { cpSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { collectProblems } from './problems';
 import { deployWorkspace, sessionPort } from './stack-workspace';
 import { edit, node, quickOpen, save, selectTarget, setParameters } from './studio';
 
 test.use({ viewport: { width: 1440, height: 900 }, baseURL: `http://localhost:${sessionPort}` });
 
-// The quickstart's "Change a mapping and see it": the demo as its first run makes it, the flow greet sent a person, its
-// mapping changed in the studio, committed and deployed from Packages, and the person sent again.
+// The quickstart's "Change a mapping and see it", from the demo as its first run makes it and from a working copy made
+// before the greeting moved into its folder: the flow greet sent a person, its mapping found in the folder greeting and
+// changed in the studio, committed and deployed from Packages, and the person sent again.
 const checkout = fileURLToPath(new URL('../..', import.meta.url));
 const repository = join(deployWorkspace, 'demo');
 const admin = process.env.RAIL8_ADMIN_URL ?? 'http://127.0.0.1:8081';
@@ -26,21 +27,54 @@ const TEXT = '/Greeting/Text';
 
 const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, stdio: 'pipe' });
 
-// The demo's first run: the package copied into the working folder, committed and deployed with bin/rail8 over a node
-// that runs no demo; and a person who holds the roles the owner gives himself on the first run.
-test.beforeAll(async ({ request }) => {
-  const undeployed = await request.delete(`${admin}/admin/packages/demo`, { headers: { authorization: `Bearer ${token}` } });
-  expect([200, 204, 404], await undeployed.text()).toContain(undeployed.status());
-  rmSync(repository, { recursive: true, force: true });
+/** Commits every file of the working copy with `message`. */
+function commitAll(message: string) {
+  git('add', '-A');
+  git('commit', '-q', '-m', message);
+}
+
+/** The demo as its first run makes it: the package copied into the working folder and committed. */
+function firstRun() {
   cpSync(join(checkout, 'examples', 'demo'), repository, { recursive: true });
   git('init', '-q', '-b', 'main');
   git('config', 'user.name', 'Stack Scenario');
   git('config', 'user.email', 'stack@example.com');
   writeFileSync(join(repository, '.gitattributes'), '* -text\n');
-  git('add', '-A');
-  git('commit', '-q', '-m', 'The demo');
+  commitAll('The demo');
+}
+
+/**
+ * A working copy made before the greeting moved into its folder, with the flow, its test, its mapping and its schemas in
+ * flows/, mappings/ and structures/, deployed; then the quickstart's commands for an older copy, as it gives them, run
+ * from the repository root, and the result committed.
+ */
+function olderCopy() {
+  firstRun();
+  const move = (from: string, to: string) => {
+    mkdirSync(dirname(join(repository, to)), { recursive: true });
+    renameSync(join(repository, from), join(repository, to));
+  };
+  move('greeting/greet.yaml', 'flows/greet.yaml');
+  move('greeting/greet.test.yaml', 'flows/greet.test.yaml');
+  move('greeting/mappings/greeting.mapping.json', 'mappings/greeting.mapping.json');
+  move('greeting/structures/greeting', 'structures/greeting');
+  rmSync(join(repository, 'greeting'), { recursive: true });
+  const flow = join(repository, 'flows', 'greet.yaml');
+  writeFileSync(flow, readFileSync(flow, 'utf8').replace('mapping: greeting/mappings/', 'mapping: mappings/'));
+  commitAll('The demo before the greeting folder');
   execFileSync(join(checkout, 'bin', 'rail8'), ['deploy', 'demo', 'HEAD', '--expect', 'none'], { cwd: checkout, stdio: 'pipe' });
 
+  const quickstart = readFileSync(join(checkout, 'docs', 'QUICKSTART.md'), 'utf8');
+  const commands = /A working copy of the demo in[\s\S]*?```sh\n([\s\S]*?)```/.exec(quickstart)?.[1];
+  expect(commands, 'the commands for an older copy in docs/QUICKSTART.md').toBeDefined();
+  execFileSync('bash', ['-ec', commands!.replaceAll('~/rail8-workspace/demo', repository)], { cwd: checkout, stdio: 'pipe' });
+  commitAll('The greeting in its folder');
+  expect(git('status', '--porcelain', '--', 'flows/greet.yaml', 'mappings', 'structures', 'greeting').toString()).toBe('');
+  expect(git('ls-files', 'flows/greet.yaml', 'flows/greet.test.yaml', 'mappings', 'structures').toString()).toBe('');
+}
+
+// the person who holds the roles the owner gives himself on the first run
+test.beforeAll(async ({ request }) => {
   // the emergency key makes an administrator, who chooses a password and gives himself the other roles, as the owner does
   const created = await request.post(`${admin}/admin/users`, {
     headers: { authorization: `Bearer ${key}` },
@@ -79,7 +113,22 @@ async function openDemo(page: Page) {
   await expect(shown(page).getByRole('heading', { level: 1, name: 'demo' })).toBeVisible();
 }
 
-test('@stack the real node: a person greeted, the mapping changed in the studio, committed and deployed, and the change in the reply and in Messages', async ({ page, request }) => {
+for (const [start, make, how] of [
+  ['the demo as its first run makes it', firstRun, ['--expect', 'none']],
+  ['a working copy from before the greeting folder', olderCopy, ['--expect', 'any']],
+] as const) {
+  test(`@stack the real node, from ${start}: a person greeted, the mapping changed in the studio, committed and deployed, and the change in the reply and in Messages`, async ({ page, request }) => {
+    const undeployed = await request.delete(`${admin}/admin/packages/demo`, { headers: { authorization: `Bearer ${token}` } });
+    expect([200, 204, 404], await undeployed.text()).toContain(undeployed.status());
+    rmSync(repository, { recursive: true, force: true });
+    make();
+    execFileSync(join(checkout, 'bin', 'rail8'), ['deploy', 'demo', 'HEAD', ...how], { cwd: checkout, stdio: 'pipe' });
+    await walk(page, request);
+  });
+}
+
+/** The walk of the quickstart's section over the demo the node runs. */
+async function walk(page: Page, request: APIRequestContext) {
   const problems = collectProblems(page);
 
   // 1. the person sent to the flow as the demo deploys it
@@ -92,11 +141,14 @@ test('@stack the real node: a person greeted, the mapping changed in the studio,
   await logIn(page);
   await openDemo(page);
   await shown(page).getByRole('tab', { name: /^Artifacts/ }).click();
-  await shown(page).getByRole('table', { name: 'Mappings' }).getByRole('button', { name: 'greeting', exact: true }).click();
+  const tree = shown(page).getByRole('table', { name: 'Artifacts' });
+  // the folder greeting with its namespace, and in it the mapping greeting, the one row of the kind Mapping
+  await expect(tree.getByLabel('Namespace urn:rail8:demo:greeting')).toBeVisible();
+  await tree.getByRole('row').filter({ hasText: /Mapping/ }).getByRole('button', { name: 'greeting', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeVisible();
   await page.getByRole('button', { name: 'Close greeting', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeHidden();
-  await quickOpen(page, 'greeting', 'demo/mappings/greeting.mapping.json');
+  await quickOpen(page, 'greeting', 'demo/greeting/mappings/greeting.mapping.json');
   await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeVisible();
   const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).filter({ visible: true }).getByRole('listitem');
   await expect(crumbs).toHaveText(['Design', 'Packages', 'demo', 'greeting']);
@@ -138,4 +190,4 @@ test('@stack the real node: a person greeted, the mapping changed in the studio,
   await expect(shown(page).getByRole('region', { name: 'Payload after step 1 (greeting), attempt 1' })).toContainText('<Text>Hi, Ann</Text>');
   // the browser logs the 401 of the page before the login
   expect(problems.filter((problem) => problem !== 'Failed to load resource: the server responded with a status of 401 (Unauthorized)')).toEqual([]);
-});
+}

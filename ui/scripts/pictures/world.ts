@@ -48,7 +48,8 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
 /**
  * The working folder the pictures show, in the terms of the contract suite's seed: the package `orders` with seven
  * commits on `main`, two of them not yet on its upstream, which has one of its own; the node runs the fifth commit;
- * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Of its three
+ * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Its folder `billing`
+ * nests two folders, each with a flow, and it and its folder `invoices` have a namespace, as `flows` has. Of its three
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
  * `customers` runs on the node one commit behind its `HEAD`, and two packages the node runs from other repositories pin
  * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, and two folders that are
@@ -63,6 +64,10 @@ const SEED: Seed = {
       manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 2.4.0\ndescription: Orders from the web shop to the ERP, and its invoices back.\ndependencies:\n  - name: common\n    version: 1.2.1\n  - name: customers\n    version: 1.0.0\n  - name: ledger\n    version: 2.0.0\n',
       files: {
         'flows/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders\ndescription: The flows of the orders package.\n',
+        'billing/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders:billing\ndescription: What the orders bill.\n',
+        'billing/invoices/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders:billing:invoices\n',
+        'billing/invoices/invoice-out.yaml': flow('invoice-out', 'erp-in', '  - type: to\n    name: partner\n    endpoint: partner-out\n'),
+        'billing/credit-notes/credit-note-out.yaml': flow('credit-note-out', 'erp-in', '  - type: to\n    name: partner\n    endpoint: partner-out\n'),
         'flows/orders.yaml': ORDERS,
         'flows/orders.xsl': XSL,
         'schemas/order.xsd': '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>\n',

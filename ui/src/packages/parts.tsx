@@ -343,31 +343,6 @@ export function CommitSubject({ commit, host }: { commit: Commit; host: string }
   );
 }
 
-/** Artifacts, dense: each one's name, its file, what uses it when they are files, and how it changed. */
-export function ArtifactsTable({ artifacts, open, label }: { artifacts: Artifact[]; open: (screen: Screen) => void; label: string }) {
-  const used = artifacts.some((a) => a.kind === 'file');
-  const { t } = useText();
-  return (
-    <ProTable<Artifact>
-      aria-label={label}
-      rowKey="path"
-      size="small"
-      dataSource={artifacts}
-      search={false}
-      options={false}
-      toolBarRender={false}
-      pagination={false}
-      cardProps={false}
-      columns={[
-        { title: t('packages.name'), key: 'name', render: (_, a) => <ArtifactName artifact={a} open={open} /> },
-        { title: t('packages.file'), key: 'file', render: (_, a) => inside(a.path) },
-        ...(used ? [{ title: t('packages.usedBy'), key: 'usedBy', render: (_: unknown, a: Artifact) => (a.usedBy ?? []).map(inside).join(', ') || '-' }] : []),
-        { title: t('packages.change'), key: 'change', width: 128, render: (_, a) => (a.change === undefined ? '-' : <ChangeBadge status={a.change} />) },
-      ]}
-    />
-  );
-}
-
 /** The commits of the branch, dense, each opening the files it changed, and each with Deploy this commit…, which calls `onDeploy`; the commit the node runs is marked. */
 export function HistoryTable({ api, repository, commits, loading, host, now, onDeploy }: {
   api: PackagesApi;

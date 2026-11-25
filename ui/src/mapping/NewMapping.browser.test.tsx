@@ -9,12 +9,12 @@ let root: Root | undefined;
 let host: HTMLElement | undefined;
 let consoleError: ReturnType<typeof vi.spyOn>;
 
-/** New mapping in the folder `folder`, with nothing beside it, telling `onCreated` and `openMapping` what it made. */
-function render(api: ApiClient, openMapping: (id: string) => void = () => undefined, onCreated: () => void = () => undefined, folder = 'mappings') {
+/** New mapping in the folder `folder`, in its folder `within` when one is chosen, telling `onCreated` and `openMapping` what it made. */
+function render(api: ApiClient, openMapping: (id: string) => void = () => undefined, onCreated: () => void = () => undefined, folder = 'mappings', within?: string) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<NewMapping api={api} folder={folder} onCreated={onCreated} openMapping={openMapping} />);
+  root.render(<NewMapping api={api} folder={folder} within={within} onCreated={onCreated} openMapping={openMapping} />);
 }
 
 /** The fake with a spy on createMapping, so a test can read the request the modal sent. */
@@ -60,6 +60,20 @@ describe('the New mapping modal', () => {
     expect(onCreated).toHaveBeenCalledOnce();
     expect(createMapping.mock.calls).toEqual([[{ id: 'orders/inbound/eu/order-to-invoice', description: 'Turns an order into an invoice.' }]]);
     await expect.element(modal()).not.toBeInTheDocument();
+  });
+
+  test('in a chosen folder, Folder starts as that folder and the mapping goes in it', async () => {
+    const { api, createMapping } = spied();
+    const openMapping = vi.fn();
+    render(api, openMapping, undefined, 'demo', 'greeting/mappings');
+    await open();
+
+    await expect.element(field('Folder')).toHaveValue('greeting/mappings');
+    await field('Name').fill('farewell');
+    await userEvent.keyboard('{Enter}');
+
+    await expect.poll(() => openMapping.mock.calls).toEqual([['demo/greeting/mappings/farewell']]);
+    expect(createMapping.mock.calls).toEqual([[{ id: 'demo/greeting/mappings/farewell' }]]);
   });
 
   test('with no folders typed the mapping is in the top folder; an empty description is not sent; spaces around name and folders are dropped', async () => {

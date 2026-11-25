@@ -60,8 +60,12 @@ const pick = (file) => (page) => shown(page).getByRole('table', { name: 'Changes
 const end = (page) => page.evaluate(() => window.endSession());
 /** Opens the message `id` from its row on the Messages screen. */
 const message = (id) => (page) => shown(page).getByRole('table', { name: 'Messages' }).getByRole('button', { name: id, exact: true }).click();
-/** Opens the artifact `name` from the table `table` of the shown tab, such as a package's Flows. */
-const artifact = (table, name) => (page) => shown(page).getByRole('table', { name: table }).getByRole('button', { name, exact: true }).click();
+/** The tree of the artifacts of the shown tab. */
+const tree = (page) => shown(page).getByRole('table', { name: 'Artifacts' });
+/** Opens the artifact `name` from the tree of the shown tab, or chooses the folder `name` in it. */
+const artifact = (name) => (page) => tree(page).getByRole('button', { name, exact: true }).click();
+/** Shows only the artifacts of the kind `kind`, as its button above the tree names it, such as Flows. */
+const only = (kind) => (page) => shown(page).getByRole('radiogroup').getByText(new RegExp(`^${kind} \\d+$`)).click();
 /** Opens the folder `name`, which is no package, from its row on the Packages screen. */
 const folder = (name) => (page) => shown(page).getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name, exact: true }).click();
 /** Opens Quick open with Ctrl+K and types `text` into it. */
@@ -71,11 +75,11 @@ const quick = (text) => async (page) => {
   await page.getByRole('dialog').getByRole('textbox').fill(text);
 };
 /** Opens the mapping order-id-copy of the folder mappings, which is no package, in its studio. */
-const studio = [menu('Packages'), folder('mappings'), artifact('Mappings', 'order-id-copy')];
+const studio = [menu('Packages'), folder('mappings'), artifact('order-id-copy')];
 /** Opens the flow orders of the package orders. */
-const orders = [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('Flows', 'orders')];
+const orders = [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('orders')];
 /** Opens the endpoint `name` of the package orders. */
-const endpointOf = (name) => [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('Endpoints', name)];
+const endpointOf = (name) => [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact(name)];
 /** Selects the target field `name` on the studio's Definition tab, which shows its expression on the canvas. */
 const target = (name) => (page) =>
   shown(page).getByRole('region', { name: 'target message' }).getByRole('table', { name: 'target fields' }).getByRole('button', { name, exact: true }).click();
@@ -161,7 +165,9 @@ const SCENES = {
   'quick-open-cs': [speak('Čeština'), quick('order')],
   folder: [menu('Packages'), folder('mappings')],
   'folder-new-mapping': [menu('Packages'), folder('mappings'), press('New mapping')],
-  'package-new-flow': [menu('Packages'), pkg('orders'), tab('Artifacts'), press('New flow'), fill('Id', 'returns')],
+  'package-new-flow': [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('credit-notes'), press('New flow'), fill('Id', 'returns')],
+  'package-artifacts-filtered': [menu('Packages'), pkg('orders'), tab('Artifacts'), only('Flows'), fill('Filter by name, path or namespace', 'billing')],
+  'package-folder-namespace': [menu('Packages'), pkg('orders'), tab('Artifacts'), press('Edit folder billing/credit-notes…'), fill('Namespace', 'urn:acme:orders:billing:credit-notes')],
   'canvas-de': [...studio, tab('Definition'), target('OrderId'), speak('Deutsch')],
   'canvas-cs': [...studio, tab('Definition'), target('OrderId'), speak('Čeština')],
   'canvas-ru': [...studio, tab('Definition'), target('OrderId'), speak('Русский')],

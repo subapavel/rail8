@@ -69,7 +69,7 @@ test('@stack the real node: edit a flow, commit it, deploy the commit, and a mes
   await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: NAME, exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: NAME })).toBeVisible();
   await page.getByRole('tab', { name: /^Artifacts \(\d+\)$/ }).click();
-  await page.getByRole('table', { name: 'Flows' }).getByRole('button', { name: 'greet', exact: true }).click();
+  await page.getByRole('table', { name: 'Artifacts' }).getByRole('button', { name: 'greet', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'greet' })).toBeVisible();
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await page.getByTestId('flow-canvas').getByText('greeting', { exact: true }).click();

@@ -109,7 +109,7 @@ const commitButton = () => dialog().getByRole('button', { name: /Commit$/ });
 /** Opens the flow of the package in its editor from the Artifacts tab, and gives it unsaved changes when `edit`, then shows the package's tab again. */
 async function openFlow(edit: boolean) {
   await page.getByRole('tab', { name: /^Artifacts \(\d+\)$/ }).click();
-  await page.getByRole('table', { name: 'Flows' }).getByRole('button', { name: 'orders' }).click();
+  await page.getByRole('table', { name: 'Artifacts' }).getByRole('button', { name: 'orders', exact: true }).click();
   await expect.element(page.getByText('The flow editor of orders/flows/orders.yaml')).toBeVisible();
   if (edit) await button('Edit the flow').click();
   await page.getByRole('tab', { name: /orders$/ }).click();
@@ -294,7 +294,7 @@ describe('the tab of a package', () => {
     await expect.element(page.getByRole('tab', { name: 'Changes (3)' })).toBeVisible();
   });
 
-  test('lists the artifacts by kind with the files they use, and opens a flow in its editor', async () => {
+  test('lists the artifacts in their folders, each with its kind, the files they use and its change, and opens a flow in its editor', async () => {
     await openOrders({
       clones: [
         {
@@ -306,15 +306,20 @@ describe('the tab of a package', () => {
     });
     await page.getByRole('tab', { name: /^Artifacts \(\d+\)$/ }).click();
 
-    await expect.element(page.getByRole('heading', { level: 2, name: 'Flows' })).toBeVisible();
-    const flows = page.getByRole('table', { name: 'Flows' });
-    await expect.element(flows.getByRole('row').nth(1)).toMatchTextContent('ordersflows/orders.yamlModified');
-    await expect.element(page.getByRole('table', { name: 'Endpoints' }).getByRole('row').nth(1)).toMatchTextContent('inendpoints/in.yaml-');
-    await expect.element(page.getByRole('table', { name: 'Package files' }).getByRole('row').nth(1)).toMatchTextContent('package.yaml');
-    await expect.element(page.getByRole('table', { name: 'Files they use' }).getByRole('row').nth(1)).toMatchTextContent('orders.xslflows/orders.xslflows/orders.yaml-');
-    await expect.element(page.getByRole('table', { name: 'Endpoints' }).getByRole('button')).not.toBeInTheDocument();
+    const tree = page.getByRole('table', { name: 'Artifacts' });
+    const rows = () => tree.getByRole('row').elements().map((row) => row.textContent);
+    await expect.poll(rows).toEqual([
+      'NameKindUsed byChangeAction',
+      'endpointsFolder--Edit folder…',
+      'inEndpoint---',
+      'flowsFolder--Edit folder…',
+      'ordersFlow-Modified-',
+      'orders.xslFileflows/orders.yaml--',
+      'package.yamlpackage.yaml---',
+    ]);
+    await expect.element(tree.getByRole('button', { name: 'in', exact: true })).not.toBeInTheDocument();
 
-    await flows.getByRole('button', { name: 'orders' }).click();
+    await tree.getByRole('button', { name: 'orders', exact: true }).click();
     await expect.element(page.getByText('The flow editor of orders/flows/orders.yaml')).toBeVisible();
   });
 

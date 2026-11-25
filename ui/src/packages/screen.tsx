@@ -12,15 +12,16 @@ const clock = () => new Date();
 
 /**
  * The tab of the package whose clone is the folder `repository`, on a server that takes writes when `writable`: its id
- * is `package:` and the repository, its title the repository. `pane` names the page's own tab it shows first.
+ * is `package:` and the repository, its title the repository. `pane` names the page's own tab it shows first, and
+ * `select` the path of an artifact its Artifacts tab chooses and shows.
  */
-export function packageTab(api: PackagesApi, repository: string, writable: boolean, now: () => Date = clock, pane?: string): Screen {
+export function packageTab(api: PackagesApi, repository: string, writable: boolean, now: () => Date = clock, pane?: string, select?: string): Screen {
   return {
     id: `package:${repository}`,
     title: repository,
     group: msg('frame.group.design'),
     icon: <BranchesOutlined aria-hidden />,
-    render: (open) => <PackageTab api={api} repository={repository} now={now} open={open} writable={writable} pane={pane} />,
+    render: (open) => <PackageTab api={api} repository={repository} now={now} open={open} writable={writable} pane={pane} select={select} />,
   };
 }
 
@@ -89,7 +90,7 @@ export async function findArtifacts(api: PackagesApi, kinds: ReadonlyMap<string,
       for (const { path, kind, id } of artifacts) {
         const owner = kinds.get(kind);
         if (owner !== undefined) add(path, kind, id, owner.open(path), [packages, tab]);
-        else if (kind === 'test') add(path, kind, id, packageTab(api, repository, list.writable, now, 'artifacts'), [packages]);
+        else if (kind === 'test') add(path, kind, id, packageTab(api, repository, list.writable, now, 'artifacts', path), [packages]);
       }
     }),
   );

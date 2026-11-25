@@ -7,7 +7,7 @@ import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Screen } from '../screens';
 import type { Artifact } from './api';
-import { ArtifactCards } from './PackageTab';
+import { ArtifactTree } from './ArtifactTree';
 
 type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind: 'read'; artifacts: Artifact[] };
 
@@ -19,8 +19,9 @@ export async function listedArtifacts(kinds: ReadonlyMap<string, ArtifactKind>, 
 /**
  * The tab of a folder of the working folder that is no package but holds artifacts, such as the corpus of the mapping
  * studio or the package folder of an adapter: a page with the folder's name as its title, a line saying that it is no
- * package, Refresh, and the cards of the kinds of artifact it holds, each artifact opening in its editor's tab, each
- * card with its kind's New action, such as New mapping, on a server that takes writes when `writable`.
+ * package, Refresh, and the tree of the artifacts it holds in their folders, each artifact opening in its editor's tab,
+ * with the New action of each kind it holds, such as New mapping, writing into the chosen folder, on a server that takes
+ * writes when `writable`.
  * It has no changes, history, commit or deploy: git does not keep the folder.
  */
 export function FolderTab({ folder, writable, open }: { folder: string; writable: boolean; open: (screen: Screen) => void }) {
@@ -45,7 +46,7 @@ export function FolderTab({ folder, writable, open }: { folder: string; writable
     body = <Alert type="error" showIcon title={t('packages.folder.unread', { folder })} description={result.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   else {
     const held = [...new Set(result.artifacts.map(({ kind }) => kind))];
-    body = <ArtifactCards artifacts={result.artifacts} folder={folder} writable={writable} open={open} onCreated={refresh} creates={held} />;
+    body = <ArtifactTree artifacts={result.artifacts} folder={folder} writable={writable} open={open} onCreated={refresh} creates={held} />;
   }
 
   return (

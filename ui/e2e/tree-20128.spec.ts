@@ -13,7 +13,7 @@ test('ui/tree-20128/scroll', async ({ page }, testInfo) => {
   const problems = collectProblems(page);
 
   await page.goto('/e2e/fake/');
-  await page.getByRole('table', { name: 'Mappings' }).getByRole('button', { name: 'tree-20128', exact: true }).click();
+  await page.getByRole('table', { name: 'Artifacts' }).getByRole('button', { name: 'tree-20128', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'tree-20128' })).toBeVisible();
   await page.getByRole('tab', { name: 'Definition', exact: true }).click();
   const pane = page.getByRole('region', { name: 'source message' });

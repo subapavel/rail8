@@ -84,9 +84,19 @@ The tab has five tabs of its own:
   file shows its kind and its readable change ("Readable changes"). Commit… starts here. Each row has a tick box,
   except a row staged in a terminal with other content; **Discard changes…**, in the card's header, puts the ticked
   files back as they are in the last commit ("Discard").
-- **Artifacts.** The package's flows, endpoints, mappings and tests, and the other files they use.
-  - They are listed by kind, each with its id, whether it changed, and, for a file, the artifacts that use it.
+- **Artifacts.** One tree of the package's folders, folders first, each holding its flows, endpoints, mappings and
+  tests, and the other files they use.
+  - Each row shows its kind's icon and word, its id or file name, whether it changed, and, for a file, the artifacts
+    that use it. A folder whose `folder.yaml` gives a namespace shows it beside its name, and a folder the rules
+    refuse (its name, a depth over four, a namespace another folder has) is marked with why.
   - A row opens the artifact in the tab its own screen opens.
+  - Above the tree, a filter by kind, one click for only the flows, and by text in names, paths and namespaces; and
+    Expand all and Collapse all. The folders closed stay closed while the tab lives.
+  - Choosing a folder's name chooses it for **New folder…**, **New flow** and **New mapping**, which write into it.
+    With none chosen, New folder writes into the package's root, New flow into `flows/` and New mapping into
+    `mappings/`.
+  - **Edit folder…** on a folder's row sets its namespace and its description in its `folder.yaml` ("Folders").
+  - The tree moves and renames nothing.
 - **History.** The commits of the branch, newest first, 50 to a page. The commit the node runs is marked.
   - Each commit has **Deploy this commit…**.
   - Choosing a commit shows the files it changed against its first parent, each with its readable change.
@@ -104,8 +114,18 @@ a mapping or a test of any package by its name or its path without knowing its p
 under the breadcrumb Packages › its package, and a test, which has no editor, as its package's tab on Artifacts.
 
 A folder of the working folder that is no package but holds artifacts, such as the mapping corpus or the package folder
-of an adapter, is a link in the list of folders that are no package. Its tab lists the cards of the kinds it holds, each
-with its New, and Quick open finds its artifacts under Packages › the folder.
+of an adapter, is a link in the list of folders that are no package. Its tab shows the tree of the artifacts it holds,
+with the New of each kind; with no folder chosen, a New starts where the folder's artifacts of its kind already are.
+Quick open finds its artifacts under Packages › the folder.
+
+### Folders
+
+A folder of a package is a namespace when its `folder.yaml` says so. New folder… makes a folder with its name, below
+the chosen folder, and writes its `folder.yaml`, so that git keeps the folder. Edit folder… changes the namespace and
+the description of a folder, and writes a `folder.yaml` when the folder has none. Both check the package's rules as the
+author types, and the git half checks them again: a folder's name starts with a small letter and holds small letters,
+digits and `-`, at most 64 characters; a folder lies at most four folders deep; a namespace holds 1 to 1024 characters
+and belongs to one folder only. A write of `folder.yaml` keeps its comments and its other keys.
 
 ## Which folders are packages
 
@@ -284,6 +304,7 @@ success with `package: null` and the reason.
 | `POST /git/clone` `{address}` | 201 `{repository, package}`, with `reason` or `problem` when `package` is null ("Get a package") |
 | `POST /git/packages/{repository}/commit` `{message, branch, head, paths}` | `{commit, output, package}` ("Commit") |
 | `POST /git/packages/{repository}/discard` `{head, paths}` | `{discarded, left, package}`, with `problem` ("Discard") |
+| `POST /git/packages/{repository}/folder` `{path, tag, namespace, description}` | `{package}`, with `problem` ("Folders"): makes the folder `path` and its missing parents, and writes its `folder.yaml`; `tag` is null for a new `folder.yaml`, else the tag of the one it replaces; a null `namespace` or `description` leaves the key out |
 | `POST /git/packages/{repository}/deploy` `{commit, check, expect}` | `{deploy, replaces, package}` ("Deploy") |
 | `POST /git/packages/{repository}/lock` `{manifestTag, lockTag, dependencies}` | `{pins, package}` ("Dependencies") |
 | `POST /git/packages/{repository}/fetch` `{}` | `{package}` ("Remote") |
@@ -331,7 +352,10 @@ interface Change {
   large?: true;                           // over the read limit: listed, not compared
 }
 type Kind = 'flow' | 'endpoint' | 'mapping' | 'test' | 'package' | 'lock' | 'folder' | 'file';
-interface Artifact { path: string; kind: Kind; id?: string; change?: Change['status']; usedBy?: string[] }
+interface Artifact {
+  path: string; kind: Kind; id?: string; change?: Change['status']; usedBy?: string[];
+  namespace?: string; description?: string; // for a folder.yaml: its folder's namespace and description
+}
 ```
 
 A revision (`rev`, `from`, `to`) is `work`, the files on disk, or a commit of 40 hex digits that the clone holds. It
@@ -355,10 +379,10 @@ Every refusal is `{error, problems?, output?}`, with the status:
 | 400 | A malformed body, repository name, path or revision. A path with a `.git` segment. A message that is blank, over 8 KiB or holds a NUL. More than 1000 paths. |
 | 403 | A foreign page. Any write under `RAIL8_READ_ONLY=true` except a deploy check. A path that leaves the package's real folder, or for a discard leads into `.git`. |
 | 404 | No working folder, no such package, a path outside it, or a revision the clone lacks. |
-| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. A path a discard does not handle, or where a discard would make a file and a folder of the same name meet ("Discard"). No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. |
-| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag` or, for a discard, its `index`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; or the commit the node runs. Nothing was done. |
+| 409 | The clone is busy. A detached HEAD for a commit, pull or push. A chosen path whose index `differs`. A path a discard does not handle, or where a discard would make a file and a folder of the same name meet ("Discard"). No upstream for a fetch, pull or push. A pull that is not a fast-forward, or that would overwrite a change or an ignored file. A push the remote rejects. A lock while a dependency has several candidates. A new package over a folder that exists. A file where a folder's path needs a folder. |
+| 412 | What the write states differs from what is there now: `branch`, `head` or `upstream`; a path's `tag` or, for a discard, its `index`, or a path no longer among the changes; `manifestTag` or `lockTag`; a dependency's `folder` or `head`; a `folder.yaml` that is there for a new one, or not the one its `tag` names; or the commit the node runs. Nothing was done. |
 | 413 | A body over its limit. |
-| 422 | No git identity. Nothing to commit. Nothing to discard. A hook refused the commit (its `output`). A fetch or a push git failed, as when it could not sign in (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. |
+| 422 | No git identity. Nothing to commit. Nothing to discard. A hook refused the commit (its `output`). A fetch or a push git failed, as when it could not sign in (its `output`). The problems `rail8 lock` printed. A package name the schema refuses. A folder's name, depth or namespace the rules refuse, or a `folder.yaml` at the package's root. |
 | node's | The node's own 400, 403, 409, 422, 500 or 503 for a deploy, passed on with its `error` and `problems`. Its 500 is a failure on the node: of git, of the deploy record's write (or a write whose outcome is unknown), or of a start, which was rolled back. The package's state read after it shows what runs. |
 | 500 | git or `rail8 lock` wrote more than its output limit, and was stopped. A discard's index write that failed while no other git held `index.lock`, with git's words; a discard whose read-back failed after it wrote. |
 | 502 | The node does not answer, or refuses `RAIL8_ADMIN_TOKEN` (its 401). |

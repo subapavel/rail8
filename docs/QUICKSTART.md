@@ -78,14 +78,18 @@ Mac) finds a screen, an open tab or an artifact of any package, a flow, an endpo
 its path, and Ctrl+B (⌘B) folds the menu to its icons.
 The UI has **Messages**, the list of the messages the node recorded, and **Packages**, each package of `RAIL8_WORKSPACE`
 with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
-artifacts and history. A package's **Artifacts** tab lists its flows, endpoints, mappings and tests: a flow opens in its
-picture, an endpoint in its settings form, a mapping in the mapping studio, and **New flow** and **New mapping** in the
-corners of their cards write a new one into the package. The UI sends its
+artifacts and history. A package's **Artifacts** tab is one tree of its folders, each holding its flows, endpoints,
+mappings and tests and the files they use, and a folder whose `folder.yaml` gives a namespace shows it beside its name.
+A flow opens in its picture, an endpoint in its settings form, a mapping in the mapping studio. Above the tree, the kind
+buttons and the filter box show only the flows, say, or what a name, a path or a namespace holds. Choosing a folder's
+name chooses it: **New folder…**, **New flow** and **New mapping** in the card's corner then write into that folder, and
+into the package's root, or `flows/` and `mappings/`, when none is chosen. **Edit folder…** on a folder's row sets its
+namespace and its description in its `folder.yaml`. The tree does not move or rename files yet. The UI sends its
 `/admin` requests to the node on `localhost:8081` with your session, which the browser never sees.
 
 The studio's mappings are the `*.mapping.json` files in `RAIL8_WORKSPACE`, such as
-`demo/mappings/greeting`, and the schemas a mapping reads are the files its bundles name, relative to its
-file. A folder of `RAIL8_WORKSPACE` that is no package but holds mappings, such as `mapping-corpus`, is a link under
+`demo/greeting/mappings/greeting`, and the schemas a mapping reads are the files its bundles name, relative to its
+file, so a mapping works in any folder. A folder of `RAIL8_WORKSPACE` that is no package but holds mappings, such as `mapping-corpus`, is a link under
 **Folders that are no package** on **Packages**: its tab lists its mappings, with **New mapping**. Listing them needs no
 node; opening, saving, compiling and testing a mapping ask the node, so they need it running. With
 `RAIL8_READ_ONLY=true` the studio saves and creates nothing.
@@ -302,8 +306,9 @@ through the admin API: `curl -H "$auth" 'localhost:8081/admin/messages?flow=demo
 
 ## Change a mapping and see it
 
-The flow `demo/greet` maps a JSON person to an XML greeting with the studio's mapping `demo/mappings/greeting` and
-answers with the greeting. Send it a person from an HTTP client, such as Bruno or Postman:
+The flow `demo/greet` maps a JSON person to an XML greeting with the studio's mapping
+`demo/greeting/mappings/greeting` and answers with the greeting. The flow, its test, its mapping and the schemas the
+mapping reads lie together in the folder `greeting` of the package, whose namespace is `urn:rail8:demo:greeting`. Send it a person from an HTTP client, such as Bruno or Postman:
 
 | | |
 | --- | --- |
@@ -322,8 +327,9 @@ The reply is the greeting:
 `<?xml version="1.0" encoding="UTF-8"?><Greeting><Name>Ann</Name><City>Brno</City><Text>Hello, Ann</Text></Greeting>`.
 The node's data port, 8080, checks no caller yet: whoever reaches it can send to every flow.
 
-1. Open the mapping. In **Packages** open `demo`, choose its **Artifacts** tab and, in the Mappings card, `greeting`
-   (or press Ctrl+K, ⌘K on a Mac, type `greeting` and choose it). It opens in the mapping studio.
+1. Open the mapping. In **Packages** open `demo` and choose its **Artifacts** tab. In the tree, the folder `greeting`
+   shows its namespace `urn:rail8:demo:greeting`; in it, under `mappings`, choose `greeting` (or press Ctrl+K, ⌘K on a
+   Mac, type `greeting` and choose `demo/greeting/mappings/greeting.mapping.json`). It opens in the mapping studio.
 2. Change it. Choose the **Definition** tab and **Edit**, then the field `Text` in the target message on the right. The
    canvas below shows how `Text` is made: the constant `Hello, ` and the source field `name`, joined by `concat`. Choose
    the gear on the `constant` box, change **Value** to `Hi, ` (with the space at its end) and **Apply**. **Save**.
@@ -334,14 +340,18 @@ The node's data port, 8080, checks no caller yet: whoever reaches it can send to
    `demo/greet`: the newest row is this message. Open it by its id: its steps are `ingress` and `greeting`, and the
    payload after `greeting`, which its size in the step's row or the Payloads card opens, is the greeting with `Hi, Ann`.
 
-A working copy of the demo made before this flow came, in `~/rail8-workspace/demo`, gets its files with one command
-from the repository root, which leaves the copy's other files as they are:
+A working copy of the demo in `~/rail8-workspace/demo` made before this flow came, or before its files moved into the
+folder `greeting`, gets them with these commands from the repository root. They copy the flow's files in, take the
+flow's files out of `flows/`, `mappings/` and `structures/` where an older copy had them, and leave the copy's other
+files as they are:
 
 ```sh
-(cd examples/demo && tar cf - endpoints/http-in-greet.yaml flows/greet.yaml flows/greet.test.yaml mappings structures fixtures/person.json fixtures/not-json.txt) | tar xf - -C ~/rail8-workspace/demo
+(cd examples/demo && tar cf - endpoints/http-in-greet.yaml greeting fixtures/person.json fixtures/not-json.txt) | tar xf - -C ~/rail8-workspace/demo
+(cd ~/rail8-workspace/demo && rm -f flows/greet.yaml flows/greet.test.yaml mappings/greeting.mapping.json structures/greeting/greeting.xsd structures/greeting/person.schema.json && { rmdir -p structures/greeting mappings 2>/dev/null || true; })
 ```
 
-Then commit and deploy them from **Packages** as in step 3, where the dialog shows that the commit adds `demo/greet`.
+Then commit and deploy them from **Packages** as in step 3, where the dialog shows that the commit adds `demo/greet`,
+or swaps it when the copy ran it already.
 
 ## Users
 
