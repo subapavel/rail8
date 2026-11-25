@@ -597,6 +597,34 @@ abstract class SecretStoreContract {
     }
 
     @Test
+    void aNameIsShadowedByTheVariableItShares() {
+        Node a = start("a", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_A_B", "variable-value"));
+        written.add("variable-value");
+        create(a, value("a.b", "store-value"));
+        JsonObject all = list(a);
+        assertEquals(List.of("a"), all.getJsonArray("secrets").getJsonObject(0).getJsonArray("shadowedOn").getList());
+        assertEquals(0, all.getJsonArray("variablesOnly").size(), "the variable a stored name takes is not listed apart");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void afterALostKeyTheRowsDeletedInSqlLeaveTheNamesMissingWithTheirUsers() {
+        Node a = start("a", K1);
+        create(a, value("db", "the-value"));
+        use("db", "flow", "pkg/orders", Set.of(Secret.Kind.VALUE));
+        a.store.close();
+        refusedStart("a", K2, null);
+        SecretRows.Head was = head();
+        restore(new SecretRows.Head(was.generation() + 1, was.stamp() + 1), Map.of());   // delete from secrets, the generation and stamp raised
+        Node again = start("a", K2);
+        JsonObject missing = list(again).getJsonArray("missing").stream().map(JsonObject.class::cast)
+                .filter(e -> e.getString("name").equals("db")).findFirst().orElseThrow();
+        assertEquals("pkg/orders", missing.getJsonArray("usedBy").getJsonObject(0).getString("id"));
+        create(again, value("db", "entered-again"));
+        assertEquals(Optional.of("entered-again"), read(again, "db"));
+    }
+
+    @Test
     void theListCountsTheVariablesOfJoinedNodesOnly() {
         Node a = start("a", K1);
         start("b", Map.of(StoreKey.VARIABLE, b64(K1), "RAIL8_SECRET_ON_B", "variable-value"));
