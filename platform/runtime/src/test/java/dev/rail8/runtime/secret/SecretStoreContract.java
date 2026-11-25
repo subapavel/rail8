@@ -561,6 +561,19 @@ abstract class SecretStoreContract {
     }
 
     @Test
+    void aDeleteOfANameADrainingFlowUsesIsInUse() {
+        Node a = start("a", K1);
+        create(a, value("db", "the-value"));
+        use("db", "drain", "pkg/orders", Set.of(Secret.Kind.VALUE));
+        SecretRefused drain = refused(a.store.delete(ALICE, "db", Optional.empty()));
+        assertEquals(409, drain.status());
+        assertEquals("in-use", drain.code());
+        assertEquals(new JsonObject().put("kind", "drain").put("id", "pkg/orders").put("kinds", new JsonArray().add("value")),
+                drain.values().getJsonArray("usedBy").getJsonObject(0));
+        assertEquals(Optional.of("the-value"), read(a, "db"), "the secret stays");
+    }
+
+    @Test
     void aDeleteOfANameInUseNeedsTheConfirmation() {
         Node a = start("a", K1);
         create(a, credentials(SecretStore.GIT, "git-user", "git-token"));

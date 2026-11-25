@@ -33,8 +33,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -474,5 +476,36 @@ class DeploymentsSecretStoreTest {
         assertEquals(List.of("v4lue-one", "v4lue-one", "n3w-two"), a.tokens());
         assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://out-token")), logged.toString());
         assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-one")), logged.toString());
+    }
+
+    /**
+     * An overwrite of in-token lands while a deploy of shop holds the node's deploy lock, after the deploy resolved it: the tick
+     * that meets the lock does nothing, and the first tick after the deploy builds orders again with the new value.
+     */
+    @Test
+    void aChangeThatLandsDuringADeployReachesTheFlowItStartedAtTheFirstTickAfterIt() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "in-token", "one");
+        a.follow();
+        Doors.Gate held = a.doors.holdStartOf("shop/orders");
+        CompletableFuture<Void> deployed = CompletableFuture.runAsync(() -> {
+            try {
+                a.deploy(shop());
+            } catch (Exception failed) {
+                throw new IllegalStateException(failed);
+            }
+        });
+        assertTrue(held.reached().await(30, TimeUnit.SECONDS), "fixture: the deploy starts orders");
+
+        MemorySecretStores.overwriteValue(a.store, "in-token", "two");
+        a.follow();
+        held.release();
+        deployed.get(30, TimeUnit.SECONDS);
+        assertEquals("one", a.option("shop/orders", "token"), "fixture: the deploy started orders with the value it resolved");
+
+        a.follow();
+        assertEquals("two", a.option("shop/orders", "token"), "the first tick after the deploy builds orders again with the new value");
+        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
+        assertEquals(1, a.built("shop/ping"), "and no other flow");
     }
 }
