@@ -1,4 +1,6 @@
-import { PageContainer, type PageContainerProps } from '@ant-design/pro-components';
+import { PageContainer, RouteContext, type PageContainerProps } from '@ant-design/pro-components';
+import { Breadcrumb } from 'antd';
+import { useContext } from 'react';
 
 /**
  * A screen's page in the workspace: Ant Design Pro's PageContainer under the breadcrumb the shell gives each tab, with
@@ -8,4 +10,10 @@ import { PageContainer, type PageContainerProps } from '@ant-design/pro-componen
  */
 export function Page({ title, ...rest }: PageContainerProps) {
   return <PageContainer title={title === false ? false : <h1 className="rail8-page-title">{title}</h1>} {...rest} />;
+}
+
+/** The breadcrumb the shell gives the tab it is in, for a page that draws its own frame instead of {@link Page}. */
+export function TabBreadcrumb() {
+  const { breadcrumb } = useContext(RouteContext);
+  return breadcrumb?.items?.length ? <Breadcrumb {...breadcrumb} /> : null;
 }

@@ -21,6 +21,7 @@ import { AboutStudio } from './AboutStudio';
 import type { BrowserStateStore } from './browser-state/browser-state';
 import { DefinitionTab } from './definition/DefinitionTab';
 import { DiscardDialog } from '../../DiscardDialog';
+import { TabBreadcrumb } from '../../Page';
 import type { UnsavedChanges } from '../../screens';
 import { useWorkingFile } from '../../workingFiles';
 import { FunctionsTab } from './functions/FunctionsTab';
@@ -304,6 +305,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
 
   return (
     <section className="rail8-page studio-workspace" ref={panelRef}>
+      <TabBreadcrumb />
       <Flex align="center" justify="space-between" wrap gap="small">
         <h1>{name}</h1>
         <Flex align="center" gap="small">

@@ -127,6 +127,13 @@ describe('mappings in the shell', () => {
     await expect.element(button('Add source message')).toBeEnabled();
   });
 
+  test('the studio shows the breadcrumb of its tab: the screens that led to it, then the mapping', async () => {
+    render(fakeApiClient());
+    await openMapping('order-id-copy');
+    const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('listitem');
+    await expect.poll(() => crumbs.elements().map((crumb) => crumb.textContent)).toEqual(['Workspace', 'Files', 'order-id-copy']);
+  });
+
   test('New mapping starts in the folder of the mapping beside it, below the folder it shows, and makes the id of them', async () => {
     const fake = fakeApiClient();
     const createMapping = vi.fn(fake.createMapping);

@@ -30,7 +30,8 @@ menu marks Packages while it is shown.
 ## A page
 
 Every screen but a canvas renders inside `Page` (`ui/src/Page.tsx`), which is ProComponents' PageContainer with the
-title as the page's heading of level 1. The frame gives it:
+title as the page's heading of level 1. A canvas draws its own frame and puts `TabBreadcrumb`, from the same file, above
+its heading. The frame gives a page:
 
 - the **breadcrumb**: the screen's group, the screens it was opened from, each a link back, and its own title;
 - the **gutter**: `paddingLG` at the sides (16 px in the compact size), `paddingXL` above the header block.
