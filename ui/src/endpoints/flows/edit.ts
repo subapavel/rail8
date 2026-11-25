@@ -1,5 +1,6 @@
 import { isMap, isScalar, isSeq, parseAllDocuments, parseDocument, type CST, type Document, type Node, type Pair, type YAMLMap, type YAMLSeq } from 'yaml';
 import { yamlFindings, type Lock } from './flowYaml';
+import { currentLanguage, textsIn, type Values } from '../../language';
 import { BUILT_IN, type StepType } from './steps';
 import type { Path } from './types';
 
@@ -27,15 +28,19 @@ const MAX_OPS = 256;
 const MAX_PATH = 32;
 const MAX_LINE = 100;
 
-const refuse = (message: string): never => {
-  throw new EditRefused(message);
+/** The text of `id` in the language the UI shows now. */
+const say = (id: string, values?: Values) => textsIn(currentLanguage()).t(id, values);
+
+/** Refuses with the text of `id`. */
+const refuse = (id: string, values?: Values): never => {
+  throw new EditRefused(say(id, values));
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** `path` as the node writes a place in its refusals: `processes.enrich.steps[1].name`. */
+/** `path` as the node writes a place in its refusals: `processes.enrich.steps[1].name`; the empty path is the file. */
 export const placeOf = (path: Path) =>
-  path.length === 0 ? 'the file' : path.reduce<string>((out, s) => (typeof s === 'number' ? `${out}[${s}]` : out === '' ? s : `${out}.${s}`), '');
+  path.length === 0 ? say('flows.edit.theFile') : path.reduce<string>((out, s) => (typeof s === 'number' ? `${out}[${s}]` : out === '' ? s : `${out}.${s}`), '');
 
 const startsWith = (path: Path, prefix: Path) => prefix.length <= path.length && prefix.every((s, i) => path[i] === s);
 const samePath = (a: Path, b: Path) => a.length === b.length && startsWith(a, b);
@@ -57,7 +62,7 @@ function clean(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(clean);
   if (isRecord(value)) return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).map(([k, v]) => [k, clean(v)]));
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return value;
-  return refuse(`a value of the kind ${typeof value} cannot be written`);
+  return refuse('flows.edit.kind', { kind: typeof value });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -149,13 +154,13 @@ function read(text: string, eol: string, types: Readonly<Record<string, StepType
   const doc = Array.isArray(docs) ? docs[0] : undefined;
   if (doc === undefined) return { text, eol, doc: parseDocument('', { keepSourceTokens: true }) as Document.Parsed, value: null, locks: [], unit: 2, seqOffset: 2 };
   const error = docs.flatMap((d) => d.errors)[0];
-  if (error !== undefined) refuse(`the file is not YAML: ${error.message.split('\n')[0]}`);
+  if (error !== undefined) refuse('flows.edit.notYaml', { reason: error.message.split('\n')[0] });
   const value = doc.toJS() as unknown;
-  const locks = yamlFindings(doc, text, []);
+  const locks = yamlFindings(doc, text, [], textsIn(currentLanguage()));
   // a step that is no mapping with a text type is locked too
   for (const list of stepLists(value, types)) {
     (at(value, list) as unknown[]).forEach((item, i) => {
-      if (!isRecord(item) || typeof item.type !== 'string' || item.type === '') locks.push({ path: [...list, i], reason: 'a step that is no mapping with a text type', kind: 'step' });
+      if (!isRecord(item) || typeof item.type !== 'string' || item.type === '') locks.push({ path: [...list, i], holds: 'step', kind: 'step' });
     });
   }
   let unit: number | undefined;
@@ -219,13 +224,13 @@ const commentLine = (line: string) => /^[ \t]*#/.test(line);
 function dashOf(seq: YAMLSeq, i: number): number {
   const token = seq.srcToken as CST.BlockSequence | undefined;
   const dash = token?.type === 'block-seq' ? token.items[i]?.start.find((t) => t.type === 'seq-item-ind') : undefined;
-  return dash === undefined ? refuse('the list is not written as the editor reads it') : dash.offset;
+  return dash === undefined ? refuse('flows.edit.unreadList') : dash.offset;
 }
 
 /** The offset just after the `:` of `pair`. */
 function colonOf(pair: Pair): number {
   const sep = (pair.srcToken as CST.CollectionItem | undefined)?.sep?.find((t) => t.type === 'map-value-ind');
-  return sep === undefined ? refuse('a key without its colon') : sep.offset + 1;
+  return sep === undefined ? refuse('flows.edit.noColon') : sep.offset + 1;
 }
 
 const keyStart = (pair: Pair) => (pair.key as Node).range![0];
@@ -264,7 +269,7 @@ function locate(p: Parsed, path: Path): Found | null {
 }
 
 function must(p: Parsed, path: Path): Found {
-  return locate(p, path) ?? refuse(`there is nothing at ${placeOf(path)}`);
+  return locate(p, path) ?? refuse('flows.edit.nothingAt', { place: placeOf(path) });
 }
 
 /**
@@ -280,7 +285,7 @@ function guard(p: Parsed, deep: Path[], shallow: Path[]) {
       startsWith(path, lock.path) &&
       (lock.kind === 'anchor' || lock.kind === 'tag' || lock.kind === 'flow' || ((lock.kind === 'twice' || lock.kind === 'merge') && path[lock.path.length] === lock.key));
     if (deep.some((path) => startsWith(lock.path, path) || covering(path)) || shallow.some((path) => samePath(lock.path, path) || covering(path))) {
-      refuse(`${placeOf(lock.path)} holds ${lock.reason}, which the editor does not change`);
+      refuse('flows.edit.locked', { place: placeOf(lock.path), holds: lock.holds, name: lock.name ?? '' });
     }
   }
 }
@@ -309,10 +314,10 @@ function scalarText(value: unknown, place: Place): string {
   if (typeof value === 'boolean') return String(value);
   if (typeof value === 'number') {
     const source = Number.isNaN(value) ? '.nan' : value === Infinity ? '.inf' : value === -Infinity ? '-.inf' : String(value);
-    return readsAs(source, value, place) || Number.isNaN(value) ? source : refuse(`the number ${source} cannot be written so that the node reads it as the editor does`);
+    return readsAs(source, value, place) || Number.isNaN(value) ? source : refuse('flows.edit.number', { number: source });
   }
   if (typeof value === 'string') return value !== '' && !value.includes('\n') && readsAs(value, value, place) ? value : JSON.stringify(value);
-  return refuse('a list or a mapping cannot be written here');
+  return refuse('flows.edit.collection');
 }
 
 /** `text`, of several lines, as a literal block: its header and its lines at `col`, or null when it would not read back. */
@@ -333,7 +338,7 @@ function literal(text: string, col: number, parentCol: number, eol: string): { h
 
 /** `value` inside a mapping on one line, with `spaced` braces (`{ a: 1 }`) or not; a list cannot be. */
 function flowText(value: unknown, spaced: boolean): string {
-  if (Array.isArray(value)) return refuse('a list cannot be written inside a mapping on one line; write the step over several lines first');
+  if (Array.isArray(value)) return refuse('flows.edit.listInBraces');
   if (isRecord(value)) {
     const entries = Object.entries(value).map(([k, v]) => `${scalarText(k, 'flowKey')}: ${flowText(v, spaced)}`);
     return entries.length === 0 ? '{}' : spaced ? `{ ${entries.join(', ')} }` : `{${entries.join(', ')}}`;
@@ -397,7 +402,7 @@ function itemSpan(p: Parsed, seq: YAMLSeq, i: number): { start: number; end: num
   const { text } = p;
   const dash = dashOf(seq, i);
   let start = lineStart(text, dash);
-  if (text.slice(start, dash).trim() !== '') refuse('a list item that shares its line with another one');
+  if (text.slice(start, dash).trim() !== '') refuse('flows.edit.sharedLine');
   const floor = i > 0 ? contentLineEnd(text, valueEnd(seq.items[i - 1], dashOf(seq, i - 1) + 1)) : 0;
   while (start > floor) {
     const above = lineStart(text, start - 1);
@@ -430,11 +435,11 @@ function newItem(p: Parsed, seq: YAMLSeq, index: number, value: unknown, dash: n
 /** Inserts into the block list at `listPath`, at `index`, a new item `value`, or the text of an item moved there with its dash at `movedDash`. */
 function insertItem(p: Parsed, listPath: Path, index: number, item: { value: unknown } | { moved: string; movedDash: number }): string {
   const { node } = must(p, listPath);
-  if (!isSeq(node)) return refuse(`${placeOf(listPath)} is not a list`);
+  if (!isSeq(node)) return refuse('flows.edit.notList', { place: placeOf(listPath) });
   guard(p, [], [listPath]);
-  if (node.flow === true || node.items.length === 0) return refuse(`${placeOf(listPath)} is written on one line`);
+  if (node.flow === true || node.items.length === 0) return refuse('flows.edit.oneLine', { place: placeOf(listPath) });
   const n = node.items.length;
-  if (!Number.isInteger(index) || index < 0 || index > n) return refuse(`${placeOf(listPath)} has no place ${index}`);
+  if (!Number.isInteger(index) || index < 0 || index > n) return refuse('flows.edit.noPlace', { place: placeOf(listPath), index });
   const dash = column(p.text, dashOf(node, 0));
   const pos = index < n ? itemSpan(p, node, index).start : contentLineEnd(p.text, valueEnd(node.items[n - 1], dashOf(node, n - 1) + 1));
   if ('value' in item) return splice(p.text, pos, pos, newItem(p, node, index, item.value, dash));
@@ -455,7 +460,7 @@ function reindent(text: string, delta: number): string {
 function removeItem(p: Parsed, path: Path): string {
   const listPath = path.slice(0, -1);
   const { node } = must(p, listPath);
-  if (!isSeq(node)) return refuse(`${placeOf(listPath)} is not a list`);
+  if (!isSeq(node)) return refuse('flows.edit.notList', { place: placeOf(listPath) });
   guard(p, [path], [listPath]);
   if (node.items.length === 1) return rewrite(p, listPath, []);
   const { start, end } = itemSpan(p, node, path.at(-1) as number);
@@ -464,7 +469,7 @@ function removeItem(p: Parsed, path: Path): string {
 
 function addMember(p: Parsed, mapPath: Path, key: string, value: unknown): string {
   const { node } = must(p, mapPath);
-  if (!isMap(node)) return refuse(`${placeOf(mapPath)} is not a mapping`);
+  if (!isMap(node)) return refuse('flows.edit.notMapping', { place: placeOf(mapPath) });
   guard(p, [], [mapPath]);
   if (node.flow === true) {
     const entry = `${scalarText(key, 'flowKey')}: ${flowText(value, p.text[node.range![0] + 1] === ' ')}`;
@@ -485,7 +490,7 @@ function removeMember(p: Parsed, path: Path): string {
   const holder = found.holder as { map: YAMLMap; index: number };
   const map = holder.map;
   guard(p, [path], [mapPath]);
-  if (map.items.length === 1) return mapPath.length === 0 ? refuse('the file keeps at least one key') : rewrite(p, mapPath, {});
+  if (map.items.length === 1) return mapPath.length === 0 ? refuse('flows.edit.keepsKey') : rewrite(p, mapPath, {});
   const i = holder.index;
   const pair = map.items[i]!;
   const end = valueEnd(pair.value, colonOf(pair));
@@ -497,7 +502,7 @@ function removeMember(p: Parsed, path: Path): string {
   if (p.text.slice(lineStart(p.text, start), start).trim() !== '') {
     // the first key of an item, on the line of its dash: the next key takes its place
     const next = keyStart(map.items[i + 1]!);
-    if (p.text.slice(lineEnds, next).trim() !== '') refuse(`a comment stands between ${placeOf(path)} and the key after it`);
+    if (p.text.slice(lineEnds, next).trim() !== '') refuse('flows.edit.comment', { place: placeOf(path) });
     return splice(p.text, start, next, '');
   }
   return splice(p.text, lineStart(p.text, start), lineEnds, '');
@@ -508,8 +513,8 @@ function rename(p: Parsed, from: Path, to: Path): string {
   const holder = found.holder as { map: YAMLMap; index: number };
   guard(p, [from], [from.slice(0, -1)]);
   const key = to.at(-1);
-  if (typeof key !== 'string') return refuse('a key is renamed to a key');
-  if (locate(p, to) !== null) return refuse(`${placeOf(to)} is there already`);
+  if (typeof key !== 'string') return refuse('flows.edit.renameKey');
+  if (locate(p, to) !== null) return refuse('flows.edit.there', { place: placeOf(to) });
   const node = holder.map.items[holder.index]!.key as Node;
   return splice(p.text, node.range![0], node.range![1], scalarText(key, holder.map.flow === true ? 'flowKey' : 'key'));
 }
@@ -520,13 +525,13 @@ function rewrite(p: Parsed, path: Path, value: unknown): string {
   guard(p, [path], []);
   const { text, eol } = p;
   const style: Style = { unit: p.unit, seqOffset: p.seqOffset, eol };
-  if (holder === null) return refuse('the whole file is written only when it is new');
+  if (holder === null) return refuse('flows.edit.wholeFile');
   const flow = 'map' in holder ? holder.map.flow === true : holder.seq.flow === true;
   const old = node as Node | null;
   const range = old?.range ?? null;
   const oldBlock = (isMap(old) || isSeq(old)) && old.flow !== true;
   const oldBlockScalar = isScalar(old) && (old.type === 'BLOCK_LITERAL' || old.type === 'BLOCK_FOLDED');
-  if (range === null) return refuse(`${placeOf(path)} cannot be written`);
+  if (range === null) return refuse('flows.edit.cannotWrite', { place: placeOf(path) });
   if (flow) return splice(text, range[0], range[1], flowText(value, text[(holder as { map: YAMLMap }).map.range![0] + 1] === ' '));
   if ('map' in holder) {
     const pair = holder.map.items[holder.index]!;
@@ -577,7 +582,7 @@ function changes(p: Parsed, path: Path, value: unknown): Op[] | null {
 
 /** The text of a new file holding `value`, a mapping, in block style with two spaces of indent. */
 function wholeFile(value: unknown, eol: string): string {
-  if (!isRecord(value) || Object.keys(value).length === 0) return refuse('a new file holds a mapping with at least one key');
+  if (!isRecord(value) || Object.keys(value).length === 0) return refuse('flows.edit.newFile');
   const style: Style = { unit: 2, seqOffset: 2, eol };
   return joined(Object.entries(value).flatMap(([k, v]) => pairLines(k, v, 0, style)), eol);
 }
@@ -586,7 +591,7 @@ function wholeFile(value: unknown, eol: string): string {
 // One operation, checked.
 
 function checkPath(path: Path) {
-  if (path.length > MAX_PATH) refuse(`a path is at most ${MAX_PATH} steps deep`);
+  if (path.length > MAX_PATH) refuse('flows.edit.deepPath', { max: MAX_PATH });
 }
 
 /** The text with `op` applied, read; refused when it would not read back as the value with `op` applied. */
@@ -596,49 +601,49 @@ function apply(p: Parsed, raw: Op, types: Readonly<Record<string, StepType>>): P
   const target = op.op === 'move' ? op.from : op.path;
   checkPath(target);
   if (target.length === 0) {
-    if (op.op !== 'add' && op.op !== 'replace') return refuse('the file itself is neither removed nor moved');
-    if (p.doc.contents !== null) return refuse('the whole file is written only when it is new');
+    if (op.op !== 'add' && op.op !== 'replace') return refuse('flows.edit.fileItself');
+    if (p.doc.contents !== null) return refuse('flows.edit.wholeFile');
     return checked(p, `${p.text}${wholeFile(op.value, p.eol)}`, op.value, types);
   }
   const parentPath = target.slice(0, -1);
   const last = target.at(-1)!;
   const parent = must(p, parentPath).node;
-  if (!isMap(parent) && !isSeq(parent)) return refuse(`${placeOf(parentPath)} is no list or mapping`);
+  if (!isMap(parent) && !isSeq(parent)) return refuse('flows.edit.noCollection', { place: placeOf(parentPath) });
   const exists = locate(p, target) !== null;
   if (op.op === 'add') {
     if (isSeq(parent)) {
-      if (typeof last !== 'number') return refuse(`${placeOf(parentPath)} is a list: a value is added at an index`);
+      if (typeof last !== 'number') return refuse('flows.edit.addIndex', { place: placeOf(parentPath) });
       return checked(p, insertItem(p, parentPath, last, { value: op.value }), patched(p.value, op), types);
     }
-    if (typeof last !== 'string') return refuse(`${placeOf(parentPath)} is a mapping: a value is added under a key`);
+    if (typeof last !== 'string') return refuse('flows.edit.addKey', { place: placeOf(parentPath) });
     if (exists) return apply(p, { op: 'replace', path: op.path, value: op.value }, types);
     return checked(p, addMember(p, parentPath, last, op.value), patched(p.value, op), types);
   }
-  if (!exists) return refuse(`there is nothing at ${placeOf(target)}`);
+  if (!exists) return refuse('flows.edit.nothingAt', { place: placeOf(target) });
   switch (op.op) {
     case 'replace': {
       const ops = changes(p, op.path, op.value);
       if (ops === null) return checked(p, rewrite(p, op.path, op.value), patched(p.value, op), types);
       let q = p;
       for (const sub of ops) q = apply(q, sub, types);
-      if (!sameOrdered(q.value, patched(p.value, op))) refuse(`${placeOf(op.path)} would not read back as written`);
+      if (!sameOrdered(q.value, patched(p.value, op))) refuse('flows.edit.readBack', { place: placeOf(op.path) });
       return q;
     }
     case 'remove':
       return checked(p, isSeq(parent) ? removeItem(p, op.path) : removeMember(p, op.path), patched(p.value, op), types);
     case 'move': {
       if (samePath(op.from, op.path)) return p;
-      if (startsWith(op.path, op.from)) return refuse('a step cannot be moved into itself');
+      if (startsWith(op.path, op.from)) return refuse('flows.edit.intoItself');
       if (isMap(parent)) {
-        if (!samePath(op.path.slice(0, -1), parentPath)) return refuse('a key is moved only to another key of its own mapping');
+        if (!samePath(op.path.slice(0, -1), parentPath)) return refuse('flows.edit.moveKey');
         return checked(p, rename(p, op.from, op.path), patched(p.value, op), types);
       }
       const index = op.path.at(-1);
-      if (typeof index !== 'number') return refuse('an item is moved to an index of a list');
+      if (typeof index !== 'number') return refuse('flows.edit.moveIndex');
       guard(p, [op.from], [parentPath]);
       if (parent.items.length === 1) {
         const steps = stepLists(p.value, types).some((l) => samePath(l, parentPath));
-        return refuse(`${placeOf(parentPath)} keeps at least one ${steps ? 'step' : 'item'}`);
+        return steps ? refuse('flows.edit.keepsStep', { place: placeOf(parentPath) }) : refuse('flows.edit.keepsItem', { place: placeOf(parentPath) });
       }
       const span = itemSpan(p, parent, last as number);
       const removed = read(splice(p.text, span.start, span.end, ''), p.eol, types);
@@ -651,10 +656,10 @@ function apply(p: Parsed, raw: Op, types: Readonly<Record<string, StepType>>): P
 /** `text` read, refused when it does not read as `expected`, or when it leaves a list of steps empty that was not before. */
 function checked(p: Parsed, text: string, expected: unknown, types: Readonly<Record<string, StepType>>): Parsed {
   const next = read(text, p.eol, types);
-  if (!sameOrdered(next.value, expected)) refuse('the edit would not read back as written');
+  if (!sameOrdered(next.value, expected)) refuse('flows.edit.editReadBack');
   const before = new Set(stepLists(p.value, types).filter((l) => (at(p.value, l) as unknown[]).length === 0).map((l) => JSON.stringify(l)));
   for (const list of stepLists(next.value, types)) {
-    if ((at(next.value, list) as unknown[]).length === 0 && !before.has(JSON.stringify(list))) refuse(`${placeOf(list)} keeps at least one step`);
+    if ((at(next.value, list) as unknown[]).length === 0 && !before.has(JSON.stringify(list))) refuse('flows.edit.keepsStep', { place: placeOf(list) });
   }
   return next;
 }
@@ -675,7 +680,7 @@ function calls(value: unknown, types: Readonly<Record<string, StepType>>): { pro
  */
 export function editor(types: Readonly<Record<string, StepType>> = BUILT_IN) {
   return (text: string, ...ops: Op[]): string => {
-    if (ops.length > MAX_OPS) refuse(`an edit holds at most ${MAX_OPS} operations`);
+    if (ops.length > MAX_OPS) refuse('flows.edit.maxOps', { max: MAX_OPS });
     const eol = text.includes('\r\n') ? '\r\n' : '\n';
     const open = text !== '' && !text.endsWith('\n');
     const first = read(open ? `${text}${eol}` : text, eol, types);
@@ -684,7 +689,7 @@ export function editor(types: Readonly<Record<string, StepType>> = BUILT_IN) {
     const processes = (v: unknown) => (isRecord(v) && isRecord(v.processes) ? Object.keys(v.processes) : []);
     const gone = processes(first.value).filter((name) => !processes(p.value).includes(name));
     for (const call of calls(p.value, types)) {
-      if (gone.includes(call.process)) refuse(`process ${call.process} is still called by ${placeOf(call.path)}`);
+      if (gone.includes(call.process)) refuse('flows.edit.stillCalled', { process: call.process, place: placeOf(call.path) });
     }
     return open && p.text.endsWith(eol) ? p.text.slice(0, -eol.length) : p.text;
   };
@@ -739,7 +744,7 @@ export function follow(path: Path, ops: readonly Op[]): Path | null {
 export function spanOf(text: string, path: Path, types: Readonly<Record<string, StepType>> = BUILT_IN): { start: number; end: number } {
   const p = read(text, text.includes('\r\n') ? '\r\n' : '\n', types);
   const { node } = must(p, path.slice(0, -1));
-  if (!isSeq(node)) return refuse(`${placeOf(path.slice(0, -1))} is not a list`);
+  if (!isSeq(node)) return refuse('flows.edit.notList', { place: placeOf(path.slice(0, -1)) });
   const { start, end } = itemSpan(p, node, path.at(-1) as number);
   return { start, end };
 }

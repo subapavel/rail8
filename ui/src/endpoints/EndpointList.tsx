@@ -2,6 +2,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { useText } from '../language';
 import { packageColumn } from '../packageColumn';
 import { ReadSpinner } from '../ReadSpinner';
 import type { EndpointList as Listed, EndpointsApi } from './api';
@@ -19,6 +20,7 @@ type Result = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind
  * settings form in a tab of its own, with a filter on the package; a file that cannot be read shows why. Without a working folder it says how to set one.
  */
 export function EndpointList({ api, onOpen }: EndpointListProps) {
+  const { t, rich } = useText();
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
@@ -36,16 +38,16 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
 
   let body;
   if (result.kind === 'reading') {
-    body = <ReadSpinner label="Reading the working folder" />;
+    body = <ReadSpinner label={t('endpoints.folder.reading')} />;
   } else if (result.kind === 'failed') {
-    body = <Alert showIcon type="error" title="The working folder could not be read" description={result.message} />;
+    body = <Alert showIcon type="error" title={t('endpoints.folder.unread')} description={result.message} />;
   } else if (!result.list.configured) {
     body = (
       <Empty
         description={
           <>
-            <Typography.Title level={2}>No working folder</Typography.Title>
-            Start the UI with <code>RAIL8_WORKSPACE</code> set to the folder that holds your packages, such as <code>RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev</code>.
+            <Typography.Title level={2}>{t('endpoints.folder.none')}</Typography.Title>
+            {rich('endpoints.folder.none.hint', { code: (chunks) => <code>{chunks}</code> })}
           </>
         }
       />
@@ -55,8 +57,8 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
       <Empty
         description={
           <>
-            <Typography.Title level={2}>No endpoint files</Typography.Title>
-            The working folder holds no YAML file of the kind endpoint.
+            <Typography.Title level={2}>{t('endpoints.list.empty')}</Typography.Title>
+            {t('endpoints.list.empty.hint')}
           </>
         }
       />
@@ -68,12 +70,12 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
           <Alert
             type="warning"
             showIcon
-            title="Not every file of the working folder was looked at"
-            description="The working folder holds more YAML files than are read; only the first ones are listed."
+            title={t('endpoints.folder.truncated')}
+            description={t('endpoints.folder.truncated.hint')}
           />
         )}
         <ProTable<Listed['items'][number]>
-          aria-label="Endpoint files"
+          aria-label={t('endpoints.list.files')}
           rowKey="path"
           size="small"
           dataSource={result.list.items}
@@ -83,7 +85,7 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
           pagination={false}
           columns={[
             {
-              title: 'Endpoint',
+              title: t('endpoints.list.endpoint'),
               key: 'endpoint',
               render: (_, item) =>
                 'problem' in item ? (
@@ -95,9 +97,9 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
                 ),
             },
             packageColumn(result.list.items, (item) => item.path),
-            { title: 'Scheme', dataIndex: 'scheme' },
-            { title: 'Direction', dataIndex: 'direction' },
-            { title: 'File', dataIndex: 'path' },
+            { title: t('endpoints.list.scheme'), dataIndex: 'scheme' },
+            { title: t('endpoints.list.direction'), dataIndex: 'direction' },
+            { title: t('endpoints.list.file'), dataIndex: 'path' },
           ]}
         />
       </Flex>
@@ -108,16 +110,16 @@ export function EndpointList({ api, onOpen }: EndpointListProps) {
     <Flex vertical gap="middle">
       <Flex align="center" gap="small" wrap>
         <Typography.Title level={1} style={{ margin: 0 }}>
-          Endpoints
+          {t('endpoints.screen.title')}
         </Typography.Title>
-        {result.kind === 'read' && result.list.configured && !result.list.editable && <Tag>Read-only</Tag>}
+        {result.kind === 'read' && result.list.configured && !result.list.editable && <Tag>{t('endpoints.readOnly')}</Tag>}
         <Flex gap="small" style={{ marginInlineStart: 'auto' }}>
           <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-            Refresh
+            {t('endpoints.refresh')}
           </Button>
         </Flex>
       </Flex>
-      <Typography.Text type="secondary">The endpoint files of the working folder. Each one opens in a tab of its own, read-only until you choose Edit.</Typography.Text>
+      <Typography.Text type="secondary">{t('endpoints.list.intro')}</Typography.Text>
       {body}
     </Flex>
   );

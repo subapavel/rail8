@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { canvasGraph, FLOW_FRAME } from './canvasGraph';
 import { view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const flow = view(`schemaVersion: 1
 kind: flow
@@ -16,7 +19,7 @@ processes:
     steps:
       - type: to
         endpoint: warehouse
-`, { endpoints: [], flows: [], steps: [] });
+`, { endpoints: [], flows: [], steps: [] }, en);
 
 describe('the flow canvas graph', () => {
   it('keeps step paths, nested frames and insertion places while drawing the two systems outside', () => {
@@ -68,7 +71,7 @@ steps:
   - type: to
     byProp: destination
     endpoints: { retail: sales, 'retail#receiver': wholesale }
-`, { endpoints: [], flows: [], steps: [] });
+`, { endpoints: [], flows: [], steps: [] }, en);
     for (const vertical of [false, true]) {
       const graph = canvasGraph(picture, vertical, false);
       expect(new Set(graph.nodes.map(n => n.id)).size).toBe(graph.nodes.length);

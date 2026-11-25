@@ -1,5 +1,6 @@
 import { Form, Input, Select } from 'antd';
 import { useId, useState, type ReactNode } from 'react';
+import { say, useText, type Texts } from '../language';
 import { KNOWN_TYPES, type SettingsField } from './settings';
 
 export interface FieldControlProps {
@@ -21,8 +22,8 @@ export interface FieldControlProps {
 const shown = (value: unknown) => (value === undefined || value === null ? '' : typeof value === 'string' ? value : JSON.stringify(value));
 
 /** The text that stands in an empty control: the default when there is one. */
-function placeholder(field: SettingsField): string | undefined {
-  return field.default === undefined ? undefined : `Default: ${shown(field.default)}`;
+function placeholder({ t }: Texts, field: SettingsField): string | undefined {
+  return field.default === undefined ? undefined : t('endpoints.field.default', { value: shown(field.default) });
 }
 
 /**
@@ -42,6 +43,8 @@ function integer(text: string): unknown {
  * and a field of a type the form does not know a raw editor of its value as JSON.
  */
 export function FieldControl({ field, value, readOnly, onChange, onInvalid, problem, note }: FieldControlProps) {
+  const texts = useText();
+  const { t } = texts;
   const id = `${useId()}-${field.name}`;
   const known = KNOWN_TYPES.has(field.type);
   const [raw, setRaw] = useState<string | null>(null);
@@ -60,7 +63,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
         readOnly
         type={field.type === 'secret' ? 'password' : 'text'}
         value={text}
-        placeholder={placeholder(field) ?? 'Not set'}
+        placeholder={placeholder(texts, field) ?? t('endpoints.field.notSet')}
         aria-describedby={describedBy}
         aria-invalid={status === 'error'}
         status={status}
@@ -68,7 +71,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
     );
   } else if (field.type === 'boolean' || field.type === 'choice') {
     const values = field.type === 'boolean' ? ['true', 'false'] : (field.choices ?? []);
-    const unset = field.default === undefined ? 'Not set' : `Not set (default: ${shown(field.default)})`;
+    const unset = field.default === undefined ? t('endpoints.field.notSet') : t('endpoints.field.notSetDefault', { value: shown(field.default) });
     control = (
       <Select
         id={id}
@@ -95,7 +98,7 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
         type={field.type === 'secret' ? 'password' : 'text'}
         inputMode={field.type === 'integer' ? 'numeric' : undefined}
         value={shown(value)}
-        placeholder={placeholder(field)}
+        placeholder={placeholder(texts, field)}
         required={field.required}
         aria-describedby={describedBy}
         aria-invalid={status === 'error'}
@@ -140,10 +143,10 @@ export function FieldControl({ field, value, readOnly, onChange, onInvalid, prob
       validateStatus={status}
       help={
         <div id={describedBy}>
-          <div>{field.help}</div>
+          <div>{say(texts, field.help)}</div>
           {note !== undefined && <div>{note}</div>}
-          {!known && <div>Written as JSON.</div>}
-          {rawInvalid && <div>is not JSON</div>}
+          {!known && <div>{t('endpoints.field.json')}</div>}
+          {rawInvalid && <div>{t('endpoints.field.notJson')}</div>}
           {problem !== undefined && <div>{problem}</div>}
         </div>
       }

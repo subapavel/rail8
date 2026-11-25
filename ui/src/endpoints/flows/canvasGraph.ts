@@ -117,7 +117,7 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
     item.x += (width - (right - left)) / 2 - left;
     item.y += (height - (bottom - top) + 54) / 2 - top;
   }
-  const nodes: CanvasItem[] = [{ id: FLOW_FRAME, role: 'frame', label: 'Flow', x: 0, y: 0, width, height }];
+  const nodes: CanvasItem[] = [{ id: FLOW_FRAME, role: 'frame', label: 'Flow', x: 0, y: 0, width, height }]; // untranslated: the frame shows the flow's own title, never this label
   if (!folded) nodes.push(...inside);
   const edges: CanvasEdge[] = folded ? [] : view.edges.filter(e => e.kind !== 'calls' && !(terminal.size && e.target === '/steps#end'));
   if (!folded) edges.push(...processEntries);

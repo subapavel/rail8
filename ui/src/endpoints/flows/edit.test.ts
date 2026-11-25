@@ -7,6 +7,9 @@ import { addRow, addStep, deleteStep, moveStep, renameProcess, setField, setKeys
 import { BUILT_IN, type StepType } from './steps';
 import type { FlowContext, FlowView, Path } from './types';
 import { pointer, view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const repo = join(__dirname, '..', '..', '..', '..');
 const fixtures = join(__dirname, 'fixtures');
@@ -89,7 +92,7 @@ function hunk(before: string, after: string): string {
 
 /** The edits each golden pair makes, built from the view as the screen builds them. */
 function cases(text: string): [string, Op[]][] {
-  const drawn = view(text, demo);
+  const drawn = view(text, demo, en);
   const value = parse(text) as Record<string, unknown>;
   const steps = (value.steps as unknown[] | undefined) ?? [];
   const n = steps.length;
@@ -307,7 +310,7 @@ describe('follow', () => {
 
 describe('the operations the screen builds', () => {
   const text = readFileSync(join(fixtures, 'processes.yaml'), 'utf8');
-  const drawn = view(text, demo);
+  const drawn = view(text, demo, en);
 
   it('adds a step with its keys in order, and a free name when its default is taken', () => {
     expect(addStep(drawn, ['steps', 1], 'to', { recording: { level: 'all' }, endpoint: 'partner-domestic', retryable: true, extra: 1 }, ['byProp', 'endpoint'])).toEqual([
@@ -326,7 +329,7 @@ describe('the operations the screen builds', () => {
   it('cuts a default name so that its number fits in 64 characters', () => {
     const long = 'a'.repeat(64);
     const flow = `schemaVersion: 1\nkind: flow\nid: x\nfrom: { endpoint: http-in }\nsteps:\n  - type: ${long}\n  - type: ${long}\n    name: ${'a'.repeat(62)}-2\n`;
-    expect(addStep(view(flow, demo), ['steps', 2], long)).toEqual([{ op: 'add', path: ['steps', 2], value: { type: long, name: `${'a'.repeat(62)}-3` } }]);
+    expect(addStep(view(flow, demo, en), ['steps', 2], long)).toEqual([{ op: 'add', path: ['steps', 2], value: { type: long, name: `${'a'.repeat(62)}-3` } }]);
   });
 
   it('moves and deletes a step by its path', () => {
@@ -522,7 +525,7 @@ describe('edit, on random series of operations', () => {
       // every step of the file, by where it stands now
       const tracked = new Map<object, Path>(stepLists(model).flatMap((l) => (valueAt(model, l) as unknown[]).map((s, i) => [s as object, [...l, i]] as [object, Path])));
       for (let n = 0; n < LENGTH; n++) {
-        const drawn = view(text, demo);
+        const drawn = view(text, demo, en);
         const made = randomOps(r, model, drawn);
         if (made === null || made.ops.length === 0) continue;
         const where = `${name}, series ${series}, op ${n}: ${JSON.stringify(made.ops)}`;
@@ -545,7 +548,7 @@ describe('edit, on random series of operations', () => {
         }
 
         // the view draws the steps the operations make
-        const next = view(after, demo);
+        const next = view(after, demo, en);
         for (const l of stepLists(model)) {
           (valueAt(model, l) as unknown[]).forEach((s, i) => expect(stepNode(next, [...l, i])?.type, where).toBe((s as { type?: unknown }).type));
         }

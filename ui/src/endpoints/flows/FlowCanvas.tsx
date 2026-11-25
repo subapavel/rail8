@@ -10,6 +10,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Button, Dropdown, Space, type MenuProps } from 'antd';
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useText } from '../../language';
 import { canvasGraph, canvasStructure, FLOW_FRAME, TILE, type CanvasEdge, type CanvasItem, type Point, type Size } from './canvasGraph';
 import { placeOf } from './edit';
 import { simulationRange, type SimulationRange } from './simulationRange';
@@ -64,23 +65,24 @@ function Handles({ vertical, entry }: { vertical: boolean; entry?: Point }) {
 }
 
 const FrameNode = memo(function FrameNode({ data }: NodeProps<Frame>) {
+  const { t } = useText();
   const { title, description, count, folded, size, minimum, resize } = data;
-  return <section className={`flow-boundary${folded ? ' folded' : ''}`} aria-label={`Flow ${title}`}>
+  return <section className={`flow-boundary${folded ? ' folded' : ''}`} aria-label={t('flows.canvas.frame', { title })}>
     <Handles vertical={data.vertical} />
     <header className="flow-boundary-header nodrag nopan">
-      <Button size="small" type="text" aria-label={folded ? 'Expand flow' : 'Collapse flow'} aria-expanded={!folded}
+      <Button size="small" type="text" aria-label={t(folded ? 'flows.canvas.expand' : 'flows.canvas.collapse')} aria-expanded={!folded}
         icon={folded ? <RightOutlined /> : <DownOutlined />} onClick={data.toggle} />
       <div>
         <div className="flow-boundary-title">
-          <Button type="text" size="small" aria-label="Flow properties" title="Flow properties" icon={<ApartmentOutlined />} onClick={data.inspect}>{title}</Button>
-          <span>{count} {count === 1 ? 'step' : 'steps'}</span>
+          <Button type="text" size="small" aria-label={t('flows.inspector.label')} title={t('flows.inspector.label')} icon={<ApartmentOutlined />} onClick={data.inspect}>{title}</Button>
+          <span>{t('flows.canvas.steps', { count })}</span>
         </div>
         {description && <p title={description}>{description}</p>}
       </div>
     </header>
     {!folded && <NodeResizeControl position="bottom-right" className="flow-size-grip" minWidth={minimum.width} minHeight={minimum.height}
       maxWidth={Math.max(12000, minimum.width)} maxHeight={Math.max(12000, minimum.height)} onResize={(_, next) => resize(next)}>
-      <button type="button" aria-label="Resize flow frame" title="Drag to resize, or use the arrow keys" onKeyDown={event => {
+      <button type="button" aria-label={t('flows.canvas.resize')} title={t('flows.canvas.resize.hint')} onKeyDown={event => {
         const delta: Record<string, Point> = { ArrowRight: { x: 24, y: 0 }, ArrowLeft: { x: -24, y: 0 }, ArrowDown: { x: 0, y: 24 }, ArrowUp: { x: 0, y: -24 } };
         const change = delta[event.key];
         if (!change) return;
@@ -96,6 +98,7 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<Frame>) {
 });
 
 const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
+  const { t } = useText();
   const { item, active, vertical, problems, select, change } = data;
   const original = item.original!;
   const system = item.role === 'sender' || item.role === 'receiver';
@@ -106,8 +109,8 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
     {problems.length > 0 && (error ? <ExclamationCircleOutlined className="error" title={problems.map(p => p.message).join('\n')} />
       : <WarningOutlined className="warning" title={problems.map(p => p.message).join('\n')} />)}
     {original.locked && <LockOutlined title={original.locked} />}
-    {change === 'added' && <PlusCircleOutlined className="added" title="Added" />}
-    {change === 'changed' && <EditOutlined className="changed" title="Changed" />}
+    {change === 'added' && <PlusCircleOutlined className="added" title={t('flows.change.status', { status: 'added' })} />}
+    {change === 'changed' && <EditOutlined className="changed" title={t('flows.change.status', { status: 'changed' })} />}
   </span>;
   if (item.role === 'group') return <div className="flow-inner-frame"><Handles vertical={vertical} entry={item.entry} />
     {original.kind === 'lane' ? <Button type="text" size="small" onClick={select}>{item.label}</Button> : <span>{item.label}</span>}
@@ -116,12 +119,12 @@ const StationNode = memo(function StationNode({ data }: NodeProps<Station>) {
     <Handles vertical={vertical} />
     {!system && (original.type === 'to' || original.kind === 'destination') && <Handle id="delivery" type="source"
       position={vertical ? Position.Bottom : Position.Right} style={vertical ? { left: '74%' } : { top: '74%' }} isConnectable={false} />}
-    {system ? <Button className={`flow-participant ${item.role}`} onClick={select} aria-label={`Inspect ${item.label}`} aria-pressed={active}>
+    {system ? <Button className={`flow-participant ${item.role}`} onClick={select} aria-label={t('flows.canvas.inspect', { label: item.label })} aria-pressed={active}>
       <span>{item.role === 'sender' ? <ImportOutlined /> : <ApiOutlined />}{item.role === 'sender' ? 'Sender' : 'Receiver'}</span>
       <strong title={item.label}>{item.label}</strong>
       {item.detail && <small title={item.detail}>{item.detail}</small>}
       {marks}
-    </Button> : <Button className="flow-tile" data-type={type} data-change={change} aria-pressed={active} aria-label={`Inspect ${item.label}`}
+    </Button> : <Button className="flow-tile" data-type={type} data-change={change} aria-pressed={active} aria-label={t('flows.canvas.inspect', { label: item.label })}
       title={[item.label, original.detail, ...(original.rows ?? [])].filter(Boolean).join('\n')} onClick={select}>
       <Glyph aria-hidden /><span className="flow-caption">{item.label}</span>{marks}
     </Button>}
@@ -135,6 +138,7 @@ type Action = Edge<{
 }, 'action'>;
 
 const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
+  const { t } = useText();
   const { edge, target, starts, ends, mark, insert, remove, vertical } = props.data!;
   let [path, x, y] = getBezierPath(props);
   if (edge.deliverySide !== undefined) {
@@ -148,15 +152,15 @@ const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
     x = vertical ? (outside + targetX) / 2 : targetX;
     y = vertical ? targetY : (outside + targetY) / 2;
   }
-  const actionLabel = `Actions before ${target.label}`;
-  const markerTitle = starts && ends ? 'Simulation starts and ends' : starts ? 'Simulation starts' : 'Simulation ends';
+  const actionLabel = t('flows.canvas.actions', { label: target.label });
+  const markerTitle = t(starts && ends ? 'flows.canvas.marked.both' : starts ? 'flows.canvas.marked.start' : 'flows.canvas.marked.end', { label: target.label });
   const items: MenuProps['items'] = [
-    ...(insert ? [{ key: 'insert', label: 'Insert step here', icon: <PlusOutlined aria-hidden />, onClick: insert }] : []),
+    ...(insert ? [{ key: 'insert', label: t('flows.canvas.insert'), icon: <PlusOutlined aria-hidden />, onClick: insert }] : []),
     ...(mark ? [
-      { key: 'start', label: starts ? 'Clear simulation start' : 'Set simulation start here', icon: <FlagOutlined aria-hidden />, onClick: () => mark('start') },
-      { key: 'end', label: ends ? 'Clear simulation end' : 'Set simulation end here', icon: <StopOutlined aria-hidden />, onClick: () => mark('end') },
+      { key: 'start', label: t(starts ? 'flows.canvas.start.clear' : 'flows.canvas.start.set'), icon: <FlagOutlined aria-hidden />, onClick: () => mark('start') },
+      { key: 'end', label: t(ends ? 'flows.canvas.end.clear' : 'flows.canvas.end.set'), icon: <StopOutlined aria-hidden />, onClick: () => mark('end') },
     ] : []),
-    ...(remove ? [{ key: 'remove', label: `Delete ${target.label}`, danger: true, icon: <DeleteOutlined aria-hidden />, onClick: remove }] : []),
+    ...(remove ? [{ key: 'remove', label: t('flows.canvas.delete', { label: target.label }), danger: true, icon: <DeleteOutlined aria-hidden />, onClick: remove }] : []),
   ];
   return <>
     <BaseEdge id={props.id} path={path} markerEnd={props.markerEnd} style={props.style} />
@@ -164,11 +168,11 @@ const ActionEdge = memo(function ActionEdge(props: EdgeProps<Action>) {
       <div className={`flow-connection-actions nodrag nopan${vertical ? ' vertical' : ''}`}
         style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }}>
         {edge.label && <span className="flow-branch-label" title={edge.label}>{edge.label}</span>}
-        {insert && edge.insertAt && <Button size="small" shape="circle" aria-label={`Add a step at ${placeOf(edge.insertAt)}`}
-          title="Insert step here" icon={<PlusOutlined />} onClick={insert} />}
+        {insert && edge.insertAt && <Button size="small" shape="circle" aria-label={t('flows.canvas.addAt', { place: placeOf(edge.insertAt) })}
+          title={t('flows.canvas.insert')} icon={<PlusOutlined />} onClick={insert} />}
         {items.length > 0 && <Dropdown menu={{ items, 'aria-label': actionLabel }} trigger={['click']}>
           <Button size="small" shape="circle" className={starts || ends ? 'marked' : ''} aria-label={actionLabel}
-            title={starts || ends ? `${markerTitle} before ${target.label}` : actionLabel}
+            title={starts || ends ? markerTitle : actionLabel}
             icon={starts ? <FlagOutlined /> : ends ? <StopOutlined /> : <EllipsisOutlined />} />
         </Dropdown>}
       </div>
@@ -182,14 +186,15 @@ const arrow = { type: MarkerType.ArrowClosed, width: 13, height: 13, color: 'var
 const dashes: Partial<Record<FlowEdge['kind'], string>> = { process: '6 4', ends: '2 4' };
 
 function Camera({ fit, manual }: { fit: () => void; manual: () => void }) {
+  const { t } = useText();
   const { zoom } = useViewport();
   const { zoomIn, zoomOut } = useReactFlow();
   return <Panel position="bottom-right" className="flow-camera nodrag nopan">
     <Space.Compact>
-      <Button size="small" type="text" aria-label="Zoom out" title="Zoom out" icon={<ZoomOutOutlined />} onClick={() => { manual(); void zoomOut(); }} />
+      <Button size="small" type="text" aria-label={t('flows.canvas.zoomOut')} title={t('flows.canvas.zoomOut')} icon={<ZoomOutOutlined />} onClick={() => { manual(); void zoomOut(); }} />
       <span>{Math.round(zoom * 100)}%</span>
-      <Button size="small" type="text" aria-label="Zoom in" title="Zoom in" icon={<ZoomInOutlined />} onClick={() => { manual(); void zoomIn(); }} />
-      <Button size="small" type="text" aria-label="Fit diagram" title="Fit diagram" icon={<AimOutlined />} onClick={fit} />
+      <Button size="small" type="text" aria-label={t('flows.canvas.zoomIn')} title={t('flows.canvas.zoomIn')} icon={<ZoomInOutlined />} onClick={() => { manual(); void zoomIn(); }} />
+      <Button size="small" type="text" aria-label={t('flows.canvas.fit')} title={t('flows.canvas.fit')} icon={<AimOutlined />} onClick={fit} />
     </Space.Compact>
   </Panel>;
 }
@@ -199,6 +204,7 @@ function Camera({ fit, manual }: { fit: () => void; manual: () => void }) {
  * the markers are offered only with `onRangeChange`.
  */
 export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlowSelect, onRangeChange, title, description, direction, inspectSequence = 0, inspectTarget, layoutRevision = 0, marks }: FlowCanvasProps) {
+  const { t } = useText();
   const host = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ width: 0, height: 0, visible: false });
   const [ready, setReady] = useState(false);
@@ -242,7 +248,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
   const automaticNodes = useMemo<CanvasNode[]>(() => graph.nodes.map(item => {
     if (item.role === 'frame') return {
       id: item.id, type: 'frame', position: { x: 0, y: 0 }, width: item.width, height: item.height, draggable: false, zIndex: 0,
-      data: { title: title ?? String(view.settings?.values.id ?? 'Flow'), description: description ?? String(view.settings?.values.description ?? ''),
+      data: { title: title ?? String(view.settings?.values.id ?? t('flows.list.flow')), description: description ?? String(view.settings?.values.description ?? ''),
         count: view.nodes.filter(n => n.kind === 'step').length, size: item, minimum: graph.minimum, vertical, folded,
         toggle: () => { manual.current = false; setFoldedAt(folded ? null : inspectSequence); }, inspect: onFlowSelect,
         resize: ({ width, height }) => { manual.current = true; setSizes(old => ({ ...old, [axis]: { width, height } })); },
@@ -265,7 +271,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
         onSelect(original);
       } },
     };
-  }), [graph, title, description, view, folded, inspectSequence, onFlowSelect, axis, byId, vertical, problemsById, activeId, onSelect, marks]);
+  }), [graph, title, description, view, folded, inspectSequence, onFlowSelect, axis, byId, vertical, problemsById, activeId, onSelect, marks, t]);
   const nodes = useMemo(() => positions ? automaticNodes.map(node => {
     const p = positions[node.id];
     if (!p || !Array.isArray(node.extent)) return node;
@@ -337,7 +343,7 @@ export function FlowCanvas({ view, selected, onSelect, onInsert, onRemove, onFlo
   }, [ready, selected, structure, inspectSequence, inspectTarget, byId, box, getViewport, setCenter, positions]);
   return <div className="flow-map" ref={host}>
     {box.width > 0 && <ReactFlow<CanvasNode, Action> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
-      aria-label="Flow diagram" nodesConnectable={false} elementsSelectable={false} nodesFocusable={false} edgesFocusable={false}
+      aria-label={t('flows.canvas.diagram')} nodesConnectable={false} elementsSelectable={false} nodesFocusable={false} edgesFocusable={false}
       onPaneClick={onFlowSelect} onNodesChange={moveNodes} onInit={() => setReady(true)} onMoveStart={event => { if (event) manual.current = true; }}
       minZoom={0.12} maxZoom={2} nodeDragThreshold={0} zoomOnDoubleClick={false} deleteKeyCode={null} zIndexMode="manual" attributionPosition="bottom-left">
       <Background gap={18} size={1} color="var(--ant-color-border)" />

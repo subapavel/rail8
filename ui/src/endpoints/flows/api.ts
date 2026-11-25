@@ -1,3 +1,4 @@
+import { currentLanguage, textsIn } from '../../language';
 import type { FlowFile, FlowItem } from '../files/flowFiles';
 import type { NodeComponents } from '../api';
 import type { FlowIngress, ServedSteps } from './types';
@@ -67,7 +68,7 @@ export function httpFlowsApi(send: typeof fetch = uiFetch): FlowsApi {
     try {
       res = await send(url, { ...init, headers: { accept: 'application/json', ...(init.headers as Record<string, string> | undefined) } });
     } catch (failed) {
-      throw new FlowsError(0, `the server does not answer: ${String(failed)}`);
+      throw new FlowsError(0, textsIn(currentLanguage()).t('flows.api.noAnswer', { reason: String(failed) }));
     }
     if (!res.ok) throw await refusal(res);
     return res;
@@ -77,7 +78,7 @@ export function httpFlowsApi(send: typeof fetch = uiFetch): FlowsApi {
 
   async function stored(res: Response): Promise<StoredFlow> {
     const etag = res.headers.get('etag');
-    if (etag === null) throw new FlowsError(res.status, 'the server sent the file without its ETag');
+    if (etag === null) throw new FlowsError(res.status, textsIn(currentLanguage()).t('flows.api.noEtag'));
     return { file: (await res.json()) as FlowFile, etag };
   }
 

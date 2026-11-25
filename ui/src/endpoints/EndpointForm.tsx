@@ -2,6 +2,7 @@ import { CheckCircleOutlined, EditOutlined, SaveOutlined } from '@ant-design/ico
 import { Alert, App, Button, Flex, Form, Modal, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DiscardDialog } from '../DiscardDialog';
+import { msg, say, useText, type Label, type Message } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import type { UnsavedChanges } from '../screens';
 import { useWorkingFile } from '../workingFiles';
@@ -24,27 +25,19 @@ export interface EndpointFormProps {
  * The component's description, while it is read, once read with its HTTP prefix and where the node takes requests, or
  * why it could not be.
  */
-type Described = { kind: 'reading' } | { kind: 'read'; settings: SettingsDescription; httpPrefix: string | null; ingress: NodeIngress } | { kind: 'missing'; why: string };
+type Described = { kind: 'reading' } | { kind: 'read'; settings: SettingsDescription; httpPrefix: string | null; ingress: NodeIngress } | { kind: 'missing'; why: Message };
 
 /**
  * Under the address of an in endpoint: a preview of the URL senders call, or of the path on the node's HTTP port when
  * the node names no origin, built from the options shown with the node environment's overlay laid over them.
  */
 function ArrivalNote({ url, ingress, overlaid }: { url: string; ingress: NodeIngress; overlaid: boolean }) {
-  const where =
-    ingress.httpOrigin === null ? (
-      <>
-        The path <strong>{url}</strong> on the node&apos;s HTTP port; the node names no origin for it (RAIL8_HTTP_ORIGIN).
-      </>
-    ) : (
-      <>
-        Senders call <strong>{url}</strong>.
-      </>
-    );
+  const { t, rich } = useText();
+  const strong = (chunks: ReactNode[]) => <strong>{chunks}</strong>;
   return (
     <>
-      <Tag>Preview</Tag> {where} Built from these settings
-      {overlaid ? `, with the address environment ${ingress.environment} sets` : ` in environment ${ingress.environment}`}, not from what is deployed.
+      <Tag>{t('endpoints.arrival.preview')}</Tag> {rich(ingress.httpOrigin === null ? 'endpoints.arrival.path' : 'endpoints.arrival.senders', { url, strong })}{' '}
+      {t(overlaid ? 'endpoints.arrival.builtOverlaid' : 'endpoints.arrival.built', { environment: ingress.environment })}
     </>
   );
 }
@@ -61,7 +54,7 @@ function optionOf(path: string): string | null {
 
 /** A key of the file that no field describes, drawn as a field of no known type. */
 function undescribed(name: string): SettingsField {
-  return { name, type: 'raw', help: "No such setting in the component's description.", tab: 'general', required: false, directions: ['in', 'out'] };
+  return { name, type: 'raw', help: msg('endpoints.form.undescribed'), tab: 'general', required: false, directions: ['in', 'out'] };
 }
 
 /**
@@ -74,6 +67,8 @@ function undescribed(name: string): SettingsField {
  * description the file's options are shown as JSON, read-only, with the reason.
  */
 export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
+  const texts = useText();
+  const { t, rich } = texts;
   const [stored, setStored] = useState<StoredEndpoint | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [described, setDescribed] = useState<Described>({ kind: 'reading' });
@@ -85,7 +80,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   const [tab, setTab] = useState('general');
   const [check, setCheck] = useState<Problem[] | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveFailure, setSaveFailure] = useState<string | null>(null);
+  const [saveFailure, setSaveFailure] = useState<Label | null>(null);
   const [conflict, setConflict] = useState(false);
   const { notification } = App.useApp();
   const [discarding, setDiscarding] = useState(false);
@@ -128,10 +123,10 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         setDescribed(
           found
             ? { kind: 'read', settings: found.settings, httpPrefix: found.httpPrefix, ingress }
-            : { kind: 'missing', why: `The node serves no component of the scheme ${scheme}.` },
+            : { kind: 'missing', why: msg('endpoints.form.noComponent', { scheme }) },
         );
       },
-      (error: unknown) => current && setDescribed({ kind: 'missing', why: `The node's components could not be read: ${error instanceof Error ? error.message : String(error)}` }),
+      (error: unknown) => current && setDescribed({ kind: 'missing', why: msg('endpoints.form.componentsUnread', { reason: error instanceof Error ? error.message : String(error) }) }),
     );
     return () => {
       current = false;
@@ -153,13 +148,13 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     if (stored === null) return false;
     setSaveFailure(null);
     if (invalid.size > 0) {
-      setSaveFailure('Some settings are not valid. Correct them, then save.');
+      setSaveFailure(msg('endpoints.form.invalid'));
       return false;
     }
     setSaving(true);
     try {
       startFrom(await api.save(path, present(draft), stored.etag));
-      notification.success({ key: path, title: `Endpoint ${stored.file.id} saved`, duration: 8, role: 'status', closable: { 'aria-label': 'Dismiss save notification' } });
+      notification.success({ key: path, title: t('endpoints.form.saved', { id: stored.file.id }), duration: 8, role: 'status', closable: { 'aria-label': t('endpoints.form.saved.dismiss') } });
       return true;
     } catch (error) {
       if (error instanceof Error && 'status' in error && error.status === 412) setConflict(true);
@@ -194,16 +189,16 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   useWorkingFile(path, () => unsaved, () => void reload());
 
   if (failed !== null) {
-    return <Alert showIcon type="error" title={`${path} could not be read`} description={failed} />;
+    return <Alert showIcon type="error" title={t('endpoints.form.unread', { path })} description={failed} />;
   }
   if (stored === null) {
-    return <ReadSpinner label={`Reading ${path}`} />;
+    return <ReadSpinner label={t('endpoints.form.reading', { path })} />;
   }
 
   const { file } = stored;
   const settings = described.kind === 'read' ? described.settings : null;
   const options = editing ? draft : file.config;
-  const problems = settings === null ? [] : checkOptions(settings, present(options), file.direction);
+  const problems = settings === null ? [] : checkOptions(texts, settings, present(options), file.direction);
   const problemOf = new Map<string, string>();
   for (const p of problems) {
     const option = optionOf(p.path);
@@ -255,7 +250,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
     if (url !== null) arrival = <ArrivalNote url={url} ingress={ingress} overlaid={overlay !== undefined && Object.hasOwn(overlay.config, 'address')} />;
   }
   const tabs = settings?.tabs ?? [];
-  const activeTab = tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? 'general');
+  const activeTab = tabs.some((one) => one.id === tab) ? tab : (tabs[0]?.id ?? 'general');
 
   return (
     <Flex vertical gap="middle">
@@ -263,28 +258,28 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         <Typography.Title level={1} style={{ margin: 0 }}>
           {file.id}
         </Typography.Title>
-        <Flex align="center" role="group" aria-label="Endpoint" gap="small">
+        <Flex align="center" role="group" aria-label={t('endpoints.list.endpoint')} gap="small">
           <Tag color="blue">{file.scheme}</Tag>
           <Tag>{file.direction}</Tag>
-          {!file.editable && <Tag>Read-only</Tag>}
+          {!file.editable && <Tag>{t('endpoints.readOnly')}</Tag>}
         </Flex>
         <Flex gap="small" wrap style={{ marginInlineStart: 'auto' }}>
           {editing ? (
             <>
               <Button type="text" onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>
-                Cancel
+                {t('frame.cancel')}
               </Button>
               <Button icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(problems)}>
-                Check
+                {t('endpoints.form.check')}
               </Button>
               <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} onClick={() => void save()}>
-                Save
+                {t('endpoints.form.save')}
               </Button>
             </>
           ) : (
             canEdit && (
               <Button type="primary" icon={<EditOutlined aria-hidden />} disabled={reloading} onClick={() => setEditing(true)}>
-                Edit
+                {t('endpoints.form.edit')}
               </Button>
             )
           )}
@@ -296,11 +291,11 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         <Alert
           type="warning"
           showIcon
-          title="The settings form needs the component's description"
+          title={t('endpoints.form.noDescription')}
           description={
             <>
-              <p>{described.why}</p>
-              <p>The file's settings are shown as they are; Edit needs the description.</p>
+              <p>{say(texts, described.why)}</p>
+              <p>{t('endpoints.form.noDescription.hint')}</p>
             </>
           }
         />
@@ -309,12 +304,12 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         <Alert
           type="info"
           showIcon
-          title="Environments override some of these settings"
+          title={t('endpoints.form.overrides')}
           description={
-            <ul aria-label="Overrides">
+            <ul aria-label={t('endpoints.form.overrides.list')}>
               {file.environments.map(({ name, options: overridden }) => (
                 <li key={name}>
-                  <strong>{name}</strong>: {overridden.length > 0 ? overridden.join(', ') : 'nothing'}
+                  <strong>{name}</strong>: {overridden.length > 0 ? overridden.join(', ') : t('endpoints.form.overrides.nothing')}
                 </li>
               ))}
             </ul>
@@ -326,25 +321,25 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
           showIcon
           type={check.length > 0 ? 'warning' : 'success'}
           role="status"
-          title={check.length > 0 ? 'Check found issues' : 'Check passed'}
-          closable={{ 'aria-label': 'Dismiss check', onClose: () => setCheck(null) }}
+          title={t(check.length > 0 ? 'endpoints.form.check.issues' : 'endpoints.form.check.passed')}
+          closable={{ 'aria-label': t('endpoints.form.check.dismiss'), onClose: () => setCheck(null) }}
           description={
             <>
               {check.length > 0 && (
-                <ul aria-label="Issues">
+                <ul aria-label={t('endpoints.form.check.list')}>
                   {check.map((p, i) => (
-                    <li key={i}>{p.path === '' ? p.message : `${optionOf(p.path)} ${p.message}`}</li>
+                    <li key={i}>{p.path === '' ? p.message : t('endpoints.form.check.issue', { option: optionOf(p.path), problem: p.message })}</li>
                   ))}
                 </ul>
               )}
-              <p>The node checks the file again when the package is deployed.</p>
+              <p>{t('endpoints.form.check.again')}</p>
             </>
           }
         />
       )}
-      {saveFailure !== null && <Alert type="error" showIcon title="The file was not saved" description={saveFailure} />}
+      {saveFailure !== null && <Alert type="error" showIcon title={t('endpoints.form.notSaved')} description={say(texts, saveFailure)} />}
       {described.kind === 'reading' ? (
-        <ReadSpinner label="Reading the component's description" />
+        <ReadSpinner label={t('endpoints.form.describing')} />
       ) : settings === null || !settings.described ? (
         <Form layout="vertical">
           <RawOptions
@@ -362,16 +357,16 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         <Tabs
           activeKey={activeTab}
           onChange={setTab}
-          aria-label="Settings tabs"
+          aria-label={t('endpoints.form.tabs')}
           id={tabsId}
-          items={tabs.map((t) => {
-            const fields = fieldsOn(t.id);
+          items={tabs.map((one) => {
+            const fields = fieldsOn(one.id);
             return {
-              key: t.id,
-              label: t.label,
+              key: one.id,
+              label: one.label,
               children:
                 fields.length === 0 ? (
-                  <p>No settings on this tab for an {file.direction} endpoint.</p>
+                  <p>{t(file.direction === 'in' ? 'endpoints.form.noFields.in' : 'endpoints.form.noFields.out')}</p>
                 ) : (
                   <Form layout="vertical">
                     {fields.map((field) => (
@@ -393,10 +388,8 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         />
       )}
       <DiscardDialog isOpen={discarding} name={file.id} onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
-      <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={() => void reload()} onCancel={() => setConflict(false)}>
-        <p>
-          <strong>{file.path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
-        </p>
+      <Modal open={conflict} title={t('endpoints.conflict')} okText={t('endpoints.conflict.reload')} cancelText={t('frame.discard.keep')} onOk={() => void reload()} onCancel={() => setConflict(false)}>
+        <p>{rich('endpoints.conflict.hint', { path: file.path, strong: (chunks) => <strong>{chunks}</strong> })}</p>
       </Modal>
     </Flex>
   );

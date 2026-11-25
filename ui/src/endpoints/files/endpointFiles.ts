@@ -67,7 +67,7 @@ export async function listEndpoints(root: string): Promise<{ items: EndpointItem
 function endpointOf(text: string, path: string, editable: boolean): EndpointFile {
   try {
     const doc = readEndpoint(text);
-    if (doc === null) throw new Refusal(404, `${path} is not an endpoint file`);
+    if (doc === null) throw new Refusal(404, `${path} is not an endpoint file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return { path, editable, ...doc };
   } catch (error) {
     if (error instanceof EndpointFileError) throw new Refusal(422, error.message);
@@ -99,7 +99,7 @@ function endpointOf(text: string, path: string, editable: boolean): EndpointFile
 export function endpointFiles(options: EndpointFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
   const rootOf = async () => {
-    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return realpath(options.workspace);
   };
 
@@ -109,7 +109,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
   };
 
   const read = async (path: string) => {
-    const file = await locate(await rootOf(), path, isYaml, 'endpoint file');
+    const file = await locate(await rootOf(), path, isYaml, 'endpoint file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file);
     return { file: endpointOf(bytes.toString('utf8'), path, options.editable), etag: etagOf(bytes) };
   };
@@ -118,36 +118,36 @@ export function endpointFiles(options: EndpointFilesOptions) {
     const sent = await jsonBody(req);
     if (typeof sent !== 'object' || sent === null || !('text' in sent) || typeof sent.text !== 'string') throw new Refusal(400, 'a create sends {"text": "..."}');
     const text = sent.text;
-    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB');
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     let file: EndpointFile;
     try {
       file = endpointOf(text, path, options.editable);
     } catch (error) {
-      throw error instanceof Refusal && error.status === 404 ? new Refusal(422, 'the text is not an endpoint file') : error;
+      throw error instanceof Refusal && error.status === 404 ? new Refusal(422, 'the text is not an endpoint file') : error; // untranslated: the development server refuses with this text, as the node does, and it has no translations
     }
-    await createFile(lock, await rootOf(), path, isYaml, 'endpoint file', text);
+    await createFile(lock, await rootOf(), path, isYaml, 'endpoint file', text); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return { file, etag: etagOf(text), created: true };
   };
 
   const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
-    if (!options.editable) throw new Refusal(403, 'this server shows endpoint files read-only');
+    if (!options.editable) throw new Refusal(403, 'this server shows endpoint files read-only'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both');
+    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (ifNoneMatch === '*') return create(req, path, lock);
-    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match');
+    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const sent = await jsonBody(req);
     if (typeof sent !== 'object' || sent === null || !('config' in sent)) throw new Refusal(400, 'a save sends {"config": {...}}');
     const config = sent.config;
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Refusal(400, 'config is a JSON object');
-    const file = await locate(await rootOf(), path, isYaml, 'endpoint file');
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Refusal(400, 'config is a JSON object'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    const file = await locate(await rootOf(), path, isYaml, 'endpoint file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file);
     // under the lock: a file that is gone, or a path that now leads to another file, has changed too
     const unchanged = async () => {
-      const now = await locate(await rootOf(), path, isYaml, 'endpoint file').catch(() => undefined);
-      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+      const now = await locate(await rootOf(), path, isYaml, 'endpoint file').catch(() => undefined); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     };
-    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const text = bytes.toString('utf8');
     endpointOf(text, path, options.editable);
     let written: string;
@@ -167,7 +167,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
       next();
       return;
     }
-    const refused = foreign(req.headers, options.origins, 'the working folder');
+    const refused = foreign(req.headers, options.origins, 'the working folder'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (refused !== undefined) {
       send(res, 403, { error: refused });
       return;
@@ -185,7 +185,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
           return done;
         });
         send(res, created ? 201 : 200, file, etag);
-      } else send(res, 405, { error: 'the working folder takes GET, and PUT of one file' });
+      } else send(res, 405, { error: 'the working folder takes GET, and PUT of one file' }); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     };
     answer().catch((error: unknown) => sendFailure(res, error));
   };

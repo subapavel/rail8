@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage, currentLanguage } from '../language';
 import type { Screen } from '../screens';
 import { Shell } from '../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
@@ -391,5 +392,35 @@ describe('Endpoints', () => {
     await open(fakeApi([httpIn], { components: vi.fn(async () => ({ ...components, items: [{ scheme: 'web', httpPrefix: null, settings: web }] })) }), 'http-in');
     await expect.element(field('address')).toHaveValue('/in');
     await expect.element(text('Senders call')).not.toBeInTheDocument();
+  });
+});
+
+describe('the Endpoints screen in another language', () => {
+  afterEach(() => {
+    chooseLanguage('en');
+    localStorage.removeItem('rail8.language');
+  });
+
+  test('shows its list, its form, the check and Ant Design in the language chosen in the header', async () => {
+    render(fakeApi());
+    await expect.element(button('inbox')).toBeVisible();
+    await page.getByRole('button', { name: 'Language: English' }).click();
+    await page.getByRole('menuitem', { name: 'Čeština' }).click();
+    expect(currentLanguage()).toBe('cs');
+
+    const table = page.getByRole('table', { name: 'Soubory koncových bodů' });
+    await expect.element(table.getByRole('columnheader', { name: 'Schéma' })).toBeVisible();
+    await table.getByRole('columnheader', { name: /Balíček/ }).getByRole('button').click();
+    await expect.element(page.getByRole('button', { name: 'Potvrdit', exact: true })).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+
+    await button('inbox').click();
+    await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).toBeVisible();
+    await expect.element(field('port')).toHaveAttribute('placeholder', 'Výchozí: 22');
+    await expect.element(text('Prostředí přepisují některá z těchto nastavení')).toBeVisible();
+    await button('Upravit').click();
+    await button('Zkontrolovat').click();
+    await expect.element(text('Kontrola našla nedostatky')).toBeVisible();
+    await expect.element(page.getByRole('list', { name: 'Nedostatky' }).getByText('colour: takové nastavení neexistuje')).toBeVisible();
   });
 });

@@ -6,6 +6,9 @@ import { edit, EditRefused } from './edit';
 import { addEntry, addProcess, addRow, callable, callOf, deleteProcess, moveRow, moveToList, removeRow, renameEntry, renameProcess, stepListsOf } from './ops';
 import type { FlowContext } from './types';
 import { view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const context: FlowContext = {
   endpoints: [
@@ -25,7 +28,7 @@ const context: FlowContext = {
 };
 
 const text = readFileSync(join(__dirname, 'fixtures', 'processes.yaml'), 'utf8');
-const drawn = view(text, context);
+const drawn = view(text, context, en);
 const flow = parse(text) as Record<string, unknown>;
 const refusal = (f: () => unknown) => {
   try {
@@ -46,7 +49,7 @@ describe('the operations on processes', () => {
     ]);
     const out = edit(text, ...ops);
     expect(out).toBe(text.replace('        process: lines\n', '        process: parts\n').replace('  lines:\n', '  parts:\n'));
-    expect(view(out, context).problems).toEqual(drawn.problems);
+    expect(view(out, context, en).problems).toEqual(drawn.problems);
   });
 
   it('refuse a rename that gives a call without a name the name of another step of its list', () => {
@@ -62,7 +65,7 @@ describe('the operations on processes', () => {
   it('add a process with one step, and processes itself to a flow that has none', () => {
     expect(addProcess(drawn, flow, 'audit', 'validate')).toEqual([{ op: 'add', path: ['processes', 'audit'], value: { steps: [{ type: 'validate' }] } }]);
     const plain = 'schemaVersion: 1\nkind: flow\nid: plain\nsteps:\n  - type: to\n    endpoint: partner-domestic\n';
-    const ops = addProcess(view(plain, context), parse(plain) as Record<string, unknown>, 'audit', 'validate');
+    const ops = addProcess(view(plain, context, en), parse(plain) as Record<string, unknown>, 'audit', 'validate');
     expect(edit(plain, ...ops)).toBe(`${plain}processes:\n  audit:\n    steps:\n      - type: validate\n`);
     expect(refusal(() => addProcess(drawn, flow, 'enrich', 'validate'))).toBe('the flow has a process enrich already');
   });

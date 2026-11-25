@@ -1,3 +1,4 @@
+import { currentLanguage, textsIn } from '../language';
 import type { NodeIngress } from './inbound';
 import type { Options, SettingsDescription } from './settings';
 import { uiFetch } from '../session';
@@ -91,7 +92,7 @@ export function httpEndpointsApi(send: typeof fetch = uiFetch): EndpointsApi {
     try {
       res = await send(url, { ...init, headers: { accept: 'application/json', ...init.headers } });
     } catch (failed) {
-      throw new EndpointsError(0, `the server does not answer: ${String(failed)}`);
+      throw new EndpointsError(0, textsIn(currentLanguage()).t('endpoints.api.noAnswer', { reason: String(failed) }));
     }
     if (!res.ok) throw await refusal(res);
     return res;
@@ -99,7 +100,7 @@ export function httpEndpointsApi(send: typeof fetch = uiFetch): EndpointsApi {
 
   async function stored(res: Response): Promise<StoredEndpoint> {
     const etag = res.headers.get('etag');
-    if (etag === null) throw new EndpointsError(res.status, 'the server sent the file without its ETag');
+    if (etag === null) throw new EndpointsError(res.status, textsIn(currentLanguage()).t('endpoints.api.noEtag'));
     return { file: (await res.json()) as EndpointFile, etag };
   }
 

@@ -1,5 +1,6 @@
 import { edit, EditRefused, follow, placeOf, type Op } from './edit';
 import { STEP_KEYS, STEP_NAME } from './steps';
+import { currentLanguage, textsIn } from '../../language';
 import type { FlowContext, FlowNode, FlowView, Path } from './types';
 
 /** A step's name is at most this long. */
@@ -114,11 +115,12 @@ export const moveToList = (view: FlowView, from: Path, list: Path): Op[] => [{ o
 
 const processesOf = (flow: Record<string, unknown>) => (isRecord(flow.processes) ? Object.keys(flow.processes) : []);
 
-/** Why `name` cannot name a new process of `flow`, or null. */
+/** Why `name` cannot name a new process of `flow`, in the language the UI shows now, or null. */
 function badProcessName(flow: Record<string, unknown>, name: string): string | null {
-  if (!new RegExp(`^${STEP_NAME}$`).test(name)) return `a process name matches ${STEP_NAME}`;
-  if (name.length > MAX_NAME) return `a process name is at most ${MAX_NAME} characters long`;
-  if (processesOf(flow).includes(name)) return `the flow has a process ${name} already`;
+  const { t } = textsIn(currentLanguage());
+  if (!new RegExp(`^${STEP_NAME}$`).test(name)) return t('flows.ops.processPattern', { pattern: STEP_NAME });
+  if (name.length > MAX_NAME) return t('flows.ops.processLength', { max: MAX_NAME });
+  if (processesOf(flow).includes(name)) return t('flows.ops.processTaken', { name });
   return null;
 }
 
@@ -151,7 +153,7 @@ export function renameProcess(view: FlowView, flow: Record<string, unknown>, fro
   const calls = callsOf(view, from);
   for (const call of calls.filter((c) => c.defaultName)) {
     const clash = stepsIn(view, call.path.slice(0, -1)).find((n) => n.label === to && !calls.some((c) => c.defaultName && c.id === n.id));
-    if (clash !== undefined) throw new EditRefused(`${placeOf(call.path)} has no name and would be named ${to}, the name of ${placeOf(clash.path)} in its list`);
+    if (clash !== undefined) throw new EditRefused(textsIn(currentLanguage()).t('flows.ops.nameClash', { place: placeOf(call.path), name: to, other: placeOf(clash.path) }));
   }
   const move: Op = { op: 'move', from: ['processes', from], path: ['processes', to] };
   return [move, ...calls.map((c): Op => ({ op: 'replace', path: [...(follow(c.path, [move]) ?? c.path), 'process'], value: to }))];

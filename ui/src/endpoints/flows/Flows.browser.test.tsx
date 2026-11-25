@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage, currentLanguage } from '../../language';
 import type { Screen } from '../../screens';
 import { Shell } from '../../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../../workingFiles';
@@ -894,5 +895,37 @@ steps:
     await userEvent.keyboard('{Escape}');
     await mark('route', 'Clear simulation end');
     await expect.element(simulate).toBeDisabled();
+  });
+});
+
+describe('the Flows screen in another language', () => {
+  afterEach(() => {
+    chooseLanguage('en');
+    localStorage.removeItem('rail8.language');
+  });
+
+  test('shows its list, the flow editor, its counts and Ant Design in the language chosen in the header', async () => {
+    render(fakeFlows());
+    await expect.element(button('invoice')).toBeVisible();
+    await page.getByRole('button', { name: 'Language: English' }).click();
+    await page.getByRole('menuitem', { name: 'Čeština' }).click();
+    expect(currentLanguage()).toBe('cs');
+
+    const table = page.getByRole('table', { name: 'Soubory toků' });
+    await table.getByRole('columnheader', { name: /Balíček/ }).getByRole('button').click();
+    await expect.element(page.getByRole('button', { name: 'Potvrdit', exact: true })).toBeVisible();
+    await userEvent.keyboard('{Escape}');
+
+    await button('invoice').click();
+    await expect.element(page.getByRole('heading', { name: 'invoice', level: 1 })).toBeVisible();
+    await expect.element(page.getByRole('region', { name: 'Tok invoice' }).getByText('4 kroky', { exact: true })).toBeVisible();
+    await expect.element(page.getByRole('toolbar', { name: 'Úpravy toku' }).getByRole('combobox', { name: 'Najít krok' })).toBeVisible();
+    await button('Upravit').click();
+    await button('Zkontrolovat').click();
+    await expect.element(text('Kontrola prošla')).toBeVisible();
+    await nodeOf('validate').click();
+    await page.getByLabelText('schema', { exact: false }).fill('');
+    await expect.element(text('1 problém')).toBeVisible();
+    await expect.element(button('Přidat krok')).toBeVisible();
   });
 });

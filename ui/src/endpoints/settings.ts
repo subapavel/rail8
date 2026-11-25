@@ -1,3 +1,5 @@
+import type { Label, Texts } from '../language';
+
 /** A tab of an endpoint's settings form: the platform's common ones and the adapter's own, in the order shown. */
 export interface SettingsTab {
   id: string;
@@ -5,11 +7,14 @@ export interface SettingsTab {
   common: boolean;
 }
 
-/** One option an endpoint may set, as the admin API describes it. A `type` the form does not know gets a raw editor. */
+/**
+ * One option an endpoint may set, as the admin API describes it. A `type` the form does not know gets a raw editor. Its
+ * `help` is the node's text, or a message of the UI's own for a field the UI describes, such as a built-in step's.
+ */
 export interface SettingsField {
   name: string;
   type: 'text' | 'secret' | 'integer' | 'boolean' | 'choice' | (string & {});
-  help: string;
+  help: Label;
   tab: string;
   required: boolean;
   directions: ('in' | 'out')[];
@@ -81,11 +86,12 @@ function wholeNumber(value: unknown): number | null {
   return value >= -(2 ** 63) && value < 2 ** 63 ? value : null;
 }
 
-function bounds(field: SettingsField): string {
-  if (field.min !== undefined && field.max !== undefined) return ` from ${field.min} to ${field.max}`;
-  if (field.min !== undefined) return ` of at least ${field.min}`;
-  if (field.max !== undefined) return ` of at most ${field.max}`;
-  return '';
+/** Why a value is no whole number `field` takes, in `texts`' language: the bounds it lies within, when it has any. */
+function notWhole({ t }: Texts, field: SettingsField): string {
+  if (field.min !== undefined && field.max !== undefined) return t('endpoints.check.wholeFromTo', { min: String(field.min), max: String(field.max) });
+  if (field.min !== undefined) return t('endpoints.check.wholeAtLeast', { min: String(field.min) });
+  if (field.max !== undefined) return t('endpoints.check.wholeAtMost', { max: String(field.max) });
+  return t('endpoints.check.whole');
 }
 
 /** Whether `text` matches `pattern` whole; true when the pattern is no JavaScript regular expression, as the node judges it. */
@@ -97,37 +103,40 @@ function matches(pattern: string, text: string): boolean {
   }
 }
 
-/** What is wrong with `value` for `field`, or null when it fits. A well-formed `secret://` reference fits any text or secret. */
-export function fieldProblem(field: SettingsField, value: unknown): string | null {
+/**
+ * What is wrong with `value` for `field`, in `texts`' language, or null when it fits. A well-formed `secret://` reference
+ * fits any text or secret.
+ */
+export function fieldProblem(texts: Texts, field: SettingsField, value: unknown): string | null {
+  const { t } = texts;
   switch (field.type) {
     case 'text':
     case 'secret':
-      if (typeof value !== 'string') return 'must be text';
-      if (value === '') return 'must not be empty';
+      if (typeof value !== 'string') return t('endpoints.check.text');
+      if (value === '') return t('endpoints.check.empty');
       if (field.pattern === undefined || REFERENCE.test(value)) return null;
-      return matches(field.pattern, value) ? null : `must match ${field.pattern}`;
+      return matches(field.pattern, value) ? null : t('endpoints.check.pattern', { pattern: field.pattern });
     case 'integer': {
       const n = wholeNumber(value);
-      return n !== null && (field.min === undefined || n >= field.min) && (field.max === undefined || n <= field.max)
-        ? null
-        : `must be a whole number${bounds(field)}`;
+      return n !== null && (field.min === undefined || n >= field.min) && (field.max === undefined || n <= field.max) ? null : notWhole(texts, field);
     }
     case 'boolean':
-      return typeof value === 'boolean' ? null : 'must be true or false';
+      return typeof value === 'boolean' ? null : t('endpoints.check.boolean');
     case 'choice':
-      return typeof value === 'string' && (field.choices ?? []).includes(value) ? null : `must be one of ${(field.choices ?? []).join(', ')}`;
+      return typeof value === 'string' && (field.choices ?? []).includes(value) ? null : t('endpoints.check.choice', { choices: (field.choices ?? []).join(', ') });
     default:
       return null;
   }
 }
 
 /**
- * What is wrong with an endpoint's `options`, judged as the node judges them when it deploys: the fields in their order
- * (one of the other direction set, a value that does not fit, a required one left out while shown), then keys no field
- * has in name order, then the rules. A component that describes nothing has no problem here.
+ * What is wrong with an endpoint's `options`, judged as the node judges them when it deploys, in `texts`' language: the
+ * fields in their order (one of the other direction set, a value that does not fit, a required one left out while shown),
+ * then keys no field has in name order, then the rules. A component that describes nothing has no problem here.
  */
-export function checkOptions(description: SettingsDescription, options: Options, direction: 'in' | 'out'): Problem[] {
+export function checkOptions(texts: Texts, description: SettingsDescription, options: Options, direction: 'in' | 'out'): Problem[] {
   if (!description.described) return [];
+  const { t } = texts;
   const problems: Problem[] = [];
   const shown = shownFields(description, options);
   const byName = new Map(description.fields.map((f) => [f.name, f]));
@@ -137,25 +146,25 @@ export function checkOptions(description: SettingsDescription, options: Options,
     const set = options[field.name];
     const path = pointer(field.name);
     if (!serves(field, direction)) {
-      if (present(set)) problems.push({ path, message: `a setting of ${direction === 'in' ? 'out' : 'in'} endpoints only` });
+      if (present(set)) problems.push({ path, message: t(direction === 'in' ? 'endpoints.check.outOnly' : 'endpoints.check.inOnly') });
     } else if (present(set)) {
-      const problem = fieldProblem(field, set);
+      const problem = fieldProblem(texts, field, set);
       if (problem !== null) problems.push({ path, message: problem });
     } else if (field.required && shown.has(field.name)) {
       const by = field.visibleWhen?.field;
-      problems.push({ path, message: by === undefined ? 'is required' : `is required when ${by} is ${String(value(by))}` });
+      problems.push({ path, message: by === undefined ? t('endpoints.check.required') : t('endpoints.check.requiredWhen', { field: by, value: String(value(by)) }) });
     }
   }
   const unknown = Object.keys(options)
     .filter((key) => present(options[key]) && !byName.has(key) && !(direction === 'in' && NODE_KEYS.has(key)))
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const key of unknown) problems.push({ path: pointer(key), message: 'no such setting' });
+  for (const key of unknown) problems.push({ path: pointer(key), message: t('endpoints.check.unknown') });
   for (const rule of description.rules) {
     if (rule.kind !== 'exactlyOne') continue;
     const first = byName.get(rule.fields[0] ?? '');
     if (first === undefined || !serves(first, direction)) continue;
     if (rule.fields.filter((name) => present(options[name])).length !== 1) {
-      problems.push({ path: '', message: `set exactly one of ${rule.fields.join(', ')}` });
+      problems.push({ path: '', message: t('endpoints.check.exactlyOne', { fields: rule.fields.join(', ') }) });
     }
   }
   return problems;

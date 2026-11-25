@@ -3,6 +3,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { Alert, App, Button, Collapse, Flex, Form, Input, Menu, Modal, Select, Spin, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DiscardDialog } from '../../DiscardDialog';
+import { useText } from '../../language';
 import { ReadSpinner } from '../../ReadSpinner';
 import type { UnsavedChanges } from '../../screens';
 import { useWorkingFile } from '../../workingFiles';
@@ -69,6 +70,8 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
  * are some, `guardClose` is given the flow's save, and the page asks before it unloads.
  */
 export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, createEndpoint, guardClose }: FlowPictureProps) {
+  const texts = useText();
+  const { t, rich } = texts;
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [steps, setSteps] = useState<ServedSteps>();
   const [ingress, setIngress] = useState<FlowIngress>();
@@ -136,8 +139,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     if (result.kind !== 'read') return null;
     const read = readFlow(text);
     const context = { ...result.stored.file.context, steps, ingress };
-    return { view: view(text, context), value: read.kind === 'flow' ? read.value : {} };
-  }, [result, text, steps, ingress]);
+    return { view: view(text, context, texts), value: read.kind === 'flow' ? read.value : {} };
+  }, [result, text, steps, ingress, texts]);
   const searchable = useMemo(() => {
     if (!drawn?.view.readable) return [];
     return canvasGraph(drawn.view, false, false).nodes.flatMap((item) =>
@@ -159,7 +162,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     if (work === null || stored === null) return false;
     setSaveFailure(null);
     if (invalid.size > 0) {
-      setSaveFailure('Some fields are not valid. Correct them, then save.');
+      setSaveFailure(t('flows.invalid'));
       return false;
     }
     setSaving(true);
@@ -170,10 +173,10 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       const id = drawn?.value.id;
       notification.success({
         key: path,
-        title: `Flow ${typeof id === 'string' ? id : path} saved`,
+        title: t('flows.saved', { id: typeof id === 'string' ? id : path }),
         duration: 8,
         role: 'status',
-        closable: { 'aria-label': 'Dismiss save notification' },
+        closable: { 'aria-label': t('endpoints.form.saved.dismiss') },
       });
       return true;
     } catch (error) {
@@ -216,10 +219,10 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   useWorkingFile(path, () => unsaved, reload);
 
   if (result.kind === 'reading') {
-    return <ReadSpinner label="Reading the flow file" />;
+    return <ReadSpinner label={t('flows.reading')} />;
   }
   if (result.kind === 'failed' || drawn === null) {
-    return <Alert type="error" showIcon title="The flow file could not be read" description={result.kind === 'failed' ? result.message : ''} />;
+    return <Alert type="error" showIcon title={t('flows.unread')} description={result.kind === 'failed' ? result.message : ''} />;
   }
 
   const { view: picture, value } = drawn;
@@ -310,7 +313,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       try {
         await createEndpoint(created, call.create.text);
       } catch (error) {
-        setCallFailure(`${created} was not created: ${messageOf(error)}`);
+        setCallFailure(t('flows.add.notCreated', { path: created, reason: messageOf(error) }));
         setCalling(null);
         return;
       }
@@ -318,7 +321,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         const fresh = await api.read(path);
         setResult({ ...result, stored: { ...result.stored, file: { ...result.stored.file, context: fresh.file.context } } });
       } catch (error) {
-        setCallFailure(`${created} was created, but the flow's endpoints could not be read again: ${messageOf(error)}. Refresh after Save shows them.`);
+        setCallFailure(t('flows.add.contextUnread', { path: created, reason: messageOf(error) }));
         setCalling(null);
         return;
       }
@@ -348,8 +351,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   };
 
   // the types a step can be added of: the built-in ones, then those the node serves
-  const served = Array.isArray(steps) ? steps.map((s) => s.type).filter((t) => !Object.hasOwn(BUILT_IN, t)) : [];
-  const addable = [...Object.keys(BUILT_IN).map((type) => ({ type, from: 'Built in' })), ...[...served].sort().map((type) => ({ type, from: 'Served by the node' }))];
+  const served = Array.isArray(steps) ? steps.map((s) => s.type).filter((type) => !Object.hasOwn(BUILT_IN, type)) : [];
+  const addable = [...Object.keys(BUILT_IN).map((type) => ({ type, from: t('flows.add.builtIn') })), ...[...served].sort().map((type) => ({ type, from: t('flows.add.served') }))];
 
   const markInvalid = (key: string, bad: boolean) =>
     setInvalid((set) => {
@@ -370,7 +373,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           remove,
           up: index > 0,
           down: index >= 0 && index < length - 1,
-          lists: lists.map((l) => ({ path: l, label: l.length === 1 ? 'the flow’s steps' : `process ${String(l[1])}` })),
+          lists: lists.map((l) => ({ path: l, label: l.length === 1 ? t('flows.list.ownSteps') : t('flows.list.process', { name: String(l[1]) }) })),
           moveTo: (list) => {
             if (step !== null) change(moveToList(picture, step.path, list));
           },
@@ -412,51 +415,51 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           <Typography.Text type="secondary" title={path}>{path.split('/').slice(0, -1).join(' / ')}</Typography.Text>
           <Typography.Title level={1}>{title}</Typography.Title>
         </div>
-        {!canEdit && <Tag>Read-only</Tag>}
-        {errors > 0 && <Tag color="error">{errors === 1 ? '1 problem' : `${errors} problems`}</Tag>}
-        {warnings > 0 && <Tag color="warning">{warnings === 1 ? '1 warning' : `${warnings} warnings`}</Tag>}
+        {!canEdit && <Tag>{t('endpoints.readOnly')}</Tag>}
+        {errors > 0 && <Tag color="error">{t('flows.problems', { count: errors })}</Tag>}
+        {warnings > 0 && <Tag color="warning">{t('flows.warnings', { count: warnings })}</Tag>}
         <Flex className="rail8-flow-actions" wrap gap={4} align="center">
           {work !== null ? (
             <>
               <Button size="small" type="text" onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>
-                Cancel
+                {t('frame.cancel')}
               </Button>
               <Button size="small" icon={<CheckCircleOutlined aria-hidden />} onClick={() => setCheck(picture.problems)}>
-                Check
+                {t('endpoints.form.check')}
               </Button>
               <Button size="small" type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving || invalid.size > 0} loading={saving} onClick={() => void save()}>
-                Save
+                {t('endpoints.form.save')}
               </Button>
             </>
           ) : (
             <>
               <Button size="small" type="text" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-                Refresh
+                {t('endpoints.refresh')}
               </Button>
               {canEdit && (
                 <Button size="small" type="primary" icon={<EditOutlined aria-hidden />} disabled={steps === undefined || readFor !== asked} onClick={() => setWork({ text: file.text, undo: [], key: null })}>
-                  Edit
+                  {t('endpoints.form.edit')}
                 </Button>
               )}
             </>
           )}
         </Flex>
       </div>
-      {file.editable && picture.readable && picture.readOnly !== undefined && <Alert type="info" showIcon title={`The editor shows this flow read-only: ${picture.readOnly}.`} />}
+      {file.editable && picture.readable && picture.readOnly !== undefined && <Alert type="info" showIcon title={t('flows.readOnly', { reason: picture.readOnly })} />}
       {refused !== null && (
-        <Alert type="error" showIcon title="The change was not made" description={refused} closable={{ 'aria-label': 'Dismiss the refusal', onClose: () => setRefused(null) }} />
+        <Alert type="error" showIcon title={t('flows.refused')} description={refused} closable={{ 'aria-label': t('flows.refused.dismiss'), onClose: () => setRefused(null) }} />
       )}
       {check !== null && (
         <Alert
           showIcon
           type={check.length > 0 ? 'warning' : 'success'}
           role="status"
-          title={check.length > 0 ? 'Check found issues' : 'Check passed'}
-          closable={{ 'aria-label': 'Dismiss check', onClose: () => setCheck(null) }}
+          title={t(check.length > 0 ? 'endpoints.form.check.issues' : 'endpoints.form.check.passed')}
+          closable={{ 'aria-label': t('endpoints.form.check.dismiss'), onClose: () => setCheck(null) }}
           description={
             <>
               {check.length > 0 && (
-                <ul aria-label="Issues">
+                <ul aria-label={t('endpoints.form.check.list')}>
                   {check.map((p, i) => (
                     <li key={i}>
                       {placeOf(p.path)}: {p.message}
@@ -464,12 +467,12 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
                   ))}
                 </ul>
               )}
-              <p>The node checks the flow again when the package is deployed.</p>
+              <p>{t('flows.check.again')}</p>
             </>
           }
         />
       )}
-      {saveFailure !== null && <Alert type="error" showIcon title="The file was not saved" description={saveFailure} />}
+      {saveFailure !== null && <Alert type="error" showIcon title={t('endpoints.form.notSaved')} description={saveFailure} />}
       {picture.problems.length > 0 && (
         <Collapse
           size="small"
@@ -478,7 +481,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           items={[
             {
               key: 'problems',
-              label: !picture.readable || showProblems ? 'Hide the problems' : 'Show the problems',
+              label: t(!picture.readable || showProblems ? 'flows.problems.hide' : 'flows.problems.show'),
               children: (
                 <Flex vertical>
                   {picture.problems.map((p, i) => (
@@ -499,7 +502,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
     return (
       <div className="rail8-flow-editor rail8-flow-unavailable">
         {header}
-        <Alert type="warning" showIcon title="The flow cannot be drawn" description="Correct the listed problems in the working folder, then refresh the diagram." />
+        <Alert type="warning" showIcon title={t('flows.undrawn')} description={t('flows.undrawn.hint')} />
       </div>
     );
   }
@@ -516,12 +519,12 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
   return (
     <div className="rail8-flow-editor">
       {header}
-      <div className="rail8-flow-tools" role="toolbar" aria-label="Flow editing">
+      <div className="rail8-flow-tools" role="toolbar" aria-label={t('flows.tools')}>
         <Select
           size="small"
           className="rail8-flow-find"
-          aria-label="Find step"
-          placeholder="Find step"
+          aria-label={t('flows.find')}
+          placeholder={t('flows.find')}
           value={null}
           showSearch={{ optionFilterProp: 'label' }}
           suffix={<SearchOutlined aria-hidden />}
@@ -534,20 +537,20 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
             }
           }}
         />
-        <Tooltip title={range ? 'Open simulation preview' : 'Set a start and a later end on connections in the same step list'}>
-          <Button size="small" aria-label="Open simulation" icon={<CaretRightOutlined aria-hidden />} disabled={!range} onClick={() => setSimulationOpen(true)} />
+        <Tooltip title={t(range ? 'flows.simulation.open.hint' : 'flows.simulation.open.unset')}>
+          <Button size="small" aria-label={t('flows.simulation.open')} icon={<CaretRightOutlined aria-hidden />} disabled={!range} onClick={() => setSimulationOpen(true)} />
         </Tooltip>
         {work !== null && (
           <>
             <span className="rail8-flow-rule" />
             <Button size="small" type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setAdding(insertionPoint())}>
-              Add step
+              {t('flows.add')}
             </Button>
-            <Tooltip title="Delete selected step">
-              <Button size="small" type="text" aria-label="Delete selected step" icon={<DeleteOutlined aria-hidden />} disabled={!step || step.locked !== undefined} onClick={remove} />
+            <Tooltip title={t('flows.deleteSelected')}>
+              <Button size="small" type="text" aria-label={t('flows.deleteSelected')} icon={<DeleteOutlined aria-hidden />} disabled={!step || step.locked !== undefined} onClick={remove} />
             </Tooltip>
-            <Tooltip title="Undo last change">
-              <Button size="small" type="text" aria-label="Undo" icon={<UndoOutlined aria-hidden />} disabled={!work.undo.length} onClick={undo} />
+            <Tooltip title={t('flows.undo.hint')}>
+              <Button size="small" type="text" aria-label={t('flows.undo')} icon={<UndoOutlined aria-hidden />} disabled={!work.undo.length} onClick={undo} />
             </Tooltip>
           </>
         )}
@@ -594,7 +597,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         startLabel={range?.steps[0]?.label ?? ''} endLabel={range?.steps.at(-1)?.label ?? ''} stepCount={range?.steps.length ?? 0} />
       <Modal
         open={adding !== null}
-        title="Add a step"
+        title={t('flows.add.title')}
         footer={null}
         onCancel={() => {
           if (calling === null) {
@@ -603,10 +606,10 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           }
         }}
       >
-        {adding !== null && <p>At {placeOf(adding)}</p>}
+        {adding !== null && <p>{t('flows.add.at', { place: placeOf(adding) })}</p>}
         <Flex vertical gap="middle">
           <Menu
-            aria-label="Step types"
+            aria-label={t('flows.add.types')}
             selectable={false}
             onClick={({ key }) => add(key)}
             items={addable.map(({ type, from }) => ({
@@ -621,9 +624,9 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           />
           {flowsCalled.length > 0 && (
             <>
-              <Typography.Title level={3}>Call a flow</Typography.Title>
+              <Typography.Title level={3}>{t('flows.add.call')}</Typography.Title>
               <Menu
-                aria-label="Flows to call"
+                aria-label={t('flows.add.flows')}
                 selectable={false}
                 onClick={({ key }) => {
                   const called = flowsCalled.find((f) => f.path === key);
@@ -634,7 +637,7 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
                   disabled: calling !== null,
                   label: (
                     <>
-                      {f.id} <Typography.Text type="secondary">Serves {f.address ?? ''}</Typography.Text>
+                      {f.id} <Typography.Text type="secondary">{t('flows.add.serves', { address: f.address ?? '' })}</Typography.Text>
                     </>
                   ),
                 }))}
@@ -643,35 +646,35 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
           )}
           {calling !== null && (
             <Flex gap="small">
-              <Spin aria-label={`Creating ${calling}`} /> Creating the endpoint {calling}
+              <Spin aria-label={t('flows.add.creating', { path: calling })} /> {t('flows.add.creatingEndpoint', { path: calling })}
             </Flex>
           )}
-          {callFailure !== null && <Alert type="error" showIcon title="The call was not added" description={callFailure} />}
+          {callFailure !== null && <Alert type="error" showIcon title={t('flows.add.callFailed')} description={callFailure} />}
         </Flex>
       </Modal>
       <Modal
         open={newProcess !== null}
-        title="Add a process"
-        okText="Add"
+        title={t('flows.panel.addProcess')}
+        okText={t('flows.process.add')}
         okButtonProps={{ htmlType: 'submit', form: `${ids}-process-form`, disabled: !newProcess?.name }}
         onCancel={() => setNewProcess(null)}
       >
-        <p>A process holds at least one step: choose its first.</p>
+        <p>{t('flows.process.hint')}</p>
         <Form layout="vertical" id={`${ids}-process-form`} onFinish={createProcess}>
-          <Form.Item label="Name" required htmlFor={`${ids}-process-name`} validateStatus={newProcess?.refused === undefined ? undefined : 'error'} help={newProcess?.refused}>
+          <Form.Item label={t('flows.panel.name')} required htmlFor={`${ids}-process-name`} validateStatus={newProcess?.refused === undefined ? undefined : 'error'} help={newProcess?.refused}>
             <Input
               id={`${ids}-process-name`}
-              aria-label="Name"
+              aria-label={t('flows.panel.name')}
               required
               value={newProcess?.name ?? ''}
               onChange={({ target: { value: name } }) => setNewProcess((p) => (p === null ? p : { name, type: p.type }))}
             />
           </Form.Item>
-          <Form.Item label="First step" htmlFor={`${ids}-process-type`}>
+          <Form.Item label={t('flows.process.first')} htmlFor={`${ids}-process-type`}>
             <Select
               virtual={false}
               id={`${ids}-process-type`}
-              aria-label="First step"
+              aria-label={t('flows.process.first')}
               value={newProcess?.type ?? ''}
               options={addable.map(({ type }) => ({ value: type, label: type }))}
               onChange={(type) => setNewProcess((p) => (p === null ? p : { ...p, type }))}
@@ -685,10 +688,8 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
         onDiscard={leaveEditing}
         onKeepEditing={() => setDiscarding(false)}
       />
-      <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={reload} onCancel={() => setConflict(false)}>
-        <p>
-          <strong>{path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.
-        </p>
+      <Modal open={conflict} title={t('endpoints.conflict')} okText={t('endpoints.conflict.reload')} cancelText={t('frame.discard.keep')} onOk={reload} onCancel={() => setConflict(false)}>
+        <p>{rich('endpoints.conflict.hint', { path, strong: (chunks) => <strong>{chunks}</strong> })}</p>
       </Modal>
     </div>
   );

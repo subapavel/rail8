@@ -2,6 +2,7 @@ import { PlusCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, Button, Empty, Flex, Form, Input, Modal, Typography } from 'antd';
 import { useCallback, useEffect, useId, useState } from 'react';
+import { useText, type Texts } from '../../language';
 import { packageColumn } from '../../packageColumn';
 import { ReadSpinner } from '../../ReadSpinner';
 import { FlowsError, type FlowList as Listed, type FlowsApi } from './api';
@@ -26,11 +27,11 @@ interface Draft {
 
 const ID = /^[a-z][a-z0-9-]*$/;
 
-/** Why each value of `draft` cannot make a flow, by its name. */
-function wrongOf(draft: Draft): Partial<Record<keyof Draft, string>> {
+/** Why each value of `draft` cannot make a flow, by its name, in `texts`' language. */
+function wrongOf({ t }: Texts, draft: Draft): Partial<Record<keyof Draft, string>> {
   const wrong: Partial<Record<keyof Draft, string>> = {};
-  if (!/^[^/].*\.ya?ml$/.test(draft.path) || draft.path.split('/').includes('..')) wrong.path = 'a path inside the working folder that ends in .yaml or .yml';
-  for (const k of ['id', 'from', 'to'] as const) if (!ID.test(draft[k])) wrong[k] = 'lower-case letters, digits and hyphens, a letter first';
+  if (!/^[^/].*\.ya?ml$/.test(draft.path) || draft.path.split('/').includes('..')) wrong.path = t('flows.new.badPath');
+  for (const k of ['id', 'from', 'to'] as const) if (!ID.test(draft[k])) wrong[k] = t('flows.new.badId');
   return wrong;
 }
 
@@ -60,6 +61,8 @@ export const newFlowText = (id: string, from: string, to: string) =>
  * writes a flow file that does not exist yet, and opens it.
  */
 export function FlowList({ api, onOpen }: FlowListProps) {
+  const texts = useText();
+  const { t, rich } = texts;
   const [result, setResult] = useState<Result>({ kind: 'reading' });
   const [asked, setAsked] = useState(0);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
@@ -81,7 +84,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
   // a new flow's file goes beside the first flow listed, else at the top of the working folder
   const first = result.kind === 'read' ? result.list.items[0]?.path : undefined;
   const folder = first === undefined ? '' : first.slice(0, first.lastIndexOf('/') + 1);
-  const wrong = draft === null ? {} : wrongOf(draft);
+  const wrong = draft === null ? {} : wrongOf(texts, draft);
   const create = async () => {
     if (draft === null || Object.keys(wrong).length > 0) return;
     setCreating(true);
@@ -93,7 +96,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
       onOpen(draft.path, draft.id);
     } catch (error) {
       setCreateFailure(
-        error instanceof FlowsError && error.status === 412 ? `${draft.path} exists already; nothing was written.` : error instanceof Error ? error.message : String(error),
+        error instanceof FlowsError && error.status === 412 ? t('flows.new.exists', { path: draft.path }) : error instanceof Error ? error.message : String(error),
       );
     } finally {
       setCreating(false);
@@ -126,16 +129,16 @@ export function FlowList({ api, onOpen }: FlowListProps) {
 
   let body;
   if (result.kind === 'reading') {
-    body = <ReadSpinner label="Reading the working folder" />;
+    body = <ReadSpinner label={t('endpoints.folder.reading')} />;
   } else if (result.kind === 'failed') {
-    body = <Alert showIcon type="error" title="The working folder could not be read" description={result.message} />;
+    body = <Alert showIcon type="error" title={t('endpoints.folder.unread')} description={result.message} />;
   } else if (!result.list.configured) {
     body = (
       <Empty
         description={
           <>
-            <Typography.Title level={2}>No working folder</Typography.Title>
-            Start the UI with <code>RAIL8_WORKSPACE</code> set to the folder that holds your packages, such as <code>RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev</code>.
+            <Typography.Title level={2}>{t('endpoints.folder.none')}</Typography.Title>
+            {rich('endpoints.folder.none.hint', { code: (chunks) => <code>{chunks}</code> })}
           </>
         }
       />
@@ -145,8 +148,8 @@ export function FlowList({ api, onOpen }: FlowListProps) {
       <Empty
         description={
           <>
-            <Typography.Title level={2}>No flow files</Typography.Title>
-            The working folder holds no YAML file of the kind flow.
+            <Typography.Title level={2}>{t('flows.list.empty')}</Typography.Title>
+            {t('flows.list.empty.hint')}
           </>
         }
       />
@@ -158,12 +161,12 @@ export function FlowList({ api, onOpen }: FlowListProps) {
           <Alert
             type="warning"
             showIcon
-            title="Not every file of the working folder was looked at"
-            description="The working folder holds more YAML files than are read; only the first ones are listed."
+            title={t('endpoints.folder.truncated')}
+            description={t('endpoints.folder.truncated.hint')}
           />
         )}
         <ProTable<Listed['items'][number]>
-          aria-label="Flow files"
+          aria-label={t('flows.list.files')}
           rowKey="path"
           size="small"
           dataSource={result.list.items}
@@ -173,7 +176,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
           pagination={false}
           columns={[
             {
-              title: 'Flow',
+              title: t('flows.list.flow'),
               key: 'flow',
               render: (_, item) => {
                 const id = 'id' in item ? item.id : (item.path.split('/').at(-1) ?? item.path);
@@ -188,7 +191,7 @@ export function FlowList({ api, onOpen }: FlowListProps) {
               },
             },
             packageColumn(result.list.items, (item) => item.path),
-            { title: 'File', dataIndex: 'path' },
+            { title: t('endpoints.list.file'), dataIndex: 'path' },
           ]}
         />
       </Flex>
@@ -199,11 +202,11 @@ export function FlowList({ api, onOpen }: FlowListProps) {
     <Flex vertical gap="middle">
       <Flex align="center" gap="small" wrap>
         <Typography.Title level={1} style={{ margin: 0 }}>
-          Flows
+          {t('flows.screen.title')}
         </Typography.Title>
         <Flex gap="small" style={{ marginInlineStart: 'auto' }}>
           <Button icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-            Refresh
+            {t('endpoints.refresh')}
           </Button>
           {result.kind === 'read' && result.list.configured && (
             <Button
@@ -214,29 +217,29 @@ export function FlowList({ api, onOpen }: FlowListProps) {
                 setDraft({ path: folder, pathTyped: false, id: '', from: '', to: '' });
               }}
             >
-              New flow
+              {t('flows.new')}
             </Button>
           )}
         </Flex>
       </Flex>
-      <Typography.Text type="secondary">The flow files of the working folder. Each one opens in a tab of its own as a picture of its steps.</Typography.Text>
+      <Typography.Text type="secondary">{t('flows.list.intro')}</Typography.Text>
       {body}
       <Modal
         open={draft !== null}
-        title="New flow"
-        okText="Create"
+        title={t('flows.new')}
+        okText={t('flows.new.create')}
         confirmLoading={creating}
-        okButtonProps={{ 'aria-label': 'Create', 'aria-busy': creating, htmlType: 'submit', form: `${ids}-form`, disabled: creating || draft === null || Object.keys(wrong).length > 0 }}
+        okButtonProps={{ 'aria-label': t('flows.new.create'), 'aria-busy': creating, htmlType: 'submit', form: `${ids}-form`, disabled: creating || draft === null || Object.keys(wrong).length > 0 }}
         cancelButtonProps={{ disabled: creating }}
         onCancel={() => !creating && setDraft(null)}
       >
-        <p>A synchronous flow with one step; the rest is added in its picture.</p>
+        <p>{t('flows.new.hint')}</p>
         <Form layout="vertical" id={`${ids}-form`} onFinish={() => void create()}>
-          {field('id', 'Id', 'The flow’s id.')}
-          {field('path', 'File', 'Its path in the working folder; nothing is written over an existing file.')}
-          {field('from', 'Arrives at', 'The id of the inbound endpoint the flow serves.')}
-          {field('to', 'Sends to', 'The id of the outbound endpoint its first step sends to.')}
-          {createFailure !== null && <Alert type="error" showIcon title="The flow was not created" description={createFailure} />}
+          {field('id', t('flows.new.id'), t('flows.new.id.help'))}
+          {field('path', t('endpoints.list.file'), t('flows.new.path.help'))}
+          {field('from', t('flows.new.from'), t('flows.new.from.help'))}
+          {field('to', t('flows.new.to'), t('flows.new.to.help'))}
+          {createFailure !== null && <Alert type="error" showIcon title={t('flows.new.failed')} description={createFailure} />}
         </Form>
       </Modal>
     </Flex>

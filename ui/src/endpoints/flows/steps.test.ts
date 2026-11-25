@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, FLOW_PARTS, KEY_NAME, settingsOf, STEP_NAME } from './steps';
 import type { StepField } from './types';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const platform = join(__dirname, '..', '..', '..', '..', 'platform');
 const schema = JSON.parse(readFileSync(join(platform, 'schemas', 'src', 'main', 'resources', 'schemas', 'flow.schema.json'), 'utf8')) as {
@@ -109,7 +112,7 @@ describe('the flow’s own settings', () => {
   });
 
   it('are judged key inside key, a required one left out at its own path', () => {
-    expect(checkFields(FLOW_FIELDS, { id: 'a', version: '1.0.0', from: { endpoint: 'in' }, delivery: { mode: 'sync', timeout: '30 s' }, limits: {} }, [])).toEqual([
+    expect(checkFields(en, FLOW_FIELDS, { id: 'a', version: '1.0.0', from: { endpoint: 'in' }, delivery: { mode: 'sync', timeout: '30 s' }, limits: {} }, [])).toEqual([
       { path: ['delivery', 'timeout'], message: expect.stringContaining('must match') },
       { path: ['limits', 'maxBodyBytes'], message: 'is required' },
     ]);
@@ -121,18 +124,18 @@ describe('checkStep', () => {
   const settings = settingsOf(to.fields, to.rules);
 
   it('asks for exactly one of endpoint and byProp, and for endpoints with byProp', () => {
-    expect(checkStep(settings, { type: 'to', endpoint: 'a' }, ['steps', 0], false, to.check)).toEqual([]);
-    expect(checkStep(settings, { type: 'to' }, ['steps', 0], false, to.check)).toEqual([{ path: ['steps', 0], message: 'set exactly one of endpoint, byProp' }]);
-    expect(checkStep(settings, { type: 'to', byProp: 'P' }, ['steps', 0], false, to.check)).toEqual([{ path: ['steps', 0, 'endpoints'], message: 'is required when byProp is set' }]);
+    expect(checkStep(en, settings, { type: 'to', endpoint: 'a' }, ['steps', 0], false, to.check)).toEqual([]);
+    expect(checkStep(en, settings, { type: 'to' }, ['steps', 0], false, to.check)).toEqual([{ path: ['steps', 0], message: 'set exactly one of endpoint, byProp' }]);
+    expect(checkStep(en, settings, { type: 'to', byProp: 'P' }, ['steps', 0], false, to.check)).toEqual([{ path: ['steps', 0, 'endpoints'], message: 'is required when byProp is set' }]);
   });
 
   it('judges a list field item by item and a map field entry by entry', () => {
     const route = settingsOf(BUILT_IN.route!.fields);
-    expect(checkStep(route, { type: 'route', prop: 'P', routes: [{ when: 'x', set: '' }, { set: 'b' }, 'c'] }, ['steps', 1], false)).toEqual([
+    expect(checkStep(en, route, { type: 'route', prop: 'P', routes: [{ when: 'x', set: '' }, { set: 'b' }, 'c'] }, ['steps', 1], false)).toEqual([
       { path: ['steps', 1, 'routes', 1, 'when'], message: 'is required' },
       { path: ['steps', 1, 'routes', 2], message: 'must be a mapping' },
     ]);
-    expect(checkStep(settings, { type: 'to', byProp: 'P', endpoints: { a: 1 } }, ['steps', 0], false, to.check)).toEqual([
+    expect(checkStep(en, settings, { type: 'to', byProp: 'P', endpoints: { a: 1 } }, ['steps', 0], false, to.check)).toEqual([
       { path: ['steps', 0, 'endpoints', 'a'], message: 'must be text' },
     ]);
   });
@@ -140,20 +143,20 @@ describe('checkStep', () => {
   it('names a key no field describes only when the step is closed', () => {
     const route = settingsOf(BUILT_IN.route!.fields);
     const values = { type: 'route', prop: 'P', routes: [{ when: 'x', set: 'a' }], colour: 'red', name: 'r' };
-    expect(checkStep(route, values, ['steps', 0], false)).toEqual([]);
-    expect(checkStep(route, values, ['steps', 0], true)).toEqual([{ path: ['steps', 0, 'colour'], message: 'no such setting' }]);
+    expect(checkStep(en, route, values, ['steps', 0], false)).toEqual([]);
+    expect(checkStep(en, route, values, ['steps', 0], true)).toEqual([{ path: ['steps', 0, 'colour'], message: 'no such setting' }]);
   });
 });
 
 describe('checkStepTab', () => {
   it('judges the name, retryable and recording', () => {
-    expect(checkStepTab({ type: 'xsd', name: 'Bad name', retryable: 'yes', recording: { level: 'loud', extra: 1 } }, ['steps', 0])).toEqual([
+    expect(checkStepTab(en, { type: 'xsd', name: 'Bad name', retryable: 'yes', recording: { level: 'loud', extra: 1 } }, ['steps', 0])).toEqual([
       { path: ['steps', 0, 'name'], message: expect.any(String) },
       { path: ['steps', 0, 'retryable'], message: expect.any(String) },
       { path: ['steps', 0, 'recording', 'level'], message: expect.any(String) },
       { path: ['steps', 0, 'recording', 'extra'], message: 'no such setting' },
     ]);
-    expect(checkStepTab({ type: 'xsd', name: 'ok', retryable: true, recording: { level: 'ends', payload: 'keep' } }, ['steps', 0])).toEqual([]);
+    expect(checkStepTab(en, { type: 'xsd', name: 'ok', retryable: true, recording: { level: 'ends', payload: 'keep' } }, ['steps', 0])).toEqual([]);
   });
 });
 
@@ -188,8 +191,8 @@ describe('describeSchema', () => {
   it('takes a value that a part of matches the schema’s pattern, as JSON Schema does', () => {
     const [code] = describeSchema({ type: 'object', properties: { code: { type: 'string', pattern: '^[A-Z]' } } })!.settings.fields;
     const settings = settingsOf([code!]);
-    expect(checkStep(settings, { type: 'x', code: 'ABC' }, ['steps', 0], false)).toEqual([]);
-    expect(checkStep(settings, { type: 'x', code: 'abc' }, ['steps', 0], false)).toHaveLength(1);
+    expect(checkStep(en, settings, { type: 'x', code: 'ABC' }, ['steps', 0], false)).toEqual([]);
+    expect(checkStep(en, settings, { type: 'x', code: 'abc' }, ['steps', 0], false)).toHaveLength(1);
   });
 
   it('describes nothing of a schema without properties', () => {
