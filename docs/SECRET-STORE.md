@@ -74,7 +74,7 @@ These limits are accepted. They are stated first, and the operator's documentati
 | Kind | Id | Holds | Imported once from the environment |
 | --- | --- | --- | --- |
 | Plain value | `value` | a text of 1 character to 32 KiB, UTF-8 | `RAIL8_SECRET_<NAME>` |
-| Credentials | `credentials` | a user of 1 to 256 characters and a password of 1 to 4,096 | only `rail8.git`, from `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN` |
+| Credentials | `credentials` | a user of 1 to 256 characters and a password of 1 to 4,096; for `rail8.git`, neither blank | only `rail8.git`, from `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN` |
 | Key pair | `key-pair` | a private key, its public key, and 0 to 10 certificates, the leaf first | no |
 
 A key pair is written as text: the private key in PEM, PKCS#8 (`BEGIN PRIVATE KEY`) or unencrypted OpenSSH
@@ -179,6 +179,13 @@ public final class Secret {
   deploy, restore or the node's restart. No flow is rebuilt for a secret. A typed value, read through its handle, changes
   at its next read.
 - Every such reference is a use of kind `value` by its flow, in any option, so a delete of its name is 409 `in-use`.
+- A build reads each reference once. The endpoint's options as that build resolved them are the one holder of its
+  values: the flow's scrubber, and the node's scrubber of every text about the build (a refusal and its problems, an
+  audit row, a log line), take them from there, for a flow that runs or drains and for the candidates of the deploy at
+  hand. No second lookup supplies an endpoint's value.
+- A deploy or a restore keeps a running flow only when both its hash and the plain values its endpoints resolved equal
+  the candidate's. The values are compared in memory and never enter the hash or any text, so a deploy of unchanged
+  files after a changed value swaps the flow.
 - A flow left draining is built as any flow is, and keeps the plain values read at that build until its next one.
 - So until connections replace endpoint files, a secret administrator can change a value that an endpoint option reads,
   an address among them, and the flow sends to it from its next build. This is accepted beside whoever deploys.
@@ -202,10 +209,11 @@ public final class Secret {
     under `rail8.`); two variables that map to one name, such as `X` and `X_FILE`, are refused, naming both; one of
     `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN` without the other is refused, whatever `RAIL8_GIT_BASE` is; at most 1,000
     names;
-  - the files: the import alone reads a `RAIL8_SECRET_<NAME>_FILE`, at generation 0 only, by the rules of the node's
-    other secret files (an absolute path; missing, unreadable, empty, larger than 64 KiB or not UTF-8 text is refused),
-    and never on the event loop;
-  - each create with the checks of its kind and of the store's limits.
+  - the files: each variable the import reads may be given as its `_FILE` form, and the import alone reads it, at
+    generation 0 only, with the reader and the rules of the node's other secret files (an absolute path; missing,
+    unreadable, empty, larger than 64 KiB or not UTF-8 text is refused), and never on the event loop. The variables
+    keep the names they are set under, for the refusals, the audit and the WARNING;
+  - each create with the checks of its kind and of the store's limits; `rail8.git` refuses a blank user or token.
 
   Any refusal refuses the node's start, naming the variable and the check, never the value or the file's content: the
   transaction rolls back, and the store stays at generation 0. The import checks no live node's key: at generation 0 no
@@ -295,14 +303,17 @@ alter table deployments add column secret_uses_known boolean not null default fa
 - A node without the key does not start, in every environment and whatever the store holds, as for the other keys it
   needs. The node refuses it before its first statement to Postgres, naming `RAIL8_SECRETS_KEY_FILE`, `RAIL8_SECRETS_KEY`
   and `openssl rand -base64 32`. The quickstart generates one once into `~/.rail8-secrets-key` (`openssl rand -base64 32`,
-  readable by its owner only) and exports that same key as `RAIL8_SECRETS_KEY` at each start, beside the emergency key it
-  makes anew; a deployed node takes `RAIL8_SECRETS_KEY_FILE`. CI and `bin/run-adapter` generate one for each run. Each
+  readable by its owner only), published as a complete file that never replaces one already there, and exports that
+  same key as `RAIL8_SECRETS_KEY` at each start, beside the emergency key it makes anew; a deployed node takes
+  `RAIL8_SECRETS_KEY_FILE`. CI and `bin/run-adapter` generate one for each run. Each
   compose stack passes the variable as it passes its admin token: `docker-compose.yml` with `${RAIL8_SECRETS_KEY:-}`, the
   stack of `deploy/compose` with `${RAIL8_SECRETS_KEY:?…}`. A lost quickstart key is recovered by `docker compose down -v`,
   which empties the store with the rest.
 - The node joins in one transaction under the row lock of `secret_store`, which every write takes too, and no other
-  lock. It writes its key ids, checks every row's key id, and makes the import of a store of generation 0. A row sealed
-  under a key the node does not hold refuses its start, naming the key's id and the number of rows.
+  lock. It writes its key ids only while its row holds the epoch of this join, under the lease renewal's condition, and
+  otherwise refuses its start before anything is written. It checks every row's key id, and makes the import of a store
+  of generation 0. A row sealed under a key the node does not hold refuses its start, naming the key's id and the number
+  of rows.
 - A row that does not open, or that appears later under a key the node does not hold, is unreadable:
   - the flows and connections that use it fail as a missing secret does;
   - `/health` is `DEGRADED`;
@@ -637,6 +648,9 @@ It must not:
   - a `RAIL8_SECRET_<NAME>_FILE` naming a missing file on a store already written does not stop the start, and the
     WARNING names it as it is set;
   - a join completes while another transaction holds a name's lock;
+  - a node whose epoch a newer incarnation of the same node took imports nothing and does not start;
+  - both git variables given as files, with no base, import `rail8.git`; a blank git user, with no base, refuses the
+    start, and a write of `rail8.git` with a blank token is 422 `invalid`;
   - a node without the store's key does not start, with an empty store and with a store that holds a row;
   - a row under a key a node does not hold refuses its start; a join that races a write sees the row; a tampered row is
     unreadable and never falls back;
@@ -666,7 +680,10 @@ It must not:
     written, in each of its encodings.
 - Endpoint files:
   - an overwrite of a plain value that an endpoint option resolved changes nothing in the running flow, and its next
-    deploy sends the new value;
+    deploy, with the flow file unchanged, swaps the flow and sends the new value, on every node; a deploy with no change
+    keeps the flow;
+  - a refresh between the resolution of an endpoint's value and the component's refusal, whose failure quotes the
+    option: the refusal, its problems and its audit row hold neither value;
   - an SFTP endpoint file with `hostKey: secret://k` and `password: secret://p` reads both from the store, and its deploy
     is refused while either is missing;
   - a reference in an option that is not a secret field is a use: a delete of its name is 409 `in-use`;
@@ -727,23 +744,28 @@ builds on 1a2 and 1b, and the Secrets screen on 1a2.
 - **1a2. The store as the only source.** `class:C`, after 1a, and before 1c, the Secrets screen and the store of the
   configuration of an environment.
   - The one import of a store of generation 0, `rail8.git` included, with its audit rows; an empty variable is not set;
-    the import is the creates, all or none, and any refusal refuses the start. The `RAIL8_SECRET_<NAME>_FILE` forms are
-    read by the import only. After it no variable is read, and a node that finds one set logs the WARNING with its two
-    lists; until 1c it names the `RAIL8_SECRET_*` variables only, since the git cache still reads its own.
+    the import is the creates, all or none, and any refusal refuses the start. The `RAIL8_SECRET_<NAME>_FILE` forms and
+    `RAIL8_GIT_USER_FILE` are read by the import only; `RAIL8_GIT_TOKEN_FILE` stays read at start until 1c, for the git
+    cache. A write of `rail8.git` refuses a blank user or token. The join writes the node's row only while it holds the
+    join's epoch. After it no variable is read, and a node that finds one set logs the WARNING with its two lists; until
+    1c it names the `RAIL8_SECRET_*` variables only, since the git cache still reads its own.
   - The second source goes: `shadowedOn`, the variables in the list, and `nodes.secret_variables`. Every record's uses
     are written again by the backfill, since every reference is now a use.
   - The key mandatory: a node without it does not start, and `no-key` goes. The quickstart's `~/.rail8-secrets-key`,
     `docker-compose.yml` and the stack of `deploy/compose` passing it, CI generating one per run, `bin/run-adapter`
     generating one for each run as it makes the emergency key, and `docs/ADAPTERS.md` and `docs/QUICKSTART.md` saying
     so. `docs/QUICKSTART.md` also says that a value of the stack's `RAIL8_SECRET_*` variables changed after the first
-    start is not read: it is entered in the store, or the stack starts again after `docker compose down -v`.
+    start is not read: it is entered in the store, or the stack starts again after `docker compose down -v`. The root
+    `docker-compose.yml` passes the host key's fingerprint as `RAIL8_SECRET_SFTP_HOST_KEY_FILE`, as `deploy/compose`
+    does. The runners export the key before their first compose command, and a teardown that fails fails the check.
   - Endpoint files: a reference reads the store in any option, and no flow is rebuilt for a secret: the rebuild, the
-    stop of a flow whose rebuild fails, the change kept during a deploy and the drain's follow go.
+    stop of a flow whose rebuild fails, the change kept during a deploy and the drain's follow go. A build's resolved
+    options are the one holder of its endpoint values, and a deploy compares them with the running flow's.
   - The release notes: a variable added after the store's first write is never read; a reference whose name holds `.`
     or `_` is missing after the import, so search the deployed packages for such names before the upgrade; in a pool,
-    upgrade first a node that carries every variable; at the first start, a variable that a create would refuse, or one
-    git variable without the other, refuses the start; a database restored to a state before the first join imports
-    again.
+    upgrade first a node that carries every variable; at the first start, a variable that a create would refuse, one git
+    variable without the other, or a blank git user or token, refuses the start; a database restored to a state before
+    the first join imports again.
   - Changes the database (the column `nodes.secret_variables` goes) and the quickstart. No change to the demo: its
     references are imported from the stack's variables.
   - No release is cut between 1a2 and 1c: before 1c, `rail8.git` holds what the import read, but the git cache still
@@ -759,7 +781,8 @@ builds on 1a2 and 1b, and the Secrets screen on 1a2.
   coalesced check after a change; the release note on `rail8.` references and on the git variables, which 1a2's import
   reads once. The rule of the deploy from git that its credentials live in the node's environment only becomes: sealed
   in the secret store, imported once from the environment. The WARNING of 1a2 names `RAIL8_GIT_USER` and
-  `RAIL8_GIT_TOKEN` too, and `RAIL8_GIT_TOKEN_FILE` is read by the import only, as the other secret files are.
+  `RAIL8_GIT_TOKEN` too, and `RAIL8_GIT_TOKEN_FILE` is read by the import only, as the other secret files are. The
+  refusal of a blank user or token of `rail8.git` comes with 1a2. A release waits for 1c.
 - **2. The Secrets screen.** `class:B`, after 1a2.
   - A developer's list with its typed users.
   - A secret administrator's create, overwrite and delete, with the confirmation, and the key's state.
