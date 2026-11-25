@@ -42,7 +42,7 @@ import java.util.function.UnaryOperator;
  * first; a current value is never dropped. A plain value is replaced as text, URL-encoded and JSON-escaped; credentials by
  * their password in the same three forms and by the base64 of {@code user:password}; a key pair by the base64 of its private
  * key's PKCS#8 bytes, whole and in each 64-character line of its PEM. The plain values the flow's endpoints hold in their
- * options ({@link #FlowSecrets(SecretSource, Map)}) join them. Longer texts are replaced first.
+ * options ({@link #FlowSecrets(SecretSource, Map)}) join them. Longer texts are replaced first, in one pass over the text.
  */
 final class FlowSecrets {
 
@@ -379,11 +379,26 @@ final class FlowSecrets {
         return copy;
     }
 
+    /**
+     * {@code text} with each form of {@code values} replaced by its reference, in one pass over the original text: at each
+     * position the longest form that starts there is replaced, and a reference put in is never searched again.
+     */
     private static String replaced(String text, Map<String, String> values) {
-        if (text == null) return null;
-        String out = text;
-        for (Map.Entry<String, String> v : values.entrySet()) out = out.replace(v.getKey(), v.getValue());
-        return out;
+        if (text == null || values.isEmpty()) return text;
+        StringBuilder out = new StringBuilder(text.length());
+        int i = 0;
+        outer:
+        while (i < text.length()) {
+            for (Map.Entry<String, String> v : values.entrySet()) {   // longest first
+                if (text.startsWith(v.getKey(), i)) {
+                    out.append(v.getValue());
+                    i += v.getKey().length();
+                    continue outer;
+                }
+            }
+            out.append(text.charAt(i++));
+        }
+        return out.toString();
     }
 
     @SuppressWarnings("unchecked")
