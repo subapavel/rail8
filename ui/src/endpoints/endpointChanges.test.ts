@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { say, textsIn } from '../language';
 import { endpointChanges, HIDDEN } from './endpointChanges';
 import type { SettingsDescription } from './settings';
 
@@ -106,6 +107,8 @@ describe('endpointChanges', () => {
       status: 'unreadable',
       unreadable: [{ side: 'before', message: 'an endpoint file names its id and scheme' }],
     });
-    expect(endpointChanges(endpoint('  url: http://a\n'), 'kind: flow\n', described).unreadable).toEqual([{ side: 'after', message: 'the file is not an endpoint' }]);
+    const [notEndpoint] = endpointChanges(endpoint('  url: http://a\n'), 'kind: flow\n', described).unreadable;
+    expect(notEndpoint?.side).toBe('after');
+    expect(notEndpoint && say(textsIn('en'), notEndpoint.message)).toBe('the file is not an endpoint');
   });
 });

@@ -2,7 +2,7 @@ import { load } from 'js-yaml';
 import { leaves, same, type SettingChange } from '../leaves';
 import { EndpointFileError, readEndpoint, type EndpointDocument } from './files/endpointYaml';
 import type { SettingsDescription } from './settings';
-import { currentLanguage, textsIn } from '../language';
+import { msg, type Label } from '../language';
 
 /** One changed setting of an endpoint: its key path, the title it is shown under, and its two values on one line each; `none` when absent. */
 export interface EndpointSettingChange extends SettingChange {
@@ -24,7 +24,7 @@ export interface EndpointSettingChange extends SettingChange {
  */
 export interface EndpointChanges {
   status: 'added' | 'deleted' | 'modified' | 'formatting' | 'same' | 'unreadable';
-  unreadable: { side: 'before' | 'after'; message: string }[];
+  unreadable: { side: 'before' | 'after'; message: Label }[];
   envelope: SettingChange[];
   config: EndpointSettingChange[];
   environments: { name: string; status: 'added' | 'removed' | 'changed'; config: EndpointSettingChange[] }[];
@@ -76,7 +76,7 @@ export function endpointChanges(before: string | null, after: string | null, des
     try {
       const endpoint = readEndpoint(text);
       if (endpoint !== null) return { doc: load(text) as Record<string, unknown>, endpoint };
-      out.unreadable.push({ side, message: textsIn(currentLanguage()).t('endpoints.change.notEndpoint') });
+      out.unreadable.push({ side, message: msg('endpoints.change.notEndpoint') });
     } catch (error) {
       out.unreadable.push({ side, message: error instanceof EndpointFileError ? error.message : String(error) });
     }

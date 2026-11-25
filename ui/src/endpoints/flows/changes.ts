@@ -1,7 +1,7 @@
 import { leaves, same, type SettingChange } from '../../leaves';
 import { readFlow } from './flowYaml';
 import type { Path } from './types';
-import { currentLanguage, textsIn } from '../../language';
+import { msg, type Label } from '../../language';
 
 export type { SettingChange };
 
@@ -39,7 +39,7 @@ export interface StepChange {
  */
 export interface FlowChanges {
   status: 'added' | 'deleted' | 'modified' | 'formatting' | 'same' | 'unreadable';
-  unreadable: { side: 'before' | 'after'; message: string }[];
+  unreadable: { side: 'before' | 'after'; message: Label }[];
   settings: SettingChange[];
   processes: { name: string; status: 'added' | 'removed' }[];
   steps: StepChange[];
@@ -135,7 +135,7 @@ export function flowChanges(before: string | null, after: string | null): FlowCh
     if (text === null) return null;
     const read = readFlow(text);
     if (read.kind === 'flow') return read.value;
-    out.unreadable.push({ side, message: read.kind === 'problem' ? read.message : textsIn(currentLanguage()).t('flows.change.notFlow') });
+    out.unreadable.push({ side, message: read.kind === 'problem' ? read.message : msg('flows.change.notFlow') });
     return null;
   };
   const older = valueOf(before, 'before');
