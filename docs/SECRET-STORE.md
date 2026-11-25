@@ -159,6 +159,9 @@ public final class Secret {
 - When the value or the source of a name that an endpoint's options resolved changes in a node's memory, the node builds
   again the flows that hold it. It does so through its local follow, which builds only those flows, with the record it
   runs. A handle needs no rebuild.
+- One rule of that follow changes for this rebuild. Today a follow that cannot install keeps the old version running,
+  listed behind. A flow rebuilt for a secret whose build fails is stopped and listed `FAILED` instead, so a deleted or
+  changed secret is never used on with its old value. Each tick tries it again.
 - This rebuild goes away with endpoint files.
 
 ## Sources
@@ -174,7 +177,8 @@ public final class Secret {
 ```sql
 create table secret_store (
     one        boolean primary key default true check (one),
-    generation bigint  not null      -- raised by every change; says only that something changed
+    generation bigint  not null,     -- raised by every change
+    stamp      bigint  not null      -- a random number written by every change
 );
 
 create table secrets (
@@ -201,7 +205,7 @@ create table secret_uses (
 );
 
 alter table nodes add column secret_key bytea, add column secret_key_previous bytea,
-    add column secret_variables text[];
+    add column secret_variables text[], add column secret_epoch bigint;
 alter table deployments add column secret_uses_known boolean not null default false;
 ```
 
@@ -216,11 +220,15 @@ alter table deployments add column secret_uses_known boolean not null default fa
   nothing of the key.
 - The nonce is a row's identity: a node holds each name with the nonce it opened, and opens a row whose nonce it does not
   hold. A delete removes the row.
+- The generation and the stamp together say only that something changed. The stamp tells two states apart that have the
+  same generation, such as a database set back one change and then written once.
 - `nodes.secret_key` and `nodes.secret_key_previous` are the ids of the keys a node holds, and `nodes.secret_variables` the
-  names of its variables, written when it joins.
+  names of its variables. A node writes them when it joins, with the epoch of that join in `nodes.secret_epoch`. A write
+  counts a live node whose `secret_epoch` is not its `epoch` as holding no key.
 - `secret_uses` holds every use (below). `deployments.secret_uses_known` says whether a record's flow rows are there. It is
   false for every record written before the store.
-- The migration writes the platform's row: `rail8.git`, used by `platform`/`git` as credentials.
+- The migration inserts the one row of `secret_store`, generation 0 with a random stamp, and the platform's row of
+  `secret_uses`: `rail8.git`, used by `platform`/`git` as credentials.
 
 ## The key
 
@@ -240,9 +248,11 @@ alter table deployments add column secret_uses_known boolean not null default fa
   - `/health` is `DEGRADED`;
   - the list shows it `unreadable`;
   - a WARNING names the name and the key's id once.
-- A node treats its previous key as no longer held once it has seen, while running, no row of any table sealed or bound
-  under it. While the variable is still set, `/health` is `DEGRADED` and a WARNING says to remove it. A node restarted with
-  it still set holds it again until it sees that no row needs it.
+- A node stops holding its previous key once every live node names the same current key as it, and no row of any table
+  is sealed or bound under the previous one. It checks both, and clears `secret_key_previous` in its row, in one
+  transaction under the store's row lock, so no write can seal under that key after the check. While the variable is
+  still set, `/health` is `DEGRADED` and a WARNING says to remove it. A node restarted with it still set holds it again
+  until the same check passes.
 
 ### Changing the key
 
@@ -256,14 +266,18 @@ Two rolls of the pool's nodes:
      409 until the roll ends. The UI says to try again after the roll.
 2. Once every live node names the same current key, each node's tick seals again up to 100 rows still under another key.
    Each batch is one transaction under the store's row lock. The ticks also ask the configuration to bind its rows again
-   under the new key. When no row of any table is left under another key, the node that sealed the last one writes the
-   audit row `secret.key-changed`. Its actor is the node, its way `local`, and its detail the old and the new key's ids
-   and the number of rows.
+   under the new key. Sealing again changes a row's key id and nonce only: its `changed_at` and `changed_by` stay those of
+   the last person who wrote it. When no row of any table is left under another key, the node that sealed the last one
+   writes the audit row `secret.key-changed`, subject `secret-store`. Its actor is the node, its way `local`, and its
+   detail the old and the new key's ids and the number of rows.
 3. Once `GET /admin/secrets` shows no row under the old key, each node is restarted without
    `RAIL8_SECRETS_KEY_PREVIOUS`.
 
 - A node that starts without the old key while rows remain under it refuses its start, as above. A pool rolled back to
   the old key changes back the same way.
+- A node restarted on a version before the store ignores the store and runs on its variables. Its join raises its epoch
+  and writes no key ids, so every write is 409 `keys-differ` while it runs. The release note says not to run a version
+  before the store beside one that has it.
 - A forged row of `nodes` can only hold writes back. It never decides which key seals.
 - An unreadable row cannot be sealed again. It is deleted, and its secret entered again.
 - **After a leak of the key:** changing the key does not protect the database's backups that were taken under the old key.
@@ -272,16 +286,17 @@ Two rolls of the pool's nodes:
 
 ## How every node learns of a change
 
-- A write commits its row, the store's generation, its audit row and `pg_notify('rail8_secrets', '<generation>')` in one
-  transaction.
-- Each node listens on `rail8_secrets` on the connection it already holds for `LISTEN`. It reads the store's generation on
-  each notice, after every `LISTEN` acknowledged (a reconnect may have lost notices), and at each 5 s tick on the
+- A write commits its row, the store's generation and stamp, its audit row and `pg_notify('rail8_secrets', '<generation>')`
+  in one transaction.
+- Each node listens on `rail8_secrets` on the connection it already holds for `LISTEN`. It reads the store's generation and
+  stamp on each notice, after every `LISTEN` acknowledged (a reconnect may have lost notices), and at each 5 s tick on the
   injected timer.
-- When the generation differs from the one it holds, ahead or behind, the node reads in one repeatable-read transaction:
-  the generation, and every row's name, kind, key id and nonce.
+- When the generation or the stamp differs from the one it holds, the node reads in one repeatable-read transaction: the
+  generation, the stamp, and every row's name, kind, key id and nonce.
   - It opens the rows whose nonce it does not hold, and drops the names that are gone.
-  - A generation behind its own means the database went back to an earlier state. It is a WARNING, and the node holds
-    what it read, as for any other change.
+  - A generation behind its own, or the same generation with another stamp, means the database went back to an earlier
+    state, since every change raises the generation. It is a WARNING, and the node holds what it read, as for any other
+    change.
   - The payload of a notice is only a wake-up.
 - The node that wrote reads again before it answers, so a write is in force on that node when it is answered.
 - The values are held in the node's memory. A read of a secret never goes to Postgres.
@@ -306,7 +321,8 @@ Two rolls of the pool's nodes:
 - A node that restores a record whose `secret_uses_known` is false writes its flow rows, taking the pool's lock without
   waiting. While another holds the lock, it leaves the record as it is and tries again at a later tick.
 - The list answers the direct users. For a connection, it adds the deployed flows that name the connection, from the
-  configuration's own record. A delete counts every row, and every record whose uses are not known, as `mayUse`.
+  configuration's own record. A delete counts every row as a use, and every record whose uses are not known as a
+  possible one: the 409 `in-use` answer names the first in `usedBy` and the others in `mayUse`.
 
 ## Git credentials
 
@@ -366,6 +382,7 @@ The refusals and their codes:
 | 409 | `kind-in-use` | a create of a kind that a use of the name does not take |
 | 409 | `in-use` | a delete without the confirmation, of a name with a use or a `mayUse` |
 | 409 | `keys-differ` | a write while a live node does not hold the key it would seal under |
+| 409 | `store-full` | a create beyond 1,000 secrets, or a write that would take the sealed values beyond 16 MiB |
 | 409 | `reserved` | a name under `rail8.` other than `rail8.git` |
 | 422 | `invalid` | a value of the wrong form or out of its limits; it names the field and never echoes the value |
 | 503 | `no-key` | a write on a node without the store's key |
@@ -401,8 +418,8 @@ open is a problem naming its key's id.
 - At a restore and a follow, a problem refuses the package whole. It is listed `FAILED` with its problems and tried again
   at each tick, as today, so a secret created later lets the next tick install it.
 - A secret that a running flow uses and that is deleted, or becomes unreadable, fails that flow's next read. In the
-  interim, the flows whose endpoint options held it are built again, fail their build, and are listed `FAILED`. Each tick
-  tries them again.
+  interim, the flows whose endpoint options held it are built again, fail their build, and are stopped and listed
+  `FAILED`, as above. Each tick tries them again.
 
 ## Scrubbing
 
@@ -486,7 +503,8 @@ It must not:
 | forging a value with an old key after a change | the previous key is dropped once no row needs it; `DEGRADED` while it is set |
 | steering writes to a key they hold through `nodes` | a node seals under its own current key; a forged row only holds writes back |
 | deleting a row, or putting an old row back | accepted: a variable may take over, or an old value return; the generation behind is a WARNING |
-| restoring the database to an earlier state | every node reads everything when the generation differs, behind or ahead |
+| restoring the database to an earlier state | every node reads everything when the generation or the stamp differs |
+| a node rolled back to a version before the store | its join leaves no key ids for its epoch, so writes are 409 while it runs |
 | reading a value back through the API | no route answers one; the audit and the logs never hold one; a refusal never echoes one |
 | a developer learning values | the list holds names, kinds, dates, uses and public facts of certificates only |
 | a write that a node cannot read | 409 `keys-differ` unless every live node holds the key; the join checks the rows under the same lock |
@@ -510,7 +528,8 @@ It must not:
 - One contract suite, `SecretStoreContract`, runs for the Postgres store (Testcontainers) and an in-memory one. Two Postgres
   stores over one database stand for two nodes, each with its own fake clock and timer. Across them:
   - a write on one is read on the other after the notice, and after one tick with the notice dropped;
-  - a database set back to an earlier state, then written, is read whole by both, with the WARNING;
+  - a database set back to an earlier state is read whole by both, with the WARNING, and so is one set back one change
+    and then written once;
   - a delete brings back the variable, and a deleted secret fails the next read of a handle;
   - a row under a key a node does not hold refuses its start; a join that races a write sees the row; a tampered row is
     unreadable and never falls back;
@@ -520,8 +539,8 @@ It must not:
     - a node refuses to start without the old key while rows remain under it;
     - the previous key is no longer held once no row needs it;
     - a forged `nodes` row holds writes back and changes no seal.
-- The seal: each bound field changed one at a time fails to open; two seals of one value differ; values of 1 and 255
-  bytes give rows of one length.
+- The seal: each bound field changed one at a time fails to open; two seals of one value differ; plain values of 1
+  and 244 bytes, whose objects take 13 and 256 bytes, give rows of one length.
 - The uses:
   - a delete that races a deploy, and a deploy that races a delete, end with a consistent record or a refusal;
   - a restore writes the uses of a record that had none;
@@ -575,16 +594,18 @@ Each step is one issue, built and merged on its own. 1a comes first. The configu
   - `FlowSecrets` with the earlier values and the encodings.
   - The binding for the configuration.
   - The API's value types `Secret.Kind`, `Secret.Credentials` and `Secret.KeyPair`, and `Services.secret` with kinds for
-    custom code, with the testkit's `FakeServices`.
+    custom code, with the testkit's `FakeServices`, its placeholder key pair, and the placeholders of `rail8 validate` and
+    `rail8 test` for every kind.
   - The key pair's checks at the write.
 - **1b. Credentials and key pairs in adapters.** `class:C`, after 1a.
   - `Field.secret` with kinds, and `secret(option)` on the config an adapter is built with.
   - The component contract's check that a build reads no handle.
-  - The placeholders of `rail8 validate`.
   - The SFTP component by credentials and by key pair, with its mock.
   - It is apart from 1a because it changes public types every adapter builds on, and is reviewed as a contract of its own.
 - **1c. The git credentials from the store.** `class:C`, after 1a. `rail8.git` read once per request, behind the same-origin
-  check; the coalesced check after a change; `credentialsFrom`; the release note on `rail8.` references.
+  check; the coalesced check after a change; `credentialsFrom`; the release note on `rail8.` references. The rule of the
+  deploy from git that its credentials live in the node's environment only becomes: in the environment, or sealed in the
+  secret store.
 - **2. The Secrets screen.** `class:B`, after 1a.
   - A developer's list with its typed users, and `shadowedOn`.
   - A secret administrator's create, overwrite and delete, with the confirmation, and the key's state.
