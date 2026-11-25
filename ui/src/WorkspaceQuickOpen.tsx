@@ -117,7 +117,7 @@ export function WorkspaceQuickOpen({ screens, find, choose, chooseFound, dismiss
             <Button
               type="text"
               data-choice
-              key={`found:${found.screen.id}`}
+              key={`found:${found.path}`}
               disabled={refused !== undefined}
               icon={found.screen.icon ?? <FileTextOutlined aria-hidden />}
               onClick={() => chooseFound(found)}
