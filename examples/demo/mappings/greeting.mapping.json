@@ -1,0 +1,68 @@
+{
+  "formatVersion": 1,
+  "source": {
+    "bundle": [
+      "../structures/greeting/person.schema.json"
+    ],
+    "fingerprint": "sha256:3f63fbc1732be08cba92cb3d1ef00d97bc96e9febbf439e54c09427db1690efa",
+    "root": {
+      "json": "$"
+    }
+  },
+  "target": {
+    "bundle": [
+      "../structures/greeting/greeting.xsd"
+    ],
+    "fingerprint": "sha256:ff8c1d7090519a04de43b3a1456a08e85720aaefb30213cbf07984e84c6db8d9",
+    "root": {
+      "element": "Greeting"
+    }
+  },
+  "targetFieldMappings": {
+    "/Greeting/City": {
+      "boxes": {
+        "S2": {
+          "field": "/$/city",
+          "kind": "source"
+        }
+      },
+      "id": "T2",
+      "result": "S2"
+    },
+    "/Greeting/Name": {
+      "boxes": {
+        "S1": {
+          "field": "/$/name",
+          "kind": "source"
+        }
+      },
+      "id": "T1",
+      "result": "S1"
+    },
+    "/Greeting/Text": {
+      "boxes": {
+        "C1": {
+          "fn": "constant",
+          "kind": "function",
+          "params": {
+            "value": "Hello, "
+          }
+        },
+        "F1": {
+          "fn": "concat",
+          "inputs": [
+            "C1",
+            "S3"
+          ],
+          "kind": "function"
+        },
+        "S3": {
+          "field": "/$/name",
+          "kind": "source"
+        }
+      },
+      "id": "T3",
+      "result": "F1"
+    }
+  }
+}

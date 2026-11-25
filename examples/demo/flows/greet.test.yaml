@@ -1,0 +1,14 @@
+# The mapping runs for real; the reply is its greeting, which the case cannot read, so it counts the steps.
+schemaVersion: 1
+kind: test
+flow: greet
+cases:
+  - name: a person greeted
+    send: fixtures/person.json
+    expect:
+      status: 200
+      steps: 2
+  - name: a body that is no JSON
+    send: fixtures/not-json.txt
+    expect:
+      status: 400

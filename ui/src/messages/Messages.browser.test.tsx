@@ -324,6 +324,7 @@ describe('Messages', () => {
   });
 
   test('shows the wait for a worker between two steps, so the rows add up to the duration in the list', async () => {
+    const warned = vi.spyOn(console, 'error');
     render(fakeApi({ list: async () => ({ items: [row('m-3', { flow: 'demo/invoice-async', durationNanos: 26_200_000 })], next: null }) }));
     await expect.element(page.getByRole('table', { name: 'Messages' }).getByText('26.2 ms')).toBeVisible();
     await page.getByRole('button', { name: 'm-3' }).click();
@@ -340,6 +341,9 @@ describe('Messages', () => {
     await expect.element(header.getByText('100.0 µs')).toBeVisible();
     await expect.element(header.getByText('Duration')).toBeVisible();
     await expect.element(header.getByText('26.2 ms')).toBeVisible();
+    // the table of the steps keys its rows without the index antd no longer passes reliably, so it warns of nothing
+    expect(warned.mock.calls.map((call) => String(call[0])).filter((text) => text.includes('rowKey'))).toEqual([]);
+    warned.mockRestore();
   });
 
   test('restarts a message whose latest attempt failed, and shows a refusal with its reason', async () => {

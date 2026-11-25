@@ -278,6 +278,49 @@ order of `demo/order-jq`. Choose the flow `demo/order-jq`, or type the step name
 its timeline lists the steps `ingress`, `pick` and `partner`, and the payload `pick` recorded is that JSON. The same
 through the admin API: `curl -H "$auth" 'localhost:8081/admin/messages?flow=demo/order-jq&step=pick'` gives its `<id>`.
 
+## Change a mapping and see it
+
+The flow `demo/greet` maps a JSON person to an XML greeting with the studio's mapping `demo/mappings/greeting` and
+answers with the greeting. Send it a person from an HTTP client, such as Bruno or Postman:
+
+| | |
+| --- | --- |
+| Method | `POST` |
+| Address | `http://localhost:8080/http/greet` |
+| Header | `Content-Type: application/json` |
+| Body | `{"name": "Ann", "city": "Brno"}` |
+
+The same with `curl`:
+
+```sh
+curl -X POST -H 'Content-Type: application/json' --data '{"name": "Ann", "city": "Brno"}' localhost:8080/http/greet
+```
+
+The reply is the greeting:
+`<?xml version="1.0" encoding="UTF-8"?><Greeting><Name>Ann</Name><City>Brno</City><Text>Hello, Ann</Text></Greeting>`.
+The node's data port, 8080, checks no caller yet: whoever reaches it can send to every flow.
+
+1. Open the mapping. In **Packages** open `demo`, choose its **Artifacts** tab and, in the Mappings card, `greeting`
+   (or find `greeting` on the **Mappings** screen). It opens in the mapping studio.
+2. Change it. Choose the **Definition** tab and **Edit**, then the field `Text` in the target message on the right. The
+   canvas below shows how `Text` is made: the constant `Hello, ` and the source field `name`, joined by `concat`. Choose
+   the gear on the `constant` box, change **Value** to `Hi, ` (with the space at its end) and **Apply**. **Save**.
+3. Commit and deploy it. In the `demo` tab choose **Commit…**, write a message, such as `Greet with Hi`, and choose
+   **Commit and deploy**. The dialog checks the commit on the node and shows that it swaps `demo/greet`; choose
+   **Deploy**, then **Close** once it says that the node runs the new commit.
+4. Send the same request again. The reply now ends `<Text>Hi, Ann</Text></Greeting>`. In **Messages** choose the flow
+   `demo/greet`: the newest row is this message. Open it by its id: its steps are `ingress` and `greeting`, and the
+   payload after `greeting`, which its size in the step's row or the Payloads card opens, is the greeting with `Hi, Ann`.
+
+A working copy of the demo made before this flow came, in `~/rail8-workspace/demo`, gets its files with one command
+from the repository root, which leaves the copy's other files as they are:
+
+```sh
+(cd examples/demo && tar cf - endpoints/http-in-greet.yaml flows/greet.yaml flows/greet.test.yaml mappings structures fixtures/person.json fixtures/not-json.txt) | tar xf - -C ~/rail8-workspace/demo
+```
+
+Then commit and deploy them from **Packages** as in step 3, where the dialog shows that the commit adds `demo/greet`.
+
 ## Users
 
 The UI runs in session mode: you log in as a person, and every call to the node is that person's. `bootstrap` made the

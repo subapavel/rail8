@@ -330,7 +330,12 @@ check_quickstart() {
   order=$(curl -sf -X POST --data-binary @examples/demo/fixtures/sample-order.json -H 'Content-Type: application/json' localhost:8080/http/order)
   echo "$order"
   echo "$order" | grep -q '"orderId":42' || { echo "::error::order-jq did not answer the mapped order: $order"; exit 1; }
-  for flow in invoice-async sftp-invoice order-jq order-partner; do
+  # greet answers with the greeting its mapping makes
+  local greeting
+  greeting=$(curl -sf -X POST -H 'Content-Type: application/json' --data '{"name": "Ann", "city": "Brno"}' localhost:8080/http/greet)
+  echo "$greeting"
+  echo "$greeting" | grep -q '<Text>Hello, Ann</Text>' || { echo "::error::greet did not answer the greeting: $greeting"; exit 1; }
+  for flow in invoice-async sftp-invoice order-jq order-partner greet; do
     for _ in $(seq 1 40); do
       found=$(ui "/admin/messages?from=$(date -u -d '1 hour ago' +%FT%TZ)&to=$(date -u -d '1 minute' +%FT%TZ)&flow=demo/$flow&status=completed")
       echo "$found" | grep -q '"items":\[{' && break

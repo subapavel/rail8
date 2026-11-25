@@ -7,7 +7,8 @@ import { uiPort } from './server/uiPort';
 // on 127.0.0.1:8081 (RAIL8_ADMIN_URL to change it) and two credentials exported: RAIL8_ADMIN_TOKEN, the node's emergency key, and RAIL8_TOKEN, the token of a developer's account that `rail8 bootstrap` writes. The working folder is a
 // temporary copy of the mapping corpus that e2e/stack-setup.mjs prepares. The deploy scenario has a development server
 // of its own, on the next port, over the quickstart's working folder ~/rail8-workspace, the one the node deploys from.
-// The users scenario has one on the port after that, started without a token, so that a person logs in.
+// The users scenario and the scenario of the quickstart's change of a mapping have one on the port after that, over the
+// quickstart's working folder too, started without a token, so that a person logs in.
 const port = uiPort(process.env.RAIL8_UI_PORT);
 
 export default defineConfig({
@@ -33,10 +34,10 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: 'exec npm run dev',
+      command: `mkdir -p ${deployWorkspace} && exec npm run dev`,
       url: `http://localhost:${sessionPort}/`,
       // blank is unset: without a token the server runs in session mode
-      env: { RAIL8_ADMIN_TOKEN: '', RAIL8_TOKEN: '', RAIL8_UI_PORT: String(sessionPort) },
+      env: { RAIL8_WORKSPACE: deployWorkspace, RAIL8_ADMIN_TOKEN: '', RAIL8_TOKEN: '', RAIL8_UI_PORT: String(sessionPort) },
       reuseExistingServer: false,
     },
   ],
