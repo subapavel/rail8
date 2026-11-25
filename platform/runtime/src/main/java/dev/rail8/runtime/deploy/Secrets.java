@@ -132,8 +132,10 @@ public final class Secrets {
             return Optional.empty();
         }
         if (kinds.contains(Secret.Kind.VALUE) && variableValue(name) != null) return Optional.empty();
-        return Optional.of("secret '" + reference + "' is not set (" + (kinds.contains(Secret.Kind.VALUE) ? "in the secret store, or "
-                + where(reference) : "in the secret store, which alone holds " + ids(kinds)) + ")");
+        if (kinds.contains(Secret.Kind.VALUE)) {
+            return Optional.of("secret '" + reference + "' is not set (" + (store == null ? "" : "in the secret store, or ") + where(reference) + ")");
+        }
+        return Optional.of("secret '" + reference + "' is not set (in the secret store, which alone holds " + ids(kinds) + ")");
     }
 
     /**
@@ -234,10 +236,10 @@ public final class Secrets {
         return Objects.hash(variables, key);
     }
 
-    /** The kind and the names of the variables held, the store's key ids, never a value. */
+    /** The names of the variables held, the store's key ids when it has a key, never a value. */
     @Override
     public String toString() {
         return variables == null ? "Secrets[placeholder " + PLACEHOLDER + "]"
-                : "Secrets[env " + new TreeSet<>(variables.keySet()) + ", " + key + (store == null ? "" : ", store") + "]";
+                : "Secrets[env " + new TreeSet<>(variables.keySet()) + (key.present() ? ", " + key : "") + (store == null ? "" : ", store") + "]";
     }
 }

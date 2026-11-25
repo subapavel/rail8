@@ -1,9 +1,12 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Secret;
 import dev.rail8.core.audit.Actor;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.queue.NotAdmittedException;
 import dev.rail8.runtime.queue.PgWorkQueue;
+import dev.rail8.runtime.secret.SecretStore;
+import dev.rail8.runtime.secret.StoreKey;
 import dev.rail8.testkit.FakeClock;
 import dev.rail8.testkit.FakeTimer;
 import dev.rail8.testkit.SharedPostgres;
@@ -27,6 +30,7 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -382,7 +386,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
             Migrations.Result r = Migrations.migrate(url, pg.getUsername(), pg.getPassword());
 
-            assertEquals("32", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
+            assertEquals("33", r.schemaVersion(), "the migrations after V26 applied over the V26 database");
             PgDeploymentStore store = store(own, options);
             assertEquals(new DeploymentStore.Snapshot(0, List.of()), store.read().await(), "the row is deleted; the generation starts at 0");
             DeploymentRecord shop = record("shop", "1.0.0", C_1, SHA_1, AT);
@@ -393,5 +397,90 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         } finally {
             own.close().await();
         }
+    }
+
+    /** The flows' uses of secret names in {@code secret_uses}, {@code <user>:<name>:<kinds>}, sorted. */
+    static List<String> uses() {
+        List<String> rows = new java.util.ArrayList<>();
+        pool.query("select r from (select user_id || ':' || name || ':' || array_to_string(kinds, ',') as r from secret_uses"
+                + " where user_kind = 'flow') t order by r collate \"C\"").execute().await().forEach(r -> rows.add(r.getString(0)));
+        return rows;
+    }
+
+    /** Whether the record of {@code name} has its secret uses written. */
+    static boolean known(String name) {
+        return pool.preparedQuery("select secret_uses_known from deployments where package = $1").execute(io.vertx.sqlclient.Tuple.of(name)).await()
+                .iterator().next().getBoolean(0);
+    }
+
+    /**
+     * A store whose saves and deletes write the record of uses, checked against a node that holds the variable RAIL8_SECRET_FROM_ENV
+     * and no secret in the store.
+     */
+    static PgDeploymentStore storeWithUses() {
+        pool.query("delete from secret_uses where user_kind = 'flow'").execute().await();
+        FakeClock clock = FakeClock.at(Instant.parse("2026-10-27T09:30:00Z"));
+        SecretStore secrets = SecretStore.postgres(pool, StoreKey.NONE, "node-1", List.of("RAIL8_SECRET_FROM_ENV"), clock, new FakeTimer(clock));
+        return new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connect).map(c -> (SqlConnection) c), secrets);
+    }
+
+    static final Map<String, Map<String, java.util.Set<Secret.Kind>>> FROM_ENV = Map.of("orders", Map.of("from-env", Set.of(Secret.Kind.VALUE)));
+
+    /**
+     * A save with uses writes them and marks its record's uses known in its transaction; a save whose uses name a secret the
+     * node does not hold fails with the problem and writes nothing, the record and the uses as they were; a delete removes them.
+     */
+    @Test
+    void aSaveWritesItsUsesOrNothingAndADeleteRemovesThem() {
+        emptyStore();
+        PgDeploymentStore s = storeWithUses();
+        DeploymentStore.PoolLock lock = s.lock().await().orElseThrow();
+        try {
+            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
+            assertEquals(List.of("shop/orders:from-env:value"), uses());
+            assertTrue(known("shop"), "the record's uses are known");
+            DeploymentStore.Snapshot before = s.read().await();
+
+            Throwable refused = lock.save(record("shop", "2.0.0", C_2, SHA_2, AT), Map.of("orders", Map.of("gone", Set.of(Secret.Kind.VALUE))), BY,
+                    new JsonObject()).transform(done -> io.vertx.core.Future.succeededFuture(done.cause())).await();
+            assertTrue(refused instanceof SecretUsesRefused r && r.problems().size() == 1 && r.problems().getFirst().contains("secret://gone"),
+                    "the save fails with the problem: " + refused);
+            assertEquals(before, s.read().await(), "nothing written: the record as it was");
+            assertEquals(List.of("shop/orders:from-env:value"), uses(), "and its uses");
+
+            lock.delete("shop", BY, new JsonObject()).await();
+            assertEquals(List.of(), uses(), "the delete removes the uses");
+        } finally {
+            lock.close().await();
+        }
+    }
+
+    /**
+     * A restore writes the uses of a record that had none and marks them known; while the pool's lock is held elsewhere it answers
+     * false and writes nothing, and it writes nothing for a record whose content is no longer the one restored.
+     */
+    @Test
+    void aRestoreWritesTheUsesOfARecordThatHadNone() {
+        DeploymentStore plain = emptyStore();
+        save(record("shop", "1.0.0", C_1, SHA_1, AT));   // a record written before the store kept uses
+        assertTrue(!known("shop"), "fixture: its uses are not known");
+        PgDeploymentStore s = storeWithUses();
+
+        DeploymentStore.PoolLock held = plain.lock().await().orElseThrow();
+        try {
+            assertEquals(false, s.backfillUses("shop", SHA_1, FROM_ENV).await(), "the lock is held: nothing written");
+        } finally {
+            held.close().await();
+        }
+        assertEquals(List.of(), uses());
+
+        assertEquals(true, s.backfillUses("shop", SHA_2, FROM_ENV).await(), "another content: no longer the record restored");
+        assertEquals(List.of(), uses(), "nothing written for it");
+        assertTrue(!known("shop"));
+
+        assertEquals(true, s.backfillUses("shop", SHA_1, FROM_ENV).await());
+        assertEquals(List.of("shop/orders:from-env:value"), uses());
+        assertTrue(known("shop"), "the record's uses are known");
+        assertTrue(s.lock().await().map(l -> { l.close().await(); return true; }).orElse(false), "the backfill freed the lock");
     }
 }

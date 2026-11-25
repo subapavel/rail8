@@ -40,6 +40,8 @@ public final class PgWorkSignals implements WorkSignals {
 
     /** The channel every node listens and notifies on. */
     public static final String CHANNEL = "rail8_work";
+    /** The channel the secret store's writes notify on; this listens on it too and hands each notice on. */
+    public static final String STORE_CHANNEL = "rail8_secrets";
     /** The first reconnect's delay. */
     static final long FIRST_BACKOFF_MILLIS = 100;
     /** The longest delay between two reconnect tries. */
@@ -50,6 +52,7 @@ public final class PgWorkSignals implements WorkSignals {
 
     private final Vertx vertx;
     private final PgConnectOptions listen;
+    private final Runnable storeNotice;
     private final Pool pool;
     private final Workers workers;
     private final Timer timer;
@@ -66,6 +69,15 @@ public final class PgWorkSignals implements WorkSignals {
      * {@code workers}; windows and reconnects on {@code timer}. Connects nowhere before {@link #start()}.
      */
     public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer) {
+        this(vertx, listen, pool, node, workers, timer, () -> { });
+    }
+
+    /**
+     * As the constructor above, and {@code storeNotice} run on each notification on {@value #STORE_CHANNEL} and after every
+     * {@code LISTEN} acknowledged, the first included: a notice missed while nobody listened costs one look at the store.
+     */
+    public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer, Runnable storeNotice) {
+        this.storeNotice = Objects.requireNonNull(storeNotice, "storeNotice");
         this.vertx = Objects.requireNonNull(vertx, "vertx");
         this.listen = Objects.requireNonNull(listen, "listen");
         this.pool = Objects.requireNonNull(pool, "pool");
@@ -106,8 +118,11 @@ public final class PgWorkSignals implements WorkSignals {
     /** A connection of its own that listens: the notifications handed on; one whose LISTEN failed is closed and the failure answered. */
     private Future<PgConnection> open() {
         return PgConnection.connect(vertx, listen).compose(conn -> {
-            conn.notificationHandler(n -> received(n.getPayload()));
-            return conn.query("LISTEN " + CHANNEL).execute().transform(ack -> ack.succeeded() ? Future.succeededFuture(conn)
+            conn.notificationHandler(n -> {
+                if (STORE_CHANNEL.equals(n.getChannel())) storeNotice.run();
+                else received(n.getPayload());
+            });
+            return conn.query("LISTEN " + CHANNEL + "; LISTEN " + STORE_CHANNEL).execute().transform(ack -> ack.succeeded() ? Future.succeededFuture(conn)
                     : conn.close().transform(gone -> Future.failedFuture(ack.cause())));
         });
     }
@@ -131,6 +146,7 @@ public final class PgWorkSignals implements WorkSignals {
         }
         conn.closeHandler(gone -> lost());
         workers.wakeAll();   // what was announced while nobody listened
+        storeNotice.run();   // what the store was told while nobody listened
     }
 
     /** The dedicated connection closed: a reconnect armed, unless this is closed (its own close). */
