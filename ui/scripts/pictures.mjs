@@ -62,6 +62,9 @@ const end = (page) => page.evaluate(() => window.endSession());
 const message = (id) => (page) => shown(page).getByRole('table', { name: 'Messages' }).getByRole('button', { name: id, exact: true }).click();
 /** Opens the first mapping of the Mappings screen in its studio. */
 const studio = (page) => shown(page).getByRole('button', { name: 'Open in studio' }).first().click();
+/** Selects the target field `name` on the studio's Definition tab, which shows its expression on the canvas. */
+const target = (name) => (page) =>
+  shown(page).getByRole('region', { name: 'target message' }).getByRole('table', { name: 'target fields' }).getByRole('button', { name, exact: true }).click();
 
 /** The steps that show each scene, from the application as it starts, with Home open. */
 const SCENES = {
@@ -128,6 +131,13 @@ const SCENES = {
   'message-de': [visit('in'), menu('Messages'), message('m-7f39'), speak('Deutsch')],
   'message-cs': [visit('in'), menu('Messages'), message('m-7f39'), speak('Čeština')],
   'message-ru': [visit('in'), menu('Messages'), message('m-7f39'), speak('Русский')],
+  mappings: [menu('Mappings')],
+  'mappings-de': [menu('Mappings'), speak('Deutsch')],
+  'mappings-cs': [menu('Mappings'), speak('Čeština')],
+  'mappings-ru': [menu('Mappings'), speak('Русский')],
+  'canvas-de': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Deutsch')],
+  'canvas-cs': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Čeština')],
+  'canvas-ru': [menu('Mappings'), studio, tab('Definition'), target('OrderId'), speak('Русский')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
 };
