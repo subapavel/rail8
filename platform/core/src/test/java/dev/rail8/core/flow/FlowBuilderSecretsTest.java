@@ -294,7 +294,7 @@ class FlowBuilderSecretsTest {
 
     @Test
     void aFailureFromTheRestOfThePipelineLeavesAsItCame() {
-        FlowSecrets secrets = new FlowSecrets(source);
+        FlowSecrets secrets = new FlowSecrets((reference, kinds) -> Secret.of(reference, () -> source.apply(reference)), Map.of());
         secrets.services(new StepConfig(1, "sign", "sign", false, Map.of("key", REFERENCE)), Services.NONE.cache())
                 .secret(new StepConfig(1, "sign", "sign", false, Map.of("key", REFERENCE)), "key");
         IllegalStateException downstream = new IllegalStateException("downstream holds " + VALUE);
