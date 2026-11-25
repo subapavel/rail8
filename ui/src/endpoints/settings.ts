@@ -218,7 +218,7 @@ function readField(described: DescribedField, group?: Group): SettingsField {
  * The settings of an endpoint of `direction` over the component's `forms`, split as the node splits an endpoint file:
  * the connection's fields, which take no pattern here because a file may still hold what a connection of an
  * environment may not, such as a user name in a URL; on an out endpoint that reaches a described connection the reply's
- * limit `maxBodyBytes`, required, of at least 1; then the flow's fields.
+ * limit `maxBodyBytes`, optional (the flow's limit holds without it), of at least 1; then the flow's fields.
  */
 export function endpointSettings(forms: ComponentForms, direction: 'in' | 'out'): EndpointSettings {
   const connects = forms.reach[direction] === 'connection';
@@ -229,7 +229,7 @@ export function endpointSettings(forms: ComponentForms, direction: 'in' | 'out')
   });
   const reply: SettingsField[] =
     direction === 'out' && connects && forms.described.connection
-      ? [{ name: REPLY, type: 'integer', label: msg('endpoints.field.replyLimit'), help: msg('endpoints.field.replyLimit.help'), tab: 'general', required: true, directions: ['out'], min: 1, group: 'connection' }]
+      ? [{ name: REPLY, type: 'integer', label: msg('endpoints.field.replyLimit'), help: msg('endpoints.field.replyLimit.help'), tab: 'general', directions: ['out'], min: 1, group: 'connection' }]
       : [];
   return {
     format: forms.format,

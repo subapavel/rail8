@@ -820,6 +820,9 @@ What a component promises the node:
   0.3 is refused with a line that names its version and says to build it again on the node's.
 - **Upgrade.** Every node is upgraded before polling flows run: a node of the release before takes
   another poller lease key, so it and a node of this release would poll one directory together.
+- **Endpoint files.** An `http` out endpoint without `url` and an `sftp` endpoint without `host` are refused with
+  `is required`; both took the endpoint's id as the host before. An out endpoint's `maxBodyBytes` is optional: without
+  it, the reply's limit is the flow's `limits.maxBodyBytes`.
 
 Build, test and install:
 

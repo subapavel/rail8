@@ -124,12 +124,12 @@ class EndpointUseTest {
 
     @Test
     void theCheckListsTheConnectionsThenTheFlowsThenTheReplysLimitThenTheUnknownKeys() {
-        Map<String, Object> config = config("zeta", 1, "timeoutMs", 0, "path", "orders", "alpha", true, "address", "/a");
+        Map<String, Object> config = config("zeta", 1, "timeoutMs", 0, "path", "orders", "alpha", true, "address", "/a", "maxBodyBytes", 0);
         List<Settings.Problem> problems = EndpointUse.check(HTTP_LIKE, Direction.OUT, config);
         assertEquals(List.of(
                 "/url required", "/timeoutMs min",
                 "/address direction", "/path pattern",
-                "/maxBodyBytes required",
+                "/maxBodyBytes min",
                 "/alpha unknown", "/zeta unknown"),
                 problems.stream().map(p -> p.path() + " " + p.code()).toList(), problems.toString());
         assertEquals(List.of("/maxBodyBytes min"), codes(EndpointUse.check(HTTP_LIKE, Direction.OUT, config("url", "https://p", "maxBodyBytes", 0))),
@@ -139,9 +139,12 @@ class EndpointUseTest {
     }
 
     @Test
-    void theReplysLimitIsRequiredWhenTheConnectionFormIsDescribedAndOptionalWhenItIsNot() {
-        assertEquals(List.of("/maxBodyBytes required"), codes(EndpointUse.check(HTTP_LIKE, Direction.OUT, config("url", "https://p"))),
-                "a described connection form: an out endpoint names its reply's limit");
+    void theReplysLimitIsOptionalForEveryAdapterAndAtLeastOneWhenGiven() {
+        assertEquals(List.of(), EndpointUse.check(HTTP_LIKE, Direction.OUT, config("url", "https://p")),
+                "a described connection form: left out, the flow's limit holds");
+        assertEquals(4096, EndpointUse.call(HTTP_LIKE, endpoint("p", config("url", "https://p")), "f", "s", 4096).maxReplyBytes());
+        assertEquals(List.of("/maxBodyBytes min"), codes(EndpointUse.check(HTTP_LIKE, Direction.OUT, config("url", "https://p", "maxBodyBytes", 0))),
+                "given, it is at least 1");
         assertEquals(List.of(), EndpointUse.check(UNDESCRIBED, Direction.OUT, config("answer", "ok")),
                 "an undescribed one, as the mock: left out, the flow's limit holds");
         assertEquals(4096, EndpointUse.call(UNDESCRIBED, endpoint("p", config("answer", "ok")), "f", "s", 4096).maxReplyBytes());

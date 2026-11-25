@@ -125,6 +125,11 @@ this contract: replace `settings()` with `forms()`, take `Inbound` in `consumer`
 Upgrade every node before polling flows run. A node leases a polling flow under the key `<package>/<flow>/from`, and a node
 of the release before takes another key, so the two would poll one directory together.
 
+Two endpoint files of `schemaVersion: 1` that deployed before are refused now, each with `is required`: an `http` out
+endpoint without `url`, and an `sftp` endpoint without `host`. Both took the endpoint's id as the host before. Set `url`
+or `host` in the endpoint's `config`. An out endpoint's `maxBodyBytes` is optional on every adapter: without it, the
+reply's limit is the flow's `limits.maxBodyBytes`.
+
 ## Test it
 
 ```sh

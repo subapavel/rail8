@@ -373,13 +373,13 @@ describe('Endpoints', () => {
   });
 
   test("Check takes a user name in the connection's URL, and holds the flow's fields and the reply's limit to their rules", async () => {
-    const erp: EndpointFile = { ...inbox, id: 'erp-out', path: 'demo/endpoints/erp-out.yaml', scheme: 'http', direction: 'out', config: { url: 'https://anna:pw@erp.example/idoc', path: 'orders' }, environments: [] };
+    const erp: EndpointFile = { ...inbox, id: 'erp-out', path: 'demo/endpoints/erp-out.yaml', scheme: 'http', direction: 'out', config: { url: 'https://anna:pw@erp.example/idoc', path: 'orders', maxBodyBytes: 0 }, environments: [] };
     await open(fakeApi([erp]), 'erp-out');
     await button('Edit').click();
     await button('Check').click();
     const issues = page.getByRole('list', { name: 'Issues' });
     await expect.element(issues.getByText('path must match /.*')).toBeVisible();
-    await expect.element(issues.getByText('maxBodyBytes is required')).toBeVisible();
+    await expect.element(issues.getByText('maxBodyBytes must be a whole number of at least 1')).toBeVisible();
     expect(issues.getByText(/^url/).elements()).toHaveLength(0);
   });
 
