@@ -99,7 +99,7 @@ describe('the My tokens screen', () => {
     render('my-tokens', { ...seed(), maxDays: 120 });
     await expect.element(page.getByRole('heading', { level: 1, name: 'My tokens' })).toBeVisible();
     await expect.element(page.getByText(/The tokens of alice for the command line.*A token lives at most 120 days\./)).toBeVisible();
-    await expect.element(rowIn('Your tokens', 'laptop')).toMatchTextContent(/laptop.*aaaa000000000001.*2026-11-01 10:00 UTC by alice.*2027-01-30 10:00 UTC.*2026-11-24 08:00 UTC/);
+    await expect.element(rowIn('Your tokens', 'laptop')).toMatchTextContent(/laptop.*aaaa000000000001.*Nov 1, 2026, 10:00 UTC by alice.*Jan 30, 2027, 10:00 UTC.*Nov 24, 2026, 08:00 UTC/);
     expect(rowIn('Your tokens', 'cli').query()).toBeNull();
   });
 
@@ -123,12 +123,12 @@ describe('the My tokens screen', () => {
     await dialog().getByLabelText('Your password').fill(PASSWORD);
     await dialog().getByLabelText('Valid for').fill('10');
     await issue().click();
-    await expect.element(dialog().getByText('The token build, valid until 2026-12-04 10:00 UTC:')).toBeVisible();
+    await expect.element(dialog().getByText('The token build, valid until Dec 4, 2026, 10:00 UTC:')).toBeVisible();
     const secret = dialog().getByLabelText('Token').element().textContent!;
     expect(secret).toMatch(/^rail8t_[0-9a-f]{16}_/);
     await expect.element(dialog().getByText(/It is shown only now: copy it\. The command line reads it from RAIL8_TOKEN\./)).toBeVisible();
     await button('Done').click();
-    await expect.element(rowIn('Your tokens', 'build')).toMatchTextContent('2026-12-04 10:00 UTC');
+    await expect.element(rowIn('Your tokens', 'build')).toMatchTextContent('Dec 4, 2026, 10:00 UTC');
     expect(page.getByText(secret).query()).toBeNull();
   });
 
@@ -168,7 +168,7 @@ describe('the Tokens screen', () => {
     await expect.element(page.getByText('365 days')).toBeVisible();
     await expect.element(page.getByText('90 days')).toBeVisible();
     const table = page.getByRole('table', { name: 'Tokens that expire soon' });
-    await expect.element(table).toMatchTextContent(/anna.*cli.*bbbb000000000001.*2026-11-30 10:00 UTC.*ci-deploy.*nightly.*2026-12-08 09:00 UTC/);
+    await expect.element(table).toMatchTextContent(/anna.*cli.*bbbb000000000001.*Nov 30, 2026, 10:00 UTC.*ci-deploy.*nightly.*Dec 8, 2026, 09:00 UTC/);
     expect(rowIn('Tokens that expire soon', 'later').query()).toBeNull();
     expect(rowIn('Tokens that expire soon', 'laptop').query()).toBeNull();
     expect(rowIn('Tokens that expire soon', 'gone').query()).toBeNull();
@@ -193,7 +193,7 @@ describe('the Tokens screen', () => {
     expect(state.maxDays).toBe(30);
     await expect.element(page.getByText('30 days', { exact: true }).nth(1)).toBeVisible();
     // laptop, issued on 2026-11-01, now ends on 2026-12-01, within 14 days
-    await expect.element(rowIn('Tokens that expire soon', 'laptop')).toMatchTextContent('2026-12-01 10:00 UTC');
+    await expect.element(rowIn('Tokens that expire soon', 'laptop')).toMatchTextContent('Dec 1, 2026, 10:00 UTC');
   });
 
   test('says in its words why a ceiling is refused', async () => {

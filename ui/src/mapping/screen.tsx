@@ -2,6 +2,7 @@ import { PartitionOutlined } from '@ant-design/icons';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Page } from '../Page';
 import type { Screen, UnsavedChanges } from '../screens';
+import { msg } from '../language';
 import type { ApiClient } from './api/client';
 import { MappingList } from './list/MappingList';
 import { Studio } from './studio/Studio';
@@ -25,7 +26,7 @@ export function mappingTab(api: ApiClient, browserState: BrowserStateStore, id: 
   };
   return {
     id: `mapping:${id}`,
-    group: 'Design',
+    group: msg('frame.group.design'),
     title: id.slice(id.lastIndexOf('/') + 1),
     action: 'module.call',
     render: () => (
@@ -53,10 +54,10 @@ export function mappingsScreen(api: ApiClient, browserState: BrowserStateStore):
   const onSaved = () => void queryClient.invalidateQueries({ queryKey: ['mappings'] });
   return {
     id: 'mappings',
-    group: 'Design',
+    group: msg('frame.group.design'),
     icon: <PartitionOutlined />,
-    description: 'Design and test message mappings in the working folder.',
-    title: 'Mappings',
+    description: msg('mapping.screen.description'),
+    title: msg('mapping.screen.title'),
     action: 'module.call',
     render: (open) => (
       <QueryClientProvider client={queryClient}>

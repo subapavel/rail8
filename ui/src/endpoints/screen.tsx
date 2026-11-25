@@ -1,6 +1,7 @@
 import { ApiOutlined, ApartmentOutlined } from '@ant-design/icons';
 import { Page } from '../Page';
 import type { Screen, UnsavedChanges } from '../screens';
+import { msg } from '../language';
 import { EndpointForm } from './EndpointForm';
 import { EndpointList } from './EndpointList';
 import type { EndpointsApi } from './api';
@@ -20,7 +21,7 @@ export function endpointTab(api: EndpointsApi, path: string, id: string): Screen
   return {
     id: `endpoint:${path}`,
     title: id,
-    group: 'Design',
+    group: msg('frame.group.design'),
     render: () => (
       <Page title={false}>
         <EndpointForm api={api} path={path} guardClose={guardClose} />
@@ -34,10 +35,10 @@ export function endpointTab(api: EndpointsApi, path: string, id: string): Screen
 export function endpointsScreen(api: EndpointsApi): Screen {
   return {
     id: 'endpoints',
-    title: 'Endpoints',
-    group: 'Design',
+    title: msg('endpoints.screen.title'),
+    group: msg('frame.group.design'),
     icon: <ApiOutlined aria-hidden />,
-    description: 'Inspect and edit connection settings in the working folder.',
+    description: msg('endpoints.screen.description'),
     render: (open) => (
       <Page title={false}>
         <EndpointList api={api} onOpen={(path, id) => open(endpointTab(api, path, id))} />
@@ -72,7 +73,7 @@ export function flowTab(flows: FlowsApi, endpoints: EndpointsApi, path: string, 
   return {
     id: `flow:${path}`,
     title: id,
-    group: 'Design',
+    group: msg('frame.group.design'),
     render: (open) => (
       <FlowPicture
         api={flows}
@@ -92,10 +93,10 @@ export function flowTab(flows: FlowsApi, endpoints: EndpointsApi, path: string, 
 export function flowsScreen(flows: FlowsApi, endpoints: EndpointsApi): Screen {
   return {
     id: 'flows',
-    title: 'Flows',
-    group: 'Design',
+    title: msg('flows.screen.title'),
+    group: msg('frame.group.design'),
     icon: <ApartmentOutlined aria-hidden />,
-    description: 'Inspect flow diagrams and edit their steps.',
+    description: msg('flows.screen.description'),
     render: (open) => (
       <Page title={false}>
         <FlowList api={flows} onOpen={(path, id) => open(flowTab(flows, endpoints, path, id))} />

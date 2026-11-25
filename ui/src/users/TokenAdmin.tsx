@@ -2,6 +2,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { ProCard, ProTable } from '@ant-design/pro-components';
 import { Alert, App, Button, Descriptions, Flex, Form, InputNumber, Typography } from 'antd';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
@@ -30,6 +31,8 @@ export function TokenAdmin({ api }: { api: TokensApi }) {
   const [changing, setChanging] = useState<Ceiling | null>(null);
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const { notification } = App.useApp();
+  const texts = useText();
+  const { t } = texts;
 
   useEffect(() => {
     let current = true;
@@ -46,7 +49,7 @@ export function TokenAdmin({ api }: { api: TokensApi }) {
     setRefusal(null);
     try {
       await api.revoke(token.id);
-      notification.success({ title: `The token ${token.name} of ${token.user} is revoked`, role: 'status' });
+      notification.success({ title: t('users.token.revoked', { token: token.name, name: token.user }), role: 'status' });
     } catch (error) {
       setRefusal(reasonOf(error));
     }
@@ -55,19 +58,19 @@ export function TokenAdmin({ api }: { api: TokensApi }) {
 
   let body: ReactNode;
   if (shown.kind === 'reading') {
-    body = <ReadSpinner label="Reading the tokens" />;
+    body = <ReadSpinner label={t('users.tokens.reading')} />;
   } else if (shown.kind === 'failed') {
-    body = <Alert type="error" showIcon title="The tokens could not be read" description={shown.message} action={<Button onClick={refresh}>Try again</Button>} />;
+    body = <Alert type="error" showIcon title={t('users.tokens.unread')} description={shown.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   } else {
     const { listed } = shown;
     body = (
       <>
         <ProCard
-          title={<h2>Ceiling</h2>}
+          title={<h2>{t('users.ceiling')}</h2>}
           headerBordered
           extra={
             <Allowed action="token.ceiling">
-              <Button onClick={() => setChanging(listed)}>Change…</Button>
+              <Button onClick={() => setChanging(listed)}>{t('users.ceiling.change')}</Button>
             </Allowed>
           }
         >
@@ -75,36 +78,38 @@ export function TokenAdmin({ api }: { api: TokensApi }) {
             size="small"
             column={2}
             items={[
-              { key: 'max', label: 'Longest life of a token', children: `${listed.maxDays} days` },
-              { key: 'default', label: 'Life of a new token by default', children: `${listed.defaultDays} days` },
+              { key: 'max', label: t('users.ceiling.max'), children: t('users.days', { count: listed.maxDays }) },
+              { key: 'default', label: t('users.ceiling.default'), children: t('users.days', { count: listed.defaultDays }) },
             ]}
           />
         </ProCard>
         <ProTable<Token>
-          aria-label="Tokens that expire soon"
+          aria-label={t('users.tokens.expiring')}
           rowKey="id"
           size="small"
           dataSource={listed.tokens}
           search={false}
           options={false}
           pagination={{ pageSize: TOKENS_PAGE_SIZE, hideOnSinglePage: true, showSizeChanger: false }}
-          locale={{ emptyText: `No token expires within ${EXPIRING_DAYS} days.` }}
-          headerTitle={<h2>Expire within {EXPIRING_DAYS} days</h2>}
+          locale={{ emptyText: t('users.tokens.expiring.none', { days: EXPIRING_DAYS }) }}
+          headerTitle={<h2>{t('users.tokens.expiring.within', { days: EXPIRING_DAYS })}</h2>}
           toolBarRender={() => [
             <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-              Refresh
+              {t('users.refresh')}
             </Button>,
           ]}
-          columns={tokenColumns<Token>({ user: (t) => t.user, revoke: { action: 'token.revoke', run: revoke } })}
+          columns={tokenColumns<Token>(texts, { user: (t) => t.user, revoke: { action: 'token.revoke', run: revoke } })}
         />
       </>
     );
   }
 
   return (
-    <Page title="Tokens" content={`The installation's ceiling of a token's life, and every user's tokens that expire within ${EXPIRING_DAYS} days.`}>
+    <Page title={t('users.screen.tokens')} content={t('users.tokens.content', { days: EXPIRING_DAYS })}>
       <Flex vertical gap="large">
-        {refusal !== null && <Alert type="error" showIcon closable={{ 'aria-label': 'Dismiss' }} onClose={() => setRefusal(null)} title="The token was not revoked" description={refusal} />}
+        {refusal !== null && (
+          <Alert type="error" showIcon closable={{ 'aria-label': t('users.dismiss') }} onClose={() => setRefusal(null)} title={t('users.token.notRevoked.one')} description={refusal} />
+        )}
         {body}
       </Flex>
       {changing !== null && (
@@ -113,7 +118,7 @@ export function TokenAdmin({ api }: { api: TokensApi }) {
           ceiling={changing}
           onClose={(changed) => {
             setChanging(null);
-            if (changed !== null) notification.success({ title: `A token lives at most ${changed.maxDays} days`, role: 'status' });
+            if (changed !== null) notification.success({ title: t('users.ceiling.atMost', { days: changed.maxDays }), role: 'status' });
             refresh();
           }}
         />
@@ -127,6 +132,7 @@ function CeilingDialog({ api, ceiling, onClose }: { api: TokensApi; ceiling: Cei
   const [maxDays, setMaxDays] = useState<number | null>(ceiling.maxDays);
   const [sending, setSending] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
+  const { t } = useText();
   const valid = maxDays !== null && maxDays >= 1 && maxDays <= CEILING_MAX && maxDays !== ceiling.maxDays;
 
   const save = async () => {
@@ -143,31 +149,28 @@ function CeilingDialog({ api, ceiling, onClose }: { api: TokensApi; ceiling: Cei
 
   return (
     <MountedModal
-      title="Ceiling of a token's life"
+      title={t('users.ceiling.title')}
       onCancel={sending ? undefined : () => onClose(null)}
       footer={[
         <Button key="cancel" disabled={sending} onClick={() => onClose(null)}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="save" type="primary" loading={sending} disabled={!valid} onClick={() => void save()}>
-          Save
+          {t('users.save')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        {refused !== null && <Alert type="error" showIcon title="The ceiling was not changed" description={refused} />}
-        <Typography.Text type="secondary">
-          It holds for the whole installation. A lower ceiling holds for live tokens too: a token older than it is refused from
-          the next request on. A new token lives 90 days by default, or the ceiling when that is lower.
-        </Typography.Text>
+        {refused !== null && <Alert type="error" showIcon title={t('users.ceiling.failed')} description={refused} />}
+        <Typography.Text type="secondary">{t('users.ceiling.hint', { days: 90 })}</Typography.Text>
         <Form layout="vertical">
-          <Form.Item label="Longest life of a token" htmlFor="rail8-token-ceiling" help={`1 to ${CEILING_MAX} days.`} style={{ marginBottom: 0 }}>
+          <Form.Item label={t('users.ceiling.max')} htmlFor="rail8-token-ceiling" help={t('users.days.range', { max: CEILING_MAX })} style={{ marginBottom: 0 }}>
             <InputNumber<number>
               id="rail8-token-ceiling"
               min={1}
               max={CEILING_MAX}
               precision={0}
-              suffix="days"
+              suffix={t('users.days.unit')}
               value={maxDays}
               onChange={(value) => setMaxDays(typeof value === 'number' ? value : null)}
             />

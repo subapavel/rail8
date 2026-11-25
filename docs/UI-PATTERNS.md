@@ -10,8 +10,8 @@ compact size and in both themes.
 
 `ui/src/Shell.tsx` draws the frame with ProLayout; screens never draw it.
 
-- **Header**, 48 px high: the mark and the name at the left; at the right Quick open (Ctrl+K or ⌘K), the theme switch,
-  and room for the user.
+- **Header**, 48 px high: the mark and the name at the left; at the right Quick open (Ctrl+K or ⌘K), the language
+  switch, the theme switch, and room for the user.
 - **Side menu**, fixed under the header: the screens of the registry in their groups (Overview, Monitor, Design), each
   with its icon. Its control at the edge, or Ctrl+B or ⌘B, collapses it to the icons, each with its name as a tooltip.
   Below 1280 px wide it collapses by itself; from 1280 px the frame keeps its shape.
@@ -120,6 +120,30 @@ A status is a dot with its word (`Badge status="…" text="…"`), never a colou
   on an 8 px unit.
 - Cards and other blocks stand 16 px apart: `Flex gap="large"`, or the `marginLG` gutter of a `Row`.
 - `ci/change_guard.py` rejects a hard-coded colour on a changed line.
+
+## Texts and languages
+
+The UI speaks English, German, Czech and Russian; English is the default and the text shown wherever a translation is
+missing. The header's language switch, also on the login page, changes the language at once and keeps the choice in the
+browser; without a choice the UI follows the browser's languages.
+
+- Every text a person reads has a key. A component shows it with `const { t } = useText()` and `t('users.block')`, a
+  text with values as `t('users.block.question', { name })`, a text with markup with `rich` and its tags. A text named
+  outside React, such as a screen's title or a reason kept for later, is `msg(id, values)`, shown later by `say`.
+- The texts live in `ui/locales/<language>/<module>.json`, one file per module and language, flat, sorted, each key
+  starting with the file's name and a dot. English holds every key; another language holds the keys it translates,
+  each with the same values as English.
+- A text is an ICU message: `{name}` takes a value; a count takes `{count, plural, one {…} other {…}}`, and Czech and
+  Russian add their `few` and `many`. A list of names passed as a value reads "a, b or c" in the language. Never build
+  a sentence from pieces: give the whole sentence a key.
+- Dates are `instant(texts, iso)`, minutes in UTC in the language's form; numbers go through `texts.intl`.
+- Names from data stay as they are: a user's, a package's, a flow's, a role's. The terms of
+  `ui/locales/<language>/terms.md` stay in English in every language, with their capital letter.
+- Ant Design and ProComponents follow the language through `Rail8Theme`.
+- Not translated: the node's own refusals, shown as it gave them, logs, the audit's rows, files in git, names of
+  artifacts and the command line.
+- `ci/change_guard.py` rejects a text written in place on a changed line of `ui/src/`, and a key English does not
+  have. A string that only looks like words, such as a role's name, carries the comment `// untranslated:` with why.
 
 ## Both themes
 

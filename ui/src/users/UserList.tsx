@@ -2,6 +2,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, App, Badge, Button, Checkbox, Descriptions, Flex, Form, Input, Popconfirm, Radio, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { instant, msg, say, useText, type Message, type Texts } from '../language';
 import { MountedModal } from '../MountedModal';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
@@ -9,24 +10,29 @@ import { Allowed, useAccess, useMe, useSessionRefresh } from '../SessionGate';
 import { ROLES, type Grant, type Kind, type LiveSession, type LiveToken, type Role, type TokensApi, type User, type UsersApi } from './api';
 import { IssueTokenDialog } from './IssueTokenDialog';
 import { tokenColumns } from './tokenColumns';
-import { reasonOf, when } from './words';
+import { reasonOf } from './words';
 
+/** The names of the roles, which stay in English in every language: they are terms of the installation. */
 export const ROLE_NAMES: Record<Role, string> = {
-  administrator: 'Administrator',
-  developer: 'Developer',
-  operator: 'Operator',
-  'message-bodies': 'Message bodies',
-  'secret-administrator': 'Secret administrator',
+  administrator: 'Administrator', // untranslated: a role's name is a term
+  developer: 'Developer', // untranslated: a role's name is a term
+  operator: 'Operator', // untranslated: a role's name is a term
+  'message-bodies': 'Message bodies', // untranslated: a role's name is a term
+  'secret-administrator': 'Secret administrator', // untranslated: a role's name is a term
 };
 
 /** The users on one page of the list. */
 const PAGE_SIZE = 25;
 
+/** The ids of the words for how a role was granted. */
 const VIA: Record<string, string> = {
-  session: 'in a session',
-  'emergency-key': 'with the emergency key',
-  'shared-token': 'with the shared token',
+  session: 'users.via.session',
+  'emergency-key': 'users.via.emergencyKey',
+  'shared-token': 'users.via.sharedToken',
 };
+
+/** How a role was granted, in words; a way the list does not know shows its id. */
+const viaOf = ({ t }: Texts, via: string) => (Object.hasOwn(VIA, via) ? t(VIA[via]!) : via);
 
 /** Whether the grant is the user's own: a role the user gave themselves. */
 const own = (user: User, grant: Grant) => grant.grantedBy === user.name;
@@ -36,15 +42,14 @@ const actionOf = (role: Role) => (role === 'administrator' ? 'administrators.cha
 
 /** A first password, shown once, with what to do with it. */
 function FirstPassword({ name, password }: { name: string; password: string }) {
+  const { t } = useText();
   return (
     <Flex vertical gap="small">
-      <Typography.Text>The first password of {name}:</Typography.Text>
-      <Typography.Text code copyable aria-label="First password">
+      <Typography.Text>{t('users.firstPassword.of', { name })}</Typography.Text>
+      <Typography.Text code copyable aria-label={t('users.firstPassword')}>
         {password}
       </Typography.Text>
-      <Typography.Text type="secondary">
-        It is shown only now. Give it to {name}, who chooses their own password at the first login. It holds for 7 days.
-      </Typography.Text>
+      <Typography.Text type="secondary">{t('users.firstPassword.hint', { name, days: 7 })}</Typography.Text>
     </Flex>
   );
 }
@@ -53,7 +58,7 @@ type Shown = { kind: 'reading' } | { kind: 'failed'; message: string } | { kind:
 
 /** The words of a refused act on one user, shown above the list until the next act. */
 interface Refusal {
-  title: string;
+  title: Message;
   reason: string;
 }
 
@@ -78,6 +83,8 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
   const access = useAccess();
   const refreshSession = useSessionRefresh();
   const { notification } = App.useApp();
+  const texts = useText();
+  const { t } = texts;
 
   useEffect(() => {
     let current = true;
@@ -91,11 +98,11 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
   }, [api, asked]);
 
   /** Runs one act on a user: on success says `done` and reads the list again; a refusal shows as `failed` with the node's reason. */
-  const act = async (run: () => Promise<void>, done: string, failed: string) => {
+  const act = async (run: () => Promise<void>, done: Message, failed: Message) => {
     setRefusal(null);
     try {
       await run();
-      notification.success({ title: done, role: 'status' });
+      notification.success({ title: say(texts, done), role: 'status' });
     } catch (error) {
       setRefusal({ title: failed, reason: reasonOf(error) });
     }
@@ -109,48 +116,48 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
     <Space size={0}>
       <Tooltip title={rolesAllowed === true ? undefined : rolesAllowed}>
         <Button type="link" size="small" disabled={rolesAllowed !== true} onClick={() => setDialog({ kind: 'roles', user })}>
-          Roles…
+          {t('users.roles.change')}
         </Button>
       </Tooltip>
       {/* each its own key, so the popover of one is never reused by the other */}
       {user.blockedAt === null ? (
         <Allowed key="block" action="user.block">
           <ConfirmButton
-            label="Block"
-            title={`Block ${user.name}?`}
-            description="Their sessions end now, and their tokens are refused while the block lasts."
-            onConfirm={() => act(() => api.block(user.name), `${user.name} is blocked`, `${user.name} was not blocked`)}
+            label={t('users.block')}
+            title={t('users.block.question', { name: user.name })}
+            description={t('users.block.description')}
+            onConfirm={() => act(() => api.block(user.name), msg('users.block.done', { name: user.name }), msg('users.block.failed', { name: user.name }))}
           />
         </Allowed>
       ) : (
         <Allowed key="unblock" action="user.block">
           <ConfirmButton
-            label="Unblock"
-            title={`Unblock ${user.name}?`}
-            onConfirm={() => act(() => api.unblock(user.name), `${user.name} is unblocked`, `${user.name} was not unblocked`)}
+            label={t('users.unblock')}
+            title={t('users.unblock.question', { name: user.name })}
+            onConfirm={() => act(() => api.unblock(user.name), msg('users.unblock.done', { name: user.name }), msg('users.unblock.failed', { name: user.name }))}
           />
         </Allowed>
       )}
       {user.kind === 'technical' && (
         <Allowed action="token.issue">
           <Button type="link" size="small" onClick={() => setDialog({ kind: 'token', name: user.name })}>
-            New token…
+            {t('users.token.issueTo')}
           </Button>
         </Allowed>
       )}
       {user.kind === 'person' && (
         <Allowed action="user.password-reset">
           <ConfirmButton
-            label="Reset password"
-            title={`Reset the password of ${user.name}?`}
-            description="Their sessions end, and a new first password shows once."
+            label={t('users.reset')}
+            title={t('users.reset.question', { name: user.name })}
+            description={t('users.reset.description')}
             onConfirm={async () => {
               setRefusal(null);
               try {
                 const password = await api.resetPassword(user.name);
                 setDialog({ kind: 'password', name: user.name, password });
               } catch (error) {
-                setRefusal({ title: `The password of ${user.name} was not reset`, reason: reasonOf(error) });
+                setRefusal({ title: msg('users.reset.failed', { name: user.name }), reason: reasonOf(error) });
               }
               refresh();
             }}
@@ -159,10 +166,10 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
       )}
       <Allowed action="session.end">
         <ConfirmButton
-          label="End sessions"
-          title={`End every session of ${user.name}?`}
-          description="They log in again in each browser."
-          onConfirm={() => act(() => api.endSessions(user.name), `The sessions of ${user.name} ended`, `The sessions of ${user.name} did not end`)}
+          label={t('users.end')}
+          title={t('users.end.question', { name: user.name })}
+          description={t('users.end.description')}
+          onConfirm={() => act(() => api.endSessions(user.name), msg('users.end.done', { name: user.name }), msg('users.end.failed', { name: user.name }))}
         />
       </Allowed>
     </Space>
@@ -170,27 +177,27 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
 
   let body: ReactNode;
   if (shown.kind === 'reading') {
-    body = <ReadSpinner label="Reading the users" />;
+    body = <ReadSpinner label={t('users.reading')} />;
   } else if (shown.kind === 'failed') {
-    body = <Alert type="error" showIcon title="The users could not be read" description={shown.message} action={<Button onClick={refresh}>Try again</Button>} />;
+    body = <Alert type="error" showIcon title={t('users.unread')} description={shown.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   } else {
     body = (
       <ProTable<User>
-        aria-label="Users"
+        aria-label={t('users.screen.users')}
         rowKey="name"
         size="small"
         dataSource={shown.users}
         search={false}
         options={false}
         pagination={{ pageSize: PAGE_SIZE, hideOnSinglePage: true, showSizeChanger: false }}
-        headerTitle={<h2>Users</h2>}
+        headerTitle={<h2>{t('users.screen.users')}</h2>}
         toolBarRender={() => [
           <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-            Refresh
+            {t('users.refresh')}
           </Button>,
           <Allowed key="new" action="user.create">
             <Button type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setDialog({ kind: 'create' })}>
-              New user
+              {t('users.new')}
             </Button>
           </Allowed>,
         ]}
@@ -198,45 +205,53 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
           expandedRowRender: (user) => (
             <UserDetails
               user={user}
-              revoke={(token) => act(() => tokens.revoke(token.id), `The token ${token.name} of ${user.name} is revoked`, `The token ${token.name} of ${user.name} was not revoked`)}
+              revoke={(token) =>
+                act(
+                  () => tokens.revoke(token.id),
+                  msg('users.token.revoked', { token: token.name, name: user.name }),
+                  msg('users.token.notRevoked', { token: token.name, name: user.name }),
+                )
+              }
             />
           ),
         }}
         columns={[
           {
-            title: 'Name',
+            title: t('users.name'),
             dataIndex: 'name',
             width: 160,
             render: (_, user) => (
               <Space size="small">
                 <Typography.Text>{user.name}</Typography.Text>
-                {user.name === me?.name && <Tag>You</Tag>}
+                {user.name === me?.name && <Tag>{t('users.you')}</Tag>}
               </Space>
             ),
           },
-          { title: 'Kind', dataIndex: 'kind', width: 150, render: (_, user) => (user.kind === 'person' ? 'Person' : 'Technical account') },
-          { title: 'Roles', key: 'roles', render: (_, user) => <Roles user={user} /> },
-          { title: 'Status', key: 'status', width: 150, render: (_, user) => <Status user={user} /> },
-          { title: 'Sessions', key: 'sessions', align: 'right', width: 90, render: (_, user) => user.sessions.length },
-          { title: 'Tokens', key: 'tokens', align: 'right', width: 80, render: (_, user) => user.tokens.length },
-          { title: 'Actions', key: 'actions', width: 360, render: (_, user) => actions(user) },
+          { title: t('users.kind'), dataIndex: 'kind', width: 150, render: (_, user) => t(user.kind === 'person' ? 'users.kind.person' : 'users.kind.technical') },
+          { title: t('users.roles'), key: 'roles', render: (_, user) => <Roles user={user} /> },
+          { title: t('users.status'), key: 'status', width: 150, render: (_, user) => <Status user={user} /> },
+          { title: t('users.sessions'), key: 'sessions', align: 'right', width: 90, render: (_, user) => user.sessions.length },
+          { title: t('users.screen.tokens'), key: 'tokens', align: 'right', width: 80, render: (_, user) => user.tokens.length },
+          { title: t('users.actions'), key: 'actions', width: 360, render: (_, user) => actions(user) },
         ]}
       />
     );
   }
 
   return (
-    <Page title="Users" content="The people and technical accounts that use this installation, their roles, sessions and tokens.">
+    <Page title={t('users.screen.users')} content={t('users.content')}>
       <Flex vertical gap="large">
         {me?.emergencyKey === true && (
           <Alert
             type="warning"
             showIcon
-            title="The node holds an emergency key"
-            description="Whoever holds RAIL8_ADMIN_TOKEN can make administrators and reset passwords. Once the administrators can log in, unset it on the node and restart the node."
+            title={t('users.emergency')}
+            description={t('users.emergency.description')}
           />
         )}
-        {refusal !== null && <Alert type="error" showIcon closable={{ 'aria-label': 'Dismiss' }} onClose={() => setRefusal(null)} title={refusal.title} description={refusal.reason} />}
+        {refusal !== null && (
+          <Alert type="error" showIcon closable={{ 'aria-label': t('users.dismiss') }} onClose={() => setRefusal(null)} title={say(texts, refusal.title)} description={refusal.reason} />
+        )}
         {body}
       </Flex>
       {dialog?.kind === 'create' && (
@@ -264,7 +279,7 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
       )}
       {dialog?.kind === 'token' && (
         <IssueTokenDialog
-          title={`New token of ${dialog.name}`}
+          title={t('users.token.newOf', { name: dialog.name })}
           password={false}
           // the administrator who issues it is a person in a session, whose own list carries the ceiling
           read={() => tokens.mine()}
@@ -277,11 +292,11 @@ export function UserList({ api, tokens }: { api: UsersApi; tokens: TokensApi }) 
       )}
       {dialog?.kind === 'password' && (
         <MountedModal
-          title={`New first password of ${dialog.name}`}
+          title={t('users.firstPassword.newOf', { name: dialog.name })}
           onCancel={() => setDialog(null)}
           footer={
             <Button type="primary" onClick={() => setDialog(null)}>
-              Done
+              {t('users.done')}
             </Button>
           }
         >
@@ -305,32 +320,33 @@ function ConfirmButton({ label, title, description, onConfirm, disabled }: { lab
 
 /** The user's roles as tags, each saying who granted it and how; a role the user gave themselves says so. */
 function Roles({ user }: { user: User }) {
+  const texts = useText();
   if (user.roles.length === 0) return '-';
   return (
     <Flex wrap gap="small">
       {[...user.roles]
         .sort((a, b) => ROLES.indexOf(a.role) - ROLES.indexOf(b.role))
         .map((grant) => (
-          <Tooltip key={grant.role} title={granted(user, grant)}>
-            <Tag>
-              {ROLE_NAMES[grant.role]}
-              {own(user, grant) && ' (own)'}
-            </Tag>
+          <Tooltip key={grant.role} title={granted(texts, user, grant)}>
+            <Tag>{own(user, grant) ? texts.t('users.role.own', { role: ROLE_NAMES[grant.role] }) : ROLE_NAMES[grant.role]}</Tag>
           </Tooltip>
         ))}
     </Flex>
   );
 }
 
-const granted = (user: User, grant: Grant) =>
-  own(user, grant)
-    ? `Given by ${user.name} to themselves ${VIA[grant.grantedVia] ?? grant.grantedVia}, ${when(grant.grantedAt)}`
-    : `Given by ${grant.grantedBy} ${VIA[grant.grantedVia] ?? grant.grantedVia}, ${when(grant.grantedAt)}`;
+const granted = (texts: Texts, user: User, grant: Grant) =>
+  texts.t(own(user, grant) ? 'users.role.givenOwn' : 'users.role.given', {
+    name: own(user, grant) ? user.name : grant.grantedBy,
+    via: viaOf(texts, grant.grantedVia),
+    at: instant(texts, grant.grantedAt),
+  });
 
 function Status({ user }: { user: User }) {
-  if (user.blockedAt !== null) return <Badge status="error" text="Blocked" />;
-  if (user.firstPassword) return <Badge status="warning" text="First password" />;
-  return <Badge status="success" text="Active" />;
+  const { t } = useText();
+  if (user.blockedAt !== null) return <Badge status="error" text={t('users.status.blocked')} />;
+  if (user.firstPassword) return <Badge status="warning" text={t('users.firstPassword')} />;
+  return <Badge status="success" text={t('users.status.active')} />;
 }
 
 /**
@@ -338,61 +354,63 @@ function Status({ user }: { user: User }) {
  * each token with Revoke, which runs `revoke`.
  */
 function UserDetails({ user, revoke }: { user: User; revoke: (token: LiveToken) => Promise<void> }) {
+  const texts = useText();
+  const { t } = texts;
   return (
     <Flex vertical gap="middle">
       <Descriptions
         size="small"
         column={2}
         items={[
-          { key: 'created', label: 'Created', children: `${when(user.createdAt)} by ${user.createdBy}` },
-          { key: 'blocked', label: 'Blocked', children: user.blockedAt === null ? '-' : `since ${when(user.blockedAt)}` },
+          { key: 'created', label: t('users.created'), children: t('users.atBy', { at: instant(texts, user.createdAt), name: user.createdBy }) },
+          { key: 'blocked', label: t('users.status.blocked'), children: user.blockedAt === null ? '-' : t('users.since', { at: instant(texts, user.blockedAt) }) },
         ]}
       />
       <Table<Grant>
-        aria-label={`Roles of ${user.name}`}
+        aria-label={t('users.rolesOf', { name: user.name })}
         size="small"
         rowKey="role"
         pagination={false}
         dataSource={user.roles}
-        locale={{ emptyText: 'No role' }}
+        locale={{ emptyText: t('users.roles.none') }}
         columns={[
-          { title: 'Role', dataIndex: 'role', render: (_, grant) => ROLE_NAMES[grant.role] },
+          { title: t('users.role'), dataIndex: 'role', render: (_, grant) => ROLE_NAMES[grant.role] },
           {
-            title: 'Granted by',
+            title: t('users.grantedBy'),
             dataIndex: 'grantedBy',
             render: (_, grant) => (
               <Space size="small">
                 {grant.grantedBy}
-                {own(user, grant) && <Tag>Own</Tag>}
+                {own(user, grant) && <Tag>{t('users.own')}</Tag>}
               </Space>
             ),
           },
-          { title: 'How', dataIndex: 'grantedVia', render: (_, grant) => VIA[grant.grantedVia] ?? grant.grantedVia },
-          { title: 'When', dataIndex: 'grantedAt', width: 180, render: (_, grant) => when(grant.grantedAt) },
+          { title: t('users.how'), dataIndex: 'grantedVia', render: (_, grant) => viaOf(texts, grant.grantedVia) },
+          { title: t('users.when'), dataIndex: 'grantedAt', width: 210, render: (_, grant) => instant(texts, grant.grantedAt) },
         ]}
       />
       <Table<LiveSession>
-        aria-label={`Sessions of ${user.name}`}
+        aria-label={t('users.sessionsOf', { name: user.name })}
         size="small"
         rowKey="id"
         pagination={false}
         dataSource={user.sessions}
-        locale={{ emptyText: 'No live session' }}
+        locale={{ emptyText: t('users.sessions.none') }}
         columns={[
-          { title: 'Session', dataIndex: 'id', render: (_, s) => <Typography.Text code>{s.id}</Typography.Text> },
-          { title: 'Started', dataIndex: 'createdAt', width: 180, render: (_, s) => when(s.createdAt) },
-          { title: 'Last seen', dataIndex: 'lastSeenAt', width: 180, render: (_, s) => when(s.lastSeenAt) },
-          { title: 'Ends at the latest', dataIndex: 'expiresAt', width: 180, render: (_, s) => when(s.expiresAt) },
+          { title: t('users.session'), dataIndex: 'id', render: (_, s) => <Typography.Text code>{s.id}</Typography.Text> },
+          { title: t('users.session.started'), dataIndex: 'createdAt', width: 210, render: (_, s) => instant(texts, s.createdAt) },
+          { title: t('users.session.lastSeen'), dataIndex: 'lastSeenAt', width: 210, render: (_, s) => instant(texts, s.lastSeenAt) },
+          { title: t('users.session.ends'), dataIndex: 'expiresAt', width: 210, render: (_, s) => instant(texts, s.expiresAt) },
         ]}
       />
       <Table<LiveToken>
-        aria-label={`Tokens of ${user.name}`}
+        aria-label={t('users.tokensOf', { name: user.name })}
         size="small"
         rowKey="id"
         pagination={false}
         dataSource={user.tokens}
-        locale={{ emptyText: 'No live token' }}
-        columns={tokenColumns<LiveToken>({ revoke: { action: 'token.revoke', run: revoke } })}
+        locale={{ emptyText: t('users.tokens.none') }}
+        columns={tokenColumns<LiveToken>(texts, { revoke: { action: 'token.revoke', run: revoke } })}
       />
     </Flex>
   );
@@ -401,12 +419,13 @@ function UserDetails({ user, revoke }: { user: User; revoke: (token: LiveToken) 
 /** The roles a user may be given, as checkboxes: each disabled when the caller may not change it, saying why. */
 function RoleChoices({ value, onChange, kind }: { value: Role[]; onChange: (roles: Role[]) => void; kind: Kind }) {
   const access = useAccess();
+  const { t } = useText();
   return (
     <Checkbox.Group<Role> value={value} onChange={onChange}>
       <Flex vertical gap="small">
         {ROLES.map((role) => {
           const may = access(actionOf(role));
-          const why = kind === 'technical' && role === 'administrator' ? 'Only a person may hold the administrator role' : may === true ? undefined : may;
+          const why = kind === 'technical' && role === 'administrator' ? t('users.role.personOnly') : may === true ? undefined : may;
           return (
             <Tooltip key={role} title={why} placement="right">
               <Checkbox value={role} disabled={why !== undefined}>
@@ -424,6 +443,7 @@ const NAME = /^[a-z][a-z0-9._-]{1,63}$/;
 
 /** New user: a name, a person or a technical account, and roles; a person's first password then shows once. */
 function CreateDialog({ api, onClose }: { api: UsersApi; onClose: () => void }) {
+  const { t } = useText();
   const [name, setName] = useState('');
   const [kind, setKind] = useState<Kind>('person');
   const [roles, setRoles] = useState<Role[]>([]);
@@ -435,16 +455,16 @@ function CreateDialog({ api, onClose }: { api: UsersApi; onClose: () => void }) 
   if (created !== null) {
     return (
       <MountedModal
-        title={`${created.name} is created`}
+        title={t('users.created.title', { name: created.name })}
         onCancel={onClose}
         footer={
           <Button type="primary" onClick={onClose}>
-            Done
+            {t('users.done')}
           </Button>
         }
       >
         {created.password === null ? (
-          <Typography.Text>{created.name} is a technical account: it has no password, and acts with tokens only.</Typography.Text>
+          <Typography.Text>{t('users.created.technical', { name: created.name })}</Typography.Text>
         ) : (
           <FirstPassword name={created.name} password={created.password} />
         )}
@@ -467,41 +487,41 @@ function CreateDialog({ api, onClose }: { api: UsersApi; onClose: () => void }) 
 
   return (
     <MountedModal
-      title="New user"
+      title={t('users.new')}
       onCancel={sending ? undefined : onClose}
       footer={[
         <Button key="cancel" disabled={sending} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="create" type="primary" loading={sending} disabled={!valid} onClick={() => void create()}>
-          Create
+          {t('users.create')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        {refused !== null && <Alert type="error" showIcon title="The user was not created" description={refused} />}
+        {refused !== null && <Alert type="error" showIcon title={t('users.create.failed')} description={refused} />}
         <Form layout="vertical" requiredMark>
           <Form.Item
-            label="Name"
+            label={t('users.name')}
             htmlFor="rail8-new-user-name"
             required
             validateStatus={name === '' || valid ? undefined : 'error'}
-            help="2 to 64 characters: lowercase letters, digits, dots, dashes and underscores, starting with a letter. It never changes."
+            help={t('users.name.help', { min: 2, max: 64 })}
           >
             <Input id="rail8-new-user-name" value={name} autoComplete="off" onChange={(event) => setName(event.target.value)} />
           </Form.Item>
-          <Form.Item label="Kind">
+          <Form.Item label={t('users.kind')}>
             <Radio.Group
-              aria-label="Kind"
+              aria-label={t('users.kind')}
               value={kind}
               onChange={(event) => setKind(event.target.value as Kind)}
               options={[
-                { value: 'person', label: 'Person, who logs in with a password' },
-                { value: 'technical', label: 'Technical account, which has tokens only' },
+                { value: 'person', label: t('users.kind.person.choice') },
+                { value: 'technical', label: t('users.kind.technical.choice') },
               ]}
             />
           </Form.Item>
-          <Form.Item label="Roles" style={{ marginBottom: 0 }}>
+          <Form.Item label={t('users.roles')} style={{ marginBottom: 0 }}>
             <RoleChoices value={kind === 'technical' ? roles.filter((r) => r !== 'administrator') : roles} onChange={setRoles} kind={kind} />
           </Form.Item>
         </Form>
@@ -515,6 +535,7 @@ function CreateDialog({ api, onClose }: { api: UsersApi; onClose: () => void }) 
  * caller gives themselves is recorded as their own, which the dialog says for the message bodies role.
  */
 function RolesDialog({ api, user, self, onClose }: { api: UsersApi; user: User; self: boolean; onClose: (changed: string | null) => void }) {
+  const { t, intl } = useText();
   const held = user.roles.map((g) => g.role);
   const [roles, setRoles] = useState<Role[]>(held);
   const [sending, setSending] = useState(false);
@@ -529,11 +550,15 @@ function RolesDialog({ api, user, self, onClose }: { api: UsersApi; user: User; 
     try {
       const changed = await api.changeRoles(user.name, add, remove);
       const words = [
-        ...changed.added.map((role) => `gets ${ROLE_NAMES[role]}`),
-        ...changed.removed.map((role) => `loses ${ROLE_NAMES[role]}`),
+        ...changed.added.map((role) => t('users.roles.gets', { role: ROLE_NAMES[role] })),
+        ...changed.removed.map((role) => t('users.roles.loses', { role: ROLE_NAMES[role] })),
       ];
-      const recorded = self && changed.added.includes('message-bodies') ? ', recorded in the audit as your own' : '';
-      onClose(words.length === 0 ? `The roles of ${user.name} did not change` : `${user.name} ${words.join(', ')}${recorded}`);
+      const recorded = self && changed.added.includes('message-bodies');
+      onClose(
+        words.length === 0
+          ? t('users.roles.unchanged', { name: user.name })
+          : t(recorded ? 'users.roles.changedOwn' : 'users.roles.changed', { name: user.name, changes: intl.formatList(words, { type: 'unit' }) }),
+      );
     } catch (error) {
       setRefused(reasonOf(error));
       setSending(false);
@@ -542,27 +567,27 @@ function RolesDialog({ api, user, self, onClose }: { api: UsersApi; user: User; 
 
   return (
     <MountedModal
-      title={`Roles of ${user.name}`}
+      title={t('users.rolesOf', { name: user.name })}
       onCancel={sending ? undefined : () => onClose(null)}
       footer={[
         <Button key="cancel" disabled={sending} onClick={() => onClose(null)}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="save" type="primary" loading={sending} disabled={add.length === 0 && remove.length === 0} onClick={() => void save()}>
-          Save
+          {t('users.save')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        {refused !== null && <Alert type="error" showIcon title="The roles were not changed" description={refused} />}
-        <Typography.Text type="secondary">A role holds for the whole installation, from the user's next request on.</Typography.Text>
+        {refused !== null && <Alert type="error" showIcon title={t('users.roles.failed')} description={refused} />}
+        <Typography.Text type="secondary">{t('users.roles.hint')}</Typography.Text>
         <RoleChoices value={roles} onChange={setRoles} kind={user.kind} />
         {ownBodies && (
           <Alert
             type="info"
             showIcon
-            title="You give yourself the message bodies role"
-            description="It lets you see every message's body. The audit records it as your own assignment."
+            title={t('users.roles.ownBodies')}
+            description={t('users.roles.ownBodies.description')}
           />
         )}
       </Flex>

@@ -1,0 +1,4 @@
+{
+  "packages.screen.description": "See each package of the working folder: its branch, last commit, changes and what the node runs.",
+  "packages.screen.title": "Packages"
+}

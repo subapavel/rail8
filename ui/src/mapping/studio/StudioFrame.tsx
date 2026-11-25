@@ -361,7 +361,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
           items={VIEWS.map(([key, label, Icon]) => ({ key, label, icon: <Icon aria-hidden />, children: panel[key] }))}
         />
       </div>
-      <DiscardDialog isOpen={discarding} name={name} then="return to view mode" onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
+      <DiscardDialog isOpen={discarding} name={name} onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
       <SaveConflict store={store} />
       {saved > 0 && (
         <Alert

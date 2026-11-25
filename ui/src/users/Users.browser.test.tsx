@@ -1,6 +1,7 @@
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage, currentLanguage } from '../language';
 import { SessionGate } from '../SessionGate';
 import { sessionClient, type Me } from '../session';
 import type { Screen } from '../screens';
@@ -79,6 +80,8 @@ afterEach(() => {
   root?.unmount();
   host?.remove();
   document.body.innerHTML = '';
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
 });
 
 /**
@@ -133,15 +136,15 @@ describe('the Users screen', () => {
 
     await rowOf('anna').getByRole('button', { name: /expand row/i }).click();
     const roles = page.getByRole('table', { name: 'Roles of anna' });
-    await expect.element(roles.getByRole('row').filter({ hasText: 'Operator' })).toMatchTextContent(/alice.*in a session.*2026-11-21 10:00 UTC/);
+    await expect.element(roles.getByRole('row').filter({ hasText: 'Operator' })).toMatchTextContent(/alice.*in a session.*Nov 21, 2026, 10:00 UTC/);
     await expect.element(roles.getByRole('row').filter({ hasText: 'Developer' })).toMatchTextContent(/ops.*with the shared token/);
     await expect.element(page.getByRole('table', { name: 'Sessions of anna' })).toMatchTextContent('No live session');
 
     await rowOf('ci-deploy').getByRole('button', { name: /expand row/i }).click();
-    await expect.element(page.getByRole('table', { name: 'Tokens of ci-deploy' })).toMatchTextContent(/ci.*fedcba9876543210.*2027-02-20 10:01 UTC/);
+    await expect.element(page.getByRole('table', { name: 'Tokens of ci-deploy' })).toMatchTextContent(/ci.*fedcba9876543210.*Feb 20, 2027, 10:01 UTC/);
     await rowOf('alice').getByRole('button', { name: /expand row/i }).click();
     await expect.element(page.getByRole('table', { name: 'Roles of alice' })).toMatchTextContent('with the emergency key');
-    await expect.element(page.getByRole('table', { name: 'Sessions of alice' })).toMatchTextContent(/0123456789abcdef.*2026-11-24 09:55 UTC/);
+    await expect.element(page.getByRole('table', { name: 'Sessions of alice' })).toMatchTextContent(/0123456789abcdef.*Nov 24, 2026, 09:55 UTC/);
   });
 
   test('pages a list longer than one page', async () => {
@@ -336,7 +339,7 @@ describe('the Users screen', () => {
     await issue().click();
     const issued = state.users.find((u) => u.name === 'ci-deploy')!.tokens.find((t) => t.name === 'release')!;
     expect(issued).toMatchObject({ createdBy: 'alice', expiresAt: '2026-12-01T10:00:00.000Z' });
-    await expect.element(dialog().getByText('The token release, valid until 2026-12-01 10:00 UTC:')).toBeVisible();
+    await expect.element(dialog().getByText('The token release, valid until Dec 1, 2026, 10:00 UTC:')).toBeVisible();
     const secret = dialog().getByLabelText('Token').element().textContent!;
     expect(secret).toMatch(new RegExp(`^rail8t_${issued.id}_`));
     await button('Done').click();
@@ -393,5 +396,36 @@ describe('the Users screen', () => {
     fail = false;
     await button('Try again').click();
     await expect.element(rowOf('anna')).toBeVisible();
+  });
+});
+
+describe('the Users screen in another language', () => {
+  test('shows its texts, the frame, its dates and Ant Design in the language chosen in the header, and keeps the choice', async () => {
+    render();
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Language: English' }).click();
+    await page.getByRole('menuitem', { name: 'Čeština' }).click();
+
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Uživatelé' })).toBeVisible();
+    expect(currentLanguage()).toBe('cs');
+    expect(document.documentElement.lang).toBe('cs');
+    expect(localStorage.getItem('rail8.language')).toBe('cs');
+    await expect.element(page.getByRole('button', { name: 'Jazyk: Čeština' })).toBeVisible();
+    await expect.element(page.getByRole('navigation', { name: 'Obrazovky' }).getByRole('menuitem', { name: 'Uživatelé', exact: true })).toBeVisible();
+    const czech = page.getByRole('table', { name: 'Uživatelé' });
+    const row = (name: string) => czech.getByRole('row').filter({ has: page.getByText(name, { exact: true }) }).first();
+    await expect.element(row('alice')).toMatchTextContent(/aliceVy.*Osoba.*Administrator.*Aktivní/);
+    await expect.element(row('ci-deploy')).toMatchTextContent(/Technický účet.*Developer/);
+    await expect.element(row('bert').getByText('Zablokovaný')).toBeVisible();
+
+    await row('anna').getByRole('button', { name: /expand row|rozbalit/i }).click();
+    await expect
+      .element(page.getByRole('table', { name: 'Role uživatele anna' }).getByRole('row').filter({ hasText: 'Operator' }))
+      .toMatchTextContent(/alice.*v relaci.*21\. 11\. 2026 10:00 UTC/);
+
+    await row('bert').getByRole('button', { name: 'Odblokovat', exact: true }).click();
+    const asked = page.getByRole('tooltip').filter({ hasText: 'Odblokovat uživatele bert?' });
+    await expect.element(asked.getByRole('button', { name: 'Zrušit', exact: true })).toBeVisible();
   });
 });

@@ -77,8 +77,8 @@ function edited(name: string, saved = true) {
 /** Renders `list` with every screen of it open in a tab, in its order, and the first one shown. */
 async function renderOpen(list: readonly Screen[]) {
   render(list, list[0]!.id);
-  for (const screen of list.slice(1)) await navigate(screen.title);
-  await tab(list[0]!.title).click();
+  for (const screen of list.slice(1)) await navigate(screen.title as string);
+  await tab(list[0]!.title as string).click();
 }
 
 /** Chooses `name` in the menu of the tab `title`, opened with a right click. */
@@ -416,7 +416,7 @@ describe('Shell', () => {
   test('when the row is too narrow, the three dots list the hidden tabs, and choosing one shows it', async () => {
     const list = plain(...'ABCDEFGHIJ'.split('').map((letter) => `Screen ${letter}`));
     render(list, list[0]!.id);
-    for (const screen of list.slice(1)) await navigate(screen.title);
+    for (const screen of list.slice(1)) await navigate(screen.title as string);
     await button('Hidden tabs').hover();
     const hidden = page.getByRole('listbox').getByRole('option');
     await expect.element(hidden.first()).toBeVisible();

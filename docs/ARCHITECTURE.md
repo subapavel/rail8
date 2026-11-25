@@ -1055,6 +1055,15 @@ the development server restarts when that file or one it imports changes. The sh
 `ui/src/`) and the development server import no module, and a module imports no other, which the lint checks;
 what two modules share is a file directly in `ui/src/` or in `ui/server/`.
 
+The UI shows its texts in English, German, Czech or Russian. The header's language switch, also on the login page,
+changes the language at once and keeps the choice in the browser; without one the UI follows the browser's languages,
+and English is the default. Every text has a key, and the texts of each module and language are a file of
+`ui/locales/<language>/`, read by react-intl as ICU messages, so dates, numbers and the plural forms of Czech and
+Russian follow the language; a key a language lacks shows the English text. Ant Design and ProComponents switch with
+it. The frame, the login and the Users, Tokens, My tokens and Audit screens are translated, and the titles of every
+screen; the other screens still show English. Names from data, the terms of `ui/locales/<language>/terms.md`, the
+node's refusals, logs, the audit's rows, files in git and the command line stay as they are.
+
 The Messages screen opens on the list of recent messages, newest first, a page at a time: each row has
 the message's start, flow, status (completed, failed, running or cancelled), duration and business keys,
 and its id opens the message in a tab of its own, as does an id typed in. Above the list, the time range

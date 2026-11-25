@@ -1,5 +1,6 @@
 import { AuditOutlined, KeyOutlined, SafetyCertificateOutlined, TeamOutlined } from '@ant-design/icons';
 import type { Screen } from '../screens';
+import { msg } from '../language';
 import type { AuditApi, TokensApi, UsersApi } from './api';
 import { AuditList } from './AuditList';
 import { MyTokens } from './MyTokens';
@@ -13,10 +14,10 @@ import { UserList } from './UserList';
 export function usersScreen(api: UsersApi, tokens: TokensApi): Screen {
   return {
     id: 'users',
-    title: 'Users',
-    group: 'Administration',
+    title: msg('users.screen.users'),
+    group: msg('frame.group.administration'),
     icon: <TeamOutlined />,
-    description: 'Create users, change their roles, block them, reset passwords, end sessions and issue tokens of technical accounts.',
+    description: msg('users.screen.users.description'),
     action: 'user.read',
     render: () => <UserList api={api} tokens={tokens} />,
   };
@@ -26,10 +27,10 @@ export function usersScreen(api: UsersApi, tokens: TokensApi): Screen {
 export function tokensScreen(tokens: TokensApi): Screen {
   return {
     id: 'tokens',
-    title: 'Tokens',
-    group: 'Administration',
+    title: msg('users.screen.tokens'),
+    group: msg('frame.group.administration'),
     icon: <SafetyCertificateOutlined />,
-    description: "Set the ceiling of a token's life, and see the tokens that expire within 14 days.",
+    description: msg('users.screen.tokens.description', { days: 14 }),
     action: 'token.read',
     render: () => <TokenAdmin api={tokens} />,
   };
@@ -39,10 +40,10 @@ export function tokensScreen(tokens: TokensApi): Screen {
 export function auditScreen(api: AuditApi): Screen {
   return {
     id: 'audit',
-    title: 'Audit',
-    group: 'Administration',
+    title: msg('users.screen.audit'),
+    group: msg('frame.group.administration'),
     icon: <AuditOutlined />,
-    description: 'Read who did what, filtered by user, action and time, and export it as a CSV file.',
+    description: msg('users.screen.audit.description'),
     action: 'audit.read',
     render: () => <AuditList api={api} />,
   };
@@ -52,10 +53,10 @@ export function auditScreen(api: AuditApi): Screen {
 export function myTokensScreen(tokens: TokensApi): Screen {
   return {
     id: 'my-tokens',
-    title: 'My tokens',
-    group: 'Account',
+    title: msg('users.screen.myTokens'),
+    group: msg('frame.group.account'),
     icon: <KeyOutlined />,
-    description: 'Issue and revoke your own tokens for the command line.',
+    description: msg('users.screen.myTokens.description'),
     action: 'self.tokens',
     render: () => <MyTokens api={tokens} />,
   };

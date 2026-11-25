@@ -1,9 +1,10 @@
 import { Alert, Button, Flex, Form, Input, InputNumber, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { instant, useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { ReadSpinner } from '../ReadSpinner';
 import type { Ceiling, Issued } from './api';
-import { reasonOf, when } from './words';
+import { reasonOf } from './words';
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -36,6 +37,8 @@ export function IssueTokenDialog({
   const [sending, setSending] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
   const [issued, setIssued] = useState<Issued | null>(null);
+  const texts = useText();
+  const { t } = texts;
 
   useEffect(() => {
     let current = true;
@@ -55,22 +58,20 @@ export function IssueTokenDialog({
   if (issued !== null) {
     return (
       <MountedModal
-        title={`The token ${issued.name}`}
+        title={t('users.token.named', { token: issued.name })}
         onCancel={onClose}
         footer={
           <Button type="primary" onClick={onClose}>
-            Done
+            {t('users.done')}
           </Button>
         }
       >
         <Flex vertical gap="small">
-          <Typography.Text>The token {issued.name}, valid until {when(issued.expiresAt)}:</Typography.Text>
-          <Typography.Text code copyable aria-label="Token">
+          <Typography.Text>{t('users.token.until', { token: issued.name, at: instant(texts, issued.expiresAt) })}</Typography.Text>
+          <Typography.Text code copyable aria-label={t('users.token')}>
             {issued.token}
           </Typography.Text>
-          <Typography.Text type="secondary">
-            It is shown only now: copy it. The command line reads it from RAIL8_TOKEN. Revoke it once it is no longer needed.
-          </Typography.Text>
+          <Typography.Text type="secondary">{t('users.token.once', { variable: 'RAIL8_TOKEN' })}</Typography.Text>
         </Flex>
       </MountedModal>
     );
@@ -92,33 +93,33 @@ export function IssueTokenDialog({
   };
 
   let body;
-  if (limits.kind === 'reading') body = <ReadSpinner label="Reading the ceiling" />;
-  else if (limits.kind === 'failed') body = <Alert type="error" showIcon title="The ceiling of a token's life could not be read" description={limits.reason} />;
+  if (limits.kind === 'reading') body = <ReadSpinner label={t('users.ceiling.reading')} />;
+  else if (limits.kind === 'failed') body = <Alert type="error" showIcon title={t('users.ceiling.unread')} description={limits.reason} />;
   else {
     body = (
       <Form layout="vertical" requiredMark>
         <Form.Item
-          label="Name"
+          label={t('users.name')}
           htmlFor="rail8-new-token-name"
           required
           validateStatus={name === '' || NAME.test(name) ? undefined : 'error'}
-          help="1 to 64 characters: lowercase letters, digits and dashes, starting with a letter or a digit. A new token that takes the name of an expired one replaces it."
+          help={t('users.token.name.help', { max: 64 })}
         >
           <Input id="rail8-new-token-name" value={name} autoComplete="off" onChange={(event) => setName(event.target.value)} />
         </Form.Item>
-        <Form.Item label="Valid for" htmlFor="rail8-new-token-days" required help={`1 to ${maxDays} days, the installation's ceiling.`}>
+        <Form.Item label={t('users.token.validFor')} htmlFor="rail8-new-token-days" required help={t('users.token.days.help', { max: maxDays })}>
           <InputNumber<number>
             id="rail8-new-token-days"
             min={1}
             max={maxDays}
             precision={0}
-            suffix="days"
+            suffix={t('users.days.unit')}
             value={days}
             onChange={(value) => setDays(typeof value === 'number' ? value : null)}
           />
         </Form.Item>
         {password && (
-          <Form.Item label="Your password" htmlFor="rail8-new-token-password" required help="Asked again: the token outlives your session." style={{ marginBottom: 0 }}>
+          <Form.Item label={t('users.token.password')} htmlFor="rail8-new-token-password" required help={t('users.token.password.help')} style={{ marginBottom: 0 }}>
             <Input.Password id="rail8-new-token-password" value={given} autoComplete="current-password" onChange={(event) => setGiven(event.target.value)} />
           </Form.Item>
         )}
@@ -132,15 +133,15 @@ export function IssueTokenDialog({
       onCancel={sending ? undefined : onClose}
       footer={[
         <Button key="cancel" disabled={sending} onClick={onClose}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="issue" type="primary" loading={sending} disabled={!valid} onClick={() => void send()}>
-          Issue
+          {t('users.token.issue')}
         </Button>,
       ]}
     >
       <Flex vertical gap="middle">
-        {refused !== null && <Alert type="error" showIcon title="The token was not issued" description={refused} />}
+        {refused !== null && <Alert type="error" showIcon title={t('users.token.notIssued')} description={refused} />}
         {body}
       </Flex>
     </MountedModal>

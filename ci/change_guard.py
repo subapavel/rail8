@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Change guard: checks the lines a change adds or modifies, compared with a base commit.
 
-Two checks, each on the added and modified lines only (older lines are left alone), with one exception: in the
+Four checks, each on the added and modified lines only (older lines are left alone), with one exception: in the
 folders whose comments have been cleaned (CLEANED below), references in comments are checked in every file, on
 every line, whether the change touches it or not.
 
@@ -17,6 +17,17 @@ every line, whether the change touches it or not.
    (a named colour only as the value of a style key such as `color:` or of an SVG `fill=` or `stroke=`).
    Not checked: site/ (the project site has its own styles), test files and e2e/ (tests compare the colours
    the browser computes) and generated code.
+3. Texts written in place. The UI shows its texts in the user's language, so a script file under ui/src/ holds
+   no text of its own: it names the text by its key, such as `t('frame.quickOpen')`, and the text is in the files
+   of translations, ui/locales/<language>/<module>.json. A finding is a string literal that reads as words
+   (two words of letters in a row, or one capitalised word given to a property that shows text, such as `title`
+   or `label`), and in TSX a text between tags. A line that ends with the comment `// untranslated`, and a reason
+   after it, is left alone: a text no user sees, such as a developer's error. Not checked: test files, e2e/,
+   generated code, the development server (server/) and the fakes that stand in for it (fake.ts, fake/,
+   contract/).
+4. Keys. A key a changed line of ui/src/ names with `t(...)`, `rich(...)` or `msg(...)`, and a key a changed line
+   of a file of translations gives a text, must be a key of English, ui/locales/en/*.json; English is the text
+   shown wherever a language lacks one.
 
 The base is `--base <commit>`; the change is the commit `--head` (default HEAD), read from git, so the working
 tree does not matter. Findings, one per line: `path:line: <what is wrong>`; the last line counts them.
@@ -28,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -53,6 +65,31 @@ SCRIPT_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 STYLE_SUFFIXES = (".css", ".scss")
 HASH_SUFFIXES = (".sh", ".bash", ".yml", ".yaml", ".py")
 COLOUR_SKIPPED = re.compile(r"^site/|(^|/)e2e/|(^|/)generated/|\.(test|spec)\.[a-z]+$")
+UI_SOURCES = "ui/src/"
+LOCALES = "ui/locales/"
+ENGLISH = LOCALES + "en/"
+TEXT_SKIPPED = re.compile(r"(^|/)e2e/|(^|/)generated/|\.(test|spec)\.[a-z]+$|(^|/)server/|(^|/)fake(/|\.)|(^|/)contract/")
+UNTRANSLATED = re.compile(r"//\s*untranslated\b")
+# two words of letters in a row, as prose has them
+PROSE = re.compile(r"(?<![\w.#$/-])[A-Za-z]{2,}[,;:]? [A-Za-z]{2,}(?![\w(/-])")
+# a capitalised word, the whole of a value given to a property that shows text
+WORD_TEXT = re.compile(r"^[A-Z][a-z]+[.!?…]?$")
+TEXT_KEY = re.compile(r"(?:\b(?:title|label|placeholder|aria-label|alt|description|message|tooltip|content|okText|cancelText"
+                      r"|headerTitle|subTitle|emptyText|submitText|resetText|searchText|help|tab|addonBefore|addonAfter|text)"
+                      r")\s*[:=]\s*\{?\s*$")
+CODE_LIKE = re.compile(r"var\(--|[=<>\[\]{}|&\\]|^\s*[./@#]|://")
+# a text between tags, after the `>` that closes a tag
+JSX_AFTER_TAG = re.compile(r"(?<=[\w\"'}/])>([^<>{}]*)")
+# a text after an expression, from its `}` up to the next tag or expression
+JSX_AFTER_VALUE = re.compile(r"\}([^<>{}$`\"]*)(?=[<{])")
+JSX_TAG = re.compile(r"</?[A-Za-z][\w.]*(?:\s|/?>)")
+JS_WORDS = {"return", "export", "import", "const", "let", "var", "type", "interface", "case", "default", "else", "async",
+            "await", "new", "throw", "typeof", "extends", "implements", "function", "if", "for", "while", "from", "as",
+            "declare", "class", "enum", "yield", "break", "continue", "do", "try", "catch", "finally", "switch", "void",
+            "delete", "in", "of", "readonly", "public", "private", "protected", "static", "abstract", "keyof",
+            "instanceof", "satisfies"}
+KEY_USE = re.compile(r"\b(?:t|rich|msg)\(\s*(['\"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1")
+LOCALE_KEY = re.compile(r'^\s*"((?:[^"\\]|\\.)+)"\s*:')
 
 REFERENCE = re.compile(r"(?<![\w-])([A-Z][A-Z0-9]*-\d{1,4}[a-zA-Z]?)(?![\w-])|(?<![\w&#])(#\d+)(?!\w)")
 # names of standards and formats that are written like a reference but explain themselves
@@ -220,16 +257,87 @@ def colours_in_string(value: str, code_before: str) -> list[str]:
     return found
 
 
-def check(path: str, text: str, changed: set[int], whole: bool = False) -> list[str]:
+def is_text(value: str, code_before: str) -> bool:
+    """Whether a string literal reads as a text for people: words, not code, a key or a value."""
+    words = re.sub(r"\$\{[^}]*\}", " ", value).strip()
+    if CODE_LIKE.search(words):
+        return False
+    if PROSE.search(words):
+        return True
+    return bool(WORD_TEXT.match(words)) and bool(TEXT_KEY.search(code_before))
+
+
+def jsx_texts(code: str, whole_line: bool) -> list[str]:
+    """The texts between tags on one line of TSX code: after a tag's `>` or an expression's `}`, or the whole line
+    when it is only words."""
+    found = []
+    for m in JSX_AFTER_TAG.finditer(code):
+        words = m.group(1).strip()
+        if re.match(r"[A-Za-z]", words) and re.search(r"\b[A-Za-z]{2,}\b", words) and not re.search(r"[=()|&\[\]]", words) \
+                and not re.match(r"\w+\??:", words):
+            found.append(words)
+    if JSX_TAG.search(code):
+        for m in JSX_AFTER_VALUE.finditer(code):
+            words = m.group(1).strip()
+            if PROSE.search(words) and not re.search(r"[=()|&\[\]]", words) and words.split(" ", 1)[0] not in JS_WORDS:
+                found.append(words)
+    line = re.sub(r"\{[^{}]*\}", " ", code).strip()
+    if whole_line and not found and re.fullmatch(r"[A-Za-z][\w'’,.!?:;…\- ]*", line) \
+            and (PROSE.search(line) or WORD_TEXT.match(line)) \
+            and line.split(" ", 1)[0] not in JS_WORDS and not {"instanceof", "typeof"} & set(line.split(" ")) and not re.match(r"\w+\??:", line) and not line.endswith((",", ";")):
+        found.append(line)
+    return found
+
+
+def text_checked(path: str) -> bool:
+    return path.startswith(UI_SOURCES) and path.endswith(SCRIPT_SUFFIXES) and not TEXT_SKIPPED.search(path)
+
+
+def texts_in(path: str, parts: list[tuple[str, str]]) -> list[str]:
+    """The texts written in place on one line, given as its segments. In TSX the line is read again whole, without
+    its comments, for the texts between tags: an apostrophe in such a text reads as the start of a string."""
+    found = []
+    code_before = ""
+    for seg, value in parts:
+        if seg == "string" and is_text(value, code_before):
+            found.append(value.strip())
+        if seg == "code":
+            code_before = value
+    if path.endswith((".tsx", ".jsx")):
+        code = "".join(value if seg == "code" else "'" + re.sub(r"\$\{[^}]*\}", " ", value) + "'" if seg == "string" else ""
+                       for seg, value in parts)
+        found += [text for text in jsx_texts(code, all(seg != "string" for seg, _ in parts)) if text not in found]
+    return found
+
+
+def unknown_keys(path: str, line: str, parts: list[tuple[str, str]], english: set[str]) -> list[str]:
+    """The keys one line names, or gives a text, that English lacks."""
+    if path.startswith(LOCALES) and path.endswith(".json"):
+        if path.startswith(ENGLISH):
+            return []
+        m = LOCALE_KEY.match(line)
+        return [m.group(1)] if m and m.group(1) not in english else []
+    code = "".join(value if seg == "code" else f"'{value}'" if seg == "string" else "" for seg, value in parts)
+    return [m.group(2) for m in KEY_USE.finditer(code) if m.group(2) not in english]
+
+
+def check(path: str, text: str, changed: set[int], whole: bool = False, english: set[str] | None = None) -> list[str]:
     """The findings on the `changed` lines of one file; with `whole`, references in comments on every line."""
+    findings = []
+    lines = text.split("\n")
+    if path.startswith(LOCALES) and path.endswith(".json") and english is not None:
+        for number in sorted(changed):
+            for key in unknown_keys(path, lines[number - 1] if number <= len(lines) else "", [], english):
+                findings.append(f"{path}:{number}: the key {key} is not a key of English: add it to {ENGLISH}")
+        return findings
     kind = file_kind(path)
     if kind is None:
         return []
     comments = comment_checked(path, kind)
     colours = kind in ("script", "style") and not COLOUR_SKIPPED.search(path)
-    if not comments and not colours:
+    texts = kind == "script" and text_checked(path)
+    if not comments and not colours and not texts:
         return []
-    findings = []
     per_line = segments(text, kind)
     for number in sorted(changed | set(per_line) if whole else changed):
         parts = per_line.get(number, [])
@@ -253,6 +361,14 @@ def check(path: str, text: str, changed: set[int], whole: bool = False) -> list[
         if cols:
             findings.append(f"{path}:{number}: a hard-coded colour ({', '.join(cols)}): use an Ant Design token, "
                             f"{TOKEN}")
+        source = lines[number - 1] if number <= len(lines) else ""
+        if texts and number in changed and not UNTRANSLATED.search(source):
+            for words in texts_in(path, parts):
+                findings.append(f"{path}:{number}: a text written in place (\"{words}\"): give it a key in "
+                                f"{ENGLISH}<module>.json and show it with t('<key>')")
+        if texts and number in changed and english is not None:
+            for key in unknown_keys(path, source, parts, english):
+                findings.append(f"{path}:{number}: the key {key} is not a key of English: add it to {ENGLISH}")
     return findings
 
 
@@ -282,6 +398,18 @@ def changed_lines(base: str, head: str) -> dict[str, set[int]]:
     return {p: lines for p, lines in result.items() if lines}
 
 
+def english_keys(head: str) -> set[str]:
+    """Every key of the English files of translations in `head`."""
+    keys: set[str] = set()
+    for path in git("ls-tree", "-r", "-z", "--name-only", head, "--", ENGLISH).split("\0"):
+        if path.endswith(".json"):
+            try:
+                keys.update(json.loads(git("show", f"{head}:{path}")))
+            except ValueError:
+                raise RuntimeError(f"{path} is not a JSON object of texts")
+    return keys
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", required=True, help="the commit the change is compared with")
@@ -291,11 +419,13 @@ def main(argv: list[str] | None = None) -> int:
         changed = changed_lines(args.base, args.head)
         cleaned = {p for p in git("ls-tree", "-r", "-z", "--name-only", args.head, "--", *CLEANED).split("\0")
                    if p.startswith(CLEANED)}
+        english = english_keys(args.head)
         findings = []
         for path in sorted(set(changed) | cleaned):
-            if file_kind(path) is None:
+            if file_kind(path) is None and not path.startswith(LOCALES):
                 continue
-            findings += check(path, git("show", f"{args.head}:{path}"), changed.get(path, set()), path in cleaned)
+            findings += check(path, git("show", f"{args.head}:{path}"), changed.get(path, set()), path in cleaned,
+                              english)
     except RuntimeError as e:
         print(f"CHANGE GUARD: {e}", file=sys.stderr)
         return 2

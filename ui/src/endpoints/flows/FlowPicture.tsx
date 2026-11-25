@@ -682,7 +682,6 @@ export function FlowPicture({ api, path, endpointForm, openEndpoint, openFlow, c
       <DiscardDialog
         isOpen={discarding}
         name={typeof value.id === 'string' ? value.id : path}
-        then="return to view mode"
         onDiscard={leaveEditing}
         onKeepEditing={() => setDiscarding(false)}
       />

@@ -1,4 +1,5 @@
 import type { AuditRow } from '../audit';
+import { currentLanguage, textsIn } from '../language';
 import { uiFetch } from '../session';
 
 /** The five roles, in the order the screen lists them. */
@@ -116,7 +117,7 @@ async function refusal(res: Response): Promise<UsersError> {
   } catch {
     // no JSON
   }
-  return new UsersError(res.status, `the node answered ${res.status}`);
+  return new UsersError(res.status, textsIn(currentLanguage()).t('frame.node.answered', { status: res.status }));
 }
 
 const userPath = (name: string) => `/admin/users/${encodeURIComponent(name)}`;

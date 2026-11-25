@@ -2,6 +2,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable } from '@ant-design/pro-components';
 import { Alert, App, Button, Flex } from 'antd';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useText } from '../language';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed, useMe } from '../SessionGate';
@@ -25,6 +26,8 @@ export function MyTokens({ api }: { api: TokensApi }) {
   const refresh = useCallback(() => setAsked((n) => n + 1), []);
   const me = useMe();
   const { notification } = App.useApp();
+  const texts = useText();
+  const { t } = texts;
 
   useEffect(() => {
     let current = true;
@@ -41,7 +44,7 @@ export function MyTokens({ api }: { api: TokensApi }) {
     setRefusal(null);
     try {
       await api.revokeMine(token.id);
-      notification.success({ title: `The token ${token.name} is revoked`, role: 'status' });
+      notification.success({ title: t('users.token.revoked.mine', { token: token.name }), role: 'status' });
     } catch (error) {
       setRefusal(reasonOf(error));
     }
@@ -50,49 +53,49 @@ export function MyTokens({ api }: { api: TokensApi }) {
 
   let body: ReactNode;
   if (shown.kind === 'reading') {
-    body = <ReadSpinner label="Reading your tokens" />;
+    body = <ReadSpinner label={t('users.mine.reading')} />;
   } else if (shown.kind === 'failed') {
-    body = <Alert type="error" showIcon title="Your tokens could not be read" description={shown.message} action={<Button onClick={refresh}>Try again</Button>} />;
+    body = <Alert type="error" showIcon title={t('users.mine.unread')} description={shown.message} action={<Button onClick={refresh}>{t('frame.tryAgain')}</Button>} />;
   } else {
     body = (
       <ProTable<Token>
-        aria-label="Your tokens"
+        aria-label={t('users.mine')}
         rowKey="id"
         size="small"
         dataSource={shown.listed.tokens}
         search={false}
         options={false}
         pagination={{ pageSize: TOKENS_PAGE_SIZE, hideOnSinglePage: true, showSizeChanger: false }}
-        locale={{ emptyText: 'No live token. New token issues one for the command line.' }}
-        headerTitle={<h2>Your tokens</h2>}
+        locale={{ emptyText: t('users.mine.none') }}
+        headerTitle={<h2>{t('users.mine')}</h2>}
         toolBarRender={() => [
           <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={refresh}>
-            Refresh
+            {t('users.refresh')}
           </Button>,
           <Allowed key="new" action="self.token-issue">
             <Button type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setIssuing(true)}>
-              New token
+              {t('users.token.new')}
             </Button>
           </Allowed>,
         ]}
-        columns={tokenColumns<Token>({ revoke: { action: 'self.tokens', run: revoke } })}
+        columns={tokenColumns<Token>(texts, { revoke: { action: 'self.tokens', run: revoke } })}
       />
     );
   }
 
-  const ceiling = shown.kind === 'read' ? ` A token lives at most ${shown.listed.maxDays} days.` : '';
+  const about = me === null ? t('users.mine.content') : t('users.mine.contentOf', { name: me.name });
+  const ceiling = shown.kind === 'read' ? ` ${t('users.ceiling.atMost', { days: shown.listed.maxDays })}.` : '';
   return (
-    <Page
-      title="My tokens"
-      content={`The tokens of ${me?.name ?? 'your account'} for the command line. A token acts with your roles as they are at each request, and never changes an account.${ceiling}`}
-    >
+    <Page title={t('users.screen.myTokens')} content={`${about}${ceiling}`}>
       <Flex vertical gap="large">
-        {refusal !== null && <Alert type="error" showIcon closable={{ 'aria-label': 'Dismiss' }} onClose={() => setRefusal(null)} title="The token was not revoked" description={refusal} />}
+        {refusal !== null && (
+          <Alert type="error" showIcon closable={{ 'aria-label': t('users.dismiss') }} onClose={() => setRefusal(null)} title={t('users.token.notRevoked.one')} description={refusal} />
+        )}
         {body}
       </Flex>
       {issuing && (
         <IssueTokenDialog
-          title="New token"
+          title={t('users.token.new')}
           password
           read={() => api.mine()}
           issue={(name, days, password) => api.issueMine(name, days, password)}
