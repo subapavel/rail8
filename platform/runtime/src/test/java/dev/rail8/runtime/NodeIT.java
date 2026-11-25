@@ -314,11 +314,6 @@ class NodeIT {
     }
 
     /**
-     * Expectation changed by CORE-4c2 (D-105): the spool tier and its per-start key are gone — a body the memory tier does not
-     * hold is a large body in the journal — so a started node keeps no {@code <data>/spool}; its bodies live under the journal
-     * directory ({@code <data>/journal} by default). (The case used to pin that a start clears the spool a previous run left.)
-     */
-    /**
      * A node without the secret store's key does not start on a store that holds a row: the first start imports one secret,
      * and the start without the key is refused, naming the variable, with the store's row, its generation and the node's
      * row as they were.
@@ -353,6 +348,11 @@ class NodeIT {
         }
     }
 
+    /**
+     * Expectation changed by CORE-4c2 (D-105): the spool tier and its per-start key are gone — a body the memory tier does not
+     * hold is a large body in the journal — so a started node keeps no {@code <data>/spool}; its bodies live under the journal
+     * directory ({@code <data>/journal} by default). (The case used to pin that a start clears the spool a previous run left.)
+     */
     @Test
     void aStartedNodeKeepsNoSpool() throws Exception {
         Path besides = Files.writeString(data.resolve("not-the-spool.txt"), "outside the journal");

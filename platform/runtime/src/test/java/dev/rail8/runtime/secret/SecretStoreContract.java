@@ -487,7 +487,10 @@ abstract class SecretStoreContract {
         String big = "b".repeat(SecretStore.MAX_VALUE_BYTES + 1);
         Map<String, String> many = new HashMap<>();
         for (int i = 0; i <= SecretStore.MAX_SECRETS; i++) many.put("RAIL8_SECRET_S" + i, "many-value");
-        written.addAll(List.of("refused-value", "git-token-value", "many-value"));
+        String full = "h".repeat(SecretStore.MAX_VALUE_BYTES);   // sealed, each takes 16 bytes more: the last of them passes the store's most
+        Map<String, String> heavy = new HashMap<>();
+        for (long i = 0; i < SecretStore.MAX_SEALED_BYTES / SecretStore.MAX_VALUE_BYTES; i++) heavy.put("RAIL8_SECRET_H" + i, full);
+        written.addAll(List.of("refused-value", "git-token-value", "many-value", full));
         Map<Map<String, String>, List<String>> refusals = new java.util.LinkedHashMap<>();
         refusals.put(Map.of("RAIL8_SECRET_A_B", "refused-value", "RAIL8_SECRET_NOT A NAME", "refused-value"),
                 List.of("RAIL8_SECRET_NOT A NAME", "not a secret's name"));
@@ -507,6 +510,7 @@ abstract class SecretStoreContract {
         refusals.put(Map.of("RAIL8_SECRET_RELATIVE_FILE", "relative/path"), List.of("RAIL8_SECRET_RELATIVE_FILE must be the absolute path"));
         refusals.put(Map.of("RAIL8_SECRET_USED_AS_LOGIN", "refused-value"), List.of("RAIL8_SECRET_USED_AS_LOGIN", "pkg/orders", "credentials"));
         refusals.put(many, List.of("1001 secrets"));
+        refusals.put(heavy, List.of("the sealed values would take more than " + SecretStore.MAX_SEALED_BYTES + " bytes"));
         for (Map.Entry<Map<String, String>, List<String>> each : refusals.entrySet()) {
             IllegalStateException refused = refusedStart("r", withK1(each.getKey()));
             for (String part : each.getValue()) {

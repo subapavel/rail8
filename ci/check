@@ -79,8 +79,7 @@ mvnw() { ./mvnw -B -ntp "$@"; }
 # The node's jar and the command line, as the Docker areas start them.
 build_node() { mvnw -q package -DskipTests -pl :rail8-node,:rail8-cli -am; }
 
-# The secret store's key of this run, exported as RAIL8_SECRETS_KEY: the base64 of 256 random bits, made afresh, as
-# docs/QUICKSTART.md makes the owner's once.
+# The secret store's key of this run, exported as RAIL8_SECRETS_KEY: the base64 of 256 random bits, made afresh for each run.
 export_secrets_key() {
   RAIL8_SECRETS_KEY=$(openssl rand -base64 32)
   mask "$RAIL8_SECRETS_KEY"

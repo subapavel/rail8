@@ -839,7 +839,7 @@ class MigrationsIT {
     /**
      * V34 leaves the store as the only source of a secret: on a database at V33 with a node that recorded its variables and a
      * record whose uses are known, the migration drops {@code nodes.secret_variables} and marks every record's uses unknown, so the
-     * next deploy of each package writes them anew.
+     * node's next restore of each package writes them anew.
      */
     @Test
     @Order(23)
@@ -856,7 +856,7 @@ class MigrationsIT {
         assertFalse(columnsOf("nodes").containsKey("secret_variables"), "V34 drops the node's variables: " + columnsOf("nodes"));
         assertEquals(1L, pool.query("select count(*) from nodes").execute().await().iterator().next().getLong(0), "the node's row stays");
         assertEquals(false, pool.query("select secret_uses_known from deployments").execute().await().iterator().next().getBoolean(0),
-                "the record's uses are unknown until its next deploy");
+                "the record's uses are unknown until the next restore writes them");
     }
 
     /** {@code table}'s columns in order: name → {@code format_type} and {@code not null} when the column is. */
