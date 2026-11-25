@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { say, textsIn } from '../../../language';
 import { builtIn, declaration, emptyFunctions, metadata, moveRow, nameIssue, newFunction, readFunctions, unusedName, variable, type Variable } from './function-model';
 
 const argument = (name: string): Variable => ({ id: name, kind: 'Argument', name, javaType: 'String', title: '' });
@@ -41,11 +42,15 @@ describe('declaration in the UDF API method shape', () => {
 
 describe('names', () => {
   test('nameIssue refuses what is no Java identifier, a keyword and a name taken', () => {
-    expect(nameIssue('9a', [])).toBe('Enter a valid Java identifier.');
-    expect(nameIssue('a-b', [])).toBe('Enter a valid Java identifier.');
-    expect(nameIssue('class', [])).toBe('Enter a valid Java identifier.');
-    expect(nameIssue('concat', ['concat'])).toBe('This name is already in use.');
-    expect(nameIssue('$ok_1', ['concat'])).toBe('');
+    const said = (value: string, taken: string[]) => {
+      const issue = nameIssue(value, taken);
+      return issue && say(textsIn('en'), issue);
+    };
+    expect(said('9a', [])).toBe('Enter a valid Java identifier.');
+    expect(said('a-b', [])).toBe('Enter a valid Java identifier.');
+    expect(said('class', [])).toBe('Enter a valid Java identifier.');
+    expect(said('concat', ['concat'])).toBe('This name is already in use.');
+    expect(nameIssue('$ok_1', ['concat'])).toBeNull();
   });
 
   test('unusedName takes the first free number', () => {

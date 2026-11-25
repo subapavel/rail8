@@ -3,7 +3,7 @@ import { MountedModal } from '../../../MountedModal';
 import { UploadOutlined, FileAddOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
-import { useText } from '../../../language';
+import { msg, say, useText, type Label } from '../../../language';
 import { Tool } from '../shared/Tool';
 import { PreviewBadge } from './PreviewBadge';
 import {
@@ -55,7 +55,8 @@ export function InstanceTools({
   validateFile = false,
   selectLabel,
 }: InstanceToolsProps) {
-  const { t } = useText();
+  const texts = useText();
+  const { t } = texts;
   const list = useStore(library, (s) => s.value);
   const chosen = useStore(instanceChoice(library), (s) => s.id);
   const entries = instancesOf(list, format);
@@ -65,7 +66,8 @@ export function InstanceTools({
   const actions = instanceActions(library, format);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [name, setName] = useState('');
-  const [notice, setNotice] = useState('');
+  // a message, so that it shows in the language chosen while it is up
+  const [notice, setNotice] = useState<Label>('');
   const [reading, setReading] = useState(false);
   const fieldId = useId();
   const file = useRef<HTMLInputElement>(null);
@@ -84,7 +86,7 @@ export function InstanceTools({
       if (validateFile) parseDocument(text, format);
       onLoad(text);
     } catch {
-      setNotice(t('studio.instances.unreadable', { format }));
+      setNotice(msg('studio.instances.unreadable', { format }));
     } finally {
       setReading(false);
     }
@@ -124,7 +126,7 @@ export function InstanceTools({
         disabled={locked || !current}
         onClick={() => {
           actions.save(resource());
-          setNotice(t('studio.instances.saved'));
+          setNotice(msg('studio.instances.saved'));
         }}
       />
       <Tool
@@ -153,7 +155,7 @@ export function InstanceTools({
         accept={`.${format.toLowerCase()},.zip`}
         onChange={(e) => void load(e)}
       />
-      {notice && !dialog && <small role="status">{notice}</small>}
+      {notice && !dialog && <small role="status">{say(texts, notice)}</small>}
 
       {dialog === 'add' && (
         <MountedModal
@@ -167,7 +169,7 @@ export function InstanceTools({
             <Form.Item label={t('studio.instances.name')} htmlFor={fieldId}>
               <Input id={fieldId} autoFocus maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
             </Form.Item>
-            {notice && <Alert type="error" title={notice} />}
+            {notice && <Alert type="error" title={say(texts, notice)} />}
           </Form>
         </MountedModal>
       )}

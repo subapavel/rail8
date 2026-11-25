@@ -1,4 +1,4 @@
-import { currentLanguage, textsIn, type Texts } from '../../../language';
+import { msg, type Message } from '../../../language';
 
 /**
  * The model of the Functions tab, a preview feature until the engine runs user-defined functions: the user-defined
@@ -143,13 +143,10 @@ export function declaration(fn: { name: string; variables: readonly Variable[]; 
   return `public static ${list || lifecycle ? 'void' : 'String'} ${fn.name}(${args.join(', ')}) {`;
 }
 
-/**
- * Why `value` cannot name a method or variable, in the language of `texts`: not a Java identifier, or one of `taken`;
- * empty when it can.
- */
-export function nameIssue(value: string, taken: readonly string[], { t }: Texts = textsIn(currentLanguage())): string {
-  if (!/^[a-zA-Z_$][\w$]*$/.test(value) || KEYWORDS.has(value)) return t('studio.functions.badName');
-  return taken.includes(value) ? t('studio.functions.takenName') : '';
+/** Why `value` cannot name a method or variable: not a Java identifier, or one of `taken`; null when it can. */
+export function nameIssue(value: string, taken: readonly string[]): Message | null {
+  if (!/^[a-zA-Z_$][\w$]*$/.test(value) || KEYWORDS.has(value)) return msg('studio.functions.badName');
+  return taken.includes(value) ? msg('studio.functions.takenName') : null;
 }
 
 /** `rows` with the row at `from` swapped with the one `delta` away; `rows` itself when either is out of range. */

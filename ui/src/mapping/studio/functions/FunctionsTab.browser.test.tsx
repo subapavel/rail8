@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage } from '../../../language';
 import { ApiProblem, type ApiClient } from '../../api/client';
 import { fakeApiClient } from '../../api/fake/fake-api';
 import type { BrowserStateStore } from '../browser-state/browser-state';
@@ -88,6 +89,8 @@ beforeEach(() => {
 afterEach(() => {
   unmount();
   history.replaceState(null, '', window.location.pathname);
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
   // every test fails on console.error
   expect(consoleError).not.toHaveBeenCalled();
   consoleError.mockRestore();
@@ -286,6 +289,10 @@ describe('editing functions', () => {
       await expect.element(page.getByRole('alert')).toMatchTextContent(issue!);
       await expect.element(name).toHaveAttribute('aria-invalid', 'true');
     }
+    // the refusal follows a language chosen while it shows
+    chooseLanguage('cs');
+    await expect.element(page.getByRole('alert')).toHaveTextContent('Tento název se už používá.');
+    chooseLanguage('en');
     await name.click();
     await userEvent.keyboard('{Escape}');
     await expect.element(name).toHaveValue('calculate2');

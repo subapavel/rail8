@@ -10,7 +10,7 @@ import {
   RightOutlined,
 } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
-import { useText } from '../../../language';
+import { msg, say, useText, type Label } from '../../../language';
 import { PreviewBadge } from '../mock/PreviewBadge';
 import { PARAMETERS_ISSUE } from '../mock/signature-mock';
 import { zipInstance } from '../mock/test-instances';
@@ -90,7 +90,8 @@ export function TestDocument({
   onParameter,
   valuesReadOnly = readOnly,
 }: TestDocumentProps) {
-  const { t } = useText();
+  const texts = useText();
+  const { t } = texts;
   const input = side === 'Input';
   const title = t(input ? 'studio.document.source' : 'studio.document.result');
   const [section, setSection] = useState<Section>('Document');
@@ -98,7 +99,8 @@ export function TestDocument({
   const [selection, select] = useState<string | null>(null);
   const [fullPath, setFullPath] = useState(false);
   const [formatted, setFormatted] = useState<{ original: string; text: string } | null>(null);
-  const [error, setError] = useState('');
+  // a message, so that it shows in the language chosen while it is up
+  const [error, setError] = useState<Label>('');
   const available = text !== null;
   const displayed = !input && formatted?.original === text ? formatted.text : (text ?? '');
   const treeMode = mode === 'Tree';
@@ -140,7 +142,7 @@ export function TestDocument({
       else setFormatted({ original: text!, text: value });
       setError('');
     } catch (e) {
-      setError(t('studio.document.unprocessable', { format, reason: (e as Error).message }));
+      setError(msg('studio.document.unprocessable', { format, reason: (e as Error).message }));
     }
   };
   const download = () => downloadFile('schema.zip', new Blob([zipInstance(displayed, format)], { type: 'application/zip' }));
@@ -247,7 +249,7 @@ export function TestDocument({
               <Tool label={t('studio.tree.download')} icon={DownloadOutlined} disabled={!available} onClick={download} />
             </Flex>
           </Flex>
-          {error && <Alert type="error" showIcon title={error} />}
+          {error && <Alert type="error" showIcon title={say(texts, error)} />}
           {treeMode ? (
             <div style={SCROLL_AREA}>{tree}</div>
           ) : input ? (

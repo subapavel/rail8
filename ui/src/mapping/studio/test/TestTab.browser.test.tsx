@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage } from '../../../language';
 import type { ApiClient, Diagnostic, TestResult } from '../../api/client';
 import { fakeApiClient, type FakeScenario } from '../../api/fake/fake-api';
 import { testSourceKey, type BrowserStateStore } from '../browser-state/browser-state';
@@ -72,6 +73,8 @@ afterEach(() => {
   host?.remove();
   root = undefined;
   history.replaceState(null, '', window.location.pathname);
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
   // every test fails on console.error
   expect(consoleError).not.toHaveBeenCalled();
   consoleError.mockRestore();
@@ -223,6 +226,10 @@ describe('the Test tab', () => {
     await input.fill('<Order>');
     await source().getByRole('button', { name: 'Pretty Print' }).click();
     await expect.element(source().getByRole('alert')).toMatchTextContent('Cannot process this XML document. The text is not well-formed XML.');
+    // the error follows a language chosen while it shows
+    chooseLanguage('cs');
+    await expect.element(page.getByRole('alert').filter({ hasText: /^Tento dokument XML nelze zpracovat\./ })).toBeVisible();
+    chooseLanguage('en');
     await source().getByRole('button', { name: 'Tree', exact: true }).click();
     await expect.element(source().getByRole('alert')).not.toBeInTheDocument();
     await expect.element(source().getByRole('status')).toHaveTextContent('The XML cannot be displayed as a tree. Open Text to correct it.');
