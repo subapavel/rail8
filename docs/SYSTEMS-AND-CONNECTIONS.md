@@ -316,7 +316,7 @@ public record Inbound(String flow, Optional<Connection> connection, Map<String, 
 public record Outbound(Optional<Connection> connection) {}
 
 /** One send: the flow and step it is for, every setting in the flow with its templates rendered, the largest reply taken,
- *  and the checked address of an address field. */
+ *  and the checked address of an address field, empty for a step without one. */
 public record Call(String flow, String step, Map<String, Object> settings, long maxReplyBytes, Optional<URI> address) {}
 
 public interface Producer {
@@ -382,8 +382,9 @@ Tab.of(id, label)                         // as today
 - `HttpIngress.mount` takes the adapter's scheme and the `Inbound` in place of the `EndpointConfig`.
 - **Text keys.** Every field, choice and tab has a label, and every field a help text, in English in the code. Their
   keys are derived and never written: `<scheme>.field.<name>.label`, `<scheme>.field.<name>.help`,
-  `<scheme>.field.<name>.choice.<value>`, `<scheme>.tab.<id>`; the platform's own fields use `rail8.` in place of the
-  scheme. Two adapters never clash, since a scheme is unique on a node.
+  `<scheme>.field.<name>.choice.<value>`, `<scheme>.tab.<id>`; the platform's own fields and tabs (`general`, `retry`,
+  `recording`, `security`) use `rail8.` in place of the scheme, and a plugin whose scheme is `rail8` is refused at load.
+  Two adapters never clash, since a scheme is unique on a node.
 - **An adapter's own translations.** An adapter's jar may carry `META-INF/rail8/texts/<scheme>/<language>.json`: one
   flat JSON object of those keys to ICU messages, the form of the UI's own texts, at most 256 KiB each. The node serves
   it at `GET /admin/components/<scheme>/texts/<language>` for a language matching `^[a-z]{2,3}(-[A-Z]{2})?$`, and 404
@@ -394,7 +395,8 @@ Tab.of(id, label)                         // as today
   `pattern`, `choice`) besides its English text.
 - **The description** served at `GET /admin/components` becomes format 2: `{ "format": 2, "reach": { "in": …, "out": … },
   "connection": [fields], "flow": [fields] }`, each field with `label`, `labelKey`, `helpKey`, and `expression` or
-  `address` where set, and with what format 1 has: tabs, `visibleWhen`, `exactlyOne`, choices and a secret field's kinds.
+  `address` where set, and with what format 1 has: tabs, `visibleWhen`, `exactlyOne` and choices. A secret field's
+  kinds join it with the secret store's step that adds them.
   It still serves three readers: the deploy and `rail8 validate` check against it, the UI draws
   the forms from it, and the configuration of an environment checks a connection's values against its connection form.
 - **Credentials a caller presents.** The design of who may send to a flow adds what a consumer needs for them: the kinds
@@ -487,13 +489,14 @@ never from what this node installed, so a package that failed to install here st
    an instance name; a step that uses an address field has allowed hosts. Each line names the flow, the step, the
    connection key, the field and the environment, never a value.
 4. **The record**: in the transaction that writes the deployment's record, the deploy writes the generation it checked
-   against, the table `deployment_systems` (deployment, system key, its definition: partner, name, connections and their
-   adapters) with every system the package defines, and the table `deployment_connection_uses` (deployment, flow, step,
-   connection key, adapter, direction, whether through an address field) with every connection a flow can reach, each
-   choice of a computed step included. In that transaction it checks the used connections again, under the lock on the
-   environment that every activation takes, as the secret store does for secrets. A check that fails there rolls the
-   deploy back as a failed save of the record does today, and the earlier rows stay. The flows that phase B started
-   before the save read the snapshot at each send, so a connection removed meanwhile makes their sends wait for it.
+   against (`deployments.config_generation`), the table `deployment_systems` (deployment, system key, its definition:
+   partner, name, connections and their adapters) with every system the package defines, and the table
+   `deployment_connection_uses` (deployment, flow, step, connection key, adapter, direction, whether through an address
+   field, and a sender's polled place) with every connection a flow can reach, each choice of a computed step included.
+   In that transaction it checks the used connections again, under the lock on the environment that every activation
+   takes, as the secret store does for secrets. A check that fails there rolls the deploy back as a failed save of the
+   record does today, and the earlier rows stay. The flows that phase B started before the save read the snapshot at
+   each send, so a connection removed meanwhile makes their sends wait for it.
 5. **The hash** of a flow covers its file and the files it reads, as today. No system file and no value of the environment
    is in it, so a connection's change restarts no flow and needs no new lock.
 
@@ -527,10 +530,15 @@ Each attempt reads one snapshot and keeps it, and the producer it took, until it
    confirmed removal leaves one) is recorded as not set, and the send goes on.
 
 **Waiting for its connection.** A connection that is stopped or not set is not the receiver's fault and does not use up
-the flow's retries. An at-least-once message is scheduled again every 30 s without counting an attempt, for at most 72
-hours, so a connection stopped on a Friday evening parks nothing over the weekend; then it is parked, naming the
-connection. Its row in `work` names the connection it waits for, and Monitor shows the message as waiting for that
-connection. This is not a held message, which is one that cannot even be parked. A sync flow answers 503 at once, with
+the flow's retries. An at-least-once message's work item is deferred by 30 s, and its row in `work` records the
+connection it waits for (`waiting_for`) and, at its first wait only, since when (`waiting_since`). When the item is due,
+the worker reads that connection in the current snapshot before it runs anything: while the connection would still make
+the send wait, it defers the item by 30 s more and runs no step, so the history gains nothing and no step runs twice.
+Once the connection is set, the item runs again from step 1, as a retry does today, with the next attempt number so its
+steps' rows are its own; the run that ended waiting does not count against `delivery.retries`, and the two columns are
+cleared. 72 hours after `waiting_since`, so a connection stopped on a Friday evening parks nothing over the weekend, the
+item is parked, naming the connection. Monitor shows the message as waiting for that connection. This is not a held
+message, which is one that cannot even be parked. A sync flow answers 503 at once, with
 `Retry-After: 30`. An at-most-once flow fails the send. The flow is `DEGRADED` in `/health` while a send of it waits.
 
 ### When the environment changes
@@ -551,8 +559,9 @@ use, so a new value reaches the adapter at its next login, session or handshake,
 - **From the environment**: the configuration of an environment refuses it while `deployment_connection_uses` names it,
   unless the connection administrator confirms. Once confirmed, every send through it waits for it, as above. A polling
   sender whose connection is missing or stopped is not built: its flow runs, takes nothing, and is `DEGRADED` in
-  `/health`. Today a sender that cannot be built fails its flow until the next deploy; here, the activation that sets the
-  connection again builds the sender and starts it. A node that starts meanwhile does the same.
+  `/health`. Today a sender that cannot be built refuses the deploy, and at a restore its package is listed FAILED and
+  tried again at every tick; here, the activation that sets the connection again builds the sender and starts it. A
+  node that starts meanwhile does the same.
 - **An instance name**: the configuration refuses to remove the instance name of a system whose connections are used,
   unless confirmed. Once removed, the receiver's facts say it is not set.
 
@@ -621,7 +630,7 @@ or a new flow tried before the partner's side exists.
 ## Several receivers
 
 Today the engine does not deliver to several receivers each on its own. A `to` step sends to exactly one endpoint;
-`route` with `byProp` picks one. `split` runs its parts in the parent's run, so one part that fails fails them all, and a
+`to` with `byProp` picks one. `split` runs its parts in the parent's run, so one part that fails fails them all, and a
 retry repeats the parts already delivered. A `direct` call to an at-least-once flow saves a work item in that flow with
 its own retries, but the call is made inside the caller's run: when a second call fails, the caller's retry makes the first
 again.
@@ -692,7 +701,7 @@ instanceNames:
   fingerprint stays a secret of the node's environment, as today, so the stacks' wrappers that set it stay.
 - Until the store of the configuration exists, a change of the file has no draft, no history, no record of who made it,
   and no confirmation when it removes a used connection. The quickstart's text says so.
-- Each node writes the digest of its file into its row of the nodes table, and a deploy is refused while the live nodes'
+- Each node writes the digest of its file into its row of `nodes`, and a deploy is refused while the live nodes'
   digests differ, naming them.
 - The deploy records the secrets that the file's connections name as uses of the flows that reach them, as the secret
   store records an endpoint file's, so a secret in use is not deleted unasked.
@@ -764,7 +773,9 @@ This design relies on it for:
 - allowing mocks only in an environment that says so, none without a setting;
 - a lock that every activation takes and the deploy takes in its record's transaction (its environment's counter, which
   an activation takes for update and the deploy for share), so a deploy's check and an activation never cross;
-- deciding which environments allow mocks, and how the deploy's record names the generation.
+- deciding which environments allow mocks;
+- the generation that `deployments.config_generation` holds once the store exists: this design's second step adds the
+  column and fills it with the environment file's generation until then.
 
 This design gives it the system and connection keys, `GET /admin/systems` (every deployed system with the packages that
 hold it, its connections, their adapters, descriptions, the flows that can reach each, and each one's state in this
@@ -850,8 +861,9 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
 - `http`: a `path` that would change the host or leave `url`'s path refused; `url` with user info refused; the request
   built from the one parsed `URI`; the public text to a sync caller and the detail in the history only.
 - Addresses: an address field without a placeholder refused; wildcard boundaries; a port not listed; no redirect.
-- Leaks: a recognizable value set in a connection never shows in a fault, a log, the history, `/health`, the admin API
-  or the hash; changing only values leaves the hash as it was.
+- Leaks: a recognizable secret named by a connection never shows in a fault, a log, the history, `/health`, the admin
+  API or the hash; a recognizable value of a field that is not secret never shows to a sync caller, in `/health`, in
+  `GET /admin/systems`, in a deploy's problem or in the hash; changing only values leaves the hash as it was.
 - Deploy against `InMemoryEnvironment`: an unset connection, one set for another adapter, incomplete values, an unset
   secret, a mock where mocks are not allowed, a missing instance name, each a line with its code naming flow, step, key,
   field and environment and never a value; the record names the generation; `deployment_connection_uses` holds every
@@ -864,9 +876,11 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
   fake timer; a version set back; a polling sender restarts with the new values, never polls twice at once, and on two
   nodes holds one lease; a restart made obsolete is cancelled; mock and back.
 - Waiting for a connection: a stopped connection, and values incomplete for the step's direction, make an at-least-once
-  message wait without counting attempts, shown with the connection's key, and park it after 72 hours on the fake
-  clock; sync answers 503 with `Retry-After: 30`; a polling sender is `DEGRADED` and recovers at the activation that
-  sets it.
+  message wait without counting attempts, shown with the connection's key, and park it 72 hours after its first wait on
+  the fake clock; a due item whose connection still waits is deferred again without running a step; once the connection
+  is set, the item runs from step 1 with the next attempt number, its earlier steps recorded again, and every retry of
+  `delivery.retries` left; sync answers 503 with `Retry-After: 30`; a polling sender is `DEGRADED` and recovers at the
+  activation that sets it.
 - The lease: a node of the first step's release and one of the release before poll one directory, and only one polls.
 - The environment file: re-read when changed, a bad read keeping the previous state, two nodes with different files, a
   path under the git base refused.
@@ -890,8 +904,9 @@ built at any time after the first: the bundles of `http`, `sftp` and the templat
 contract suite's checks of them. It changes no file of the demo, the quickstart or the database.
 
 1. **The adapter's contract.** `Forms` with its declared reach, labels, text keys and codes, `Connection`, `Inbound`,
-   `Outbound`, `Call`, `Producer.send(e, call)`, `polledPlace`, `HttpIngress.mount`, the plugin API's version, the
-   poller's lease key by flow, held together with today's; `http` (with a literal `path`, the request built from one
+   `Outbound`, `Call` (its `address` empty until the step of a whole address), `Producer.send(e, call)`,
+   `polledPlace`, `HttpIngress.mount`, the plugin API's version, the poller's lease key by flow, held together with
+   today's; `http` (with a literal `path`, the request built from one
    parsed `URI`, and a connection's `url` refusing user info), `sftp` (with `hostKey` a secret field), `direct`, `mock`,
    the Java of the template,
    `ComponentContract`, `PollingConsumerContract` and `RecordingComponent` on it; INVALID final for the step's own retry;
@@ -908,8 +923,9 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    key in the history, `rail8 validate`, and `rail8 test` with `expect.sent.<key>.settings`. The Flows screen draws a
    flow of either shape and edits only the old one. Changes `examples/demo` (its systems; `sftp-invoice` and its test on
    the new shape, which the quickstart does not edit), the quickstart (`environment.yaml`, copied once into
-   `~/rail8-environment`; both compose stacks mount that directory and set `RAIL8_ENVIRONMENT_FILE`) and the database
-   (two new tables, and a column of `work` naming the connection a message waits for).
+   `~/rail8-environment`; each compose stack mounts a directory holding it and sets `RAIL8_ENVIRONMENT_FILE`) and the
+   database (the tables `deployment_systems` and `deployment_connection_uses`, `deployments.config_generation`, the
+   columns `waiting_for` and `waiting_since` of `work`, and the file's digest in `nodes`).
 3. **Templates and computed receivers.** Expressions in the settings in the flow, `by` with `connections`, the public
    texts of faults, a missing value tried once on a step with `retryable: true`. Changes `examples/demo`
    (`invoice-async` and its test on the new shape; the test checks the path each receiver saw, and both invoice tests
@@ -920,8 +936,9 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    writes a system file. The editor keeps comments, line ends and its compare on save in a package of both shapes.
    Changes `examples/demo` (`invoice-sync`, `order-jq` and `order-partner` on the new shape, with the call from
    `order-jq` through `direct` to `order-partner` run for real; its endpoint files gone), the template's package with
-   an environment file for its partner on port 18091, `rail8 new-adapter` and `bin/run-adapter` with it, the stack check
-   that expects `endpoints/call-audit.yaml`, and the quickstart's text. From this step a deploy warns of each file of the
+   an environment file for its partner on port 18091, `rail8 new-adapter` and `bin/run-adapter` with it, the quickstart
+   check of `ci/check` (which creates `endpoints/call-audit.yaml` and looks for `partner-domestic` in invoice-sync's
+   file), and the quickstart's text. From this step a deploy warns of each file of the
    old shape. No change to the database.
 5. **The Systems screen under Configure.** Every system with the packages that hold it, its connections, their adapters,
    the flows that use each and whether it is set, mocked, stopped or missing in the environment, and the instance names;
