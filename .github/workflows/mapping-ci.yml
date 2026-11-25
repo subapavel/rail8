@@ -1,12 +1,12 @@
 name: mapping-ci
 
-# The mapping engine's checks (mapping/): build with unit tests, licences and bans and the script tests. Every step
-# runs in mapping/ with the repository's wrapper. The mapping studio is part of the Rail8 UI (ui/), which ui-ci.yml
-# checks.
+# The mapping engine's checks (mapping/): build with unit tests, licences and bans and the script tests, run by
+# ci/check mapping in mapping/ with the repository's wrapper. The mapping studio is part of the Rail8 UI (ui/), which
+# ui-ci.yml checks.
 # It runs once a day on main, before the owner's morning overview, and on demand. It has no pull request trigger; the
-# session that wrote a change builds locally before it merges. A push to main also runs it when the mapping, the root
-# pom, the wrapper, the root .gitattributes, this file or mapping-nightly.yml changes, because the coverage ratchet of
-# mapping-nightly.yml reads the push runs of the backend job. The UI's end-to-end tests, coverage floors, the ratchet,
+# session that wrote a change runs ci/check mapping before it merges. A push to main also runs it when the mapping, the
+# root pom, the wrapper, the root .gitattributes, .java-version, ci/check, this file or mapping-nightly.yml changes,
+# because the coverage ratchet of mapping-nightly.yml reads the push runs of the backend job. The UI's end-to-end tests, coverage floors, the ratchet,
 # mutation testing and the Windows build run only on demand in mapping-nightly.yml. The platform's ci.yml checks the
 # sign-off of every commit.
 on:
@@ -21,6 +21,8 @@ on:
       - '.mvn/**'
       - 'mvnw*'
       - '.gitattributes'
+      - '.java-version'
+      - 'ci/check'
       - '.github/workflows/mapping-ci.yml'
       - '.github/workflows/mapping-nightly.yml'
 
@@ -41,15 +43,12 @@ jobs:
     # of this job was green; scripts/ratchet-baseline.sh finds it by this name, so renaming the job renames the key.
     name: mapping · backend
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: mapping
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version-file: .java-version
           cache: maven
           cache-dependency-path: 'mapping/**/pom.xml'
       - name: Maven mirror
@@ -66,28 +65,5 @@ jobs:
             </mirrors>
           </settings>
           EOF
-      # The generator the build runs to merge the function families (ADR-0025 "Families", F-15), and the
-      # ratchet's mutation rows (#87); both scripts run on this job's JDK 25
-      - name: Script tests of scripts/function-families.java and scripts/ratchet.java
-        run: |
-          scripts/test/function-families-test.sh
-          scripts/test/function-families-refusals-test.sh
-          scripts/test/ratchet-mutation-test.sh
-          scripts/test/ratchet-moved-test.sh
-          scripts/test/ratchet-bench-test.sh
-          scripts/test/ratchet-baseline-test.sh
-          scripts/test/gate-spec-bench-test.sh
-      # The script tests that need no JDK. The ratchet's CI script and its wiring test stub java and gh.
-      - name: Script tests that need no JDK (gate scripts, ratchet CI scripts, HANDOVER.md)
-        run: |
-          scripts/test/pit-summary-test.sh
-          scripts/test/gate-spec-default-test.sh
-          scripts/test/gate-log-test.sh
-          scripts/test/handover-test.sh
-          scripts/test/ratchet-ci-test.sh
-          scripts/test/ratchet-ci-wiring-test.sh
-      # jacoco.skip: coverage floors and the ratchet run only in the nightly coverage job, so they never block a change
-      - name: Build, test, licences, bans
-        run: ../mvnw -B -Djacoco.skip=true verify
-      - name: Every file checks out byte-identical on Windows (#49)
-        run: scripts/check-lf-checkout.sh
+      - name: Script tests, build, test, licences, bans, the LF checkout check (ci/check mapping)
+        run: ci/check mapping

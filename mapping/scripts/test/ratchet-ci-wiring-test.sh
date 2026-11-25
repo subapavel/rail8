@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # A guard of text, not a test of behaviour (MAP-12b; since 17. 11. 2026 the ratchet runs only in the
 # nightly workflow's coverage job, on demand, as a report that blocks nothing): it reads
-# .github/workflows/mapping-ci.yml, .github/workflows/mapping-nightly.yml, scripts/ratchet-enforced-from,
-# MUTATION_MODULES of scripts/ratchet.java and the job name in scripts/ratchet-baseline.sh, and asserts how the ratchet
-# check is wired. It runs nothing. The workflows are read as text in the layout they have (two-space YAML, block
+# .github/workflows/mapping-ci.yml, the function check_mapping of ci/check that its backend job runs,
+# .github/workflows/mapping-nightly.yml, scripts/ratchet-enforced-from, MUTATION_MODULES of scripts/ratchet.java and the
+# job name in scripts/ratchet-baseline.sh, and asserts how the ratchet check is wired. It runs nothing. The workflows are read as text in the layout they have (two-space YAML, block
 # style, a job's steps under `    steps:`); a change of layout that keeps the meaning is this file's to follow. An
 # absence (no `secrets.`, no `if:` on the step) is asserted beside a presence, so that a missing step never passes.
 # One `ok`/`FAIL` line per assertion (newlines shown as \n); exit 1 on any FAIL.
@@ -11,6 +11,7 @@ set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 mapping=$(cd "$here/../.." && pwd)
 ci=$mapping/../.github/workflows/mapping-ci.yml
+check_script=$mapping/../ci/check
 nightly=$mapping/../.github/workflows/mapping-nightly.yml
 datefile=$mapping/scripts/ratchet-enforced-from
 lookup=$mapping/scripts/ratchet-baseline.sh
@@ -71,13 +72,17 @@ check "nightly: the coverage job's checkout takes fetch-depth: 0" \
 
 backend=$(job "$ci" backend)
 bsteps=$(printf '%s\n' "$backend" | steps)
-check "ci: the backend job builds with coverage skipped and runs no ratchet step" \
-  "build $(printf '%s\n' "$bsteps" | count '^[0-9]+'$'\t'' +run: \.\./mvnw -B -Djacoco\.skip=true verify *$'), \
-ratchet $(printf '%s\n' "$bsteps" | count 'ratchet-ci\.sh (push|nightly)')" "build 1, ratchet 0"
-nojdk=$(printf '%s\n' "$bsteps" | step_no 'name: .*need no JDK')
+# the body of check_mapping in ci/check, the commands the backend job runs
+area=$(awk '/^check_mapping\(\) \{/ {b = 1; next} b && /^\}/ {b = 0} b' "$check_script")
+check "ci: the backend job runs ci/check mapping, which builds with coverage skipped and runs no ratchet step" \
+  "job $(printf '%s\n' "$bsteps" | count '^[0-9]+'$'\t'' +run: ci/check mapping *$'), \
+build $(printf '%s\n' "$area" | count '^ +\.\./mvnw -B -Djacoco\.skip=true verify *$'), \
+ratchet $(printf '%s\n%s\n' "$bsteps" "$area" | count 'ratchet-ci\.sh (push|nightly)')" "job 1, build 1, ratchet 0"
+# the script tests under the comment of check_mapping that names those needing no JDK, up to its next comment
+nojdk=$(printf '%s\n' "$area" | awk '/^ *#.*need no JDK/ {s = 1; next} s && /^ *#/ {s = 0} s')
 check "ci: the three tests of MAP-12b run beside the script tests that need no JDK" \
   "$(for t in ratchet-ci-test.sh ratchet-ci-wiring-test.sh pit-summary-test.sh; do
-       printf '%s %s; ' "$t" "$(printf '%s\n' "$bsteps" | step_text "$nojdk" | count "^ +scripts/test/${t//./\\.} *$")"
+       printf '%s %s; ' "$t" "$(printf '%s\n' "$nojdk" | count "^ +scripts/test/${t//./\\.} *$")"
      done)" "ratchet-ci-test.sh 1; ratchet-ci-wiring-test.sh 1; pit-summary-test.sh 1; "
 name=$(printf '%s\n' "$backend" | sed -n 's/^    name: *//p' | head -n 1)
 check "ci: the backend job's name is the one scripts/ratchet-baseline.sh looks up" \
