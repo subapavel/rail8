@@ -67,13 +67,14 @@ import java.util.regex.Pattern;
 /**
  * The {@code sftp} component: a polling consumer on the Apache MINA SSHD client; no producer yet. Its sender reaches a
  * connection, which says where the server is and how to log in: {@code host} (required), {@code port} (1–65535, 22),
- * {@code user}, exactly one of the secrets {@code password} / {@code privateKey}, the secret {@code hostKey} (the server
+ * {@code user}, exactly one of the secrets {@code password} (a plain value, or credentials that also give the user, and then
+ * {@code user} is left out) / {@code privateKey} (an OpenSSH private key as text, or a key pair), the secret {@code hostKey} (the server
  * key's {@code SHA256:} fingerprint — a mismatch refuses the session, there is no accept-all), {@code connectTimeoutMs}
  * (10 000) and {@code ioTimeoutMs} (30 000). The flow says what is polled: {@code dir} (none: the login directory),
  * {@code glob} ({@code *}), {@code intervalMs} (10 000), {@code maxFilesPerPoll} (100), {@code minAgeMs} (0),
  * {@code afterSuccess} ({@code delete} | {@code move}, then {@code moveTo}) and an optional {@code errorDir}; the largest
- * body is the flow's {@link Inbound#maxBodyBytes}. The secrets are read at each login, never when a consumer is built, so a
- * changed secret is used from the next login on; a {@code hostKey} that is not a {@code SHA256:} fingerprint fails that
+ * body is the flow's {@link Inbound#maxBodyBytes}. The secrets are read once at each login, never when a consumer is built,
+ * so a changed secret is used from the next login on; a {@code hostKey} that is not a {@code SHA256:} fingerprint fails that
  * login, naming the field and never its value.
  *
  * <p>A round runs on a virtual thread the consumer starts (the timer only fires it; the next round is scheduled
@@ -124,9 +125,11 @@ public final class SftpComponent implements Component {
             Settings.of(
                     Field.text("host", "Host", "The server's name or address.").required().in(),
                     Field.integer("port", "Port", "The server's port.").range(1, 65535).byDefault(DEFAULT_PORT).in(),
-                    Field.text("user", "User", "The user to log in as.").required().tab(Tab.SECURITY).in(),
-                    Field.secret("password", "Password", "The user's password; or set privateKey.").tab(Tab.SECURITY).in(),
-                    Field.secret("privateKey", "Private key", "The user's private key in OpenSSH form; or set password.").tab(Tab.SECURITY).in(),
+                    Field.text("user", "User", "The user to log in as; none when the password is credentials, which name it.").tab(Tab.SECURITY).in(),
+                    Field.secret("password", "Password", "The user's password, or credentials of the user and the password; or set privateKey.",
+                            Secret.Kind.VALUE, Secret.Kind.CREDENTIALS).tab(Tab.SECURITY).in(),
+                    Field.secret("privateKey", "Private key", "The user's private key in OpenSSH form, or a key pair; or set password.",
+                            Secret.Kind.VALUE, Secret.Kind.KEY_PAIR).tab(Tab.SECURITY).in(),
                     Field.secret("hostKey", "Host key", "The server key's fingerprint as OpenSSH prints it, SHA256: and its base64; a "
                             + "session with any other key is refused.").required().tab(Tab.SECURITY).in(),
                     Field.integer("connectTimeoutMs", "Connect timeout (ms)", "How long connecting and logging in may take, in milliseconds.")
@@ -248,7 +251,7 @@ public final class SftpComponent implements Component {
         private final String host;
         private final int port;
         private final String dir;          // null: the login directory
-        private final String user;
+        private final String user;         // null when the password is credentials, which give the user
         private final Secret password;     // null when the connection logs in with a private key; read at each login
         private final Secret privateKey;   // null when it logs in with a password; read at each login
         private final Secret hostKey;      // read at each login
@@ -281,8 +284,12 @@ public final class SftpComponent implements Component {
             this.name = c.key();
             this.host = required(c, "host");
             this.port = (int) number(c.values(), "port", DEFAULT_PORT);
-            this.user = required(c, "user");
             this.password = c.secret("password").orElse(null);
+            boolean credentials = password != null && password.kind() == Secret.Kind.CREDENTIALS;   // its kind, which is no read
+            if (credentials && c.values().get("user") != null) {
+                throw new IllegalArgumentException("connection '" + name + "': the setting 'user' is given by the credentials of 'password'; leave it out");
+            }
+            this.user = credentials ? null : required(c, "user");
             this.privateKey = c.secret("privateKey").orElse(null);
             this.hostKey = c.secret("hostKey").orElseThrow(() -> new IllegalArgumentException("connection '" + name + "': the setting 'hostKey' is required"));
             this.dir = text(o, "dir", null);
@@ -499,8 +506,9 @@ public final class SftpComponent implements Component {
         /**
          * The session's SFTP channel, (re)connected and logged in when there is none or the session is closing or closed (the
          * partner went away, or it sat idle for {@code ioTimeoutMs} while a handler worked). Set and dropped together with it,
-         * and with the directory listed: {@code dir}, else the login directory the server names. Each login reads the secrets
-         * anew; a {@code hostKey} that is no {@code SHA256:} fingerprint fails it before anything is sent.
+         * and with the directory listed: {@code dir}, else the login directory the server names. Each login reads each secret
+         * once, anew: the user and the password of credentials, a key pair presented as the session's only key; a
+         * {@code hostKey} that is no {@code SHA256:} fingerprint fails it before anything is sent.
          */
         private SftpClient sftp() throws IOException {
             if (sftp != null && session.isOpen()) return sftp;
@@ -510,10 +518,22 @@ public final class SftpComponent implements Component {
                 throw new IOException("connection '" + name + "': the setting 'hostKey' must be a SHA256: fingerprint as OpenSSH prints it");
             }
             client.setServerKeyVerifier((s, address, key) -> expected.equals(KeyUtils.getFingerPrint(key)));
-            session = client.connect(user, host, port).verify(connectTimeout).getSession();
-            if (password != null) session.addPasswordIdentity(password.value());
-            if (privateKey != null) {
-                for (KeyPair key : keys(privateKey.value())) session.addPublicKeyIdentity(key);
+            String login = user;
+            String secret = null;
+            if (password != null && password.kind() == Secret.Kind.CREDENTIALS) {
+                Secret.Credentials credentials = password.credentials();
+                login = credentials.user();
+                secret = credentials.password();
+            } else if (password != null) {
+                secret = password.value();
+            }
+            KeyPair pair = privateKey != null && privateKey.kind() == Secret.Kind.KEY_PAIR ? privateKey.keyPair().pair() : null;
+            String pem = privateKey != null && pair == null ? privateKey.value() : null;
+            session = client.connect(login, host, port).verify(connectTimeout).getSession();
+            if (secret != null) session.addPasswordIdentity(secret);
+            if (pair != null) session.setKeyIdentityProvider(KeyIdentityProvider.wrapKeyPairs(pair));
+            if (pem != null) {
+                for (KeyPair key : keys(pem)) session.addPublicKeyIdentity(key);
             }
             session.auth().verify(connectTimeout);   // a host key other than hostKey fails here, before any credential is sent
             sftp = SftpClientFactory.instance().createSftpClient(session);

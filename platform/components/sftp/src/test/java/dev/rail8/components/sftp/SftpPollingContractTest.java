@@ -36,6 +36,9 @@ class SftpPollingContractTest extends PollingConsumerContract {
         server.close();
     }
 
+    /** The server the suite polls; a restart by {@link #partnerDown} replaces it. */
+    protected EmbeddedSftp server() { return server; }
+
     @Override protected Component component() { return new SftpComponent(rt.blobs(), rt.ids(), rt.timer(), rt.clock()); }
 
     @Override protected Inbound inbound() { return server.endpoint("sftp-in", "/inbox", Map.of()); }

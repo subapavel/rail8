@@ -80,8 +80,8 @@ port, as in the sample, keeps the default.
 
 - **The connection form** describes what is the same for every flow that talks to one system: where it is and how to log
   in, such as a URL, a host and port, a user, a password. A secret field (`Field.secret`) is never handed over as text: the
-  adapter reads it through `Connection.secret(name)`, a `Secret` whose `value()` it asks for at each login, and whose
-  text is only its reference.
+  adapter reads it through `Connection.secret(name)`, a `Secret` whose text is only its reference. See
+  [Secret fields](#secret-fields).
 - **The flow form** describes what one flow sets on its use of the system: a path, a directory, a polling interval.
 - **The reach** says, for each direction the adapter serves (`IN`, `OUT`), whether a use of that direction reaches a
   connection (`Reach.CONNECTION`) or not (`Reach.NO_CONNECTION`). A direction missing from the map is one the adapter does
@@ -111,6 +111,37 @@ their label, help, type, default and rules, and the tabs. Every label has a text
 override: `<scheme>.field.<name>.label` and `<scheme>.field.<name>.help` for a field, `<scheme>.field.<name>.choice.<value>`
 for a choice, `<scheme>.tab.<id>` for a tab of the adapter's own and `rail8.tab.<id>` for a common one. A text key without a
 translation shows the label as the adapter wrote it. The scheme `rail8` is the platform's own and no adapter may take it.
+
+### Secret fields
+
+A secret field names the kinds of secret it takes, in the order the adapter prefers them:
+
+```java
+Field.secret("password", "Password", "The user's password, or the user and the password together.",
+        Secret.Kind.VALUE, Secret.Kind.CREDENTIALS)
+```
+
+`Field.secret(name, label, help)` with no kind takes a plain value (`Secret.Kind.VALUE`). The forms serve the kinds as
+`"kinds": ["value", "credentials"]`. A kind is one of:
+
+- `VALUE`, a plain text, read with `value()`;
+- `CREDENTIALS`, a user and a password, read with `credentials()`;
+- `KEY_PAIR`, a private key, its public key and its certificates, read with `keyPair()`.
+
+In an endpoint file a secret field holds a reference, `secret://<name>`, to a secret in the node's secret store. Its kind
+must be one the field takes, or the deploy is refused naming the endpoint, the option and the secret, never its value.
+A field that takes `VALUE` also takes a plain value written in the file. Any other option takes only a reference to a
+plain value.
+
+The adapter finds the handle under `connection.secret(field)` and asks `kind()` which kind it holds; asking `kind()` or
+`reference()` reads nothing. It reads the value once at each connection, login, session or handshake, and uses that one
+value for the whole of it. It never reads a handle while it builds a consumer or a producer, and keeps no value beyond
+one session: the contract suite fails an adapter whose build reads a handle. A secret overwritten in the store is then
+what the adapter's next session uses, with no new deploy. A secret deleted and created again with another kind fails
+the handle's next read, naming both kinds, until the flow is built again.
+
+`rail8 validate` and `rail8 test` hand out placeholders: a producer is built with the placeholder of each kind its secret
+fields take, in their order, until one builds.
 
 A problem the node finds in an endpoint's config is one line, `endpoint '<id>' config (environment <env>) at '<path>':
 <message>`, and in the forms' own check (`Settings.check`) each problem has a stable code: `required`, `unknown`, `min`,

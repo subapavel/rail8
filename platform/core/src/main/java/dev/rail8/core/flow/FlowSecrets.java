@@ -42,9 +42,10 @@ import java.util.function.UnaryOperator;
  * first; a current value is never dropped. A plain value is replaced as text, URL-encoded and JSON-escaped; credentials by
  * their password in the same three forms and by the base64 of {@code user:password}; a key pair by the base64 of its private
  * key's PKCS#8 bytes, whole and in each 64-character line of its PEM. The plain values the flow's endpoints hold in their
- * options ({@link #FlowSecrets(SecretSource, Map)}) join them. Longer texts are replaced first, in one pass over the text.
+ * options ({@link #FlowSecrets(SecretSource, Map)}) join them, and so do the handles of the endpoints' secret fields
+ * ({@link #endpoints}). Longer texts are replaced first, in one pass over the text.
  */
-final class FlowSecrets {
+public final class FlowSecrets {
 
     /** The earlier values kept of one handle. */
     static final int EARLIER_PER_HANDLE = 7;
@@ -68,7 +69,7 @@ final class FlowSecrets {
      * the node looks for it, never a value; {@code held} are the plain values, by reference, that the flow's endpoints hold in
      * their options, which the scrubber replaces too.
      */
-    FlowSecrets(SecretSource source, Map<String, String> held) {
+    public FlowSecrets(SecretSource source, Map<String, String> held) {
         this.source = Objects.requireNonNull(source, "source");
         this.held = Map.copyOf(held);
     }
@@ -139,6 +140,31 @@ final class FlowSecrets {
         } catch (IllegalArgumentException refused) {
             throw new IllegalArgumentException(step + ": '" + key + "': " + refused.getMessage(), refused);
         }
+        return wrapped(inner);
+    }
+
+    /**
+     * The source of the handles of an endpoint's secret fields, before the build ends or after it: each is this flow's own
+     * handle over the one {@code source} gives ({@link SecretSource#endpoint}), so every value an adapter reads is one the
+     * scrubber replaces. It refuses as {@code source} does. Off the node, {@link SecretSource#placeholders} is the source's.
+     */
+    public SecretSource endpoints() {
+        return new SecretSource() {
+            @Override
+            public Secret handle(String reference, Set<Secret.Kind> kinds) {
+                return wrapped(source.endpoint(reference, kinds));
+            }
+
+            @Override
+            public boolean placeholders() {
+                return source.placeholders();
+            }
+        };
+    }
+
+    /** {@code inner} as a handle of this flow: of its reference and kind, each read seen. */
+    private Secret wrapped(Secret inner) {
+        String reference = inner.reference();
         Handle handle = new Handle(inner);
         handedOut.add(handle);
         return switch (inner.kind()) {
@@ -146,6 +172,23 @@ final class FlowSecrets {
             case CREDENTIALS -> Secret.credentials(reference, () -> handle.read(inner::credentials));
             case KEY_PAIR -> Secret.keyPair(reference, () -> handle.read(inner::keyPair));
         };
+    }
+
+    /**
+     * Every value this flow's scrubber replaces, by reference: the values its endpoints hold, then each handle's value read now
+     * and the earlier values kept; strings, {@link Secret.Credentials} and {@link Secret.KeyPair}s, as {@link Scrubber#of} takes them.
+     */
+    public Map<String, List<Object>> seen() {
+        Map<String, List<Object>> seen = new LinkedHashMap<>();
+        held.forEach((reference, value) -> seen.computeIfAbsent(reference, r -> new ArrayList<>()).add(value));
+        for (Handle h : handedOut) {
+            Object now = h.now();
+            if (now != null) seen.computeIfAbsent(h.inner.reference(), r -> new ArrayList<>()).add(now);
+        }
+        synchronized (earlier) {
+            for (Earlier e : earlier) seen.computeIfAbsent(e.handle().inner.reference(), r -> new ArrayList<>()).add(e.value());
+        }
+        return seen;
     }
 
     /** A handle handed out: its source's handle and the last value a read of it saw. */

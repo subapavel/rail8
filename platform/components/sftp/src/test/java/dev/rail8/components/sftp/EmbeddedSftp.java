@@ -29,6 +29,7 @@ import java.nio.file.attribute.FileTime;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.PublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.util.Collection;
@@ -46,8 +47,9 @@ import java.util.stream.Stream;
 
 /**
  * An Apache MINA SSHD server with the SFTP subsystem on 127.0.0.1, its file system a {@link VirtualFileSystemFactory} rooted
- * at a test's directory (remote {@code /inbox} is {@code root/inbox}), password login for {@link #USER}, an EC host key.
- * It counts sessions and password checks, records what the client opened, read, closed, removed and moved, and lets a test act
+ * at a test's directory (remote {@code /inbox} is {@code root/inbox}), password login for {@link #USER} (another login with
+ * {@link #login}), public-key login with the key {@link #authorize} names, an EC host key.
+ * It counts sessions, password checks and the public keys offered, records what the client opened, read, closed, removed and moved, and lets a test act
  * once inside a removal, an open or a read (drop the session, fail the read, grow the file).
  *
  * <p>Public, with what a test of another module needs (the sftp test-jar): runtime's two-node lease test (P2-02L).
@@ -76,6 +78,12 @@ public final class EmbeddedSftp implements AutoCloseable {
     private final AtomicInteger sessionsCreated = new AtomicInteger();
     private final AtomicInteger sessionsClosed = new AtomicInteger();
     private final AtomicInteger passwordChecks = new AtomicInteger();
+    /** The public keys clients offered to log in with, once at each check: a key is checked when offered and again when signed. */
+    private final List<PublicKey> offeredKeys = new CopyOnWriteArrayList<>();
+    /** The user and the password a login takes. */
+    private final AtomicReference<String[]> login = new AtomicReference<>(new String[]{USER, PASSWORD});
+    /** The public key a login as {@link #USER} takes; null: none. */
+    private final AtomicReference<PublicKey> authorized = new AtomicReference<>();
     private final AtomicLong drops = new AtomicLong();
     /**
      * "open /inbox/a.xml", "read /inbox/a.xml", "close /inbox/a.xml", "remove /inbox/a.xml", "move /inbox/a.xml -> /done/a.xml",
@@ -100,7 +108,13 @@ public final class EmbeddedSftp implements AutoCloseable {
         server.setKeyPairProvider(KeyPairProvider.wrap(hostKey));
         server.setPasswordAuthenticator((user, password, session) -> {
             passwordChecks.incrementAndGet();
-            return USER.equals(user) && PASSWORD.equals(password);
+            String[] taken = login.get();
+            return taken[0].equals(user) && taken[1].equals(password);
+        });
+        server.setPublickeyAuthenticator((user, key, session) -> {
+            offeredKeys.add(key);
+            PublicKey taken = authorized.get();
+            return USER.equals(user) && taken != null && KeyUtils.compareKeys(taken, key);
         });
         server.setFileSystemFactory(new VirtualFileSystemFactory(root));
         SftpSubsystemFactory sftp = new SftpSubsystemFactory();
@@ -129,6 +143,15 @@ public final class EmbeddedSftp implements AutoCloseable {
     int sessionsClosed() { return sessionsClosed.get(); }
 
     int passwordChecks() { return passwordChecks.get(); }
+
+    /** The public keys clients offered to log in with, in order: a key appears when offered and again when signed. */
+    List<PublicKey> offeredKeys() { return List.copyOf(offeredKeys); }
+
+    /** From now on a password login takes {@code user} and {@code password} alone. */
+    void login(String user, String password) { login.set(new String[]{user, password}); }
+
+    /** From now on a public-key login as {@link #USER} takes {@code key} alone. */
+    void authorize(PublicKey key) { authorized.set(key); }
 
     /** Runs {@code hook} at the next removal the client asks for, once (public: the runtime's tests use it). */
     public void onNextRemoving(Hook hook) { onRemoving.set(hook); }
@@ -273,7 +296,8 @@ public final class EmbeddedSftp implements AutoCloseable {
         List<String> secretFields = SftpComponent.FORMS.connection().secrets();
         all.forEach((name, value) -> {
             if (value == null || name.equals("flow") || name.equals("maxBodyBytes")) return;
-            if (secretFields.contains(name)) secrets.put(name, Secret.of("secret://" + key + "." + name.toLowerCase(java.util.Locale.ROOT), () -> String.valueOf(value)));
+            if (value instanceof Secret handle) secrets.put(name, handle);
+            else if (secretFields.contains(name)) secrets.put(name, Secret.of("secret://" + key + "." + name.toLowerCase(java.util.Locale.ROOT), () -> String.valueOf(value)));
             else if (SftpComponent.FORMS.connection().has(name)) values.put(name, value);
             else settings.put(name, value);
         });

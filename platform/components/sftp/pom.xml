@@ -26,6 +26,12 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <!-- SftpAtmozIT: the login of each kind against the SFTP server image the compose stack runs -->
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <!-- the client; the tests' embedded SshServer comes from the same two jars -->
       <groupId>org.apache.sshd</groupId>
       <artifactId>sshd-core</artifactId>

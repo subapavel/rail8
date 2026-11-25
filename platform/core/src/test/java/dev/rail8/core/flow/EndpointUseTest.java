@@ -93,6 +93,47 @@ class EndpointUseTest {
         assertFalse(password.toString().contains("hunter2"), password.toString());
     }
 
+    /** An adapter with a login of a password or credentials, and a key of text or a key pair, as SFTP's. */
+    static final Forms TYPED = new Forms(
+            Settings.of(
+                    Field.secret("password", "Password", "The password.", Secret.Kind.VALUE, Secret.Kind.CREDENTIALS),
+                    Field.secret("key", "Key", "The key.", Secret.Kind.KEY_PAIR, Secret.Kind.VALUE)),
+            Settings.NONE,
+            Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
+
+    @Test
+    void aReferenceInASecretFieldIsTheSourcesHandleAskedForTheFieldsKindsInTheirOrder() {
+        List<String> asked = new java.util.ArrayList<>();
+        SecretSource source = (reference, kinds) -> {
+            asked.add(reference + " " + kinds.stream().map(Secret.Kind::id).toList());
+            return Secret.credentials(reference, () -> new Secret.Credentials("u", "p"));
+        };
+        EndpointConfig cfg = endpoint("drop", config("password", "secret://drop.login", "key", "secret://drop.key"));
+        Connection connection = EndpointUse.inbound(TYPED, cfg, "shop/f", 9, source).connection().orElseThrow();
+        assertEquals(java.util.Set.of("secret://drop.login [value, credentials]", "secret://drop.key [key-pair, value]"), java.util.Set.copyOf(asked));
+        assertEquals("secret://drop.login", connection.secret("password").orElseThrow().reference());
+        assertEquals(Secret.Kind.CREDENTIALS, connection.secret("password").orElseThrow().kind());
+        assertFalse(connection.values().containsKey("password"), "a reference is never a plain value");
+    }
+
+    @Test
+    void aSourcesRefusalNamesTheEndpointAndTheField() {
+        SecretSource refusing = (reference, kinds) -> { throw new IllegalArgumentException("secret '" + reference + "' is not set"); };
+        EndpointConfig cfg = endpoint("drop", config("password", "secret://drop.login"));
+        IllegalArgumentException refused = org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> EndpointUse.outbound(TYPED, cfg, refusing));
+        assertEquals("endpoint 'drop': 'password': secret 'secret://drop.login' is not set", refused.getMessage());
+    }
+
+    @Test
+    void withoutASourceAReferenceIsAHandleOfTheFieldsFirstKindThatNoReadTakes() {
+        EndpointConfig cfg = endpoint("drop", config("key", "secret://drop.key"));
+        Secret key = EndpointUse.outbound(TYPED, cfg).connection().orElseThrow().secret("key").orElseThrow();
+        assertEquals(Secret.Kind.KEY_PAIR, key.kind());
+        IllegalStateException unread = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, key::keyPair);
+        assertTrue(unread.getMessage().startsWith("secret://drop.key is not read here"), unread.getMessage());
+    }
+
     @Test
     void undescribedFormsGiveEveryKeyButTheNodesToTheConnectionOnADirectionThatConnects() {
         EndpointConfig in = endpoint("feed", config("dir", "/in", "flow", "shop/f", "maxBodyBytes", 5));

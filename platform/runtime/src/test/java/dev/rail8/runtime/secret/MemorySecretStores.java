@@ -66,6 +66,11 @@ public final class MemorySecretStores {
         done(store.create(ADMIN, new JsonObject().put("name", name).put("kind", "credentials").put("user", user).put("password", password)));
     }
 
+    /** {@code store} overwrites the credentials {@code name}. */
+    public static void overwriteCredentials(SecretStore store, String name, String user, String password) {
+        done(store.overwrite(ADMIN, name, new JsonObject().put("kind", "credentials").put("user", user).put("password", password)));
+    }
+
     /** {@code store} overwrites the plain value {@code name}. */
     public static void overwriteValue(SecretStore store, String name, String value) {
         done(store.overwrite(ADMIN, name, new JsonObject().put("kind", "value").put("value", value)));

@@ -577,7 +577,7 @@ class SftpComponentTest {
         assertRefused(connection, without(base, "hostKey"), "no hostKey: never accept-all");
         assertRefused(connection, with(base, "privateKey", "-----BEGIN OPENSSH PRIVATE KEY-----"), "both password and privateKey");
         assertRefused(connection, without(base, "password"), "neither password nor privateKey");
-        assertRefused(connection, without(base, "user"), "no user");
+        assertValid(connection, without(base, "user"), "no user: credentials give it; with a plain password or key the consumer's build refuses");
         assertRefused(connection, without(base, "host"), "no host");
         assertRefused(connection, with(base, "glob", "*.xml"), "a flow setting is not the connection's");
         assertRefused(connection, with(base, "pasword", "typo"), "strict: a setting the form does not know");

@@ -20,12 +20,14 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /**
  * An endpoint file of a flow of {@code schemaVersion: 1} as one use of the adapter's contract. Its config, the override of
  * its environment applied, is split by the adapter's {@link Forms}: the values of the connection form's fields serving
  * the endpoint's direction become a {@link Connection} whose key is the endpoint's id, a secret field's value a handle in
- * it, and the values of the flow form's fields serving that direction the settings in the flow; both with the forms'
+ * it ({@link #connection(Forms, Direction, EndpointConfig, SecretSource)}), and the values of the flow form's fields serving that direction the settings in the flow; both with the forms'
  * defaults filled in. A form that describes nothing takes what the other form does not describe: the connection form on
  * a direction that connects, else the flow form. A key that neither form takes is left out, and {@link #check} names it.
  *
@@ -43,17 +45,45 @@ public final class EndpointUse {
     private static final String REPLY = "maxBodyBytes";
     /** What the node sets on every in endpoint. */
     private static final Set<String> NODE_KEYS = Set.of("flow", "maxBodyBytes");
+    /** A reference to a secret, as a secret field's value. */
+    private static final Pattern REFERENCE = Pattern.compile("secret://[a-z0-9][a-z0-9._-]*");
+
+    /** The source of handles that are never read: a read fails naming the reference, never a value. */
+    private static final SecretSource UNREAD = (reference, kinds) -> {
+        Supplier<RuntimeException> unread = () -> new IllegalStateException(reference + " is not read here: only a consumer or a producer the flow runs reads it");
+        return switch (kinds.iterator().next()) {
+            case VALUE -> Secret.of(reference, () -> { throw unread.get(); });
+            case CREDENTIALS -> Secret.credentials(reference, () -> { throw unread.get(); });
+            case KEY_PAIR -> Secret.keyPair(reference, () -> { throw unread.get(); });
+        };
+    };
 
     private EndpointUse() {}
 
-    /** The sender {@code cfg} is, for the flow {@code flow} whose bodies are at most {@code maxBodyBytes}. */
+    /**
+     * The sender {@code cfg} is, for the flow {@code flow} whose bodies are at most {@code maxBodyBytes}, to ask the adapter
+     * about: a reference in a secret field is a handle of the field's first kind that no read may take.
+     */
     public static Inbound inbound(Forms forms, EndpointConfig cfg, String flow, long maxBodyBytes) {
-        return new Inbound(flow, connection(forms, Direction.IN, cfg), settings(forms, Direction.IN, cfg), maxBodyBytes);
+        return inbound(forms, cfg, flow, maxBodyBytes, UNREAD);
     }
 
-    /** What a producer of the out endpoint {@code cfg} is built for. */
+    /**
+     * The sender {@code cfg} is, for the flow {@code flow} whose bodies are at most {@code maxBodyBytes}, a reference in a
+     * secret field a handle from {@code secrets}.
+     */
+    public static Inbound inbound(Forms forms, EndpointConfig cfg, String flow, long maxBodyBytes, SecretSource secrets) {
+        return new Inbound(flow, connection(forms, Direction.IN, cfg, secrets), settings(forms, Direction.IN, cfg), maxBodyBytes);
+    }
+
+    /** What a producer of the out endpoint {@code cfg} is built for, to ask the adapter about: its handles are never read. */
     public static Outbound outbound(Forms forms, EndpointConfig cfg) {
-        return new Outbound(connection(forms, Direction.OUT, cfg));
+        return outbound(forms, cfg, UNREAD);
+    }
+
+    /** What a producer of the out endpoint {@code cfg} is built for, a reference in a secret field a handle from {@code secrets}. */
+    public static Outbound outbound(Forms forms, EndpointConfig cfg, SecretSource secrets) {
+        return new Outbound(connection(forms, Direction.OUT, cfg, secrets));
     }
 
     /**
@@ -66,19 +96,32 @@ public final class EndpointUse {
         return new Call(flow, step, settings(forms, Direction.OUT, cfg), reply, Optional.empty());
     }
 
-    /** The connection of {@code cfg} for {@code direction}; empty when that direction reaches none. */
+    /** The connection of {@code cfg} for {@code direction}, its handles never read; empty when that direction reaches none. */
     public static Optional<Connection> connection(Forms forms, Direction direction, EndpointConfig cfg) {
+        return connection(forms, direction, cfg, UNREAD);
+    }
+
+    /**
+     * The connection of {@code cfg} for {@code direction}; empty when that direction reaches none. A secret field that holds a
+     * reference, {@code secret://<name>}, is the handle {@code secrets} gives for it and the kinds the field takes, in the
+     * order the field names them; one that holds a literal is a handle of that plain value, named after the endpoint and the
+     * field.
+     *
+     * @throws IllegalArgumentException {@code secrets} refuses a reference; the message names the endpoint, the field and the refusal
+     */
+    public static Optional<Connection> connection(Forms forms, Direction direction, EndpointConfig cfg, SecretSource secrets) {
+        Objects.requireNonNull(secrets, "secrets");
         if (!forms.connects(direction)) return Optional.empty();
         Settings form = forms.connection();
         Map<String, Object> values = new LinkedHashMap<>(form.defaults(direction));
-        Map<String, Secret> secrets = new LinkedHashMap<>();
+        Map<String, Secret> handles = new LinkedHashMap<>();
         List<String> secretFields = form.secrets();
         cfg.options().forEach((key, value) -> {
             if (value == null || side(forms, direction, key) != Side.CONNECTION) return;
-            if (secretFields.contains(key)) secrets.put(key, handle(cfg.name(), key, String.valueOf(value)));
+            if (secretFields.contains(key)) handles.put(key, secret(cfg.name(), key, String.valueOf(value), form.kinds(key), secrets));
             else values.put(key, value);
         });
-        return Optional.of(new Connection(cfg.name(), values, secrets));
+        return Optional.of(new Connection(cfg.name(), values, handles));
     }
 
     /** The settings in the flow of {@code cfg} for {@code direction}: the flow form's values, its defaults filled in. */
@@ -144,6 +187,16 @@ public final class EndpointUse {
         if (!connection.described() && forms.connects(direction)) return Side.CONNECTION;
         if (!flow.described()) return Side.FLOW;
         return Side.NONE;
+    }
+
+    /** The handle of the secret field {@code field} of {@code endpoint} that holds {@code value}: a reference's from {@code secrets}. */
+    private static Secret secret(String endpoint, String field, String value, Set<Secret.Kind> kinds, SecretSource secrets) {
+        if (!REFERENCE.matcher(value).matches()) return handle(endpoint, field, value);
+        try {
+            return Objects.requireNonNull(secrets.handle(value, kinds.isEmpty() ? Set.of(Secret.Kind.VALUE) : kinds), "the secret source answered null");
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalArgumentException("endpoint '" + endpoint + "': '" + field + "': " + refused.getMessage(), refused);
+        }
     }
 
     /** A handle of the value an endpoint file gives a secret field, named after the endpoint and the field, never the value. */

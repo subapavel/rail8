@@ -202,9 +202,9 @@ class AdminServerComponentsTest {
                       {"name": "port", "type": "integer", "label": "Port", "labelKey": "drop.field.port.label", "help": "The port.",
                        "helpKey": "drop.field.port.help", "tab": "general", "required": false, "directions": ["in"], "default": 22, "min": 1, "max": 65535},
                       {"name": "password", "type": "secret", "label": "Password", "labelKey": "drop.field.password.label", "help": "The password.",
-                       "helpKey": "drop.field.password.help", "tab": "security", "required": false, "directions": ["in"]},
+                       "helpKey": "drop.field.password.help", "tab": "security", "required": false, "directions": ["in"], "kinds": ["value"]},
                       {"name": "privateKey", "type": "secret", "label": "Private key", "labelKey": "drop.field.privateKey.label", "help": "The key.",
-                       "helpKey": "drop.field.privateKey.help", "tab": "security", "required": false, "directions": ["in"]}],
+                       "helpKey": "drop.field.privateKey.help", "tab": "security", "required": false, "directions": ["in"], "kinds": ["value"]}],
                     "flow": [
                       {"name": "afterSuccess", "type": "choice", "label": "After success", "labelKey": "drop.field.afterSuccess.label",
                        "help": "What then.", "helpKey": "drop.field.afterSuccess.help", "tab": "polling", "required": false, "directions": ["in"],

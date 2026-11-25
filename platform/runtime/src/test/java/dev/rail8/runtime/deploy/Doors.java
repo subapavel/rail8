@@ -11,6 +11,7 @@ import dev.rail8.api.Health;
 import dev.rail8.api.Inbound;
 import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Secret;
 import dev.rail8.api.settings.Choice;
 import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
@@ -103,6 +104,8 @@ public final class Doors implements Component {
     private final String scheme;
     private final RecordingComponent partner;
     private final List<String> listensOnAsked = new CopyOnWriteArrayList<>();
+    /** What each consumer was built for, in build order. */
+    private final List<Inbound> inbounds = new CopyOnWriteArrayList<>();
     private final List<String> internalAddressAsked = new CopyOnWriteArrayList<>();
     private final List<String> events = new CopyOnWriteArrayList<>();
     private final List<Door> doors = new CopyOnWriteArrayList<>();
@@ -160,6 +163,13 @@ public final class Doors implements Component {
 
     /** Every door built, in order. */
     public List<Door> doors() { return List.copyOf(doors); }
+
+    /** What the newest consumer of {@code flow} was built for, its handles as the deploy gave them. */
+    public Inbound inbound(String flow) {
+        List<Inbound> of = inbounds.stream().filter(in -> in.flow().equals(flow)).toList();
+        if (of.isEmpty()) throw new AssertionError("no consumer of " + flow + " was built");
+        return of.getLast();
+    }
 
     /** The door built last whose {@code flow} option is {@code flow}; fails the case when there is none. */
     public Door door(String flow) {
@@ -254,14 +264,30 @@ public final class Doors implements Component {
     /** {@link #FORMS} until {@link #describe} gives the connection form. */
     @Override public Forms forms() { return forms; }
 
-    /** The endpoint of {@code connection} as this fixture's tests read it: the key, {@code <scheme>://<key>}, every value in one map, a secret's its plain value. */
+    /**
+     * The endpoint of {@code connection} as this fixture's tests read it: the key, {@code <scheme>://<key>}, every value in one
+     * map, a secret's its value read now, or its reference where no read is taken ({@link #listensOn}).
+     */
     private EndpointConfig view(Optional<Connection> connection, Map<String, Object> settings, Map<String, Object> more) {
         Connection c = connection.orElseThrow(() -> new IllegalArgumentException("a " + scheme + " endpoint reaches a connection"));
         Map<String, Object> options = new LinkedHashMap<>(c.values());
-        c.secrets().forEach((field, secret) -> options.put(field, secret.value()));
+        c.secrets().forEach((field, secret) -> options.put(field, read(secret)));
         options.putAll(settings);
         options.putAll(more);
         return new EndpointConfig(c.key(), URI.create(scheme + "://" + c.key()), options);
+    }
+
+    /** The value of {@code secret} now, of its kind; its reference when it takes no read here. */
+    private static Object read(Secret secret) {
+        try {
+            return switch (secret.kind()) {
+                case VALUE -> secret.value();
+                case CREDENTIALS -> secret.credentials();
+                case KEY_PAIR -> secret.keyPair();
+            };
+        } catch (IllegalStateException unread) {
+            return secret.reference();
+        }
     }
 
     /** The in endpoint {@code in} stands for, as the consumers of this component read it. */
@@ -332,6 +358,7 @@ public final class Doors implements Component {
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
         EndpointConfig cfg = endpoint(Objects.requireNonNull(in, "in"));
         Objects.requireNonNull(handler, "handler");
+        inbounds.add(in);
         onConsumer.accept(cfg);
         if (cfg.options().get("refuse") instanceof String why) throw new IllegalArgumentException(why);
         Door d = new Door(cfg, handler);

@@ -199,6 +199,17 @@ public final class Settings {
         return fields.stream().filter(Field::isSecret).map(Field::name).toList();
     }
 
+    /**
+     * The kinds the secret field {@code name} takes, in the order it names them ({@link Field#kinds}); empty when the form has
+     * no secret field of that name.
+     *
+     * @since 0.4
+     */
+    public Set<dev.rail8.api.Secret.Kind> kinds(String name) {
+        Field f = byName.get(Objects.requireNonNull(name, "name"));
+        return f == null ? Set.of() : f.kinds();
+    }
+
     /** Whether the form describes its settings; false only for {@link #NONE}. */
     public boolean described() {
         return described;
@@ -207,7 +218,7 @@ public final class Settings {
     /**
      * What is wrong with the {@code options} of an endpoint of {@code direction}; empty when nothing is. A key whose value
      * is null is absent. A {@code secret://} reference stands in for any text or secret and is resolved by the node after
-     * the check. On an in endpoint {@code flow} and {@code maxBodyBytes} are the node's and are skipped.
+     * the check; a secret field that does not take {@link dev.rail8.api.Secret.Kind#VALUE} takes a reference only. On an in endpoint {@code flow} and {@code maxBodyBytes} are the node's and are skipped.
      *
      * <p>The problems come in a fixed order: the fields in the order they are declared (one served by the other direction
      * only, a value that does not fit, a required field left out while shown), then keys no field has in name order, then
@@ -272,7 +283,9 @@ public final class Settings {
      * ({@code text}, {@code secret}, {@code integer}, {@code boolean} or {@code choice}), {@code label}, {@code help},
      * {@code tab} (an id), {@code required} and {@code directions} ({@code in}, {@code out} or both), and only what it sets
      * of {@code pattern}, {@code default}, {@code min}, {@code max}, {@code choices} (each {@code value} and {@code label}),
-     * {@code expression} (its escape in lower case) and {@code visibleWhen} ({@code field} and {@code values}). A rule is
+     * {@code expression} (its escape in lower case) and {@code visibleWhen} ({@code field} and {@code values}); a secret field
+     * always has {@code kinds}, the ids of the kinds it takes in the order it names them ({@code ["value"]} for
+     * {@link Field#secret(String, String, String)}). A rule is
      * {@code {"kind": "exactlyOne", "fields": [...]}}. {@link Forms#toJson} carries two of them with their text keys.
      */
     public Map<String, Object> toJson() {

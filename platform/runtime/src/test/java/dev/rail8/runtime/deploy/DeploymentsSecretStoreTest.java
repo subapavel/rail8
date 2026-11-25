@@ -145,7 +145,8 @@ class DeploymentsSecretStoreTest {
     /** One node: its own data directory and Doors, the pool's records, and its store over the shared secret database. */
     /** The connection form of this test's Doors: {@code token} and {@code refuse} secret fields, the rest text. */
     static final Settings DESCRIBED = Settings.of(Field.text("path", "Path", "Where it listens.").in(), Field.text("url", "URL", "Where it sends."),
-            Field.secret("token", "Token", "What it presents."), Field.secret("refuse", "Refusal", "A text its consumer's build throws with."));
+            Field.secret("token", "Token", "What it presents."), Field.secret("refuse", "Refusal", "A text its consumer's build throws with."),
+            Field.secret("login", "Login", "A password or credentials.", Secret.Kind.VALUE, Secret.Kind.CREDENTIALS));
 
     final class Node {
         final Doors doors = new Doors().describe(DESCRIBED);
@@ -294,7 +295,7 @@ class DeploymentsSecretStoreTest {
         Node a = new Node("node-1", Map.of());
         MemorySecretStores.createCredentials(a.store, "in-token", "app", "pw-0815");
         DeployRefusedException kind = a.refused(shop());
-        assertEquals(List.of("endpoint 'orders-in': secret 'secret://in-token' is a secret of kind credentials in the secret store, taken here as [value]"),
+        assertEquals(List.of("endpoint 'orders-in': the option 'token': secret 'secret://in-token' is a secret of kind credentials in the secret store, taken here as [value]"),
                 kind.problems());
 
         PackageDraft platform = shop();
@@ -565,5 +566,86 @@ class DeploymentsSecretStoreTest {
         assertEquals("two", a.option("shop/orders", "token"), "the first tick after the deploy builds orders again with the new value");
         assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
         assertEquals(1, a.built("shop/ping"), "and no other flow");
+    }
+
+    /** {@code shop}, the in endpoint of {@code orders} logging in with {@code secret://in-login}. */
+    static PackageDraft logins() {
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").remove("token");
+        p.endpointDoc("orders-in").getJsonObject("config").put("login", "secret://in-login");
+        return p;
+    }
+
+    /** The handle of the secret field {@code field} the newest consumer of {@code flow} was built with. */
+    static Secret handle(Node node, String flow, String field) {
+        return node.doors.inbound(flow).connection().orElseThrow().secret(field).orElseThrow();
+    }
+
+    @Test
+    void aSecretFieldTakesAReferenceOfEachOfItsKindsAndItsUseHoldsThem() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "in-login", "app", "pw-0815");
+        a.deploy(logins());
+        Secret login = handle(a, "shop/orders", "login");
+        assertEquals(Secret.Kind.CREDENTIALS, login.kind());
+        assertEquals(new Secret.Credentials("app", "pw-0815"), login.credentials());
+        assertEquals(Map.of("orders", Map.of("in-login", Set.of(Secret.Kind.VALUE, Secret.Kind.CREDENTIALS)), "ping", Map.of()), records.uses.get("shop"),
+                "the use holds the kinds the field takes");
+
+        MemorySecretStores.overwriteCredentials(a.store, "in-login", "app", "pw-4711");
+        a.follow();
+        assertEquals("pw-4711", login.credentials().password(), "an overwrite reaches the next read");
+        assertEquals(1, a.built("shop/orders"), "no flow is built again for a typed secret");
+    }
+
+    @Test
+    void aReferenceOfAKindTheFieldDoesNotTakeOrATypedOneOutsideASecretFieldRefusesTheDeploy() {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "in-token", "app", "pw-0815");
+        PackageDraft text = shop();
+        text.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://t").put("url", "secret://in-token");
+        MemorySecretStores.createValue(a.store, "t", "one");
+        assertEquals(List.of("endpoint 'orders-in': secret 'secret://in-token' is a secret of kind credentials in the secret store: the option 'url' is not a "
+                + "secret field, so it takes a plain value only"), a.refused(text).problems());
+        assertFalse(String.join(" ", a.refused(text).problems()).contains("pw-0815"));
+    }
+
+    @Test
+    void aDeleteAndACreateOfAnotherKindFailTheRunningFlowsNextReadNamingBothKindsUntilItsNextBuild() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "in-login", "app", "pw-0815");
+        a.deploy(logins());
+        Secret login = handle(a, "shop/orders", "login");
+
+        MemorySecretStores.delete(a.store, "in-login");
+        MemorySecretStores.createValue(a.store, "in-login", "plain-1");
+        a.follow();
+        IllegalStateException other = assertThrows(IllegalStateException.class, login::credentials);
+        assertEquals("secret://in-login is now a secret of kind value in the secret store, and this flow took it as credentials: the flow's next build "
+                + "takes it as its new kind", other.getMessage());
+        assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"), "no flow is built again for it");
+
+        PackageDraft next = logins();
+        next.manifest().put("version", "1.1.0");
+        next.endpointDoc("orders-in").getJsonObject("config").put("path", "/orders/v2");   // so orders is built anew
+        a.deploy(next);
+        Secret fresh = handle(a, "shop/orders", "login");
+        assertEquals(Secret.Kind.VALUE, fresh.kind(), "the next build takes the new kind");
+        assertEquals("plain-1", fresh.value());
+    }
+
+    @Test
+    void aFailureQuotingAPasswordReadBeforeAnOverwriteIsLoggedScrubbed() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createCredentials(a.store, "in-login", "app", "pw-first-0815");
+        a.deploy(logins());
+        Secret login = handle(a, "shop/orders", "login");
+        a.doors.failStop("shop/orders", "no logout of " + login.credentials().user() + " with " + login.credentials().password());
+        MemorySecretStores.overwriteCredentials(a.store, "in-login", "app", "pw-second-4711");
+        a.follow();
+        assertEquals("pw-second-4711", login.credentials().password(), "the consumer reads the new password at its next session");
+        a.undeploy("shop");
+        assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of app with secret://in-login")), logged.toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("pw-first-0815")), logged.toString());
     }
 }
