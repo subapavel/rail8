@@ -1,5 +1,7 @@
 package dev.rail8.api.settings;
 
+import dev.rail8.api.Secret;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -7,6 +9,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,7 +39,8 @@ public final class Field {
 
     /**
      * What a field holds. {@code TEXT} and {@code SECRET} are strings; a secret is shown masked, has no default, and either
-     * may be a reference {@code secret://<name>} that the node resolves after the check. {@code INTEGER} is a whole number,
+     * may be a reference {@code secret://<name>} that the node resolves after the check; a secret that does not take a plain
+     * value ({@link Field#kinds}) is a reference only. {@code INTEGER} is a whole number,
      * {@code BOOLEAN} true or false, {@code CHOICE} one of a fixed list of strings. The JSON form names each in lower case.
      */
     enum Type {
@@ -72,9 +76,12 @@ public final class Field {
     private final List<Choice> choiceList;
     private final List<String> choices;
     private final Escape escape;
+    /** The kinds a secret field takes, in the order it names them; empty for any other field. */
+    private final Set<Secret.Kind> kinds;
 
     private Field(Type type, String name, String label, String help, boolean required, Object byDefault, Tab tab, Set<Direction> directions,
-                  String shownBy, List<Object> shownFor, Long min, Long max, String pattern, List<Choice> choiceList, Escape escape) {
+                  String shownBy, List<Object> shownFor, Long min, Long max, String pattern, List<Choice> choiceList, Escape escape,
+                  Set<Secret.Kind> kinds) {
         this.type = type;
         this.name = name;
         this.label = label;
@@ -90,15 +97,20 @@ public final class Field {
         this.choiceList = choiceList;
         this.choices = choiceList == null ? null : choiceList.stream().map(Choice::value).toList();
         this.escape = escape;
+        this.kinds = kinds;
         this.compiled = validate();
         this.byDefault = byDefault == null ? null : normalDefault(byDefault);
     }
 
     private static Field of(Type type, String name, String label, String help, List<Choice> choices) {
+        return of(type, name, label, help, choices, Set.of());
+    }
+
+    private static Field of(Type type, String name, String label, String help, List<Choice> choices, Set<Secret.Kind> kinds) {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(label, "label");
         Objects.requireNonNull(help, "help");
-        return new Field(type, name, label, help, false, null, Tab.GENERAL, EnumSet.allOf(Direction.class), null, null, null, null, null, choices, null);
+        return new Field(type, name, label, help, false, null, Tab.GENERAL, EnumSet.allOf(Direction.class), null, null, null, null, null, choices, null, kinds);
     }
 
     /** A string; {@code label} is what the form names it, 1 to 64 characters, and {@code help} what it says of it, 1 to 1000. */
@@ -106,9 +118,32 @@ public final class Field {
 
     /**
      * A string shown masked, never with a default; usually a reference {@code secret://<name>}. A secret field belongs to the
-     * connection form only: its value reaches the adapter as a handle, {@link dev.rail8.api.Connection#secret}.
+     * connection form only: its value reaches the adapter as a handle, {@link dev.rail8.api.Connection#secret}. It takes a
+     * plain value only: {@code secret(name, label, help, Kind.VALUE)}.
      */
-    public static Field secret(String name, String label, String help) { return of(Type.SECRET, name, label, help, null); }
+    public static Field secret(String name, String label, String help) { return secret(name, label, help, Secret.Kind.VALUE); }
+
+    /**
+     * A secret field that takes a secret of each of {@code kinds}, in the order given: the settings description serves them
+     * as {@code "kinds"}, and {@code rail8 validate} and {@code rail8 test} try their placeholders in that order. Its value
+     * is a reference {@code secret://<name>} to a secret of one of them, or, only when {@code kinds} holds
+     * {@link Secret.Kind#VALUE}, a plain value written in place. The handle the adapter gets has the kind of the secret the
+     * reference names when the flow is built.
+     *
+     * @throws IllegalArgumentException naming the field when {@code kinds} is empty or names a kind twice
+     * @since 0.4
+     */
+    public static Field secret(String name, String label, String help, Secret.Kind... kinds) {
+        Objects.requireNonNull(kinds, "kinds");
+        Set<Secret.Kind> taken = new LinkedHashSet<>();
+        for (Secret.Kind k : kinds) {
+            if (!taken.add(Objects.requireNonNull(k, "kind"))) {
+                throw new IllegalArgumentException("field '" + name + "': the kind " + k.id() + " is named twice");
+            }
+        }
+        if (taken.isEmpty()) throw new IllegalArgumentException("field '" + name + "': a secret field takes at least one kind");
+        return of(Type.SECRET, name, label, help, null, Collections.unmodifiableSet(taken));
+    }
 
     /** A whole number. */
     public static Field integer(String name, String label, String help) { return of(Type.INTEGER, name, label, help, null); }
@@ -123,7 +158,7 @@ public final class Field {
 
     private Field with(boolean required, Object byDefault, Tab tab, Set<Direction> directions, String shownBy, List<Object> shownFor,
                        Long min, Long max, String pattern) {
-        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape);
+        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds);
     }
 
     /** A field the endpoint must set; it has no default. While hidden by {@link #visibleWhen} it is not required. */
@@ -188,7 +223,7 @@ public final class Field {
      */
     public Field expression(Escape escape) {
         Objects.requireNonNull(escape, "escape");
-        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape);
+        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds);
     }
 
     /** The key of the setting. */
@@ -196,6 +231,13 @@ public final class Field {
 
     /** What the form names the field, in English. */
     public String label() { return label; }
+
+    /**
+     * The kinds of secret a secret field takes, in the order it names them; empty for any other field.
+     *
+     * @since 0.4
+     */
+    public Set<Secret.Kind> kinds() { return kinds; }
 
     /** How a template in it is escaped, when it takes one ({@link #expression}). */
     public java.util.Optional<Escape> escape() { return java.util.Optional.ofNullable(escape); }
@@ -277,6 +319,9 @@ public final class Field {
             case TEXT, SECRET -> {
                 if (!(value instanceof String s)) yield new Wrong(Settings.Problem.TYPE, "must be text");
                 if (s.isEmpty()) yield new Wrong(Settings.Problem.TYPE, "must not be empty");
+                if (type == Type.SECRET && !kinds.contains(Secret.Kind.VALUE) && !REFERENCE.matcher(s).matches()) {
+                    yield new Wrong(Settings.Problem.TYPE, "must name a secret, secret://<name>, of kind " + ids(kinds) + ": it takes no plain value");
+                }
                 if (compiled == null || (references && REFERENCE.matcher(s).matches())) yield null;
                 yield compiled.matcher(s).matches() ? null : new Wrong(Settings.Problem.PATTERN, "must match " + pattern);
             }
@@ -290,6 +335,10 @@ public final class Field {
             case CHOICE -> value instanceof String s && choices.contains(s) ? null
                     : new Wrong(Settings.Problem.CHOICE, "must be one of " + String.join(", ", choices));
         };
+    }
+
+    private static String ids(Set<Secret.Kind> kinds) {
+        return String.join(" or ", kinds.stream().map(Secret.Kind::id).toList());
     }
 
     private String bounds() {
@@ -353,6 +402,7 @@ public final class Field {
             m.put("choices", List.copyOf(list));
         }
         if (escape != null) m.put("expression", escape.name().toLowerCase(Locale.ROOT));
+        if (type == Type.SECRET) m.put("kinds", kinds.stream().map(Secret.Kind::id).toList());
         if (shownBy != null) {
             Map<String, Object> when = new LinkedHashMap<>();
             when.put("field", shownBy);

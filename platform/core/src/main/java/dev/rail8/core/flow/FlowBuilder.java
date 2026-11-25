@@ -575,7 +575,7 @@ public final class FlowBuilder {
                 }
                 if (kind == BodyKind.SPLIT_ASSEMBLE) splitBefore = true;
                 Stage stage = switch (step.type()) {
-                    case "to" -> to(step, flow, forward, opened, fence);
+                    case "to" -> flowSecrets.scrubbing(to(step, flow, forward, opened, fence, flowSecrets.endpoints()));
                     case "route" -> route(step, resources);
                     case "filter" -> new Filter(predicate(step, step.requireString("when"), resources));
                     case "extractKey" -> extractKey(step, resources);
@@ -668,9 +668,10 @@ public final class FlowBuilder {
      * The producer gets the envelope through {@code forward} (the flow's {@code forwardHeaders}) under its target's limit;
      * what goes on is its reply. Every producer created is added to {@code opened} at once.
      */
-    private Stage to(StepConfig step, FlowDefinition flow, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence) {
+    private Stage to(StepConfig step, FlowDefinition flow, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence,
+                     SecretSource secrets) {
         if (step.config().get("endpoint") != null) {
-            Send send = send(step, flow, step.requireString("endpoint"), opened, fence);
+            Send send = send(step, flow, step.requireString("endpoint"), opened, fence, secrets);
             return Stage.of(e -> send.apply(forward.apply(e)));
         }
         Key<String> prop = new Key<>(step.requireString("byProp"));
@@ -678,7 +679,7 @@ public final class FlowBuilder {
             throw new IllegalArgumentException(step + ": 'endpoints' must map every value of " + prop.name() + " to an endpoint");
         }
         Map<String, Send> sends = new LinkedHashMap<>();
-        choices.forEach((choice, endpoint) -> sends.put(String.valueOf(choice), send(step, flow, String.valueOf(endpoint), opened, fence)));
+        choices.forEach((choice, endpoint) -> sends.put(String.valueOf(choice), send(step, flow, String.valueOf(endpoint), opened, fence, secrets)));
         return Stage.of(e -> {
             String choice = e.get(prop).orElseThrow(() -> new IllegalStateException(step + ": prop " + prop.name() + " is not set; a route step before it decides"));
             Send send = sends.get(choice);
@@ -690,9 +691,12 @@ public final class FlowBuilder {
     /**
      * The producer of {@code endpoint}, added to {@code opened} at once, the call of {@code step} through it, the limit of the
      * target its component names, and {@code fence}. Each endpoint a step names is one use of the adapter's contract with a
-     * producer of its own ({@link EndpointUse}).
+     * producer of its own ({@link EndpointUse}), the references of its secret fields handles from {@code secrets}. When
+     * {@code secrets} hands out placeholders, the producer is built with the placeholder of each kind its secret fields take,
+     * in their order (a field that names fewer kinds keeps its last), until one builds; when none does, the first one's
+     * failure leaves.
      */
-    private Send send(StepConfig step, FlowDefinition flow, String endpoint, List<Producer> opened, BooleanSupplier fence) {
+    private Send send(StepConfig step, FlowDefinition flow, String endpoint, List<Producer> opened, BooleanSupplier fence, SecretSource secrets) {
         EndpointConfig cfg = endpoints.get(endpoint);
         if (cfg == null) throw new IllegalArgumentException(step + ": unknown endpoint '" + endpoint + "' (" + endpoints.keySet() + ")");
         Component component;
@@ -703,12 +707,31 @@ public final class FlowBuilder {
         }
         Forms forms = component.forms();
         if (!forms.serves(Direction.OUT)) throw new IllegalArgumentException(step + ": endpoint '" + endpoint + "': the adapter '" + cfg.scheme() + "' does not send");
-        Outbound out = EndpointUse.outbound(forms, cfg);
         Call call = EndpointUse.call(forms, cfg, flow.id(), step.name(), flow.maxBodyBytes());
-        Producer producer = component.producer(out);
+        int trials = secrets.placeholders() ? forms.connection().secrets().stream().mapToInt(f -> forms.connection().kinds(f).size()).max().orElse(1) : 1;
+        Outbound out = null;
+        Producer producer = null;
+        RuntimeException first = null;
+        for (int trial = 0; trial < trials && producer == null; trial++) {
+            out = EndpointUse.outbound(forms, cfg, trials == 1 ? secrets : nth(secrets, trial));
+            try {
+                producer = component.producer(out);
+            } catch (RuntimeException refused) {
+                if (first == null) first = refused;
+            }
+        }
+        if (producer == null) throw Objects.requireNonNull(first, "no producer was built");
         opened.add(producer);
         return new Send(endpoint, producer, call, component.target(out).map(targets::of).orElseGet(targets::unshared), runtime.clock(), runtime.timer(), fence,
                 fence instanceof Fence f ? f : null);   // only a Fence bounds a send in time and abandons it when the fence closes
+    }
+
+    /** {@code secrets} asked each time for the kind at {@code trial} of those it is asked for, or for the last one when there are fewer. */
+    private static SecretSource nth(SecretSource secrets, int trial) {
+        return (reference, kinds) -> {
+            List<Secret.Kind> ordered = List.copyOf(kinds);
+            return secrets.handle(reference, Set.of(ordered.get(Math.min(trial, ordered.size() - 1))));
+        };
     }
 
     /**

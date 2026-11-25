@@ -195,12 +195,51 @@ public final class Secrets {
         }
         Optional<String> problem = problem(reference, kinds);
         if (problem.isPresent()) throw new IllegalArgumentException(problem.get());
-        Secret.Kind kind = store == null ? Secret.Kind.VALUE : store.held(name).map(SecretStore.Held::kind).orElse(Secret.Kind.VALUE);
+        return typed(reference, name, store == null ? Secret.Kind.VALUE : store.held(name).map(SecretStore.Held::kind).orElse(Secret.Kind.VALUE));
+    }
+
+    /**
+     * A live handle of {@code reference}, a secret of one of {@code kinds}, as {@link #handle} gives it but never refused for a
+     * value it lacks now: of the kind the store holds it as when that is one of {@code kinds}, else {@code value} when
+     * {@code kinds} names it, else the first of {@code kinds}. A read of a secret not set fails, and so does one of another kind,
+     * naming both kinds.
+     *
+     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}, or {@code kinds} is empty
+     */
+    public Secret live(String reference, Set<Secret.Kind> kinds) {
+        String name = name(reference);
+        if (variables == null || kinds.isEmpty()) return handle(reference, kinds);
+        Secret.Kind kind = store == null ? null : store.held(name).map(SecretStore.Held::kind).filter(kinds::contains).orElse(null);
+        if (kind == null) kind = kinds.contains(Secret.Kind.VALUE) ? Secret.Kind.VALUE : kinds.iterator().next();
+        return typed(reference, name, kind);
+    }
+
+    /** The live handle of {@code reference}, whose name is {@code name}, of {@code kind}. */
+    private Secret typed(String reference, String name, Secret.Kind kind) {
         return switch (kind) {
-            case VALUE -> Secret.of(reference, () -> (String) read(name, Secret.Kind.VALUE));
-            case CREDENTIALS -> Secret.credentials(reference, () -> (Secret.Credentials) read(name, Secret.Kind.CREDENTIALS));
-            case KEY_PAIR -> Secret.keyPair(reference, () -> (Secret.KeyPair) read(name, Secret.Kind.KEY_PAIR));
+            case VALUE -> Secret.of(reference, () -> (String) readAs(reference, name, Secret.Kind.VALUE));
+            case CREDENTIALS -> Secret.credentials(reference, () -> (Secret.Credentials) readAs(reference, name, Secret.Kind.CREDENTIALS));
+            case KEY_PAIR -> Secret.keyPair(reference, () -> (Secret.KeyPair) readAs(reference, name, Secret.Kind.KEY_PAIR));
         };
+    }
+
+    /**
+     * The value of {@code name} as {@code kind}, the kind its handle was built with, now.
+     *
+     * @throws IllegalStateException the store holds it now as another kind; the message names the reference and both kinds
+     */
+    private Object readAs(String reference, String name, Secret.Kind kind) {
+        Optional<SecretStore.Held> held = store == null ? Optional.empty() : store.held(name);
+        if (held.isPresent() && held.get().kind() != kind) {
+            throw new IllegalStateException(reference + " is now a secret of kind " + held.get().kind().id() + " in the secret store, and this flow took it as "
+                    + kind.id() + ": the flow's next build takes it as its new kind");
+        }
+        return read(name, kind);
+    }
+
+    /** Whether this is the placeholder of {@code rail8 validate} and {@code rail8 test}, rather than a node's. */
+    boolean placeholders() {
+        return variables == null;
     }
 
     /** A plain value's handle of {@code reference}: {@link #handle} of the kind {@code value}. */

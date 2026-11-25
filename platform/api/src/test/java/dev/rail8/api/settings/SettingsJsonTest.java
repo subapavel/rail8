@@ -1,5 +1,7 @@
 package dev.rail8.api.settings;
 
+import dev.rail8.api.Secret;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -43,7 +45,7 @@ class SettingsJsonTest {
                         Field.integer("port", "Port", "The port.").range(1, 65535).byDefault(22),
                         Field.integer("least", "Least", "At least one.").min(1),
                         Field.secret("password", "Password", "The password.").tab(Tab.SECURITY),
-                        Field.secret("privateKey", "Private key", "The key.").tab(Tab.SECURITY),
+                        Field.secret("privateKey", "Private key", "The key.", Secret.Kind.KEY_PAIR, Secret.Kind.VALUE).tab(Tab.SECURITY),
                         Field.choice("afterSuccess", "After success", "What then.", Choice.of("delete", "Delete"), Choice.of("move", "Move")).byDefault("delete").in(),
                         Field.text("moveTo", "Move to", "Where to.").required().visibleWhen("afterSuccess", "move").in(),
                         Field.bool("tls", "Tls", "Whether TLS is on.").byDefault(false).out(),
@@ -56,8 +58,10 @@ class SettingsJsonTest {
                         "min", 1L, "max", 65535L, "default", 22L),
                 Map.of("name", "least", "type", "integer", "label", "Least", "help", "At least one.", "tab", "general", "required", false, "directions", List.of("in", "out"),
                         "min", 1L),
-                Map.of("name", "password", "type", "secret", "label", "Password", "help", "The password.", "tab", "security", "required", false, "directions", List.of("in", "out")),
-                Map.of("name", "privateKey", "type", "secret", "label", "Private key", "help", "The key.", "tab", "security", "required", false, "directions", List.of("in", "out")),
+                Map.of("name", "password", "type", "secret", "label", "Password", "help", "The password.", "tab", "security", "required", false, "directions", List.of("in", "out"),
+                        "kinds", List.of("value")),
+                Map.of("name", "privateKey", "type", "secret", "label", "Private key", "help", "The key.", "tab", "security", "required", false, "directions", List.of("in", "out"),
+                        "kinds", List.of("key-pair", "value")),
                 Map.of("name", "afterSuccess", "type", "choice", "label", "After success", "help", "What then.", "tab", "general", "required", false, "directions", List.of("in"),
                         "choices", List.of(Map.of("value", "delete", "label", "Delete"), Map.of("value", "move", "label", "Move")), "default", "delete"),
                 Map.of("name", "moveTo", "type", "text", "label", "Move to", "help", "Where to.", "tab", "general", "required", true, "directions", List.of("in"),

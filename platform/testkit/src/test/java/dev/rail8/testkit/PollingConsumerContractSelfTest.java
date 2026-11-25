@@ -85,7 +85,9 @@ class PollingConsumerContractSelfTest {
 
     /** The inbound every case's consumer is built for: a connection holding a password. */
     static final Inbound INBOX = new Inbound("contract",
-            Optional.of(new Connection("partner", Map.of(), Map.of("password", Secret.of("secret://partner.password", () -> "pw")))), Map.of(), 1L << 26);
+            Optional.of(new Connection("partner", Map.of(), Map.of("password", Secret.of("secret://partner.password", () -> "pw"),
+                    "login", Secret.credentials("secret://partner.login", () -> new Secret.Credentials("u", "pw")),
+                    "key", Secret.keyPair("secret://partner.key", FakeServices::placeholderKeyPair)))), Map.of(), 1L << 26);
 
     /**
      * A polling component over an in-memory directory, its own fake clock and timer and a BlobStore with a 4 KiB tree limit.
@@ -181,7 +183,7 @@ class PollingConsumerContractSelfTest {
         @Override public Forms forms() { return forms.get(); }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
-            if (readsSecretsAtBuild) in.connection().ifPresent(c -> c.secrets().values().forEach(Secret::value));
+            if (readsSecretsAtBuild) in.connection().ifPresent(c -> c.secrets().values().forEach(ComponentContractSelfTest::read));
             return new Poller(handler);
         }
 

@@ -329,7 +329,7 @@ class ComponentContractSelfTest {
         }
 
         private void readSecrets(Optional<Connection> connection) {
-            if (readsSecretsAtBuild) connection.ifPresent(c -> c.secrets().values().forEach(Secret::value));
+            if (readsSecretsAtBuild) connection.ifPresent(c -> c.secrets().values().forEach(ComponentContractSelfTest::read));
         }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
@@ -428,7 +428,9 @@ class ComponentContractSelfTest {
     /** The suite over a connection that holds a secret: for {@link Variant#connected} and its broken kin. */
     static class ConnectedContractTest extends VariantContractTest {
         @Override protected Inbound inbound() {
-            Connection loop = new Connection("loop", Map.of(), Map.of("password", Secret.of("secret://loop.password", () -> "pw")));
+            Connection loop = new Connection("loop", Map.of(), Map.of("password", Secret.of("secret://loop.password", () -> "pw"),
+                    "login", Secret.credentials("secret://loop.login", () -> new Secret.Credentials("u", "pw")),
+                    "key", Secret.keyPair("secret://loop.key", FakeServices::placeholderKeyPair)));
             return new Inbound(FLOW, Optional.of(loop), Map.of(), MAX_BYTES);
         }
     }
@@ -509,6 +511,15 @@ class ComponentContractSelfTest {
     }
 
     static final String SECRET = "noSecretHandleIsReadWhileAConsumerOrAProducerIsBuilt";
+
+    /** Reads {@code handle} as its kind when it is credentials or a key pair: a typed read counts as any other. */
+    static void read(Secret handle) {
+        switch (handle.kind()) {
+            case VALUE -> { }
+            case CREDENTIALS -> handle.credentials();
+            case KEY_PAIR -> handle.keyPair();
+        }
+    }
 
     @Test
     void aComponentThatReadsASecretWhileItBuildsFailsOnlyTheSecretCase() {

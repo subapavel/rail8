@@ -413,13 +413,26 @@ public abstract class ComponentContract {
                 "a component with a prefix lists HttpIngress.ADDRESS in its flow form, so the node finds the path each in use serves");
     }
 
-    /** {@code c} with each secret handle counting its reads in {@code reads}. */
+    /**
+     * {@code c} with each secret handle counting its reads in {@code reads}: a handle of the same reference and kind; its
+     * {@code reference()} and {@code kind()} are no read.
+     */
     static Connection counted(Connection c, AtomicInteger reads) {
         Map<String, Secret> secrets = new HashMap<>();
-        c.secrets().forEach((field, handle) -> secrets.put(field, Secret.of(handle.reference(), () -> {
-            reads.incrementAndGet();
-            return handle.value();
-        })));
+        c.secrets().forEach((field, handle) -> secrets.put(field, switch (handle.kind()) {
+            case VALUE -> Secret.of(handle.reference(), () -> {
+                reads.incrementAndGet();
+                return handle.value();
+            });
+            case CREDENTIALS -> Secret.credentials(handle.reference(), () -> {
+                reads.incrementAndGet();
+                return handle.credentials();
+            });
+            case KEY_PAIR -> Secret.keyPair(handle.reference(), () -> {
+                reads.incrementAndGet();
+                return handle.keyPair();
+            });
+        }));
         return new Connection(c.key(), c.values(), secrets);
     }
 
