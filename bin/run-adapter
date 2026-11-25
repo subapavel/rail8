@@ -8,15 +8,19 @@
 #   1. builds the adapter's jar (mvn package, tests skipped: `mvn verify` runs them);
 #   2. starts a Postgres of its own in Docker, empty, on a free loopback port;
 #   3. starts a node of environment dev from the platform's node jar, with the adapter's target/plugin as its plugins and
-#      its admin API on 127.0.0.1:18081 without a token and its HTTP port on 127.0.0.1:18090, where the adapter's in endpoints
-#      are served under its prefix; its package repositories are the folder that holds <adapter-dir>, the package's folder in
-#      each is package/; its log and data are in <adapter-dir>/target/run-adapter;
-#   4. deploys the adapter's repository at HEAD to it, saying so in one line when package/ has changes not committed: those
-#      are not deployed;
+#      its admin API on 127.0.0.1:18081 with an emergency key made for this run, and its HTTP port on 127.0.0.1:18090, where
+#      the adapter's in endpoints are served under its prefix; its package repositories are the folder that holds
+#      <adapter-dir>, the package's folder in each is package/; its log and data are in <adapter-dir>/target/run-adapter;
+#   4. makes the node's first users with `rail8 bootstrap`: the administrator admin, whose password is not kept, and the
+#      technical account deploy, whose token is in <adapter-dir>/target/run-adapter/token; gives deploy the roles operator
+#      and message-bodies, which read the messages and their bodies, besides its developer role; and deploys the adapter's
+#      repository at HEAD with that token, saying so in one line when package/ has changes not committed: those are not
+#      deployed;
 #   5. starts a partner that answers every request with the body it was sent on 127.0.0.1:18091, the port the template's out
 #      endpoint calls;
-#   6. runs the UI on http://localhost:5173 with <adapter-dir> as its working folder: the Endpoints screen shows the
-#      adapter's settings forms, and Save writes the endpoint files there; the Messages screen finds what the node stored.
+#   6. runs the UI on http://localhost:5173 with <adapter-dir> as its working folder, without a login, as the account
+#      deploy: the Endpoints screen shows the adapter's settings forms, and Save writes the endpoint files there; the
+#      Messages screen finds what the node stored.
 # Ctrl+C stops the UI, the partner and the node, and removes the Postgres container. Each run starts empty and deploys the
 # package as committed: after a change to the package, commit it and run the script again; a change to the adapter's code
 # is built as it is on disk.
@@ -105,10 +109,10 @@ until docker exec "$container" pg_isready -q -h 127.0.0.1 -U rail8 -d rail8 > /d
 done
 pg_port=$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')
 
+key=$("$root/bin/rail8" key new) || fail "bin/rail8 made no emergency key: build the platform first (docs/ADAPTERS.md)"
 echo "run-adapter: starting the node with the plugins in $dir/target/plugin (log: $run/node.log)"
 (
-  unset RAIL8_ADMIN_TOKEN
-  RAIL8_ENV=dev RAIL8_NODE_ID=run-adapter RAIL8_PG_HOST=127.0.0.1 RAIL8_PG_PORT="$pg_port" RAIL8_PG_PASSWORD=rail8 \
+  RAIL8_ADMIN_TOKEN=$key RAIL8_ENV=dev RAIL8_NODE_ID=run-adapter RAIL8_PG_HOST=127.0.0.1 RAIL8_PG_PORT="$pg_port" RAIL8_PG_PASSWORD=rail8 \
     RAIL8_ADMIN_PORT=$admin_port RAIL8_HTTP_PORT=$http_port RAIL8_DATA_DIR="$run/node" RAIL8_JOURNAL_KEY_GENERATE=true RAIL8_PLUGINS="$dir/target/plugin" \
     RAIL8_GIT_BASE="$base" RAIL8_GIT_PATH=package exec "$java" -jar "$node"
 ) > "$run/node.log" 2>&1 &
@@ -124,12 +128,27 @@ until curl -sf "http://127.0.0.1:$admin_port/health" > /dev/null 2>&1; do
   waited=$((waited + 1))
 done
 
+admin="http://127.0.0.1:$admin_port"
+password=$(RAIL8_ADMIN_TOKEN=$key RAIL8_ADMIN=$admin "$root/bin/rail8" bootstrap --admin admin --deploy-account deploy --token-file "$run/token") \
+  || fail "the node's first users were not made; its log: $run/node.log"
+token=$(cat "$run/token")
+# the administrator's session gives deploy the roles that read the messages, then ends
+session=$(P=$password node -e 'process.stdout.write(JSON.stringify({name: "admin", password: process.env.P}))' \
+  | curl -sf -X POST -H 'Content-Type: application/json' --data-binary @- "$admin/admin/sessions" \
+  | node -e 'let s = ""; process.stdin.on("data", (c) => (s += c)).on("end", () => process.stdout.write(JSON.parse(s).session))') \
+  || fail "the administrator could not log in; its log: $run/node.log"
+curl -sf -o /dev/null -X POST -H "Authorization: Bearer $session" -H 'Content-Type: application/json' \
+  -d '{"add":["operator","message-bodies"],"remove":[]}' "$admin/admin/users/deploy/roles" \
+  || fail "deploy was not given the roles operator and message-bodies; the node's log: $run/node.log"
+curl -sf -o /dev/null -X POST -H "Authorization: Bearer $session" "$admin/admin/me/logout" || true
+unset password session
+
 echo "run-adapter: deploying $dir/package as committed at HEAD ($(git -C "$dir" rev-parse --short HEAD))"
 if [ -n "$(git -C "$dir" status --porcelain -- package)" ]; then
   echo "run-adapter: $dir/package has changes not committed: they are not deployed; commit them and run again to deploy them"
 fi
 # the Postgres of this run is new: the pool records no package, so the deploy expects none
-(unset RAIL8_ADMIN_TOKEN; "$root/bin/rail8" deploy "$repository" HEAD --expect none --admin "http://127.0.0.1:$admin_port") \
+(unset RAIL8_ADMIN_TOKEN; RAIL8_TOKEN=$token "$root/bin/rail8" deploy "$repository" HEAD --expect none --admin "$admin") \
   || fail "the node refused the package; its log: $run/node.log"
 
 "$java" "$root/deploy/quickstart/PartnerEcho.java" $partner_port > "$run/partner.log" 2>&1 &
@@ -139,7 +158,7 @@ partner_pid=$!
 (
   unset RAIL8_ADMIN_TOKEN
   cd "$root/ui"
-  RAIL8_WORKSPACE="$dir" RAIL8_ADMIN_URL="http://127.0.0.1:$admin_port" exec node_modules/.bin/vite
+  RAIL8_TOKEN=$token RAIL8_WORKSPACE="$dir" RAIL8_ADMIN_URL="$admin" exec node_modules/.bin/vite
 ) > "$run/ui.log" 2>&1 &
 ui_pid=$!
 waited=0
