@@ -364,9 +364,13 @@ step modules: `xslt` (Saxon-HE), `xsd`, `jq` and `mapping`. Conditions are XPath
 
 An endpoint names its scheme, direction and options, with an optional overlay per environment
 (`environments.<env>.config`), so one flow file is the same in every environment. An option whose
-whole value is `secret://<name>` is a secret; a node reads it from the environment variable
-`RAIL8_SECRET_<NAME>`, and tests and validation use a placeholder. A step's option is a secret in the
-same way; its code takes it through the API for custom code (part 5).
+whole value is `secret://<name>` is a secret. In an option its component declares a secret field, a node
+reads it from its secret store, else from the environment variable `RAIL8_SECRET_<NAME>`; any other
+option reads its variable only. Tests and validation use a placeholder. A step's option is a secret in
+the same way; its code takes it through the API for custom code (part 5). The store
+(`docs/SECRET-STORE.md`) keeps each secret sealed in Postgres under a key the nodes hold and Postgres
+never does; a change reaches every node without a restart, and a flow whose endpoints resolved it is
+built again.
 
 ### Step names
 
@@ -594,8 +598,8 @@ its drain.
   they are entered in each environment. How a node reads the environment until its store is built,
   how a flow names a system of another package and whether one release reads both shapes are settled
   by #443.
-- The secret store (`docs/SECRET-STORE.md`): a secret is entered in the UI by the secret administrator
-  and reaches every node without a restart; today secrets are environment variables.
+- The secret store's screens, credentials and key pairs in adapters, and the git credentials from the
+  store (`docs/SECRET-STORE.md`); today the store is written through the admin API.
 - Credentials of the callers of a flow and the check at the entry of every message
   (`docs/WHO-MAY-SEND.md`); today the HTTP adapter does not check its caller. A credential belongs to
   a system and is entered in the environment; a caller's password or key is held only as a verifier.
@@ -692,7 +696,7 @@ and the shipped modules. The runtime's build brings the modules for its tests on
 them from the node's build. Other plugins are jars, or folders of jars, in the folder that
 `RAIL8_PLUGINS` names. Each implements `dev.rail8.api.plugin.Plugin`, named in the
 `META-INF/services/dev.rail8.api.plugin.Plugin` of its own jar: a name, the api version it was
-built against, and what it adds. The api is 0.3.
+built against, and what it adds. The api is 0.4.
 
 At start the node finds its modules on its class path (Java's `ServiceLoader`), in name order,
 then loads every entry of `RAIL8_PLUGINS`, in name order. Modules and plugins share one space of
