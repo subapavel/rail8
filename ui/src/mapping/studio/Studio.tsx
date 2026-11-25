@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { useState } from 'react';
 import { ReadSpinner } from '../../ReadSpinner';
 import type { UnsavedChanges } from '../../screens';
-import type { ApiClient, StoredMapping } from '../api/client';
+import { isBusy, type ApiClient, type StoredMapping } from '../api/client';
 import { newAuthoringId } from '../model/authoring-id';
 import { RefusedMapping } from './RefusedMapping';
 import type { BrowserStateStore } from './browser-state/browser-state';
@@ -43,8 +43,18 @@ export function Studio(props: StudioProps) {
   const [queryClient] = useState(
     () =>
       new QueryClient({
-        // the loaded mapping is the baseline's source; a refetch must not replace it behind the working copy
-        defaultOptions: { queries: { retry: false, staleTime: Infinity, refetchOnWindowFocus: false } },
+        defaultOptions: {
+          queries: {
+            // A load the node answered 503 busy is sent again, up to 5 times, a quarter of a second to 2 s apart: an opening
+            // studio asks for the mapping, the catalogue and both messages at once, which on a node that has just started
+            // can take more calls of the mapping module than it runs together.
+            retry: (failures, error) => failures < 5 && isBusy(error),
+            retryDelay: (failures) => Math.min(250 * 2 ** failures, 2000),
+            // the loaded mapping is the baseline's source; a refetch must not replace it behind the working copy
+            staleTime: Infinity,
+            refetchOnWindowFocus: false,
+          },
+        },
       }),
   );
   return (

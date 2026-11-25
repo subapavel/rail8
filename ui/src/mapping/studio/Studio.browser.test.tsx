@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
-import { ApiProblem, type ApiClient } from '../api/client';
+import { ApiProblem, type ApiClient, type StructureRequest } from '../api/client';
 import { fakeApiClient } from '../api/fake/fake-api';
 import type { BrowserStateStore } from './browser-state/browser-state';
 import { selectUnsaved, type StudioTab } from './store/working-copy';
@@ -541,6 +541,19 @@ describe('the tabs', () => {
     await userEvent.keyboard('{ArrowDown}');
     await expect.element(tab('Functions')).toHaveAttribute('aria-selected', 'true');
     await expect.element(tab('Functions')).toHaveFocus();
+  });
+
+  test('sends a load the node answered busy again, and shows both messages once it answers', async () => {
+    const fake = fakeApiClient();
+    const busy = new ApiProblem({ type: 'urn:rail8:admin:problem:busy', title: 'Busy', status: 503, detail: '4 calls of this plugin run already; try again later' });
+    let refusals = 1;
+    const loadStructure = vi.fn((request: StructureRequest) => (refusals-- > 0 ? Promise.reject(busy) : fake.loadStructure(request)));
+    renderStudio({ ...fake, loadStructure }, 'mappings/order-id-copy', { openOn: 'definition' });
+
+    for (const side of ['source', 'target']) {
+      await expect.element(page.getByRole('region', { name: `${side} message` }).getByRole('table', { name: `${side} fields` })).toBeVisible();
+    }
+    expect(loadStructure.mock.calls.length).toBeGreaterThan(1);
   });
 
   test('Definition asks for both messages while the mapping lacks one, and leads to the Signature tab', async () => {
