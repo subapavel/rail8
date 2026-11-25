@@ -234,8 +234,8 @@ with `partitionBy`, this one refuses it. Upgrade every node, then deploy such pa
   acknowledged, rejected or overdue. On a rejection or an overdue acknowledgement Rail8 alerts and
   shows the state; it does not send again by itself.
 - The sender and every receiver on every message: partner (may be empty), system, and the instance
-  name as it held then, and what the caller proved itself with. They are kept whatever the flow
-  records about bodies. A call between flows keeps the caller's sender.
+  name as it held then, and what the caller proved itself with. They are written at every recording
+  level, `off` included. A call between flows keeps the caller's sender (`docs/WHO-MAY-SEND.md`).
 - A number from a number sequence is given to a message once and kept with it; a retry uses the same
   number. The sequence's state is in Postgres.
 
@@ -596,8 +596,12 @@ its drain.
   by #443.
 - The secret store (`docs/SECRET-STORE.md`): a secret is entered in the UI by the secret administrator
   and reaches every node without a restart; today secrets are environment variables.
-- Credentials of the callers of a flow and the check at the entry of every message (#445); today
-  the HTTP adapter does not check its caller.
+- Credentials of the callers of a flow and the check at the entry of every message
+  (`docs/WHO-MAY-SEND.md`); today the HTTP adapter does not check its caller. A credential belongs to
+  a system and is entered in the environment; a caller's password or key is held only as a verifier.
+  The flow names who may send, or switches the check off with a reason. An unknown caller gets 401 on
+  every path, before any byte of its body is read. A limit per caller is counted in Postgres for each
+  sending system.
 
 ## 5. Components, steps and their mocks
 
@@ -904,14 +908,18 @@ a file to poll; a deployed node refuses it.
   in SAP XI.
 - Custom code sends through a connection (#443).
 - The adapter contract describes two forms for each direction it serves: the connection's and the
-  settings in the flow. It says which kinds of caller credential it can read, and every label and
-  help text it declares has a key, so that the UI shows it in the user's language (#443, #445, #446).
+  settings in the flow. Every label and help text it declares has a key, so that the UI shows it in
+  the user's language (#443, #446).
+- An adapter says which kinds of caller credential it reads (`Component.reads()`) and hands over
+  what a caller presented before it reads the body (`Entry.enter`). The node's HTTP port reads the
+  common kinds for every adapter on it and writes the answer of a refusal (`docs/WHO-MAY-SEND.md`).
 - An interface (OpenAPI, WSDL, OData metadata, later an IDoc type) kept as a file of the package in a
   folder with its namespace, read from a file or from the system by the adapter and always saved to
   git. The flow editor offers its operations, the mapping editor takes the structures of request and
   reply, and an ABAP proxy is generated from its name and namespace.
 - Priority: the core and the contracts first, then HTTP inbound and outbound.
-- HTTPS on the node's HTTP port, from a certificate and key the node is given.
+- HTTPS on the node's HTTP port, from a certificate and key the node is given. Until then a caller's
+  credential is taken only on loopback, from a trusted proxy, or with `RAIL8_HTTP_TLS=off`.
 - The full URL on the node's HTTP port of an HTTP sender's path: `GET /admin/components` serves each
   component's prefix. Where it is shown is settled by #443, since the sender holds only a path.
 
@@ -1460,13 +1468,14 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
 - Eight roles (`docs/USERS-AND-ROLES.md` lists them, five built): Connection administrator and
   Partner administrator are added by the configuration of an environment
   (`docs/ENVIRONMENT-CONFIGURATION.md`), Message sender, who sends a test message to a flow with a
-  personal token as the password of basic authentication, by the entry (#445). The operator also
-  stops and starts a connection.
+  personal token as the password of basic authentication, by the entry (`docs/WHO-MAY-SEND.md`).
+  The operator also stops and starts a connection.
 - The admin API of the configuration of an environment, and one documented, versioned text format of
   one file per object for export and import. An export holds no secret value and no state; an import
   is a dry run, then drafts, and never deletes; a command of `rail8` does both from files
   (`docs/ENVIRONMENT-CONFIGURATION.md`).
 - Monitor has three views: Messages and Connections from the start, Interchanges with partner
-  communication.
+  communication. Messages are searched by sender, receiver, partner, instance name, what the caller
+  proved itself with, and the tester of a test message (`docs/WHO-MAY-SEND.md`).
 - Partner communication with EDI and the management of APIs are part of the platform; each design
   says how a scenario of SAP PO and of SAP Integration Suite maps onto the model.

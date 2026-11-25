@@ -16,7 +16,8 @@ from the header `X-Rail8-Actor`.
 ## Rules
 
 - A user is a person or a machine that uses the UI, the command line or the admin API. A partner that sends messages is
-  not a user: that is the security of an adapter.
+  not a user: that is the security of an adapter. A sending system proves itself with a credential of its own, which
+  never logs in to the UI or the admin API (`docs/WHO-MAY-SEND.md`).
 - Accounts are Rail8's own: a name and a password in Postgres. An administrator creates them and resets a forgotten
   password. Rail8 sends no e-mail and has no second factor of its own.
 - An account has a `source`, and roles belong to the account, not to its password, so that sign-in through OIDC can be
@@ -51,7 +52,7 @@ from the header `X-Rail8-Actor`.
 | Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Planned: consents that a secret may go to a destination |
 | Connection administrator | `connection-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): systems in the environment, the values of connections, credentials, instance names, technical identifiers |
 | Partner administrator | `partner-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): partner profiles, business identifiers, agreements, API products, subscriptions, number sequences |
-| Message sender | `message-sender` | both | planned, with the check at a flow's entry: sends a test message to a flow |
+| Message sender | `message-sender` | both | planned (`docs/WHO-MAY-SEND.md`): sends a test message to a flow on the node's HTTP port, with the user's name and a personal token as the password of basic authentication |
 
 An administrator does not hold the message bodies role unless it is assigned. Assigning it to oneself is allowed and is
 in the audit, marked as one's own. Only a person may hold the administrator role.
@@ -98,6 +99,9 @@ partner administrator too. They join this table, and the enum, when they are bui
 | `self.logout` | `POST /admin/me/logout` | a session |
 | `self.tokens` | `GET /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | a person |
 | `self.token-issue` | `POST /admin/me/tokens` | a person logged in |
+
+The entry of a message (`docs/WHO-MAY-SEND.md`) adds `message.send`, granted by the message sender: a token may do it,
+the emergency key may not. It joins this table, and the enum, when it is built.
 
 "Logged in" means a session, never a token. A token of an administrator may do the reads (`user.read`, `token.read` and
 `audit.read`), but an action that needs a session is 403 `session-required`.
@@ -426,6 +430,9 @@ A UI server outside development, when it comes, runs in session mode only and ho
 - **Expiring soon.** `GET /admin/tokens?expiringWithin=P14D` lists the live tokens that expire within 14 days; the UI shows
   them to an administrator.
 - **Limits.** At most 20 live tokens per user.
+- **On the node's HTTP port.** A token of a user who holds `message.send`, a person's or a technical account's, is the
+  one credential of this page that the HTTP port takes, as the password of basic authentication, to send a test message (`docs/WHO-MAY-SEND.md`).
+  A session, a device and the emergency key are unknown callers there, and the port never routes to `/admin`.
 
 The command line sends `Authorization: Bearer $RAIL8_TOKEN`. Only `rail8 user` and `rail8 bootstrap` send
 `RAIL8_ADMIN_TOKEN`, which is how `rail8 user add` makes the first administrator. No other command ever sends a value of
