@@ -25,10 +25,45 @@ Valkey (optional), and git repositories the packages are deployed from. Licence 
 | **Stage** | `Envelope apply(Envelope, Pipeline rest)`: a step that decides how often the rest runs (zero, once, many times). Route, filter, split and retry are stages. | router, filter, splitter |
 | **Flow** | One file: where messages come from, how they are delivered, and the steps they pass. | iFlow; integrated configuration in PO |
 | **Process** | A named block of steps in a flow file, run inside the same message where a `process` step calls it. | Local Process Call in CPI |
-| **Endpoint** | One file: a named inbound or outbound connection (scheme, direction, options). | communication channel |
+| **Endpoint** | One file: a named inbound or outbound connection (scheme, direction, options). **Replaced** by System and Connection (below); the word leaves Rail8 when they are built. | communication channel |
 | **Component** | The code for one scheme (`http`, `sftp`, `mock`): a consumer for inbound endpoints and a producer for outbound ones. All contact with the outside world goes through a component. | adapter |
 | **Package** | A folder of flows, endpoints and their files, deployed together under one name and version. | integration package in CPI; software component version in PO |
 | **Node** | One running Rail8 process. Several nodes share one Postgres. | server node of a PO cluster |
+
+**Planned names.** The owner has decided a model that replaces the endpoint (`docs/DECISIONS.md`, D-167 to D-183). Until
+it is built, the parts below describe the endpoint files the code reads today. The names, in the UI, the files and the
+documents:
+
+| Term | What it is |
+| --- | --- |
+| **Partner** | A company Rail8 exchanges messages with, or one's own, marked **Own company**. A whole profile: basic data, contacts, identifiers, systems, certificates, parameters, agreements. |
+| **System** | An application that sends or receives, with a **Name** (logical, in git, the same in every environment) and an **Instance name** (entered in each environment). Its key is partner and system, the partner optional: `eshop`, `acme/edi`. |
+| **Connection** | How Rail8 reaches a system with one adapter: `eshop/rest`, `acme/edi/as2`. Git holds its name, its adapter type and a description; its settings are entered in each environment, or it is switched to a built-in mock. |
+| **Credential** | How a system proves itself to Rail8: a name and a password, an API key, a client certificate, an OAuth2 token. Belongs to one system; entered in the environment. |
+| **Identifier** | What a partner or a system is called inside messages: a type and a value, optionally valid in one named system. |
+| **Interface** | The description of an API or a message (OpenAPI, WSDL, OData metadata), a file of the package. |
+| **Sender, Receiver** | The two ends of a flow. The sender holds the adapter type, the settings in the flow and who may send; a send step picks its connection by name, computed, or by agreement. |
+| **Allowed senders** | Who may send to a flow: Named systems, Subscribers, By agreement. |
+| **API product, Subscription** | A set of flows offered to callers as one, composed in the environment; a system's right to call it. |
+| **Agreement, Transaction, Agreement template** | What is exchanged with a partner and how; one exchange of an agreement, switched on and off on its own; a prepared set of transactions, in git beside the flows it names. |
+| **Interchange, Number sequence** | One EDI envelope; a counter for interchange numbers, in Postgres. |
+| **Draft, Activate** | A change saved but not yet in force; putting it in force. |
+| **Design, Configure, Monitor** | The three parts of the UI: what is in git, what an environment holds, and monitoring. |
+| **Connection administrator, Partner administrator, Message sender** | The three new roles (`docs/USERS-AND-ROLES.md` lists the five that exist). |
+
+From the words of SAP PO and SAP Integration Suite to these. Rail8 supports moving from both and is a copy of neither.
+
+| SAP PO and Integration Suite | Rail8 |
+| --- | --- |
+| Party | Partner |
+| Business system, business component, communication component | System (its name) |
+| The technical name in the SLD, such as `EP1CLNT100` | The system's instance name; Rail8 has no SLD and no renaming at deploy |
+| Communication channel (PO) | A connection, whose settings are entered in the environment |
+| An adapter configured on an integration flow (Integration Suite) | A system with a connection; the settings in the flow stay in the flow |
+| Integration flow, integrated configuration | Flow |
+| Trading Partner Management agreement | Agreement, with its transactions |
+| API artifact, product, application, subscription | The rules of an API are part of the flow; API product and Subscription are composed in the environment. Whether a caller and an application are one object is open (`docs/DECISIONS.md`, D-174) |
+| `SAP_Sender` and `SAP_Receiver`, the sender and receiver searched by party, component and interface | The sender and every receiver on every message, from the credential and the connection, never from the flow's author |
 
 Every step and stage runs on the message's own virtual thread and may block (wait for a database,
 for a partner) without holding a platform thread. Vert.x verticles own sockets and timers and never
@@ -195,6 +230,14 @@ with `partitionBy`, this one refuses it. Upgrade every node, then deploy such pa
 - What happens when a step fails, defined by the flow's author: an error message to a partner, a
   chosen answer to the caller, or a few steps of its own (like an exception subprocess in CPI).
 - What is left in the code from replay is removed.
+- A message is done when it is sent. A partner's acknowledgement is a separate fact on it: waiting,
+  acknowledged, rejected or overdue. On a rejection or an overdue acknowledgement Rail8 alerts and
+  shows the state; it does not send again by itself.
+- The sender and every receiver on every message: partner (may be empty), system, and the instance
+  name as it held then, and what the caller proved itself with. They are kept whatever the flow
+  records about bodies. A call between flows keeps the caller's sender.
+- A number from a number sequence is given to a message once and kept with it; a retry uses the same
+  number. The sequence's state is in Postgres.
 
 ## 3. Storage
 
@@ -280,6 +323,11 @@ any work row points at that place, so the callee can read the body after the cal
 - Bodies that wait long (a parked message, a partner down for days) move to S3 in the background, so
   a node's journal stays small.
 - Valkey also serves as a distributed cache.
+- What an environment holds outside git, in Postgres: the settings of every connection (or its switch
+  to a built-in mock), a system's instance name, credentials, identifiers, partner profiles, API
+  products and subscriptions, agreements, number sequences, and whether a connection is stopped. Each
+  object has a draft, the version in force and its history. The tables, the versions kept and how long
+  the history is kept are settled by the design of the configuration of an environment (#444).
 
 ## 4. Packages, flows and deployment
 
@@ -539,8 +587,17 @@ its drain.
 **Planned**
 - A node that restarts builds the drain of a retired flow from its mark's copy of the record. Today
   it builds none, and what the flow left in the work queue waits there.
-- An authentication, authorization and secret store comes in step 2; today secrets are environment
-  variables.
+- Systems and connections replace the endpoint files (#443). A package holds a system's file with
+  the names of its connections; git holds nothing else of a connection. A flow names a system and a
+  connection, and a deploy refuses a flow whose connections are not set, or not complete, in the
+  environment it is deployed to. Differences between environments are no longer overrides in files:
+  they are entered in each environment. How a node reads the environment until its store is built,
+  how a flow names a system of another package and whether one release reads both shapes are settled
+  by #443.
+- The secret store: a secret is entered in the UI by the secret administrator and reaches every node
+  without a restart; today secrets are environment variables (#99).
+- Credentials of the callers of a flow and the check at the entry of every message (#445); today
+  the HTTP adapter does not check its caller.
 
 ## 5. Components, steps and their mocks
 
@@ -845,11 +902,18 @@ a file to poll; a deployed node refuses it.
   component or step.
 - A deferred acknowledgement in the adapter contract: system and application acknowledgements as
   in SAP XI.
-- Custom code sends through an outbound endpoint of its package.
+- Custom code sends through a connection (#443).
+- The adapter contract describes two forms for each direction it serves: the connection's and the
+  settings in the flow. It says which kinds of caller credential it can read, and every label and
+  help text it declares has a key, so that the UI shows it in the user's language (#443, #445, #446).
+- An interface (OpenAPI, WSDL, OData metadata, later an IDoc type) kept as a file of the package in a
+  folder with its namespace, read from a file or from the system by the adapter and always saved to
+  git. The flow editor offers its operations, the mapping editor takes the structures of request and
+  reply, and an ABAP proxy is generated from its name and namespace.
 - Priority: the core and the contracts first, then HTTP inbound and outbound.
 - HTTPS on the node's HTTP port, from a certificate and key the node is given.
-- The endpoint form and the flow picture show an in endpoint's full URL on the node's HTTP port:
-  `GET /admin/components` serves each component's prefix.
+- The full URL on the node's HTTP port of an HTTP sender's path: `GET /admin/components` serves each
+  component's prefix. Where it is shown is settled by #443, since the sender holds only a path.
 
 ## 6. Several nodes and failures
 
@@ -1186,10 +1250,18 @@ public web page.
   commit the node runs, a deploy of a commit with its check first, the lock of its dependencies, the packages the node
   runs that pin it, and push and pull, through the author's own git in the development server.
 - A server for the UI outside development, holding the token and talking to the node the same way.
-- Helper actions on a field of an endpoint's settings form. No screens of a plugin's own.
-- Editing endpoint files on a shared server, written to git with an author, with deploy from git and sign-in.
+- The UI has three parts: Design (what is in git), Configure (what an environment holds) and Monitor.
+  The Systems screen under Configure replaces the Endpoints screen and the endpoint form: the
+  settings of a connection are one form with its secrets, a change is saved as a draft and activated,
+  every object has its history, and the screen shows which nodes have a change. The UI uses the admin
+  API and nothing else. The secret store and the configuration of an environment are the two places
+  where the UI changes a running system.
+- Helper actions on a field of a connection's settings form. No screens of a plugin's own.
+- Editing system files on a shared server, written to git with an author, with deploy from git and
+  sign-in.
+- The UI in English, German, Czech and Russian, with language packs of data only (#446).
 - Writing a view of a payload (how a body is shown), later and simply.
-- Editing flow files on the Flows screen: Edit, Check and Save, as the endpoint forms do.
+- Editing flow files on the Flows screen: Edit, Check and Save, as the mapping studio does.
 
 ## 10. Operations
 
@@ -1370,3 +1442,14 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
 - Named tokens at the command line and in the UI, and device credentials for the login
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.
+- Eight roles (`docs/USERS-AND-ROLES.md` lists five): Connection administrator and Partner
+  administrator are added by the configuration of an environment (#444), Message sender, who sends a
+  test message to a flow with a personal token as the password of basic authentication, by the entry
+  (#445). The operator also stops and starts a connection.
+- The admin API of the configuration of an environment, and one documented, versioned text format of
+  one file per object for export and import. An export holds no secret value and no state; an import
+  is a dry run, then drafts, and never deletes; a command of `rail8` does both from files (#444).
+- Monitor has three views: Messages and Connections from the start, Interchanges with partner
+  communication.
+- Partner communication with EDI and the management of APIs are part of the platform; each design
+  says how a scenario of SAP PO and of SAP Integration Suite maps onto the model.
