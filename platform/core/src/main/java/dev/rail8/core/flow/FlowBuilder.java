@@ -17,6 +17,7 @@ import dev.rail8.api.NackException;
 import dev.rail8.api.Pipeline;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Runtime;
+import dev.rail8.api.Secret;
 import dev.rail8.api.Services;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepConfig;
@@ -143,7 +144,7 @@ public final class FlowBuilder {
 
     /** The fence of an unfenced run: always open. */
     private static final BooleanSupplier OPEN = () -> true;
-    private static final Function<String, String> NO_SECRETS = reference -> {
+    private static final SecretSource NO_SECRETS = (reference, kinds) -> {
         throw new IllegalArgumentException("secret '" + reference + "' is not set: this build has no secrets");
     };
 
@@ -162,7 +163,8 @@ public final class FlowBuilder {
     private Map<String, String> extraVersions = Map.of();
     private Consumer<Path> reads = path -> { };
     private Map<String, Path> dependencies = Map.of();
-    private Function<String, String> secrets = NO_SECRETS;
+    private SecretSource secrets = NO_SECRETS;
+    private Map<String, String> heldSecrets = Map.of();
     private Function<String, Cache> caches = stepType -> Services.NONE.cache();
     private boolean stepEvents;   // false: no step is marked
     private Targets targets;
@@ -270,7 +272,33 @@ public final class FlowBuilder {
      * refused.
      */
     public FlowBuilder secrets(Function<String, String> source) {
+        Objects.requireNonNull(source, "source");
+        return secrets((reference, kinds) -> {
+            if (source.apply(reference) == null) throw new IllegalArgumentException("secret '" + reference + "' is not set");
+            if (!kinds.contains(Secret.Kind.VALUE)) {
+                throw new IllegalArgumentException("secret '" + reference + "' is of kind value, and its place takes "
+                        + kinds.stream().map(Secret.Kind::id).sorted().toList());
+            }
+            return Secret.of(reference, () -> source.apply(reference));
+        });
+    }
+
+    /**
+     * As {@link #secrets(Function)}, with secrets of every kind: {@code source} hands out the live handle of a reference of the
+     * kinds its place takes ({@link Services#secret(StepConfig, String, Secret.Kind...)}), or refuses naming the reference.
+     */
+    public FlowBuilder secrets(SecretSource source) {
         this.secrets = Objects.requireNonNull(source, "source");
+        return this;
+    }
+
+    /**
+     * The plain values, by reference, that the endpoints of the flows built from now on hold in their options: the failures of
+     * their steps, and the texts their recorder keeps, leave with each of them replaced by its reference as well. It replaces
+     * the values of an earlier call. Without a call there are none.
+     */
+    public FlowBuilder heldSecrets(Map<String, String> byReference) {
+        this.heldSecrets = Map.copyOf(Objects.requireNonNull(byReference, "byReference"));
         return this;
     }
 
@@ -523,7 +551,7 @@ public final class FlowBuilder {
         if (parks) requireDlq(flow);
         Parking parker = parks ? new Parking(dlq, runtime.clock(), versions) : null;
         StepResources resources = resources(flow, baseDir, Services.NONE);
-        FlowSecrets flowSecrets = new FlowSecrets(secrets);
+        FlowSecrets flowSecrets = new FlowSecrets(secrets, heldSecrets);
         Recorder recorder = store == null ? null : new Recorder(store, runtime.clock(), meter, versions, flowSecrets::scrubber);
         UnaryOperator<Envelope> forward = forwardHeaders(flow.forwardHeaders());
         List<Stage> stages = new ArrayList<>(flow.steps().size());
@@ -565,9 +593,9 @@ public final class FlowBuilder {
             done = true;
         } finally {
             flowSecrets.built();
-            if (!done) Producers.closeAll(flow.id(), opened);   // the flow does not build: nothing it created is left open
+            if (!done) Producers.closeAll(flow.id(), opened, flowSecrets);   // the flow does not build: nothing it created is left open
         }
-        return new Built(flow, runs.head(flow.timeout()), List.copyOf(stages), recorder, new Producers(flow.id(), opened));
+        return new Built(flow, runs.head(flow.timeout()), List.copyOf(stages), recorder, new Producers(flow.id(), opened, flowSecrets));
     }
 
     /** What a step of {@code flow} is built with; the paths it reads go to the {@link #reads} sink. */

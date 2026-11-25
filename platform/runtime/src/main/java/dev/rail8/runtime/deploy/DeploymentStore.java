@@ -1,5 +1,6 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Secret;
 import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
@@ -7,7 +8,9 @@ import io.vertx.core.json.JsonObject;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -133,6 +136,18 @@ public interface DeploymentStore {
     Future<Void> audit(Actor by, String repository, JsonObject detail);
 
     /**
+     * Writes the record of the secrets used by the flows of package {@code name}'s record, whose content is {@code content}, unless
+     * it is known already, and marks the record as one whose uses are known; under the pool's lock taken without waiting. Answers
+     * false, writing nothing, while another holds that lock, and true once the uses are known, or no such record is left. A store
+     * that keeps no record of uses answers true.
+     *
+     * @throws SecretUsesRefused (as the future's failure) a name is not set or not of a kind its use takes: nothing is written
+     */
+    default Future<Boolean> backfillUses(String name, String content, Map<String, Map<String, Set<Secret.Kind>>> uses) {
+        return Future.succeededFuture(true);
+    }
+
+    /**
      * The pool's lock, held: the one way to write records. Each write is one transaction that changes one record, raises the
      * generation by one and appends the write's audit row, and only while the generation is the one this lock read or last wrote:
      * otherwise it fails and writes nothing. A row that cannot be appended fails the write, and nothing of it is written.
@@ -152,6 +167,18 @@ public interface DeploymentStore {
          * @param detail the commit, its author and the outcome
          */
         Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail);
+
+        /**
+         * As {@link #save(DeploymentRecord, Actor, JsonObject)}, and in the same transaction the record of the secrets the package's
+         * flows use replaced with {@code uses} (by the flow's local id, the names it uses and the kinds each use takes), each name
+         * checked again against the secret store's rows, and the record marked as one whose uses are known. A store that keeps
+         * no record of uses saves the record alone.
+         *
+         * @throws SecretUsesRefused (as the future's failure) a name is not set or not of a kind its use takes: nothing is written
+         */
+        default Future<Long> save(DeploymentRecord record, Map<String, Map<String, Set<Secret.Kind>>> uses, Actor by, JsonObject detail) {
+            return save(record, by, detail);
+        }
 
         /**
          * Deletes the row of the package {@code name}, and no other, marking each flow it ran at-least-once with a copy of it, in one

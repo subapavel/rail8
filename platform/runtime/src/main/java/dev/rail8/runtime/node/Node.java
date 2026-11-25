@@ -45,6 +45,8 @@ import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.queue.PgFailedMessages;
 import dev.rail8.runtime.queue.PgWorkQueue;
 import dev.rail8.runtime.queue.PgWorkSignals;
+import dev.rail8.runtime.secret.SecretStore;
+import dev.rail8.runtime.secret.StoreKey;
 import dev.rail8.runtime.store.PgDlq;
 import dev.rail8.runtime.store.PgIntake;
 import dev.rail8.runtime.store.PgMessageList;
@@ -279,7 +281,7 @@ public final class Node implements AutoCloseable {
         PgMessageStore messages = null;
         Journal journal = null;   // once open: closed after the deployments, before the store and the pools its rows go through
         Runnable closeValkey = () -> {};   // the Valkey client once built: closed last
-        Runnable closeSignals = () -> {};   // the work events once built: closed after the deployments, before the stores and the pools
+        Runnable closeSignals = () -> {};   // the secret store's ticks, then with them the work events, once built: closed after the deployments, before the stores and the pools
         Runnable closeWork = () -> {};   // the work queue's completion batch once built: closed after the deployments, before the signals
         Deployments deployments = null;   // once built: closed first, its flows stopping while the pool is open
         // binds nothing until it listens: closed after the deployments, whose consumers' mounts drain within the stop deadline
@@ -300,6 +302,10 @@ public final class Node implements AutoCloseable {
 
             // the master key before any Postgres statement: a node without one migrates nothing
             SecretKey master = config.journalKey().load(config.journal().dir(), JournalFiles.real());
+            if (config.secrets().key().equalsKey(master.getEncoded())) {
+                throw new IllegalStateException(StoreKey.VARIABLE + " equals the journal's key: give the secret store a key of its own, "
+                        + "as openssl rand -base64 32 writes it");
+            }
             // the durability profile before the migration: a refused node leaves its database untouched
             List<String> durability = PgDurability.check(intakePool, pg.durability());   // on the sessions that commit the saves
             Migrations.migrate(jdbcUrl(pg), pg.user(), pg.password());
@@ -319,6 +325,12 @@ public final class Node implements AutoCloseable {
             lease = new NodeLease(config.nodeId(), membership, config.nodeLease(), config.nodeLeaseRenew(), System::nanoTime, timer, Node::halt);
             lease.start().await();
             epoch.set(membership.epoch());
+            // the secret store's join, under its row lock: this node's key ids and variables' names, every row's key checked;
+            // its values held in memory before any flow is built
+            SecretStore store = SecretStore.postgres(pool, config.secrets().key(), config.nodeId(), config.secrets().variableNames(), clock, timer);
+            closeSignals = store::close;
+            store.start(epoch.get()).await();
+            NodeConfig withStore = config.withSecrets(config.secrets().withStore(store));
             // a body in another live node's journal is read through its link, at the address the last renew answered (S7)
             PgMembership members = membership;
             PeerReads reads = new PeerReads(vertx, config.peer(), new PeerIdentity(config.nodeId(), epoch.get(), opened.id(), masters), opened, timer,
@@ -366,13 +378,20 @@ public final class Node implements AutoCloseable {
             // the node's started workers: its intake hands each saved item off to the flow's worker, leased to this node
             Workers workers = new Workers();
             // the work events between the nodes: listening on a connection of their own before any worker starts
-            PgWorkSignals signals = new PgWorkSignals(vertx, connectOptions(pg, "listen", config.nodeId()), pool, opened.node(), workers, timer);
-            closeSignals = () -> signals.close().await();
+            // the secret store's notices too: it looks on each, and after each LISTEN acknowledged
+            PgWorkSignals signals = new PgWorkSignals(vertx, connectOptions(pg, "listen", config.nodeId()), pool, opened.node(), workers, timer, store::notice);
+            closeSignals = () -> {
+                try {
+                    signals.close().await();
+                } finally {
+                    store.close();
+                }
+            };
             signals.start().await();
             // grouped saves on the intake pool; the wake and the announce after a commit are fire-and-forget on the work pool
             PgIntake intake = new PgIntake(intakePool, blobs, messages, work, workers, timer, config.intakeGroup(), signals);
-            Deployments restored = new Deployments(config, runtime, byScheme, clock, timer, stepFactories, expressions, messages, dlq, work,
-                    Meter.system(), new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connectOptions(pg, "deploy", config.nodeId())).map(c -> c)),
+            Deployments restored = new Deployments(withStore, runtime, byScheme, clock, timer, stepFactories, expressions, messages, dlq, work,
+                    Meter.system(), new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connectOptions(pg, "deploy", config.nodeId())).map(c -> c), store),
                     intake, leases,
                     new Targets(config.targets().defaults(), config.targets().overrides(), timer), lease, workers, signals, caches,
                     epoch.get());   // the node's one Targets and fence; its rows of what it runs are written as the joined epoch
@@ -399,6 +418,7 @@ public final class Node implements AutoCloseable {
             AdminServer admin = new AdminServer(config.admin(), messages, dlq, blobs,
                     new AdminServer.HealthProbe(Map.of("postgres", () -> pool.query("select 1").execute().map(Health.up()),
                             "deployments", () -> Future.succeededFuture(restored.health()),
+                            "secrets", () -> Future.succeededFuture(store.health()),
                             "journal", () -> Future.succeededFuture(opened.health())), messages::failed, notices, readiness,
                             () -> restored.credentials().flatMap(CredentialsCheck::last)),
                     Optional.of(restored), work, new PgFailedMessages(pool, work), sampler.map(s -> new AdminServer.Sampling(s.period(), s.since(), cpu, s::failed)),

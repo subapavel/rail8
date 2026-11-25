@@ -195,6 +195,13 @@ class ValueTypesTest {
     }
 
     @Test
+    void anEndpointConfigsTextNamesItsOptionsNeverTheirValues() {
+        EndpointConfig cfg = new EndpointConfig("partner", URI.create("http://partner:8080/in"),
+                Map.of("token", "s3cr3t-value", "headers", Map.of("Authorization", "Bearer abc"), "timeout", 5));
+        assertEquals("EndpointConfig[name=partner, uri=http://partner:8080/in, options=[headers, timeout, token]]", cfg.toString());
+    }
+
+    @Test
     void healthFactories() {
         assertEquals(new Health(Health.Status.UP, ""), Health.up());
         assertEquals(new Health(Health.Status.DOWN, "pool exhausted"), Health.down("pool exhausted"));

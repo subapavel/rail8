@@ -14,11 +14,13 @@ public interface Services {
     Services NONE = new NoServices();
 
     /**
-     * The secret that the option {@code key} of {@code step} names, its whole value {@code secret://<name>}. The value is read
+     * The plain value that the option {@code key} of {@code step} names, its whole value {@code secret://<name>}: the same as
+     * {@link #secret(StepConfig, String, Secret.Kind...)} with {@link Secret.Kind#VALUE}. The value is read
      * through the returned {@link Secret} when the step needs it, never kept in the flow. A factory calls this inside
      * {@link StepFactory#create}, so a secret that is not set refuses the deploy, naming the step, the key and where the node
-     * looks for it. On a node a secret {@code secret://<name>} is the environment variable {@code RAIL8_SECRET_<NAME>}
-     * ({@code .} and {@code -} as {@code _}). {@code rail8 validate} and {@code rail8 test} read every secret as
+     * looks for it. On a node a secret {@code secret://<name>} is the one the secret store holds, else the
+     * environment variable {@code RAIL8_SECRET_<NAME>} ({@code .} and {@code -} as {@code _}); a name under {@code rail8.} is the
+     * platform's and is refused. {@code rail8 validate} and {@code rail8 test} read every secret as
      * {@code https://secret.invalid/}. In a flow whose steps hold secrets, when one of its steps that a factory built fails,
      * every value they were handed is replaced by its reference in the failure the node records, parks, logs and answers with.
      *
@@ -26,7 +28,23 @@ public interface Services {
      *                                  (its value is not shown), not a well-formed reference, or names a secret that is not set
      * @throws IllegalStateException    after the flow has been built
      */
-    Secret secret(StepConfig step, String key);
+    default Secret secret(StepConfig step, String key) {
+        return secret(step, key, Secret.Kind.VALUE);
+    }
+
+    /**
+     * The secret that the option {@code key} of {@code step} names, as {@link #secret(StepConfig, String)} takes it, of one of
+     * {@code kinds}: the deploy refuses a secret of another kind, naming the step, the key, the secret's kind and the kinds
+     * asked. The handle's {@link Secret#kind()} is the secret's own kind. A secret from the node's environment is a plain value
+     * only. {@code rail8 validate} and {@code rail8 test} read credentials as user {@code rail8}, password {@code invalid}, and
+     * a key pair as a fixed EC secp256r1 pair with a self-signed certificate.
+     *
+     * @throws IllegalArgumentException as {@link #secret(StepConfig, String)}, when {@code kinds} is empty, or when the secret
+     *                                  is of a kind {@code kinds} does not name
+     * @throws IllegalStateException    after the flow has been built
+     * @since 0.4
+     */
+    Secret secret(StepConfig step, String key, Secret.Kind... kinds);
 
     /**
      * The cache of the step. Its keys are shared by every step of the same type in the flows of the same package and

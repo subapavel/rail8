@@ -1,6 +1,8 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Secret;
 import dev.rail8.core.audit.Actor;
+import dev.rail8.runtime.secret.SecretStore;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -17,8 +19,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -90,16 +95,68 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String LISTED = "select n.node, p.package, p.version, p.repository, p.commit, p.deployed_at, p.state, p.behind "
             + "from nodes n left join node_packages p on p.node = n.node and p.epoch = n.epoch where n.lease_until >= now() limit " + (LISTINGS_MAX + 1);
 
+    /** The flows of package $1 marked to drain. */
+    private static final String DRAINING = "select flow from retiring where package = $1";
+    /** Marks package $1's record as one whose secret uses are known. */
+    private static final String KNOWN = "update deployments set secret_uses_known = true where package = $1";
+    /** Whether the record of package $1 with content $2 still has its secret uses to write; locked for the backfill's transaction. */
+    private static final String UNKNOWN = "select not secret_uses_known from deployments where package = $1 and content = $2 for update";
+
     private final Pool pool;
     private final Supplier<Future<SqlConnection>> connect;
+    /** Where the record of secret uses is written; null: no record of uses is kept. */
+    private final SecretStore secrets;
 
     /**
+     * A store that keeps no record of secret uses.
+     *
      * @param pool where the reads and the audit rows of the deploys that wrote no record go
      * @param connect opens a fresh connection for one holder of the pool's lock, its own to close
      */
     public PgDeploymentStore(Pool pool, Supplier<Future<SqlConnection>> connect) {
+        this(pool, connect, null);
+    }
+
+    /**
+     * As the constructor above, with the record of the secrets each deployed flow uses written through {@code secrets} in the
+     * transaction of each save and delete.
+     */
+    public PgDeploymentStore(Pool pool, Supplier<Future<SqlConnection>> connect, SecretStore secrets) {
         this.pool = Objects.requireNonNull(pool, "pool");
         this.connect = Objects.requireNonNull(connect, "connect");
+        this.secrets = secrets;
+    }
+
+    @Override
+    public Future<Boolean> backfillUses(String name, String content, Map<String, Map<String, Set<Secret.Kind>>> uses) {
+        if (secrets == null) return Future.succeededFuture(true);
+        return connect.get().compose(conn -> conn.query(TRY_LOCK).execute().compose(taken -> {
+            if (!taken.iterator().next().getBoolean(0)) return Future.succeededFuture(false);
+            Future<Boolean> written = conn.begin().compose(tx -> conn.preparedQuery(UNKNOWN).execute(Tuple.of(name, content)).compose(rows -> {
+                if (!rows.iterator().hasNext() || !rows.iterator().next().getBoolean(0)) return Future.<Void>succeededFuture();
+                return knownUses(conn, name, uses);
+            }).compose(done -> tx.commit().map(true), failed -> tx.rollback().transform(rolledBack -> Future.<Boolean>failedFuture(failed))));
+            return written.eventually(() -> conn.query(UNLOCK).execute());
+        }).eventually(conn::close));
+    }
+
+    /**
+     * The record of {@code name}'s uses replaced, its flows marked to drain now keeping theirs as {@code drain} rows, and marked
+     * known, in {@code conn}'s transaction; failed, writing nothing, on a problem.
+     */
+    private Future<Void> knownUses(SqlConnection conn, String name, Map<String, Map<String, Set<Secret.Kind>>> uses) {
+        return replaced(conn, name, uses).compose(problems -> problems.isEmpty()
+                ? conn.preparedQuery(KNOWN).execute(Tuple.of(name)).<Void>mapEmpty()
+                : Future.failedFuture(new SecretUsesRefused(problems)));
+    }
+
+    /** {@link SecretStore#replacePackageUses} of {@code name} with {@code uses}, and the package's flows marked to drain now. */
+    private Future<List<String>> replaced(SqlConnection conn, String name, Map<String, Map<String, Set<Secret.Kind>>> uses) {
+        return conn.preparedQuery(DRAINING).execute(Tuple.of(name)).compose(rows -> {
+            Set<String> draining = new TreeSet<>();
+            rows.forEach(r -> draining.add(r.getString(0)));
+            return secrets.replacePackageUses(conn, name, uses, draining);
+        });
     }
 
     @Override
@@ -155,7 +212,8 @@ public final class PgDeploymentStore implements DeploymentStore {
                 String flow = mark.getString(0);
                 ended = ended.compose(n -> pool.withTransaction(tx -> tx.preparedQuery(TRY_FLOW).execute(Tuple.of(flow)).compose(locked -> {
                     if (!locked.iterator().next().getBoolean(0)) return Future.<Void>succeededFuture();   // a write of a message for it is open
-                    return tx.preparedQuery(END).execute(Tuple.of(flow)).<Void>mapEmpty();
+                    return tx.preparedQuery(END).execute(Tuple.of(flow)).compose(deleted -> deleted.rowCount() == 0 || secrets == null
+                            ? Future.<Void>succeededFuture() : secrets.endDrain(tx, flow));
                 })));
             }
             return ended;
@@ -196,7 +254,7 @@ public final class PgDeploymentStore implements DeploymentStore {
     }
 
     /** The pool's lock on its own connection: each write one transaction on it. */
-    private static final class Held implements PoolLock {
+    private final class Held implements PoolLock {
         private final SqlConnection conn;
         private final Snapshot snapshot;
         /** The generation the next write raises: the one read, then the one the last write committed. */
@@ -215,6 +273,11 @@ public final class PgDeploymentStore implements DeploymentStore {
 
         @Override
         public Future<Long> save(DeploymentRecord r, Actor by, JsonObject detail) {
+            return save(r, null, by, detail);
+        }
+
+        @Override
+        public Future<Long> save(DeploymentRecord r, Map<String, Map<String, Set<Secret.Kind>>> uses, Actor by, JsonObject detail) {
             JsonArray pins = new JsonArray();
             for (DeploymentRecord.Pin p : r.dependencies()) {
                 pins.add(new JsonObject().put("name", p.name()).put("version", p.version()).put("content", p.content()).put("repository", p.repository())
@@ -223,20 +286,23 @@ public final class PgDeploymentStore implements DeploymentStore {
             String[] runs = r.atLeastOnce().toArray(String[]::new);
             return write(List.of(Map.entry(MARK, Tuple.of(r.name(), (Object) runs)), Map.entry(REVIVE, Tuple.of((Object) runs)),
                     Map.entry(SAVE, Tuple.of(r.name(), r.version(), r.repository(), r.commit(), r.content(), r.deployedAt().atOffset(ZoneOffset.UTC), pins, runs)),
-                    Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))));
+                    Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))),
+                    secrets == null || uses == null ? null : conn -> knownUses(conn, r.name(), uses));
         }
 
         @Override
         public Future<Long> delete(String name, Actor by, JsonObject detail) {
             return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name)),
-                    Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))));
+                    Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))),
+                    secrets == null ? null : conn -> replaced(conn, name, Map.of()).<Void>mapEmpty());
         }
 
         /**
-         * Each of {@code statements}, in order, with the generation raised, in one transaction; a generation that moved writes
-         * nothing, and neither does a lock that was freed: its connection is closed, and the client's throw is the write's failure.
+         * Each of {@code statements}, in order, then {@code last} when given, with the generation raised, in one transaction; a
+         * generation that moved writes nothing, and neither does a lock that was freed: its connection is closed, and the client's
+         * throw is the write's failure; nor does a {@code last} that fails.
          */
-        private Future<Long> write(List<Map.Entry<String, Tuple>> statements) {
+        private Future<Long> write(List<Map.Entry<String, Tuple>> statements, Function<SqlConnection, Future<Void>> last) {
             long expected = generation;
             return Future.<Void>succeededFuture().compose(start -> conn.begin()).compose(tx -> conn.preparedQuery(RAISE).execute(Tuple.of(expected)).compose(raised -> {
                 if (raised.rowCount() == 0) {
@@ -245,6 +311,7 @@ public final class PgDeploymentStore implements DeploymentStore {
                 long next = raised.iterator().next().getLong(0);
                 Future<Void> done = Future.succeededFuture();
                 for (Map.Entry<String, Tuple> st : statements) done = done.compose(previous -> conn.preparedQuery(st.getKey()).execute(st.getValue()).mapEmpty());
+                if (last != null) done = done.compose(previous -> last.apply(conn));
                 return done.map(next);
             }).compose(next -> tx.commit().map(next), failed -> tx.rollback().transform(rolledBack -> Future.<Long>failedFuture(failed))))
                     .onSuccess(next -> generation = next);

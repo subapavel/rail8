@@ -1,14 +1,21 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Secret;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.secret.MemorySecretStores;
+import dev.rail8.runtime.secret.SecretStore;
+import dev.rail8.testkit.FakeRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -127,5 +134,61 @@ class SecretsTest {
         assertFalse(String.valueOf(secrets).contains(value), "Secrets' text: " + secrets);
         String config = String.valueOf(NodeConfig.from(env));
         assertFalse(config.contains(value), "NodeConfig's text: " + config);
+    }
+
+    static final String KEY = "RAIL8_SECRETS_KEY";
+    static final String KEY_VALUE = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+
+    /** A name under {@code rail8.} belongs to the platform: the node's resolver and the placeholder refuse it, naming the reference. */
+    @ParameterizedTest
+    @ValueSource(strings = {"secret://rail8.git", "secret://rail8.other"})
+    void aPlatformNameIsRefused(String reference) {
+        for (Secrets secrets : List.of(Secrets.fromEnv(Map.of("RAIL8_SECRET_RAIL8_GIT", "x")), Secrets.placeholder())) {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> secrets.resolve(reference));
+            assertTrue(refused.getMessage().contains(reference) && refused.getMessage().contains("rail8."), refused.getMessage());
+            assertThrows(IllegalArgumentException.class, () -> secrets.handle(reference, EnumSet.allOf(Secret.Kind.class)));
+            assertThrows(IllegalArgumentException.class, () -> secrets.problem(reference, EnumSet.of(Secret.Kind.VALUE)));
+        }
+    }
+
+    /** The placeholder hands out each kind's placeholder: what {@code rail8 validate} and {@code rail8 test} read. */
+    @Test
+    void thePlaceholderOfEachKind() {
+        Secrets p = Secrets.placeholder();
+        assertEquals("https://secret.invalid/", p.handle("secret://a", EnumSet.of(Secret.Kind.VALUE)).value());
+        assertEquals(new Secret.Credentials("rail8", "invalid"), p.handle("secret://a", EnumSet.of(Secret.Kind.CREDENTIALS)).credentials());
+        Secret.KeyPair pair = p.handle("secret://a", EnumSet.of(Secret.Kind.KEY_PAIR)).keyPair();
+        assertEquals("EC", pair.privateKey().getAlgorithm());
+        assertEquals("CN=invalid", pair.certificates().getFirst().getSubjectX500Principal().getName());
+    }
+
+    /**
+     * On a node the store wins over the variable: its row is read, as its kind; after a delete the variable reads again. A handle
+     * follows the sources at each read, and a name of another kind than its place takes is a problem naming both kinds.
+     */
+    @Test
+    void theStoreWinsAndADeleteBringsBackTheVariable() {
+        FakeRuntime rt = FakeRuntime.create();
+        Map<String, String> env = Map.of(KEY, KEY_VALUE, "RAIL8_SECRET_PARTNER_URL", "from-the-variable");
+        SecretStore store = new MemorySecretStores().start("node-1", env, rt.clock(), rt.timer());
+        Secrets secrets = Secrets.fromEnv(env).withStore(store);
+        Secret handle = secrets.handle("secret://partner-url");
+        assertEquals("from-the-variable", handle.value());
+
+        MemorySecretStores.createValue(store, "partner-url", "from-the-store");
+        assertEquals(Optional.of("from-the-store"), secrets.resolve("secret://partner-url"));
+        assertEquals("from-the-store", handle.value(), "the handle reads the store now");
+        MemorySecretStores.delete(store, "partner-url");
+        assertEquals("from-the-variable", handle.value(), "the variable again");
+
+        MemorySecretStores.createCredentials(store, "db", "app", "pw-0815");
+        assertEquals(new Secret.Credentials("app", "pw-0815"), secrets.handle("secret://db", Set.of(Secret.Kind.CREDENTIALS, Secret.Kind.KEY_PAIR)).credentials());
+        assertEquals(Optional.of("secret 'secret://db' is a secret of kind credentials in the secret store, taken here as [value]"),
+                secrets.problem("secret://db", EnumSet.of(Secret.Kind.VALUE)));
+        assertEquals(Optional.empty(), secrets.resolve("secret://db"), "no plain value of a name the store holds as credentials");
+        assertEquals(Optional.of("secret 'secret://other' is not set (in the secret store, or RAIL8_SECRET_OTHER)"),
+                secrets.problem("secret://other", EnumSet.of(Secret.Kind.VALUE)));
+        assertEquals(Optional.of("secret 'secret://other' is not set (in the secret store, which alone holds [credentials])"),
+                secrets.problem("secret://other", EnumSet.of(Secret.Kind.CREDENTIALS)));
     }
 }

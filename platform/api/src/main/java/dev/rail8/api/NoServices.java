@@ -38,9 +38,10 @@ final class NoServices implements Services {
     };
 
     @Override
-    public Secret secret(StepConfig step, String key) {
+    public Secret secret(StepConfig step, String key, Secret.Kind... kinds) {
         Objects.requireNonNull(step, "step");
         Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(kinds, "kinds");
         throw new IllegalStateException(step + ": option '" + key + "' names a secret, but these resources were built without a node and hold none");
     }
 

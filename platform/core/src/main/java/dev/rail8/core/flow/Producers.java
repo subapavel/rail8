@@ -12,8 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * The producers {@link FlowBuilder} created for one built flow, a {@link Delivery}'s or a {@link FlowWorker}'s, closed
  * together, once. A producer whose close fails (its future, or anything {@code close()} itself throws, an {@link Error} and a
- * sneaky checked exception included) is logged at WARNING and stops no other; the close completes, never fails, once every
- * producer's close has settled.
+ * sneaky checked exception included) is logged at WARNING, its line and its failure scrubbed of the flow's values, and stops no
+ * other; the close completes, never fails, once every producer's close has settled.
  *
  * <p>When a {@code close()} throws an {@code InterruptedException}, the flag it swallowed is restored at once, so every
  * producer after the interrupting one is asked to close on a thread whose interrupt flag is set, and a later blocking
@@ -33,22 +33,33 @@ final class Producers {
 
     private final String flow;
     private final List<Producer> all;
+    private final FlowSecrets secrets;
     private final AtomicBoolean asked = new AtomicBoolean();
     private final Promise<Void> closed = Promise.promise();
 
+    /** The producers {@code all} of {@code flow}, with no value to scrub. */
     Producers(String flow, List<Producer> all) {
+        this(flow, all, null);
+    }
+
+    /** The producers {@code all} of {@code flow}; a failed close is logged scrubbed of the values of {@code secrets}, unless it is null. */
+    Producers(String flow, List<Producer> all, FlowSecrets secrets) {
         this.flow = Objects.requireNonNull(flow, "flow");
         this.all = List.copyOf(all);
+        this.secrets = secrets;
     }
 
     /** Closes every producer on the first call (see the class comment); every call returns that one close. */
     Future<Void> close() {
-        if (asked.compareAndSet(false, true)) closeAll(flow, all).onComplete(closed);
+        if (asked.compareAndSet(false, true)) closeAll(flow, all, secrets).onComplete(closed);
         return closed.future();
     }
 
-    /** Closes each of {@code producers}, a failure logged and the others closed all the same; completes once every close settled. */
-    static Future<Void> closeAll(String flow, List<Producer> producers) {
+    /**
+     * Closes each of {@code producers}, a failure logged scrubbed of the values of {@code secrets} (none when it is null) and the
+     * others closed all the same; completes once every close settled.
+     */
+    static Future<Void> closeAll(String flow, List<Producer> producers, FlowSecrets secrets) {
         List<Future<Void>> settled = new ArrayList<>(producers.size());
         for (Producer p : producers) {
             Future<Void> closing;
@@ -60,8 +71,10 @@ final class Producers {
                 if (thrown instanceof InterruptedException) Thread.currentThread().interrupt();
                 closing = Future.failedFuture(thrown);
             }
-            settled.add(closing.recover(failure -> {
-                LOG.log(System.Logger.Level.WARNING, "flow " + flow + ": a producer did not close (" + p + "): " + failure, failure);
+            settled.add(closing.recover(failed -> {
+                Throwable failure = secrets == null ? failed : secrets.scrubbed(failed);
+                String line = "flow " + flow + ": a producer did not close (" + p + "): " + failure;
+                LOG.log(System.Logger.Level.WARNING, secrets == null ? line : secrets.scrubber().apply(line), failure);
                 return Future.succeededFuture();
             }));
         }
