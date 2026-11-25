@@ -50,7 +50,7 @@ describe('endpointSettings', () => {
       ['path', 'flow'],
     ]);
     const reply = out.fields.find((f) => f.name === 'maxBodyBytes')!;
-    expect([reply.required, reply.min, say(en, reply.label!), say(en, reply.help)]).toEqual([true, 1, 'Largest reply', 'The largest reply body taken, in bytes.']);
+    expect([reply.required, reply.min, say(en, reply.label!), say(en, reply.help)]).toEqual([undefined, 1, 'Largest reply', 'The largest reply body taken, in bytes.']);
     expect(endpointSettings(HTTP_FORMS, 'in').fields.map((f) => f.name)).not.toContain('maxBodyBytes');
     expect(endpointSettings(DIRECT_FORMS, 'out').fields.map((f) => f.name)).toEqual(['address']);
   });
@@ -72,14 +72,14 @@ describe('checkOptions', () => {
   });
 
   test("judges the connection's form, then the flow's, then the reply's limit, then the keys no form takes", () => {
-    expect(check(HTTP_FORMS, { colour: 'red', path: 'x', address: '/in' }, 'out')).toEqual([
+    expect(check(HTTP_FORMS, { colour: 'red', path: 'x', address: '/in', maxBodyBytes: 0 }, 'out')).toEqual([
       { path: '/url', code: 'required', message: 'is required' },
       { path: '/address', code: 'direction', message: 'a setting of in endpoints only' },
       { path: '/path', code: 'pattern', message: 'must match /.*' },
-      { path: '/maxBodyBytes', code: 'required', message: 'is required' },
+      { path: '/maxBodyBytes', code: 'min', message: 'must be a whole number of at least 1' },
       { path: '/colour', code: 'unknown', message: 'no such setting' },
     ]);
-    expect(check(HTTP_FORMS, { url: 'https://partner.example', maxBodyBytes: 0 }, 'out')).toEqual([{ path: '/maxBodyBytes', code: 'min', message: 'must be a whole number of at least 1' }]);
+    expect(check(HTTP_FORMS, { url: 'https://partner.example' }, 'out')).toEqual([]);
   });
 
   test("leaves the keys the node sets on an in endpoint alone, and refuses the reply's limit of an out endpoint that reaches none", () => {

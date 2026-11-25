@@ -34,9 +34,12 @@ import java.util.TreeSet;
  */
 public final class EndpointUse {
 
-    /** The reply's limit of an out endpoint whose direction connects: required, at least 1, as {@code http}'s field was. */
+    /**
+     * The reply's limit of an out endpoint whose direction connects: optional, the flow's {@code limits.maxBodyBytes} when
+     * absent, and at least 1 when present, with the messages {@code http}'s field had.
+     */
     static final Settings REPLY_LIMIT = Settings.of(Field.integer("maxBodyBytes", "Largest reply", "The largest reply body taken, in bytes.")
-            .required().min(1).out());
+            .min(1).out());
     private static final String REPLY = "maxBodyBytes";
     /** What the node sets on every in endpoint. */
     private static final Set<String> NODE_KEYS = Set.of("flow", "maxBodyBytes");
@@ -120,7 +123,7 @@ public final class EndpointUse {
             }
         }
         if (forms.flow().described() || !forms.connects(direction)) problems.addAll(forms.flow().check(flow, direction));
-        // An adapter that describes no connection took any settings before, so its reply limit stays optional.
+        // An adapter that describes no connection took any settings before, so its reply limit is not judged.
         if (direction == Direction.OUT && forms.connects(Direction.OUT) && forms.connection().described()) {
             problems.addAll(REPLY_LIMIT.check(reply, Direction.OUT));
         }

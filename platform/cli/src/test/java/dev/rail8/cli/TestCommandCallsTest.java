@@ -155,4 +155,22 @@ class TestCommandCallsTest {
         assertEquals(1, ran.exit(), ran.toString());
         assertTrue(ran.problems().stream().anyMatch(l -> l.contains("cycle") && l.contains("flow 'check' -> direct /check -> flow 'check'")), ran.toString());
     }
+
+    /**
+     * A direct endpoint is judged by the real component's forms before any case runs, as a node judges it: a key no form takes
+     * and a reply limit on an out endpoint that reaches no connection are each a problem, and no case runs.
+     */
+    @Test
+    void aKeyTheNodeRefusesOnADirectEndpointIsAProblemAndNoCaseRuns() throws IOException {
+        Path pkg = CliRuns.copy(CALLS, tmp.resolve("stray"));
+        Path endpoint = pkg.resolve("endpoints/call-check.yaml");
+        Files.writeString(endpoint, Files.readString(endpoint) + "  colour: red\n  maxBodyBytes: 5\n");
+
+        Ran ran = run("test", pkg.toString());
+
+        assertEquals(1, ran.exit(), ran.toString());
+        assertTrue(ran.problems().contains("problem: endpoint 'call-check' config (environment ci) at '/colour': no such setting"), ran.toString());
+        assertTrue(ran.problems().contains("problem: endpoint 'call-check' config (environment ci) at '/maxBodyBytes': no such setting"), ran.toString());
+        assertTrue(ran.outLines().stream().noneMatch(l -> l.startsWith("PASS ") || l.startsWith("FAIL ")), "no case ran: " + ran);
+    }
 }

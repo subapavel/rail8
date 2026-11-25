@@ -385,7 +385,7 @@ Tab.of(id, label)                         // as today
 - **The reply's limit** is the step's `maxReplyBytes`, an integer from 1 to the largest `long`, as `limits.maxBodyBytes`
   is, else the flow's `limits.maxBodyBytes`, handed in each `Call`;
   `http`'s `maxBodyBytes` field goes. For a flow of `schemaVersion: 1`, an out endpoint's `maxBodyBytes` stays the
-  reply's limit.
+  reply's limit when it is given, on any adapter; without it, the flow's `limits.maxBodyBytes` holds.
 - **The plugin API's version** goes up with the step that changes this contract. A plugin built on the earlier version
   is refused at load, as the loader refuses any other version, with a line saying that it must be built again on the
   new contract. The secret store's step that changes `Field` raises it too; if both land in one release, it goes up once.
@@ -712,7 +712,10 @@ The node reads both shapes while the steps land, and the last step removes the o
 - A flow of `schemaVersion: 1` names endpoint files as today. Inside the node each endpoint becomes one use of the new
   contract: its `config`, with the override of `RAIL8_ENV`, is split by the adapter's forms into a `Connection` of its
   own and the settings in the flow. Its deploy checks and its hash do not change, it does not touch the environment, and
-  its secrets follow the secret store's rules for endpoint files.
+  its secrets follow the secret store's rules for endpoint files. The exceptions, each a fallback that took the
+  endpoint's id as a host: an `http` out endpoint without `url` and an `sftp` endpoint without `host` are refused with
+  `is required`, and the release notes say to set them. An `http` or `webhook` out endpoint without `maxBodyBytes` now
+  deploys, with the flow's limit as the reply's.
 - A flow of `schemaVersion: 2` names connections as this document says. A package may hold both while it moves; a flow of
   one shape cannot name what belongs to the other.
 - From the step of the flow editor on, a deploy of a package that holds an endpoint file or a flow of `schemaVersion: 1`
