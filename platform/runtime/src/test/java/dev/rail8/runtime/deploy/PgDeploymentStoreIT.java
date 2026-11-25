@@ -418,10 +418,55 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
      * and no secret in the store.
      */
     static PgDeploymentStore storeWithUses() {
-        pool.query("delete from secret_uses where user_kind = 'flow'").execute().await();
+        pool.query("delete from secret_uses where user_kind in ('flow', 'drain')").execute().await();
+        return storeOn(List.of("RAIL8_SECRET_FROM_ENV"));
+    }
+
+    /** A store whose saves and deletes write the record of uses, checked against a node that holds {@code variables}. */
+    static PgDeploymentStore storeOn(List<String> variables) {
         FakeClock clock = FakeClock.at(Instant.parse("2026-10-27T09:30:00Z"));
-        SecretStore secrets = SecretStore.postgres(pool, StoreKey.NONE, "node-1", List.of("RAIL8_SECRET_FROM_ENV"), clock, new FakeTimer(clock));
+        SecretStore secrets = SecretStore.postgres(pool, StoreKey.NONE, "node-1", variables, clock, new FakeTimer(clock));
         return new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connect).map(c -> (SqlConnection) c), secrets);
+    }
+
+    /** Every flow's and draining flow's uses in {@code secret_uses}, {@code <kind> <user>:<name>:<kinds>}, sorted. */
+    static List<String> flowAndDrainUses() {
+        List<String> rows = new java.util.ArrayList<>();
+        pool.query("select r from (select user_kind || ' ' || user_id || ':' || name || ':' || array_to_string(kinds, ',') as r from secret_uses"
+                + " where user_kind in ('flow', 'drain')) t order by r collate \"C\"").execute().await().forEach(r -> rows.add(r.getString(0)));
+        return rows;
+    }
+
+    /**
+     * A flow left draining keeps its uses as {@code drain} rows: the save that marks it rewrites its flow rows, a save that runs it
+     * at-least-once again deletes them, and so does the end of its mark. A delete marks it on a node that does not hold its
+     * variable: a drain row carries a use checked at its deploy, and is not checked again.
+     */
+    @Test
+    void aFlowLeftDrainingKeepsItsUsesAsDrainUntilItsMarkEnds() {
+        emptyStore();
+        PgDeploymentStore s = storeWithUses();
+        DeploymentStore.PoolLock lock = s.lock().await().orElseThrow();
+        try {
+            lock.save(record("shop", "1.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
+            DeploymentRecord auditOnly = new DeploymentRecord("shop", "2.0.0", "shop", C_2, SHA_2, AT, List.of(), List.of("shop/audit"));
+            lock.save(auditOnly, Map.of(), BY, new JsonObject()).await();
+            assertEquals(List.of("drain shop/orders:from-env:value"), flowAndDrainUses(), "orders leaves draining with its uses");
+
+            lock.save(record("shop", "3.0.0", C_1, SHA_1, AT), FROM_ENV, BY, new JsonObject()).await();
+            assertEquals(List.of("flow shop/orders:from-env:value"), flowAndDrainUses(), "orders runs at-least-once again: its drain rows go");
+        } finally {
+            lock.close().await();
+        }
+        DeploymentStore.PoolLock elsewhere = storeOn(List.of()).lock().await().orElseThrow();
+        try {
+            elsewhere.delete("shop", BY, new JsonObject()).await();
+            assertEquals(List.of("drain shop/orders:from-env:value"), flowAndDrainUses(), "the undeploy leaves orders draining with its uses");
+        } finally {
+            elsewhere.close().await();
+        }
+        s.endMarks().await();
+        assertEquals(List.of(), flowAndDrainUses(), "the end of its mark deletes its drain rows");
     }
 
     static final Map<String, Map<String, java.util.Set<Secret.Kind>>> FROM_ENV = Map.of("orders", Map.of("from-env", Set.of(Secret.Kind.VALUE)));

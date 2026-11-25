@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -94,6 +95,8 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String LISTED = "select n.node, p.package, p.version, p.repository, p.commit, p.deployed_at, p.state, p.behind "
             + "from nodes n left join node_packages p on p.node = n.node and p.epoch = n.epoch where n.lease_until >= now() limit " + (LISTINGS_MAX + 1);
 
+    /** The flows of package $1 marked to drain. */
+    private static final String DRAINING = "select flow from retiring where package = $1";
     /** Marks package $1's record as one whose secret uses are known. */
     private static final String KNOWN = "update deployments set secret_uses_known = true where package = $1";
     /** Whether the record of package $1 with content $2 still has its secret uses to write; locked for the backfill's transaction. */
@@ -137,11 +140,23 @@ public final class PgDeploymentStore implements DeploymentStore {
         }).eventually(conn::close));
     }
 
-    /** The record of {@code name}'s uses replaced and marked known, in {@code conn}'s transaction; failed, writing nothing, on a problem. */
+    /**
+     * The record of {@code name}'s uses replaced, its flows marked to drain now keeping theirs as {@code drain} rows, and marked
+     * known, in {@code conn}'s transaction; failed, writing nothing, on a problem.
+     */
     private Future<Void> knownUses(SqlConnection conn, String name, Map<String, Map<String, Set<Secret.Kind>>> uses) {
-        return secrets.replacePackageUses(conn, name, uses).compose(problems -> problems.isEmpty()
+        return replaced(conn, name, uses).compose(problems -> problems.isEmpty()
                 ? conn.preparedQuery(KNOWN).execute(Tuple.of(name)).<Void>mapEmpty()
                 : Future.failedFuture(new SecretUsesRefused(problems)));
+    }
+
+    /** {@link SecretStore#replacePackageUses} of {@code name} with {@code uses}, and the package's flows marked to drain now. */
+    private Future<List<String>> replaced(SqlConnection conn, String name, Map<String, Map<String, Set<Secret.Kind>>> uses) {
+        return conn.preparedQuery(DRAINING).execute(Tuple.of(name)).compose(rows -> {
+            Set<String> draining = new TreeSet<>();
+            rows.forEach(r -> draining.add(r.getString(0)));
+            return secrets.replacePackageUses(conn, name, uses, draining);
+        });
     }
 
     @Override
@@ -197,7 +212,8 @@ public final class PgDeploymentStore implements DeploymentStore {
                 String flow = mark.getString(0);
                 ended = ended.compose(n -> pool.withTransaction(tx -> tx.preparedQuery(TRY_FLOW).execute(Tuple.of(flow)).compose(locked -> {
                     if (!locked.iterator().next().getBoolean(0)) return Future.<Void>succeededFuture();   // a write of a message for it is open
-                    return tx.preparedQuery(END).execute(Tuple.of(flow)).<Void>mapEmpty();
+                    return tx.preparedQuery(END).execute(Tuple.of(flow)).compose(deleted -> deleted.rowCount() == 0 || secrets == null
+                            ? Future.<Void>succeededFuture() : secrets.endDrain(tx, flow));
                 })));
             }
             return ended;
@@ -278,7 +294,7 @@ public final class PgDeploymentStore implements DeploymentStore {
         public Future<Long> delete(String name, Actor by, JsonObject detail) {
             return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name)),
                     Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))),
-                    secrets == null ? null : conn -> secrets.replacePackageUses(conn, name, Map.of()).<Void>mapEmpty());
+                    secrets == null ? null : conn -> replaced(conn, name, Map.of()).<Void>mapEmpty());
         }
 
         /**

@@ -73,8 +73,9 @@ final class PgSecretRows implements SecretRows {
     private static final String KINDS_OF = "select name, kind from secrets where scope = " + SCOPE + " and name = any($1::text[])";
     private static final String DELETE_USES = "delete from secret_uses where scope = " + SCOPE + " and user_kind = $1 and user_id = $2";
     private static final String INSERT_USE = "insert into secret_uses (scope, name, user_kind, user_id, kinds) values (" + SCOPE + ", $1, $2, $3, $4)";
-    private static final String PACKAGE_USERS = "select distinct user_id from secret_uses where scope = " + SCOPE
-            + " and user_kind = 'flow' and starts_with(user_id, $1 || '/') order by user_id";
+    /** The uses of package $1's flows and draining flows: kind, user, name, kinds. */
+    private static final String PACKAGE_USES = "select user_kind, user_id, name, kinds from secret_uses where scope = " + SCOPE
+            + " and user_kind in ('flow', 'drain') and starts_with(user_id, $1 || '/') order by user_id, name";
 
     /** How long a write waits for its locks before it is 503 {@code busy}. */
     static final Duration LOCK_WAIT = Duration.ofSeconds(5);
@@ -228,6 +229,7 @@ final class PgSecretRows implements SecretRows {
             stored.forEach(r -> kindOf.put(r.getString(0), kind(r.getString(1))));
             List<String> problems = new ArrayList<>();
             for (SecretStore.Uses u : users) {
+                if (u.userKind().equals("drain")) continue;   // a draining flow's uses were checked when it was deployed
                 new TreeMap<>(u.uses()).forEach((name, takes) -> {
                     String who = u.userKind() + " '" + u.userId() + "'";
                     if (name.startsWith(SecretStore.RESERVED) && !u.userKind().equals("platform")) {
@@ -258,12 +260,21 @@ final class PgSecretRows implements SecretRows {
         });
     }
 
-    /** The flows of {@code pkg} that have uses now, by their names in the package. */
-    static Future<List<String>> packageUsers(SqlConnection tx, String pkg) {
-        return tx.preparedQuery(PACKAGE_USERS).execute(Tuple.of(pkg)).map(rows -> {
-            List<String> flows = new ArrayList<>();
-            rows.forEach(r -> flows.add(r.getString(0).substring(pkg.length() + 1)));
-            return flows;
+    /**
+     * The uses of {@code pkg}'s flows ({@code flow}) and draining flows ({@code drain}): by kind, then by the user's qualified id,
+     * the names it uses with their kinds.
+     */
+    static Future<Map<String, Map<String, Map<String, Set<Secret.Kind>>>>> packageUses(SqlConnection tx, String pkg) {
+        return tx.preparedQuery(PACKAGE_USES).execute(Tuple.of(pkg)).map(rows -> {
+            Map<String, Map<String, Map<String, Set<Secret.Kind>>>> uses = new TreeMap<>();
+            uses.put("flow", new TreeMap<>());
+            uses.put("drain", new TreeMap<>());
+            for (Row r : rows) {
+                Set<Secret.Kind> kinds = EnumSet.noneOf(Secret.Kind.class);
+                for (String id : r.getArrayOfStrings(3)) kinds.add(kind(id));
+                uses.get(r.getString(0)).computeIfAbsent(r.getString(1), u -> new TreeMap<>()).put(r.getString(2), Set.copyOf(kinds));
+            }
+            return uses;
         });
     }
 
