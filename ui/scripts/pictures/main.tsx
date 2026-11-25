@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArtifactKinds, artifactKinds } from '../../src/artifacts';
+import { endpointsScreen, flowsScreen } from '../../src/endpoints/screen';
 import { home } from '../../src/Home';
 import { fakeApiClient } from '../../src/mapping/api/fake/fake-api';
 import { mappingsScreen } from '../../src/mapping/screen';
@@ -13,17 +14,20 @@ import { SessionGate } from '../../src/SessionGate';
 import { Shell } from '../../src/Shell';
 import { auditScreen, myTokensScreen, tokensScreen, usersScreen } from '../../src/users/screen';
 import { pictureAudit } from './audit';
+import { pictureEndpoints, pictureFlows } from './flows';
 import { pictureMessages } from './messages';
 import { pictureUsers } from './users';
 import { NOW, pictureWorld } from './world';
 
 // The application with every screen of its modules, for the pictures that scripts/pictures.mjs takes: Packages over
-// the fake world of world.ts at a fixed time, Mappings over the fake mapping service, and the other screens as the
-// application has them, which the pictures never open. The production build of the application leaves the page out.
+// the fake world of world.ts at a fixed time, Endpoints and Flows over the folder of flows.ts, Mappings over the fake
+// mapping service, and the other screens as the application has them, which the pictures never open. The production build of the application leaves the page out.
 const people = pictureUsers(() => NOW);
 const modules = import.meta.glob('../../src/*/module.tsx', { eager: true });
 const fakes: Record<string, Screen> = {
   packages: packagesScreen(pictureWorld(), () => NOW),
+  endpoints: endpointsScreen(pictureEndpoints()),
+  flows: flowsScreen(pictureFlows(), pictureEndpoints()),
   mappings: mappingsScreen(fakeApiClient(), storageBrowserState(window.sessionStorage)),
   messages: messagesScreen(pictureMessages(), () => NOW),
   users: usersScreen(people.users, people.tokens),

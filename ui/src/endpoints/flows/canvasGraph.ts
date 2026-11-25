@@ -77,6 +77,7 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
   const outputs = new Set(receivers.map(r => r.source));
   const terminal = new Map(endings.length && endings.every(e => outputs.has(e.source)) ? endings.map(e => [e.source, e]) : []);
   if (terminal.size) inside.splice(inside.findIndex(n => n.id === '/steps#end'), 1);
+  const endLabel = view.nodes.find(n => n.id === '/steps#end')?.label ?? '';
 
   // A group's geometry includes all child captions and its heading, including nested groups.
   const children = new Map<string, CanvasItem[]>();
@@ -159,7 +160,7 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
     nodes.push(item);
     edges.push({ id: `${source}->${item.id}#external`, source: folded ? FLOW_FRAME : source, target: item.id, kind: 'calls',
       ...(intermediate ? { deliverySide: vertical ? width : height } : {}),
-      ...(!folded && end ? { label: 'end', insertAt: end.insertAt } : {}),
+      ...(!folded && end ? { label: endLabel, insertAt: end.insertAt } : {}),
     });
   });
   return { nodes, edges, minimum };
