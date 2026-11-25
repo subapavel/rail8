@@ -102,18 +102,14 @@ The other types differ only in their fields:
   - a system holds at most 16 credentials.
 - Each credential's secrets are written to `secret_uses` through the store's one method, as `credential` and the
   credential's key, at its activation.
-- **The binding.** The credential's body is bound under the store's key, as every body in force is. A database writer
-  cannot plant a credential, a certificate or another system's verifier unseen. A credential whose tag fails is absent
-  from the node's snapshot, and its caller is refused as unknown. The binding stops planting, not restoring: a database
-  writer can put back an older bound row, a removed credential with its verifier among them, as the configuration of
-  an environment accepts for every object. Users, roles and tokens are not bound (`docs/USERS-AND-ROLES.md`), so a
-  database writer can still make a user who sends test messages, as it can make any administrator.
-- **Without the store's key** no verifier can be written (503 `no-key`), so no `basic` or `api-key` credential can be
-  activated. The four kinds that grant entry, `credential`, `issuer`, `api-product` and `subscription`, are held as
-  bodies that send a secret, though they need no consent: in a deployed environment without the key their activation
-  is 503 `no-key`, and when a key is set for the first time no row of theirs is bound. Such a row stays left out until
-  it is activated again under the key, so nothing that grants entry is ever bound as it stands. The quickstart holds no
-  store key, so its listening senders keep no check (`schemaVersion: 1`, or `{check: off, reason}`) until it does.
+- **The binding.** Every environment has the store's key, and a node without it does not start. The bodies of the four
+  kinds that grant entry, `credential`, `issuer`, `api-product` and `subscription`, are bound under it, as every body
+  in force is. A database writer cannot plant a credential, a certificate or another system's verifier unseen. An
+  object whose binding is missing or fails is absent from the node's snapshot: a caller of such a credential is
+  refused as unknown. The binding stops planting, not restoring: a database writer can put back an older bound row, a
+  removed credential with its verifier among them, as the configuration of an environment accepts for every object.
+  Users, roles and tokens are not bound (`docs/USERS-AND-ROLES.md`), so a database writer can still make a user who
+  sends test messages, as it can make any administrator.
 - **An `issuer` object** (kind `issuer`, a key of one segment) holds an OAuth2 issuer: `{url, audience, clientClaim,
   type?}`, where `clientClaim` is `azp`, `client_id` or `sub`. The issuer's URL is bound under the store's key with its
   body.
@@ -196,8 +192,9 @@ The index decides each request in memory:
   at most 10 minutes, and it empties with every change of the credential or its verifier.
 - A message entered under one index keeps its sender. A change activated after it reaches only the requests that
   enter after the new index is in force: on each node within one notice, or the 5 s tick when a notice is lost.
-- A node that cannot read Postgres keeps its index, is `DEGRADED` after 30 s, and goes on taking a removed credential
-  until it reads again. A removal is itself a write to Postgres, so none is activated while Postgres is away.
+- A node that cannot read Postgres keeps its last good index and is `DEGRADED`, by the same rule as for the rest of
+  its state. It goes on taking a removed credential until it reads again. A removal is itself a write to Postgres, so
+  none is activated while Postgres is away.
 
 ## Who may send, in the flow file
 
@@ -575,8 +572,6 @@ Both are objects of the configuration of an environment, written by the partner 
   the flow. The index holds the systems per product.
 - A product names flows by key. A flow that is not deployed is skipped, and when it is deployed again the product holds
   it again; the deploy's answer names the products that hold it. The flow file must still say `subscribers`.
-- Both kinds grant entry, so in a deployed environment they need the store's key (above), and Subscribers works only
-  with it.
 - An API product's application is a system: the same object that has credentials. A customer with two applications has
   two systems under its partner.
 - A system is defined in a package, as for every system. A new customer of an API is a commit and a deploy of its
@@ -825,10 +820,11 @@ create index message_parties_tester     on message_parties (tester, at desc) whe
   `senders` in `from`, which it reserves; the system keys and the first segments it reserves, `rail8`, `subscribers`
   and `by-agreement`; the receiver's facts at each attempted send; `rail8 test` cases of the new shape.
 - **The configuration of an environment:** the object store, its snapshot and the notice of each activation; the
-  binding; the kinds `credential`, `issuer`, `api-product` and `subscription` joining its tables and routes, held as
-  bodies that send a secret without the store's key and at the first key, though they need no consent; the action
-  `config.partners`; how long an activation takes to reach a node, which is how long a revoked credential keeps working.
-- **The secret store:** the kind `verifier`, its forms, and the store's values held in memory on every node.
+  binding of every body in force; the kinds `credential`, `issuer`, `api-product` and `subscription` joining its
+  tables and routes; the action `config.partners`; how long an activation takes to reach a node, which is how long a
+  revoked credential keeps working.
+- **The secret store:** its key in every environment, the kind `verifier`, its forms, and the store's values held in
+  memory on every node.
 
 A change in any of these is a change here, made in that design's pull request.
 
