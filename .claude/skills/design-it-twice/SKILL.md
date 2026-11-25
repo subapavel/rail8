@@ -73,6 +73,12 @@ cloud environment over this repository, read-only.
 6. A design of security, of a storage format or of a public contract is never merged without the
    answer from Codex, and its build does not start before it. The other Claude model may argue
    earlier, so that the design is ready; the label stays and the merge waits for the owner.
+7. The review of a design of security is not published. Its prompt ends with `Do not post your
+   review anywhere; give it as your answer.` in place of the line about the comment, and has no
+   sentence that allows one. The owner hands the answer to the control session, which keeps it
+   outside this repository and sends it to you. On the issue, write for each finding only its
+   number, a neutral title and what the design now says; never the review's text, and never a
+   weakness of today's code.
 
 Give the brief, the drafts, the recommendation and the objections to the `owner-proxy` agent; it
 chooses.
