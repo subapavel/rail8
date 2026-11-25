@@ -415,6 +415,10 @@ consent is held on the object and given to the exact draft it covers.
 - **When a key is set for the first time**, the job below binds every unbound body that sends no secret, as it stands.
   An unbound body that sends a secret is not bound: it stays left out until it is activated again with the secret
   administrator's consent, since nothing proves who put it there. A WARNING says how many.
+- **The kinds that hold a secret.** A system's credential, an issuer, an API product and a subscription, when their
+  kinds come, count as bodies that send a secret in the two rules above and in the seed, though they need no consent: in
+  a deployed environment without the store's key their activation is 503 `no-key`, and the first key never binds one.
+  An unbound one stays left out until its administrator activates it again.
 - **A change of the store's key** binds the rows again, as the secret store asks at its tick: up to 100 rows a batch,
   `for update skip locked`, so a row being written is skipped and bound by a later batch. Each tag, of a body and of a
   consent, is verified under the key it names before it is bound under the new one. A tag that does not verify is
