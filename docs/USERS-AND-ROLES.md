@@ -181,20 +181,20 @@ exceptions.
 A deploy knows its package only once it has read the commit. Its check names `PackageRef.ANY` for now. A later scope by
 package asks again inside the deploy, once the manifest names the package.
 
-**Errors.** Every refusal has a `code`:
-- 401 `{error, code}`, with `WWW-Authenticate: Bearer`. The codes:
+**Errors.** Every refusal has a `code` and `values`, the values its text names:
+- 401 `{error, code, values}`, with `WWW-Authenticate: Bearer`. The codes:
   - `no-credential`.
   - `unknown-credential`: a credential of the wrong form, an unknown id or a wrong secret.
   - Only once the secret matched: `session-ended`, `token-expired`, `token-revoked` or `blocked`.
   - `login-refused`, for a refused login, with one text for every reason. The audit holds the reason.
-- 403 `{error, code, needs}`. The codes:
+- 403 `{error, code, values, needs}`. The codes:
   - `not-allowed`, with `needs` the roles that grant the action.
   - `wrong-password`, for a wrong current password asked again by the password change or the issue of a personal token.
     The session goes on.
   - `session-required`, for a token.
   - `password-change-required`.
   - `browser`, from the guard.
-- 429 `{error, code: "too-many-attempts"}` with `Retry-After`: the login, the password change and the issue of a
+- 429 `{error, code: "too-many-attempts", values}` with `Retry-After`: the login, the password change and the issue of a
   personal token.
 - 503:
   - the Postgres pool refused, as today;
@@ -203,7 +203,7 @@ package asks again inside the deploy, once the manifest names the package.
     nothing runs.
 
 Plugins' admin services answer these as problems (`application/problem+json`) of the types
-`urn:rail8:admin:problem:unauthenticated` and `urn:rail8:admin:problem:forbidden`.
+`urn:rail8:admin:problem:unauthenticated` and `urn:rail8:admin:problem:forbidden`, with the same `code` and `values`.
 
 ## Credentials
 

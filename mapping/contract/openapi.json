@@ -221,7 +221,7 @@
       },
       "Problem" : {
         "type" : "object",
-        "required" : [ "type", "title", "status", "detail" ],
+        "required" : [ "type", "title", "status", "detail", "code", "values" ],
         "properties" : {
           "type" : {
             "type" : "string",
@@ -236,6 +236,16 @@
           },
           "detail" : {
             "type" : "string"
+          },
+          "code" : {
+            "type" : "string",
+            "enum" : [ "invalid-workspace-path", "malformed-json", "invalid-request", "malformed-input", "model-refused", "not-found", "read-only", "foreign-origin", "mapping-exists", "too-large", "unsupported-media-type", "mapping-changed", "node-unavailable", "busy", "not-allowed", "session-required", "password-change-required" ]
+          },
+          "values" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : [ "string", "number" ]
+            }
           }
         }
       },
@@ -280,7 +290,7 @@
       },
       "RefusedProblem" : {
         "type" : "object",
-        "required" : [ "type", "title", "status", "detail", "diagnostics" ],
+        "required" : [ "type", "title", "status", "detail", "code", "values", "diagnostics" ],
         "properties" : {
           "type" : {
             "type" : "string",
@@ -295,6 +305,16 @@
           },
           "detail" : {
             "type" : "string"
+          },
+          "code" : {
+            "type" : "string",
+            "const" : "model-refused"
+          },
+          "values" : {
+            "type" : "object",
+            "additionalProperties" : {
+              "type" : [ "string", "number" ]
+            }
           },
           "diagnostics" : {
             "type" : "array",
@@ -743,7 +763,7 @@
             }
           },
           "403" : {
-            "description" : "read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server",
+            "description" : "read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {
@@ -886,7 +906,7 @@
             }
           },
           "403" : {
-            "description" : "read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server",
+            "description" : "read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {
@@ -1107,7 +1127,7 @@
             }
           },
           "403" : {
-            "description" : "foreign-origin: the request does not come from a page of this server",
+            "description" : "foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {
@@ -1214,7 +1234,7 @@
             }
           },
           "403" : {
-            "description" : "foreign-origin: the request does not come from a page of this server",
+            "description" : "foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {
@@ -1331,7 +1351,7 @@
             }
           },
           "403" : {
-            "description" : "foreign-origin: the request does not come from a page of this server",
+            "description" : "foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {
@@ -1429,7 +1449,7 @@
             }
           },
           "403" : {
-            "description" : "foreign-origin: the request does not come from a page of this server",
+            "description" : "foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module",
             "content" : {
               "application/problem+json" : {
                 "schema" : {

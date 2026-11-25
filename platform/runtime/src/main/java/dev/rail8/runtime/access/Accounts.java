@@ -2,6 +2,7 @@ package dev.rail8.runtime.access;
 
 import dev.rail8.core.audit.Actor;
 import dev.rail8.core.record.Page;
+import dev.rail8.runtime.refusal.RefusalCode;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
@@ -95,7 +96,7 @@ abstract class Accounts implements Access {
     public Caller authenticate(Optional<String> authorization, Optional<String> declaredActor) {
         if (authorization.isEmpty()) {
             if (key.isEmpty() && shared.isEmpty() && query(Tx::bridgeOpen)) return Caller.bridge(Via.LOCAL, declared(declaredActor));
-            throw AccessRefused.unauthenticated("no-credential", "the admin API needs a credential: Authorization: Bearer <credential>");
+            throw AccessRefused.unauthenticated(RefusalCode.NO_CREDENTIAL, "the admin API needs a credential: Authorization: Bearer <credential>");
         }
         String presented = Credentials.presented(authorization.get()).orElseThrow(Accounts::unknownCredential);
         String fingerprint = Credentials.fingerprint(presented);
@@ -114,8 +115,8 @@ abstract class Accounts implements Access {
         Tx.SessionRow session = found.get().session();
         Tx.UserRow user = found.get().user();
         Instant now = clock.instant();
-        if (!live(session, now)) throw AccessRefused.unauthenticated("session-ended", "the session ended: log in again");
-        if (user.blockedAt().isPresent()) throw AccessRefused.unauthenticated("blocked", "the user is blocked");
+        if (!live(session, now)) throw AccessRefused.unauthenticated(RefusalCode.SESSION_ENDED, "the session ended: log in again");
+        if (user.blockedAt().isPresent()) throw AccessRefused.unauthenticated(RefusalCode.BLOCKED, "the user is blocked");
         if (!now.isBefore(session.lastSeenAt().plus(TOUCH_EVERY))) query(tx -> { tx.touch(session.id(), now); return null; });
         return new Caller(OptionalLong.of(user.id()), user.name(), user.kind(), found.get().roles(), Via.SESSION,
                 Optional.of(session.id()), session.firstPassword());
@@ -129,9 +130,9 @@ abstract class Accounts implements Access {
         Tx.TokenRow token = found.get().token();
         Tx.UserRow user = found.get().user();
         Instant now = clock.instant();
-        if (token.revokedAt().isPresent()) throw AccessRefused.unauthenticated("token-revoked", "the token was revoked");
-        if (!now.isBefore(token.expiresAt())) throw AccessRefused.unauthenticated("token-expired", "the token expired");
-        if (user.blockedAt().isPresent()) throw AccessRefused.unauthenticated("blocked", "the user is blocked");
+        if (token.revokedAt().isPresent()) throw AccessRefused.unauthenticated(RefusalCode.TOKEN_REVOKED, "the token was revoked");
+        if (!now.isBefore(token.expiresAt())) throw AccessRefused.unauthenticated(RefusalCode.TOKEN_EXPIRED, "the token expired");
+        if (user.blockedAt().isPresent()) throw AccessRefused.unauthenticated(RefusalCode.BLOCKED, "the user is blocked");
         Instant before = now.minus(USE_EVERY);
         if (token.lastUsedAt().map(at -> !at.isAfter(before)).orElse(true)) query(tx -> { tx.used(id, now, before); return null; });
         return new Caller(OptionalLong.of(user.id()), user.name(), user.kind(), found.get().roles(), Via.TOKEN, Optional.of(id), false);
@@ -140,7 +141,7 @@ abstract class Accounts implements Access {
     /** The name a caller of the bridge declared, stripped; {@code unknown} when none; above {@link #ACTOR_MAX} characters a 400. */
     private static String declared(Optional<String> declaredActor) {
         String actor = declaredActor.map(String::strip).orElse("");
-        if (actor.length() > ACTOR_MAX) throw AccessRefused.of(400, "X-Rail8-Actor is at most " + ACTOR_MAX + " characters, was " + actor.length());
+        if (actor.length() > ACTOR_MAX) throw AccessRefused.of(400, RefusalCode.BAD_REQUEST, "X-Rail8-Actor is at most " + ACTOR_MAX + " characters, was " + actor.length(), Map.of());
         return actor.isEmpty() ? UNKNOWN_ACTOR : actor;
     }
 
@@ -249,19 +250,19 @@ abstract class Accounts implements Access {
 
     @Override
     public void changePassword(Actor by, String current, String next) {
-        long userId = by.user().orElseThrow(() -> AccessRefused.of(400, "only a user has a password"));
-        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, "a password is changed in a session"));
+        long userId = by.user().orElseThrow(() -> AccessRefused.of(400, RefusalCode.PASSWORD_NEEDS_USER, "only a user has a password", Map.of()));
+        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, RefusalCode.PASSWORD_NEEDS_SESSION, "a password is changed in a session", Map.of()));
         String given = Passwords.normalize(current);
         String chosen = Passwords.normalize(next);
         Tx.UserRow user = query(tx -> tx.user(userId, Tx.Lock.NONE)).orElseThrow(Accounts::sessionEnded);
-        Passwords.refusal(chosen, user.name(), given).ifPresent(why -> { throw AccessRefused.of(400, why); });
+        Passwords.refusal(chosen, user.name(), given).ifPresent(refused -> { throw refused; });
         HashPlaces.Place place = places.take(true).orElseThrow(AccessRefused::busy);
         try (place) {
             Instant now = clock.instant();
             int claimed = claim(user.name(), now);
             if (!(hash.matches(given, user.password().orElse(hash.dummy())) && user.password().isPresent())) {
                 throw refusal(user.name(), Optional.of(user), claimed, "wrong-password", by.remote(), now,
-                        AccessRefused.forbidden("wrong-password", "the current password is wrong", Set.of()));
+                        AccessRefused.forbidden(RefusalCode.WRONG_PASSWORD, "the current password is wrong", Map.of(), Set.of()));
             }
             String stored = hash.hash(chosen);
             transaction(tx -> {
@@ -279,7 +280,7 @@ abstract class Accounts implements Access {
 
     @Override
     public void logout(Actor by) {
-        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, "only a session logs out"));
+        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, RefusalCode.LOGOUT_NEEDS_SESSION, "only a session logs out", Map.of()));
         Instant now = clock.instant();
         transaction(tx -> {
             if (tx.endSession(session)) tx.audit(row(by, now, "logout", "user/" + by.name(), new JsonObject()));
@@ -321,16 +322,16 @@ abstract class Accounts implements Access {
 
     @Override
     public Optional<String> createUser(Actor by, String name, Kind kind, Set<Role> roles) {
-        if (!NAME.matcher(name).matches()) throw AccessRefused.of(400, "a name matches ^[a-z][a-z0-9._-]{1,63}$: " + name);
-        if (kind == Kind.NONE) throw AccessRefused.of(400, "a user is a person or a technical account");
+        if (!NAME.matcher(name).matches()) throw AccessRefused.of(400, RefusalCode.BAD_USER_NAME, "a name matches ^[a-z][a-z0-9._-]{1,63}$: " + name, Map.of("name", name));
+        if (kind == Kind.NONE) throw AccessRefused.of(400, RefusalCode.BAD_REQUEST, "a user is a person or a technical account", Map.of());
         if (kind == Kind.TECHNICAL && roles.contains(Role.ADMINISTRATOR)) throw technicalAdministrator();
         Optional<String> first = kind == Kind.PERSON ? Optional.of(Passwords.first(random)) : Optional.empty();
         Optional<String> stored = first.map(this::hashOnAPlace);
         Instant now = clock.instant();
         transaction(tx -> {
-            if (tx.userCount() >= USERS_MAX) throw AccessRefused.of(409, "the installation has " + USERS_MAX + " users, the most it holds");
+            if (tx.userCount() >= USERS_MAX) throw AccessRefused.of(409, RefusalCode.USERS_FULL, "the installation has " + USERS_MAX + " users, the most it holds", Map.of("max", USERS_MAX));
             long id = tx.insertUser(name, kind, stored, first.isPresent(), first.map(f -> now), now, by.name())
-                    .orElseThrow(() -> AccessRefused.of(409, "the name " + name + " is taken"));
+                    .orElseThrow(() -> AccessRefused.of(409, RefusalCode.NAME_TAKEN, "the name " + name + " is taken", Map.of("name", name)));
             for (Role role : sorted(roles)) tx.grant(id, role, now, by.name(), by.via());
             tx.audit(row(by, now, "user.create", "user/" + name, new JsonObject().put("kind", kind.id()).put("roles", ids(roles))));
             return null;
@@ -340,7 +341,7 @@ abstract class Accounts implements Access {
 
     @Override
     public RolesChanged changeRoles(Actor by, String name, Set<Role> add, Set<Role> remove) {
-        if (add.stream().anyMatch(remove::contains)) throw AccessRefused.of(400, "a role is either added or removed");
+        if (add.stream().anyMatch(remove::contains)) throw AccessRefused.of(400, RefusalCode.BAD_REQUEST, "a role is either added or removed", Map.of());
         Instant now = clock.instant();
         return transaction(tx -> {
             if (remove.contains(Role.ADMINISTRATOR)) tx.lockAdministrators();
@@ -369,7 +370,7 @@ abstract class Accounts implements Access {
         transaction(tx -> {
             tx.lockAdministrators();
             Tx.UserRow user = tx.user(name, Tx.Lock.UPDATE).orElseThrow(() -> noSuchUser(name));
-            if (by.user().equals(OptionalLong.of(user.id()))) throw AccessRefused.of(409, "nobody blocks themselves");
+            if (by.user().equals(OptionalLong.of(user.id()))) throw AccessRefused.of(409, RefusalCode.BLOCK_SELF, "nobody blocks themselves", Map.of());
             if (user.blockedAt().isPresent()) return null;
             boolean administrator = user.kind() == Kind.PERSON && roles(tx.grants(user.id())).contains(Role.ADMINISTRATOR);
             if (administrator && tx.unblockedAdministrators() <= 1) throw lastAdministrator();
@@ -395,7 +396,7 @@ abstract class Accounts implements Access {
     @Override
     public String resetPassword(Actor by, String name) {
         Tx.UserRow user = query(tx -> tx.user(name, Tx.Lock.NONE)).orElseThrow(() -> noSuchUser(name));
-        if (user.kind() != Kind.PERSON) throw AccessRefused.of(409, "a technical account has no password");
+        if (user.kind() != Kind.PERSON) throw AccessRefused.of(409, RefusalCode.TECHNICAL_HAS_NO_PASSWORD, "a technical account has no password", Map.of());
         String first = Passwords.first(random);
         String stored = hashOnAPlace(first);
         Instant now = clock.instant();
@@ -424,8 +425,8 @@ abstract class Accounts implements Access {
 
     @Override
     public Issued issueOwnToken(Actor by, String password, String name, OptionalInt days) {
-        long userId = by.user().orElseThrow(() -> AccessRefused.of(400, "only a person issues their own token"));
-        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, "a personal token is issued in a session"));
+        long userId = by.user().orElseThrow(() -> AccessRefused.of(400, RefusalCode.TOKEN_NEEDS_PERSON, "only a person issues their own token", Map.of()));
+        String session = by.credential().orElseThrow(() -> AccessRefused.of(400, RefusalCode.TOKEN_NEEDS_SESSION, "a personal token is issued in a session", Map.of()));
         checkToken(name, days);
         String given = Passwords.normalize(password);
         Tx.UserRow user = query(tx -> tx.user(userId, Tx.Lock.NONE)).orElseThrow(Accounts::sessionEnded);
@@ -435,7 +436,7 @@ abstract class Accounts implements Access {
             int claimed = claim(user.name(), now);
             if (!(hash.matches(given, user.password().orElse(hash.dummy())) && user.password().isPresent())) {
                 throw refusal(user.name(), Optional.of(user), claimed, "wrong-password", by.remote(), now,
-                        AccessRefused.forbidden("wrong-password", "the password is wrong", Set.of()));
+                        AccessRefused.forbidden(RefusalCode.WRONG_PASSWORD, "the password is wrong", Map.of(), Set.of()));
             }
             // forgiven on its own, so a 409 of the issue below does not undo the forgive of a right password
             transaction(tx -> {
@@ -458,7 +459,7 @@ abstract class Accounts implements Access {
         Instant now = clock.instant();
         if (tx.session(session).filter(s -> live(s.session(), now)).isEmpty()) throw sessionEnded();
         if (locked.generation() != read.generation()) {
-            throw AccessRefused.of(409, "the account changed while the password was checked: try again");
+            throw AccessRefused.of(409, RefusalCode.ACCOUNT_CHANGED, "the account changed while the password was checked: try again", Map.of());
         }
         return locked;
     }
@@ -469,8 +470,8 @@ abstract class Accounts implements Access {
         Instant now = clock.instant();
         return transaction(tx -> {
             Tx.UserRow account = tx.user(user, Tx.Lock.UPDATE).orElseThrow(() -> noSuchUser(user));
-            if (account.kind() != Kind.TECHNICAL) throw AccessRefused.of(409, "a person issues their own tokens");
-            if (account.blockedAt().isPresent()) throw AccessRefused.of(409, user + " is blocked");
+            if (account.kind() != Kind.TECHNICAL) throw AccessRefused.of(409, RefusalCode.PERSON_ISSUES_OWN_TOKENS, "a person issues their own tokens", Map.of());
+            if (account.blockedAt().isPresent()) throw AccessRefused.of(409, RefusalCode.USER_BLOCKED, user + " is blocked", Map.of("user", user));
             return issue(tx, by, account, name, days, now);
         });
     }
@@ -484,10 +485,12 @@ abstract class Accounts implements Access {
         List<Tx.TokenRow> unrevoked = tx.unrevokedTokens(user.id());
         Optional<Tx.TokenRow> named = unrevoked.stream().filter(t -> t.name().equals(name)).findFirst();
         if (named.isPresent() && now.isBefore(named.get().expiresAt())) {
-            throw AccessRefused.of(409, user.name() + " holds a live token named " + name);
+            throw AccessRefused.of(409, RefusalCode.TOKEN_NAME_TAKEN, user.name() + " holds a live token named " + name,
+                    Map.of("user", user.name(), "name", name));
         }
         if (unrevoked.stream().filter(t -> now.isBefore(t.expiresAt())).count() >= TOKENS_PER_USER) {
-            throw AccessRefused.of(409, user.name() + " holds " + TOKENS_PER_USER + " live tokens, the most a user holds");
+            throw AccessRefused.of(409, RefusalCode.TOKENS_FULL, user.name() + " holds " + TOKENS_PER_USER + " live tokens, the most a user holds",
+                    Map.of("user", user.name(), "max", TOKENS_PER_USER));
         }
         named.ifPresent(t -> tx.revokeToken(t.id(), now, by.name()));
         String id = Credentials.newId(random);
@@ -503,7 +506,7 @@ abstract class Accounts implements Access {
 
     /** A 400 for a token's name not of the form, or for days outside 1 to the ceiling as it is now. */
     private void checkToken(String name, OptionalInt days) {
-        if (!TOKEN_NAME.matcher(name).matches()) throw AccessRefused.of(400, "a token's name matches ^[a-z0-9][a-z0-9-]{0,63}$: " + name);
+        if (!TOKEN_NAME.matcher(name).matches()) throw AccessRefused.of(400, RefusalCode.BAD_TOKEN_NAME, "a token's name matches ^[a-z0-9][a-z0-9-]{0,63}$: " + name, Map.of("name", name));
         life(days, query(tx -> tx.ceiling(Tx.Lock.NONE)));
     }
 
@@ -511,20 +514,21 @@ abstract class Accounts implements Access {
     private static int life(OptionalInt days, int ceiling) {
         int life = days.orElse(ceiling(ceiling).defaultDays());
         if (life < 1 || life > ceiling) {
-            throw AccessRefused.of(400, "a token lives 1 to " + ceiling + " days, the installation's ceiling, not " + life);
+            throw AccessRefused.of(400, RefusalCode.TOKEN_LIFE, "a token lives 1 to " + ceiling + " days, the installation's ceiling, not " + life,
+                    Map.of("ceiling", ceiling, "days", life));
         }
         return life;
     }
 
     @Override
     public Tokens ownTokens(Caller who) {
-        return listed(OptionalLong.of(who.user().orElseThrow(() -> AccessRefused.of(400, "only a user holds tokens"))), Optional.empty());
+        return listed(OptionalLong.of(who.user().orElseThrow(() -> AccessRefused.of(400, RefusalCode.TOKENS_NEED_USER, "only a user holds tokens", Map.of()))), Optional.empty());
     }
 
     @Override
     public Tokens tokens(Optional<Duration> expiringWithin) {
         if (expiringWithin.filter(w -> w.isNegative() || w.isZero() || w.compareTo(Duration.ofDays(TOKEN_MAX_DAYS)) > 0).isPresent()) {
-            throw AccessRefused.of(400, "expiringWithin is above zero and at most P365D, not " + expiringWithin.get());
+            throw AccessRefused.of(400, RefusalCode.BAD_REQUEST, "expiringWithin is above zero and at most P365D, not " + expiringWithin.get(), Map.of());
         }
         return listed(OptionalLong.empty(), expiringWithin);
     }
@@ -565,7 +569,8 @@ abstract class Accounts implements Access {
 
     @Override
     public Ceiling changeCeiling(Actor by, int maxDays) {
-        if (maxDays < 1 || maxDays > TOKEN_MAX_DAYS) throw AccessRefused.of(400, "the ceiling is 1 to " + TOKEN_MAX_DAYS + " days, not " + maxDays);
+        if (maxDays < 1 || maxDays > TOKEN_MAX_DAYS) throw AccessRefused.of(400, RefusalCode.CEILING_RANGE, "the ceiling is 1 to " + TOKEN_MAX_DAYS + " days, not " + maxDays,
+                    Map.of("max", TOKEN_MAX_DAYS, "days", maxDays));
         Instant now = clock.instant();
         return transaction(tx -> {
             int from = tx.ceiling(Tx.Lock.UPDATE);
@@ -778,30 +783,30 @@ abstract class Accounts implements Access {
     }
 
     private static AccessRefused unknownCredential() {
-        return AccessRefused.unauthenticated("unknown-credential", "the credential is not known");
+        return AccessRefused.unauthenticated(RefusalCode.UNKNOWN_CREDENTIAL, "the credential is not known");
     }
 
     private static AccessRefused sessionEnded() {
-        return AccessRefused.unauthenticated("session-ended", "the session ended: log in again");
+        return AccessRefused.unauthenticated(RefusalCode.SESSION_ENDED, "the session ended: log in again");
     }
 
     private static AccessRefused loginRefused() {
-        return AccessRefused.unauthenticated("login-refused", "the name or the password is wrong");
+        return AccessRefused.unauthenticated(RefusalCode.LOGIN_REFUSED, "the name or the password is wrong");
     }
 
     private static AccessRefused noSuchUser(String name) {
-        return AccessRefused.of(404, "no user " + name);
+        return AccessRefused.of(404, RefusalCode.NO_USER, "no user " + name, Map.of("name", name));
     }
 
     private static AccessRefused noSuchToken(String id) {
-        return AccessRefused.of(404, "no token " + id);
+        return AccessRefused.of(404, RefusalCode.NO_TOKEN, "no token " + id, Map.of("id", id));
     }
 
     private static AccessRefused technicalAdministrator() {
-        return AccessRefused.of(409, "a technical account never holds the administrator role");
+        return AccessRefused.of(409, RefusalCode.TECHNICAL_ADMINISTRATOR, "a technical account never holds the administrator role", Map.of());
     }
 
     private static AccessRefused lastAdministrator() {
-        return AccessRefused.of(409, "at least one unblocked person holds the administrator role");
+        return AccessRefused.of(409, RefusalCode.LAST_ADMINISTRATOR, "at least one unblocked person holds the administrator role", Map.of());
     }
 }

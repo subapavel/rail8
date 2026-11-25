@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { PackagesError, type DeployBody } from '../api';
+import { refusalText } from '../../refusal';
 import type { FakeNodeRefusal } from '../fake';
+import { PACKAGE_WORDS } from '../refusals';
 import { DEPLOY_MS } from '../rules';
 import { httpWorld } from './httpWorld';
 import { fakeWorld, type Build, type CloneSeed, type Seed, type World } from './seed';
@@ -90,17 +92,28 @@ describe.each<[string, Build]>([
   });
 
   test.each<[number, FakeNodeRefusal]>([
-    [422, { status: 422, error: 'the package has problems', problems: ['flows/a.yaml: the step 1 names no type', 'endpoints/in.yaml: no such component'] }],
-    [500, { status: 500, error: 'the start of orders/a failed and was rolled back', problems: ['orders/a: port 8080 is taken'] }],
-    [409, { status: 409, error: 'another deploy runs on node-b' }],
-  ])('a %s of the node is passed on with its error and its problems, and nothing is deployed', async (status, refusal) => {
+    [
+      422,
+      {
+        status: 422,
+        error: "package 'orders' is invalid: 2 problem(s)",
+        code: 'package-invalid',
+        values: { package: 'orders', count: 2 },
+        problems: ['flows/a.yaml: the step 1 names no type', 'endpoints/in.yaml: no such component'],
+      },
+    ],
+    [500, { status: 500, error: 'the start of orders/a failed and was rolled back', code: 'flow-did-not-start', values: { flow: 'orders/a' }, problems: ['orders/a: port 8080 is taken'] }],
+    [409, { status: 409, error: 'another deploy runs on node-b', code: 'deploy-running', values: {} }],
+    [400, { status: 400, error: 'the node takes no such body' }],
+  ])('a %s of the node is passed on with its error, its code and values and its problems, and nothing is deployed', async (status, refusal) => {
     const { api } = await one(FLOWS, { deploys: refusal });
     const second = world!.id('orders', 'second');
+    const passed = { status, code: refusal.code ?? 'node-refused', values: refusal.values ?? {}, english: refusal.error, message: refusalText(refusal, PACKAGE_WORDS) };
 
     const checked = await refusalOf(api.deploy('orders', { commit: second, check: true }));
-    expect(checked).toMatchObject({ status, message: refusal.error, problems: refusal.problems });
+    expect(checked).toMatchObject({ ...passed, problems: refusal.problems });
     const deployed = await refusalOf(api.deploy('orders', { commit: second, check: false, expect: 'none' }));
-    expect(deployed).toMatchObject({ status, message: refusal.error });
+    expect(deployed).toMatchObject(passed);
     expect((await api.get('orders')).deployed).toMatchObject({ relation: 'none' });
   });
 
@@ -112,7 +125,12 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.deploy('orders', { commit: second, check: false, expect: checked.replaces }));
 
-    expect(refused).toMatchObject({ status: 412, message: expect.stringMatching(/^the node's commit changed since the check: .*; nothing was deployed$/) });
+    expect(refused).toMatchObject({
+      status: 412,
+      code: 'deploy-stale',
+      values: { expect: checked.replaces, records: world!.id('orders', 'first') },
+      english: expect.stringMatching(/^the node's commit changed since the check: .*; nothing was deployed$/),
+    });
     expect((await api.get('orders')).deployed).toMatchObject({ relation: 'behind', commit: world!.id('orders', 'first') });
   });
 

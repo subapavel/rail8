@@ -1,5 +1,6 @@
 import type { AuditRow } from '../audit';
 import { currentLanguage, textsIn } from '../language';
+import { refusalText } from '../refusal';
 import { uiFetch } from '../session';
 
 /** The five roles, in the order the screen lists them. */
@@ -112,8 +113,8 @@ export class UsersError extends Error {
 
 async function refusal(res: Response): Promise<UsersError> {
   try {
-    const body = (await res.json()) as { error?: unknown };
-    if (typeof body.error === 'string') return new UsersError(res.status, body.error);
+    const text = refusalText(await res.json());
+    if (text !== undefined) return new UsersError(res.status, text);
   } catch {
     // no JSON
   }

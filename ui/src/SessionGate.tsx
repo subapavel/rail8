@@ -71,6 +71,9 @@ export function Allowed({ action, children }: { action: string; children: ReactE
 }
 
 /** `words`, and when to try again when the node said so. */
+/** `words` ending in a full stop, unless they end in one already. */
+const stopped = (words: string) => (/[.!?]$/.test(words) ? words : `${words}.`);
+
 const waited = ({ t }: Texts, words: string, retryAfter?: string) =>
   retryAfter === undefined ? words : `${words} ${t('frame.session.retryAfter', { seconds: retryAfter })}`;
 
@@ -183,7 +186,7 @@ function PasswordChange({ client }: { client: SessionClient }) {
           await client.changePassword(current, next);
         } catch (error) {
           if (!(error instanceof PasswordRefused)) throw error;
-          setRefused(error.code === 'wrong-password' ? t('frame.password.wrong') : waited(texts, `${say(texts, error.reason)}.`, error.retryAfter));
+          setRefused(error.code === 'wrong-password' ? t('frame.password.wrong') : waited(texts, stopped(say(texts, error.reason)), error.retryAfter));
         }
         return true;
       }}
@@ -276,7 +279,7 @@ function gated(texts: Texts, client: SessionClient, state: SessionState, childre
             type="error"
             showIcon
             title={t('frame.session.unread')}
-            description={waited(texts, `${say(texts, state.error)}.`, state.retryAfter)}
+            description={waited(texts, stopped(say(texts, state.error)), state.retryAfter)}
             action={
               <Button size="small" onClick={() => void client.start()}>
                 {t('frame.tryAgain')}

@@ -1,5 +1,7 @@
-import { msg, say, type Message, type Texts } from '../language';
-import { ADDRESS_REFUSALS, MAX_ADDRESS, NEW_PACKAGE_REFUSALS } from './rules';
+import { SERVER_CODES } from '../../server/refusal';
+import { msg, type Message, type Texts } from '../language';
+import { NOT_TRANSLATED, refusalText } from '../refusal';
+import { ADDRESS_REFUSALS, MAX_ADDRESS, NEW_PACKAGE_REFUSALS, PACKAGE_REFUSAL_CODES, type Refused } from './rules';
 
 /** The words of each refusal of an address that Get a package finds as the author types, in the UI's languages. */
 export const ADDRESS_TEXTS: Readonly<Partial<Record<keyof typeof ADDRESS_REFUSALS, Message>>> = {
@@ -31,12 +33,27 @@ export const NEW_PACKAGE_TEXTS: Readonly<Partial<Record<keyof typeof NEW_PACKAGE
   name: msg('packages.new.name.refused'),
 };
 
+/** The message id of the packages' own text for the refusal `code`, in `ui/locales/<language>/packages.json`. */
+export const packageRefusalKey = (code: string) => `packages.refusal.${code}`;
+
+/** The entries of `words`, the words of some refusals of `refusals`, by the refusals' codes. */
+const byCode = <K extends string>(refusals: Readonly<Record<K, { readonly code: string }>>, words: Readonly<Partial<Record<K, Message>>>) =>
+  (Object.entries(words) as [K, Message][]).map(([key, message]) => [refusals[key].code, message] as const);
+
+const shell = new Set<string>(SERVER_CODES);
+
 /**
- * `error`, one of `refusals` as the rules word it in English for the development server too, in `texts`' language when
- * `words` holds that refusal; any other text as it is.
+ * The words of every refusal of the packages' records by its code: the packages' own text, `packages.refusal.<code>`,
+ * or for a refusal the dialogs find as the author types the words they show. A code of the UI's server is worded by the
+ * shell, and a code left in English has no words.
  */
-export function refusalIn<K extends string>(texts: Texts, refusals: Readonly<Record<K, string>>, words: Readonly<Partial<Record<K, Message>>>, error: string): string {
-  const name = (Object.keys(refusals) as K[]).find((key) => refusals[key] === error);
-  const message = name === undefined ? undefined : words[name];
-  return message === undefined ? error : say(texts, message);
+export const PACKAGE_WORDS: Readonly<Record<string, Message>> = Object.fromEntries([
+  ...PACKAGE_REFUSAL_CODES.filter((code) => !shell.has(code) && !NOT_TRANSLATED.has(code)).map((code) => [code, msg(packageRefusalKey(code))] as const),
+  ...byCode(ADDRESS_REFUSALS, ADDRESS_TEXTS),
+  ...byCode(NEW_PACKAGE_REFUSALS, NEW_PACKAGE_TEXTS),
+]);
+
+/** `refused`, a refusal of the packages' rules, in `texts`' language, by its code. */
+export function refusedIn(texts: Texts, refused: Refused): string {
+  return refusalText(refused, PACKAGE_WORDS, texts.language) ?? refused.error;
 }

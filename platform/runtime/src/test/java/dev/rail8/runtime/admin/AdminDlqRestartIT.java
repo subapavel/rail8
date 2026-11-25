@@ -406,7 +406,7 @@ class AdminDlqRestartIT {
 
         Answer gone = post(in.id(), "restart");
         assertEquals(404, gone.status(), "the route is gone: " + gone.body());
-        assertEquals(new JsonObject().put("error", "no such route"), gone.json(), "the router's 404, not a handler's");
+        assertEquals(new JsonObject().put("error", "no such route").put("code", "no-route").put("values", new JsonObject()), gone.json(), "the router's 404, not a handler's");
         assertEquals(Optional.of(row), dlqRow(in.id()), "its DLQ row kept");
         assertEquals(0, count("select count(*) from work"), "nothing written");
 

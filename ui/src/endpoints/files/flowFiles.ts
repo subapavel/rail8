@@ -1,6 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
+import { refusalBody } from '../../../server/refusal.ts';
 import { readFlow, saysFlow } from '../flows/flowYaml.ts';
 import { contextOf, surveyOf, type FlowContext } from './flowContext.ts';
 import {
@@ -82,7 +83,7 @@ async function survey(root: string, signal?: AbortSignal) {
 export function flowFiles(options: FlowFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
   const rootOf = async () => {
-    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (options.workspace === undefined) throw new Refusal(404, 'no-workspace', 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     return realpath(options.workspace);
   };
 
@@ -98,7 +99,7 @@ export function flowFiles(options: FlowFilesOptions) {
     const bytes = await readFile(file, { signal });
     const text = bytes.toString('utf8');
     const flow = readFlow(text);
-    if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, `${path} is not a flow file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, 'not-flow-file', `${path} is not a flow file`, { path }); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const { truncated, ...found } = await survey(root, signal);
     const context = contextOf(found, path, truncated);
     return { file: { path, text, editable: options.editable, context } satisfies FlowFile, etag: etagOf(bytes) };
@@ -107,12 +108,12 @@ export function flowFiles(options: FlowFilesOptions) {
   /** The flow text a save or a create sends, refused when it is too large, no YAML or no flow. */
   const flowText = async (req: IncomingMessage) => {
     const sent = await jsonBody(req);
-    if (!isRecord(sent) || typeof sent.text !== 'string') throw new Refusal(400, 'a save sends {"text": "..."}');
+    if (!isRecord(sent) || typeof sent.text !== 'string') throw new Refusal(400, 'bad-request', 'a save sends {"text": "..."}');
     const text = sent.text;
-    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'file-too-large', 'the text is over 1 MiB', { max: MAX_FILE_BYTES }); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const flow = readFlow(text);
-    if (flow.kind === 'problem') throw new Refusal(422, flow.message);
-    if (flow.kind === 'other') throw new Refusal(422, 'the text is not a flow'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (flow.kind === 'problem') throw new Refusal(422, 'flow-file-refused', flow.message);
+    if (flow.kind === 'other') throw new Refusal(422, 'not-flow-text', 'the text is not a flow'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     return text;
   };
 
@@ -122,24 +123,24 @@ export function flowFiles(options: FlowFilesOptions) {
   };
 
   const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
-    if (!options.editable) throw new Refusal(403, 'this server shows flow files read-only'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (!options.editable) throw new Refusal(403, 'read-only', 'this server shows flow files read-only'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'bad-request', 'a save sends If-Match or If-None-Match, not both'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     if (ifNoneMatch === '*') return { ...(await create(req, path, lock)), created: true };
-    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match, or creates the file with If-None-Match: *'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (ifMatch === undefined) throw new Refusal(428, 'version-required', 'a save names the version it changes in If-Match, or creates the file with If-None-Match: *'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const text = await flowText(req);
     const file = await locate(await rootOf(), path, isYaml, 'flow file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file);
     const current = bytes.toString('utf8');
     const old = readFlow(current);
-    if (old.kind === 'other' || (old.kind === 'problem' && !saysFlow(current))) throw new Refusal(404, `${path} is not a flow file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (old.kind === 'other' || (old.kind === 'problem' && !saysFlow(current))) throw new Refusal(404, 'not-flow-file', `${path} is not a flow file`, { path }); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     // under the lock: a file that is gone, or a path that now leads to another file, has changed too
     const unchanged = async () => {
       const now = await locate(await rootOf(), path, isYaml, 'flow file').catch(() => undefined); // untranslated: the development server refuses with this text, as the node does, and it has no translations
-      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     };
-    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     if (!bytes.equals(Buffer.from(text, 'utf8'))) await replaceFile(lock, file, text, unchanged);
     return { ...(await read(path)), created: false };
   };
@@ -152,7 +153,7 @@ export function flowFiles(options: FlowFilesOptions) {
     }
     const refused = foreign(req.headers, options.origins, 'the working folder'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (refused !== undefined) {
-      send(res, 403, { error: refused });
+      send(res, 403, refusalBody('foreign-origin', refused));
       return;
     }
     const path = url.pathname.slice(PREFIX.length + 1);
@@ -172,7 +173,7 @@ export function flowFiles(options: FlowFilesOptions) {
           return done;
         });
         send(res, created ? 201 : 200, file, etag);
-      } else send(res, 405, { error: 'the flow files take GET, and PUT of one file' }); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      } else send(res, 405, refusalBody('method-not-allowed', 'the flow files take GET, and PUT of one file')); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     };
     answer().catch((error: unknown) => {
       if (!res.destroyed) sendFailure(res, error);

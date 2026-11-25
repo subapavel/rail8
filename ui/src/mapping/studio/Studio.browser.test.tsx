@@ -105,8 +105,7 @@ describe('the studio', () => {
 
     await expect.element(page.getByText('Opening mappings/gone…')).toBeVisible();
     answer();
-    await expect.element(page.getByRole('heading', { name: /Not found/ })).toBeVisible();
-    await expect.element(page.getByText('no mapping mappings/gone')).toBeVisible();
+    await expect.element(page.getByRole('heading', { name: 'No such mapping or folder in the working folder.' })).toBeVisible();
     await page.getByRole('button', { name: 'Retry' }).click();
     await expect.poll(() => getMapping.mock.calls.length).toBe(2);
   });
@@ -795,7 +794,7 @@ describe('Edit, Save and Discard', () => {
 
     await button('Save').click();
 
-    await expect.element(page.getByRole('heading', { name: /Model refused/ })).toBeVisible();
+    await expect.element(page.getByRole('heading', { name: 'The mapping is refused; its problems are listed.' })).toBeVisible();
     await expect.element(page.getByRole('list', { name: 'Save diagnostics' })).toHaveTextContent('error unknown-function: no such function');
     await expect.element(page.getByRole('heading', { name: /saved/ })).not.toBeInTheDocument();
   });

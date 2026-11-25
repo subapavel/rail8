@@ -1,4 +1,5 @@
 import { msg, type Label, type Message } from './language';
+import { refusalText } from './refusal';
 /**
  * Who uses the page, and the page's `fetch`.
  *
@@ -141,9 +142,8 @@ async function codeOf(response: Response): Promise<string | null> {
 
 async function errorOf(response: Response): Promise<Label> {
   try {
-    const body = (await response.clone().json()) as { error?: unknown; detail?: unknown };
-    if (typeof body.error === 'string') return body.error;
-    if (typeof body.detail === 'string') return body.detail;
+    const text = refusalText(await response.clone().json());
+    if (text !== undefined) return text;
   } catch {
     // no JSON
   }

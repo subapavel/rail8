@@ -24,6 +24,7 @@ import dev.rail8.core.record.RecordingPolicy;
 import dev.rail8.core.record.Snapshot;
 import dev.rail8.core.record.StepLog;
 import dev.rail8.runtime.git.CredentialsCheck;
+import dev.rail8.runtime.refusal.RefusalCode;
 import dev.rail8.testkit.InMemoryBlobStore;
 import io.vertx.core.Context;
 import io.vertx.core.Future;
@@ -52,6 +53,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -232,6 +234,17 @@ class AdminServerTest {
         assertTrue(a.contentType().startsWith("application/json"), what + ": " + a.contentType());
         String error = a.error();
         assertTrue(error != null && !error.isBlank(), what + ": {error} names the failure: " + a.body());
+        assertCoded(a.json(), what);
+    }
+
+    /** A refusal's body carries one of the node's codes and its {@code values}, an object of strings and numbers. */
+    static void assertCoded(JsonObject body, String what) {
+        String code = body.getString("code");
+        assertTrue(Arrays.stream(RefusalCode.values()).anyMatch(known -> known.code().equals(code)), what + ": a code of the node: " + body);
+        assertTrue(body.getValue("values") instanceof JsonObject, what + ": the values are an object: " + body);
+        for (Object value : body.getJsonObject("values").getMap().values()) {
+            assertTrue(value instanceof String || value instanceof Number, what + ": a value is a string or a number: " + body);
+        }
     }
 
     // --- GET /admin/messages/{id}
@@ -888,7 +901,7 @@ class AdminServerTest {
             for (String auth : wrong) {
                 Answer a = get(path, auth);
                 assertJsonError(401, a, path + " with Authorization " + auth);
-                assertEquals(Set.of("error", "code"), a.json().fieldNames(), "nothing but the error and its code: " + a.body());
+                assertEquals(Set.of("error", "code", "values"), a.json().fieldNames(), "nothing but the error, its code and its values: " + a.body());
                 assertEquals(auth == null ? "no-credential" : "unknown-credential", a.json().getString("code"), a.body().toString());
             }
             assertEquals(200, admin(path).status(), path + " with the token");

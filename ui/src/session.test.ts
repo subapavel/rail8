@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { msg, say, textsIn } from './language';
+import { describe, expect, it, vi } from 'vitest';
+import { chooseLanguage, msg, say, textsIn } from './language';
 import { HELD_MAX, HELD_MAX_BYTES, PasswordRefused, reasonOf, sessionClient, WAIT_MS, type Me } from './session';
 
 const ME: Me = {
@@ -91,7 +91,7 @@ describe('the start', () => {
     let start = w.client.start();
     await w.answer('/session', json(503, { error: 'the node is busy', code: 'busy' }, { 'retry-after': '1' }));
     await start;
-    expect(w.client.state()).toEqual({ kind: 'failed', error: 'the node is busy', retryAfter: '1' });
+    expect(w.client.state()).toEqual({ kind: 'failed', error: 'The node is busy; nothing was done. Try again.', retryAfter: '1' });
 
     start = w.client.start();
     w.open('/session')[0]!.fail(new TypeError('offline'));
@@ -216,7 +216,7 @@ describe('uiFetch', () => {
 
     const wrong = w.client.changePassword('nope', 'a new long password');
     await w.answer('/admin/me/password', json(403, { error: 'the current password is wrong', code: 'wrong-password' }));
-    await expect(wrong).rejects.toEqual(new PasswordRefused('wrong-password', 'the current password is wrong'));
+    await expect(wrong).rejects.toEqual(new PasswordRefused('wrong-password', 'The password is wrong.'));
     expect(w.client.state()).toMatchObject({ kind: 'asking' });
 
     const change = w.client.changePassword('first', 'a new long password');
@@ -229,6 +229,24 @@ describe('uiFetch', () => {
     expect(w.client.state()).toEqual({ kind: 'in', me: { ...ME, session: NEXT } });
     await w.answer('/admin/messages', json(200, []));
     expect((await call).status).toBe(200);
+  });
+
+  it("gives a refused password change in the UI's language by its code, and one of an unknown code in the node's English", async () => {
+    const w = world();
+    await w.started();
+    vi.stubGlobal('document', { documentElement: {} });
+    chooseLanguage('cs');
+    try {
+      const short = w.client.changePassword('first', 'short');
+      await w.answer('/admin/me/password', json(400, { error: 'a password has 12 to 128 characters', code: 'password-length', values: { min: 12, max: 128 } }));
+      await expect(short).rejects.toEqual(new PasswordRefused('password-length', 'Heslo má 12 až 128 znaků.'));
+      const unknown = w.client.changePassword('first', 'a new long password');
+      await w.answer('/admin/me/password', json(400, { error: 'the node says no', code: 'not-a-code-of-the-ui', values: {} }));
+      await expect(unknown).rejects.toEqual(new PasswordRefused('not-a-code-of-the-ui', 'the node says no'));
+    } finally {
+      chooseLanguage('en');
+      vi.unstubAllGlobals();
+    }
   });
 
   it('reloads after a password change when GET /session names another session or still the first password', async () => {

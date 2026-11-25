@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import { isIPv4 } from 'node:net';
+import { refusalBody, type RefusalValues } from './refusal.ts';
 
 // The UI server's session: which credential every call to the node carries, the gate in front of the proxy and the
 // halves, and the routes a page logs in and out with. Plain node:http, so a UI server outside development can mount it.
@@ -208,18 +209,17 @@ export function isSessionRefused(error: unknown): error is SessionRefused {
 }
 
 /**
- * The body of one of the UI server's own refusals: `{error, code}`, or under `/api` problem+json of the type
- * `urn:rail8:ui:problem:<code>`, which names the code there, as the mapping studio's contract gives a problem no other
- * member.
+ * The body of one of the UI server's refusals: `{error, code, values}`, or under `/api` problem+json of the type
+ * `urn:rail8:ui:problem:<code>`, with the same `code` and `values`.
  */
-function refusalBody(status: number, code: string, error: string, problem: boolean): { type: string; body: string } {
-  if (!problem) return { type: 'application/json', body: JSON.stringify({ error, code }) };
+function answerOf(status: number, code: string, error: string, problem: boolean, values: RefusalValues): { type: string; body: string } {
+  if (!problem) return { type: 'application/json', body: JSON.stringify(refusalBody(code, error, values)) };
   const title = status === 401 ? 'Unauthenticated' : status === 409 ? 'Session changed' : status === 403 ? 'Forbidden' : 'Refused';
-  return { type: 'application/problem+json', body: JSON.stringify({ type: `urn:rail8:ui:problem:${code}`, title, status, detail: error }) };
+  return { type: 'application/problem+json', body: JSON.stringify({ type: `urn:rail8:ui:problem:${code}`, title, status, detail: error, code, values }) };
 }
 
-function refuse(res: ServerResponse, status: number, code: string, error: string, problem = false, headers: Record<string, string> = {}) {
-  const { type, body } = refusalBody(status, code, error, problem);
+function refuse(res: ServerResponse, status: number, code: string, error: string, problem = false, headers: Record<string, string> = {}, values: RefusalValues = {}) {
+  const { type, body } = answerOf(status, code, error, problem, values);
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', ...headers }).end(body);
 }
 
@@ -284,9 +284,18 @@ function jsonOf(bytes: Buffer | null): unknown {
   }
 }
 
-/** The `code` of a node's refusal, from `{error, code}` or from problem+json. */
+/** The `code` of a node's refusal, from `{error, code, values}` or from problem+json. */
 function codeOf(json: unknown): string {
   return isRecord(json) && typeof json.code === 'string' ? json.code : 'unknown';
+}
+
+/** The `values` of a node's refusal: its strings and numbers, by name. */
+function valuesOf(json: unknown): RefusalValues {
+  const values: Record<string, string | number> = {};
+  if (isRecord(json) && isRecord(json.values)) {
+    for (const [name, value] of Object.entries(json.values)) if (typeof value === 'string' || typeof value === 'number') values[name] = value;
+  }
+  return values;
 }
 
 /** The node's client for one request, as the gate admitted it. */
@@ -350,13 +359,13 @@ function meOf(me: Record<string, unknown>, session: string | null): Record<strin
 export const isJson = (contentType: string | undefined) => contentType?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
 
 /** The login's body, or the status and code of its refusal. */
-async function loginOf(req: IncomingMessage): Promise<{ name: string; password: string } | { status: number; code: string; error: string }> {
+async function loginOf(req: IncomingMessage): Promise<{ name: string; password: string } | { status: number; code: string; error: string; values?: RefusalValues }> {
   if (!isJson(req.headers['content-type'])) return { status: 415, code: 'unsupported-media-type', error: 'a login is application/json' };
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > LOGIN_MAX_BYTES) return { status: 413, code: 'too-large', error: `a login is at most ${LOGIN_MAX_BYTES} bytes` };
+    if (size > LOGIN_MAX_BYTES) return { status: 413, code: 'too-large', error: `a login is at most ${LOGIN_MAX_BYTES} bytes`, values: { max: LOGIN_MAX_BYTES } };
     chunks.push(chunk);
   }
   const body = jsonOf(Buffer.concat(chunks));
@@ -428,15 +437,15 @@ export function uiSession(options: UiSessionOptions) {
 
   const passOn = (res: ServerResponse, answer: { status: number; json: unknown; retryAfter: string | null }, headers: Record<string, string> = {}) => {
     const error = isRecord(answer.json) && typeof answer.json.error === 'string' ? answer.json.error : `the node answered ${answer.status}`;
-    refuse(res, answer.status, codeOf(answer.json), error, false, { ...(answer.retryAfter === null ? {} : { 'retry-after': answer.retryAfter }), ...headers });
+    refuse(res, answer.status, codeOf(answer.json), error, false, { ...(answer.retryAfter === null ? {} : { 'retry-after': answer.retryAfter }), ...headers }, valuesOf(answer.json));
   };
 
   const login = async (req: IncomingMessage, res: ServerResponse) => {
     if (mode.kind === 'token') return refuse(res, 404, 'token-mode', `this UI server runs with ${mode.variable} and has no login`);
     const body = await loginOf(req);
-    if ('status' in body) return refuse(res, body.status, body.code, body.error);
+    if ('status' in body) return refuse(res, body.status, body.code, body.error, false, {}, body.values);
     const sent = JSON.stringify({ name: body.name, password: body.password, device: heldDevice(mode, req.headers) });
-    if (Buffer.byteLength(sent, 'utf8') > LOGIN_MAX_BYTES) return refuse(res, 413, 'too-large', `a login is at most ${LOGIN_MAX_BYTES} bytes`);
+    if (Buffer.byteLength(sent, 'utf8') > LOGIN_MAX_BYTES) return refuse(res, 413, 'too-large', `a login is at most ${LOGIN_MAX_BYTES} bytes`, false, {}, { max: LOGIN_MAX_BYTES });
     const answer = await call(res, '/admin/sessions', {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json' },

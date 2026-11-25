@@ -134,7 +134,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server */
+                /** @description read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -339,7 +339,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server */
+                /** @description read-only: the working folder is shown read-only; or foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -463,7 +463,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description foreign-origin: the request does not come from a page of this server */
+                /** @description foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -568,7 +568,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description foreign-origin: the request does not come from a page of this server */
+                /** @description foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -682,7 +682,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description foreign-origin: the request does not come from a page of this server */
+                /** @description foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -785,7 +785,7 @@ export interface paths {
                         "application/problem+json": components["schemas"]["Problem"];
                     };
                 };
-                /** @description foreign-origin: the request does not come from a page of this server */
+                /** @description foreign-origin: the request does not come from a page of this server; or not-allowed, session-required or password-change-required (urn:rail8:admin:problem:forbidden): the node refuses the caller the mapping module */
                 403: {
                     headers: {
                         [name: string]: unknown;
@@ -943,6 +943,11 @@ export interface components {
             /** Format: int32 */
             status: number;
             detail: string;
+            /** @enum {string} */
+            code: "invalid-workspace-path" | "malformed-json" | "invalid-request" | "malformed-input" | "model-refused" | "not-found" | "read-only" | "foreign-origin" | "mapping-exists" | "too-large" | "unsupported-media-type" | "mapping-changed" | "node-unavailable" | "busy" | "not-allowed" | "session-required" | "password-change-required";
+            values: {
+                [key: string]: string | number;
+            };
         };
         RefreshResponse: {
             model: components["schemas"]["mapping-model.schema"];
@@ -965,6 +970,11 @@ export interface components {
             /** Format: int32 */
             status: number;
             detail: string;
+            /** @constant */
+            code: "model-refused";
+            values: {
+                [key: string]: string | number;
+            };
             diagnostics: components["schemas"]["DiagnosticDto"][];
         };
         RuntimeErrorDto: {

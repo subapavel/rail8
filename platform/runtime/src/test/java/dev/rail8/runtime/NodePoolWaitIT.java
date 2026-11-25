@@ -575,7 +575,7 @@ class NodePoolWaitIT {
 
     static void assertBusy(HttpResponse<String> answer, String what) {
         assertEquals(503, answer.statusCode(), what + ": a request the pool refused is retryable, 503: " + answer.body());
-        assertEquals(new JsonObject().put("error", BUSY), new JsonObject(answer.body()), what + ": the fixed refusal body");
+        assertEquals(new JsonObject().put("error", BUSY).put("code", "pool-busy").put("values", new JsonObject()), new JsonObject(answer.body()), what + ": the fixed refusal body");
     }
 
     /**
@@ -637,7 +637,7 @@ class NodePoolWaitIT {
             assertEquals(1, count("select count(*) from dlq where id = $1", id), "the refused retry kept its row");
             assertEquals(0, count("select count(*) from work where id = $1", id), "and queued nothing for it");
             HttpResponse<String> retried = post(client, node.adminPort(), "/admin/dlq/" + id + "/retry");
-            assertTrue(retried.statusCode() != 503 && !new JsonObject(retried.body()).equals(new JsonObject().put("error", BUSY)) && retried.body().contains(id),
+            assertTrue(retried.statusCode() != 503 && !new JsonObject(retried.body()).equals(new JsonObject().put("error", BUSY).put("code", "pool-busy").put("values", new JsonObject())) && retried.body().contains(id),
                     "witness: once the pool is free the route answers the same retry itself, naming the message: " + retried.statusCode() + " " + retried.body());
         }
     }

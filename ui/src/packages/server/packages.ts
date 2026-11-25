@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isSessionRefused } from '../../../server/session.ts';
 import { MAX_FILE_BYTES, Refusal } from '../../../server/workingFolder.ts';
 import type { Busy, Commit, Consumer, Deployed, PackageList, PackageRow, PinRelation, Pool, PoolNode, UsedBy } from '../api.ts';
-import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS } from '../rules.ts';
+import { isRepositoryName, isSaveTemporary, manifestOf, MAX_PACKAGES, REASONS, type Refused } from '../rules.ts';
 import { holds, LOG_FORMAT, parseLog, parseStatus, read, type Status } from './git.ts';
 import type { NodeRead, PoolRead } from './node.ts';
 import type { Runner } from './runner.ts';
@@ -31,7 +31,7 @@ const exists = (path: string) => lstat(path).then(() => true, (error: unknown) =
  * folder itself, and it holds `package.yaml` at its root. A symbolic link is no package: a package is a folder itself.
  * Only a `package.yaml` that is not there makes it no package; any other failure to look at it rejects.
  */
-export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'name' | 'isSymbolicLink'>): Promise<{ clone: string } | { reason: string }> {
+export async function folderOf(git: Runner, root: string, entry: Pick<Dirent, 'name' | 'isSymbolicLink'>): Promise<{ clone: string } | { reason: Refused }> {
   if (!isRepositoryName(entry.name)) return { reason: REASONS.name };
   const folder = join(root, entry.name);
   if (entry.isSymbolicLink()) return { reason: REASONS.link };
@@ -252,7 +252,7 @@ export async function listPackages(git: Runner, root: string, node: NodeState): 
       folders.slice(i, i + AT_ONCE).map(async (entry): Promise<{ row: PackageRow } | { reason: string }> => {
         try {
           const found = await folderOf(git, root, entry);
-          return 'reason' in found ? found : { row: (await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone))).row };
+          return 'reason' in found ? { reason: found.reason.error } : { row: (await rowOf(git, found.clone, entry.name, node, await statusOf(git, found.clone))).row };
         } catch (error) {
           if ((error instanceof Refusal && error.status === 503) || isSessionRefused(error)) throw error;
           return { reason: `git could not read it: ${error instanceof Error ? error.message : String(error)}` };

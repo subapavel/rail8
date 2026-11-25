@@ -3,8 +3,8 @@ import { useId, useState } from 'react';
 import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { PackagesError, type PackagesApi } from './api';
-import { NEW_PACKAGE_TEXTS, refusalIn } from './refusals';
-import { NEW_PACKAGE_REFUSALS, newPackageBodyOf } from './rules';
+import { refusedIn } from './refusals';
+import { newPackageBodyOf } from './rules';
 
 export interface NewPackageDialogProps {
   api: PackagesApi;
@@ -31,7 +31,6 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
   const ids = useId();
   const texts = useText();
   const { t, rich } = texts;
-  const refusal = (error: string) => refusalIn(texts, NEW_PACKAGE_REFUSALS, NEW_PACKAGE_TEXTS, error);
   const making = shown.kind === 'making';
   // each field's own refusal: the other field is given a name the rule takes, so only this one's is found
   const repositoryError = repository === '' ? null : newPackageBodyOf({ repository, name: 'x' });
@@ -115,7 +114,7 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
             htmlFor={`${ids}-repository`}
             required
             validateStatus={repositoryError !== null && 'error' in repositoryError ? 'error' : undefined}
-            help={repositoryError !== null && 'error' in repositoryError ? refusal(repositoryError.error) : t('packages.new.repository.help')}
+            help={repositoryError !== null && 'error' in repositoryError ? refusedIn(texts, repositoryError) : t('packages.new.repository.help')}
           >
             <Input
               id={`${ids}-repository`}
@@ -134,7 +133,7 @@ export function NewPackageDialog({ api, onPackage, onMade, onClose }: NewPackage
             required
             style={{ marginBottom: 0 }}
             validateStatus={nameError !== null && 'error' in nameError ? 'error' : undefined}
-            help={nameError !== null && 'error' in nameError ? refusal(nameError.error) : t('packages.new.name.help')}
+            help={nameError !== null && 'error' in nameError ? refusedIn(texts, nameError) : t('packages.new.name.help')}
           >
             <Input
               id={`${ids}-name`}

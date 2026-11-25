@@ -2,19 +2,20 @@ import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { etagOf, Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { Dependency, LockBody, LockedPin } from '../api.ts';
-import { candidateOf, declaredOf, dependencyOf, LOCK_LIMITS, LOCK_REFUSALS, lockBodyOf as lockBodyRules, lockedPinsOf, lockStillHolds, manifestOf, pinsOf, READ_LIMIT } from '../rules.ts';
+import { BUILD_CLI, candidateOf, declaredOf, dependencyOf, LOCK_LIMITS, LOCK_REFUSALS, lockBodyOf as lockBodyRules, lockedPinsOf, lockStillHolds, manifestOf, PACKAGE_REFUSALS, pinsOf, READ_LIMIT, type Refused } from '../rules.ts';
 import { formatted } from './formatter.ts';
 import { read } from './git.ts';
 import type { NodeState } from './packages.ts';
+import { refusal } from './refused.ts';
 import type { Runner } from './runner.ts';
 
-/** A lock that `rail8 lock` refused or failed: its status, its error, its `problem:` lines, and what it said otherwise. */
+/** A lock that `rail8 lock` refused or failed: its status, its refusal, its `problem:` lines, and what it said otherwise. */
 export class LockRefused extends Refusal {
   readonly problems: string[] | undefined;
   readonly output: string | undefined;
 
-  constructor(status: number, message: string, problems?: string[], output?: string) {
-    super(status, message);
+  constructor(status: number, refused: Refused, problems?: string[], output?: string) {
+    super(status, refused.code, refused.error, refused.values);
     this.problems = problems;
     this.output = output;
   }
@@ -23,7 +24,7 @@ export class LockRefused extends Refusal {
 /** `body` as a lock takes it, refused as {@link lockBodyRules} refuses it. */
 export function lockBodyOf(body: unknown): LockBody {
   const found = lockBodyRules(body);
-  if ('error' in found) throw new Refusal(found.status, found.error);
+  if ('error' in found) throw refusal(found.status, found);
   return found;
 }
 
@@ -33,7 +34,7 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'E
 async function bytesOf(file: string): Promise<Buffer | null> {
   const info = await stat(file).catch((error: unknown) => (missing(error) ? null : Promise.reject(error)));
   if (info === null || !info.isFile()) return null;
-  if (info.size > READ_LIMIT) throw new Refusal(413, `${file.slice(file.lastIndexOf('/') + 1)} is over 1 MiB, the read limit`);
+  if (info.size > READ_LIMIT) throw refusal(413, PACKAGE_REFUSALS.overReadLimit({ path: file.slice(file.lastIndexOf('/') + 1) }));
   return readFile(file);
 }
 
@@ -125,29 +126,30 @@ export function lockPackage(git: Runner, lock: WorkingFolderLock, cli: string, c
   return lock(async () => {
     // what the node runs is no part of the check, so the node is not read while the lock is held
     const now = await dependenciesOf(git, clone, repository, null);
-    if (!lockStillHolds(body, now)) throw new Refusal(412, LOCK_REFUSALS.stale);
+    if (!lockStillHolds(body, now)) throw refusal(412, LOCK_REFUSALS.stale);
     for (const d of now.dependencies) {
       const several = now.several.get(d.name);
-      if (several !== undefined) throw new Refusal(409, LOCK_REFUSALS.several(`${d.name}@${d.version}`, several));
+      if (several !== undefined) throw refusal(409, LOCK_REFUSALS.several({ dependency: `${d.name}@${d.version}`, folders: several.join(', ') }));
     }
+    const missingCli = LOCK_REFUSALS.missing({ cli, build: BUILD_CLI });
     const ran = await git.run({
       args: ['lock', clone, '--deps', dirname(clone)],
       mode: 'write',
       limits: LOCK_LIMITS,
-      program: { file: cli, name: 'rail8 lock', missing: LOCK_REFUSALS.missing(cli) },
+      program: { file: cli, name: 'rail8 lock', missing: missingCli },
     });
     const stdout = ran.stdout.toString('utf8');
     const said = formatted([stdout, ran.stderr.toString('utf8')].filter((t) => t.trim() !== '').join('\n'));
     if (ran.code === 0) {
       const pins = lockedPinsOf(stdout);
       if (pins !== null) return pins;
-      throw new LockRefused(500, 'rail8 lock printed lines that are no pins: the command line may be another version than this UI', undefined, said);
+      throw new LockRefused(500, LOCK_REFUSALS.noPins, undefined, said);
     }
     const problems = stdout.split('\n').flatMap((line) => (line.startsWith('problem: ') ? [formatted(line.slice('problem: '.length))] : []));
     if (ran.code === 1 && problems.length > 0) throw new LockRefused(422, LOCK_REFUSALS.problems, problems);
     // bin/rail8 exits with 2 and says so when it finds no jar, and the shell with 126 or 127 when java cannot be started
     const noJar = ran.code === 2 && ran.stderr.toString('utf8').includes('no cli jar');
-    if (noJar || ran.code === 126 || ran.code === 127) throw new LockRefused(503, LOCK_REFUSALS.missing(cli), undefined, said);
-    throw new LockRefused(500, LOCK_REFUSALS.failed(ran.code), undefined, said);
+    if (noJar || ran.code === 126 || ran.code === 127) throw new LockRefused(503, missingCli, undefined, said);
+    throw new LockRefused(500, ran.code === null ? LOCK_REFUSALS.killed : LOCK_REFUSALS.failed({ exitCode: ran.code }), undefined, said);
   });
 }

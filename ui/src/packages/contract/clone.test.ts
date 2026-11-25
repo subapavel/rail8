@@ -67,8 +67,8 @@ describe.each<[string, Build]>([
   ])('%s is cloned, and is listed as a folder that is no package, with the reason', async (_, source) => {
     const { api, address } = await open({ sources: [source] });
 
-    expect(await api.clone(address('acme/orders.git'))).toEqual({ repository: 'orders', package: null, reason: REASONS.noManifest });
-    expect((await api.list()).others).toEqual([{ folder: 'orders', reason: REASONS.noManifest }]);
+    expect(await api.clone(address('acme/orders.git'))).toEqual({ repository: 'orders', package: null, reason: REASONS.noManifest.error });
+    expect((await api.list()).others).toEqual([{ folder: 'orders', reason: REASONS.noManifest.error }]);
   });
 
   test.each([
@@ -93,12 +93,12 @@ describe.each<[string, Build]>([
     ['https://localhost/acme/con.git', ADDRESS_REFUSALS.device],
     ['https://localhost/acme/orders.', ADDRESS_REFUSALS.trailingDot],
     ['https://localhost/acme/my%20orders.git', ADDRESS_REFUSALS.folderCharacter],
-  ])('%j is refused with 400 before git runs, and nothing is written', async (address, error) => {
+  ])('%j is refused with 400 before git runs, and nothing is written', async (address, refusal) => {
     const { api } = await open({});
 
     const refused = await refusalOf(api.clone(address));
 
-    expect(refused).toMatchObject({ status: 400, message: error });
+    expect(refused).toMatchObject({ status: 400, code: refusal.code, message: refusal.error });
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
     expect(world!.hostRequests?.() ?? 0).toBe(0);
   });
@@ -107,17 +107,17 @@ describe.each<[string, Build]>([
     // an ssh that fails at once, so the test never waits for a host named g
     const { api } = await open({ author: { config: '[core]\n\tsshCommand = false' } });
 
-    expect(await refusalOf(api.clone('ssh://g/team/orders.git'))).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed });
+    expect(await refusalOf(api.clone('ssh://g/team/orders.git'))).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed.error });
   });
 
   test.each([
     ['a package', { clones: [{ folder: 'orders' }] }, { packages: ['orders'], others: [] }],
-    ['a folder that is no package', { plain: ['orders'] }, { packages: [], others: [{ folder: 'orders', reason: REASONS.noClone }] }],
+    ['a folder that is no package', { plain: ['orders'] }, { packages: [], others: [{ folder: 'orders', reason: REASONS.noClone.error }] }],
   ])('an entry of that name in the working folder, %s, refuses it with 409, and stays as it was', async (_, seed, listed) => {
     const { api, address } = await open({ ...seed, sources: [{ path: 'acme/orders.git' }] });
     const before = await api.list();
 
-    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.exists });
+    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.exists.error });
     expect(world!.hostRequests?.() ?? 0).toBe(0);
     const after = await api.list();
     expect(after).toEqual(before);
@@ -127,7 +127,7 @@ describe.each<[string, Build]>([
   test('an entry of that name that appears while git clones refuses it with 409 at the move, and is kept', async () => {
     const { api, address } = await open({ sources: [{ path: 'acme/orders.git', appears: 'file' }] });
 
-    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.exists });
+    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.exists.error });
     expect((await api.list()).packages).toEqual([]);
   });
 
@@ -136,7 +136,7 @@ describe.each<[string, Build]>([
 
     const first = api.clone(address('acme/orders.git'));
     await waiting();
-    expect(await refusalOf(api.clone(address('acme/billing.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.another });
+    expect(await refusalOf(api.clone(address('acme/billing.git')))).toMatchObject({ status: 409, message: CLONE_REFUSALS.another.error });
     release();
 
     expect(await first).toMatchObject({ repository: 'orders', package: { branch: 'main' } });
@@ -151,7 +151,7 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.clone(address('acme/orders.git')));
 
-    expect(refused).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed });
+    expect(refused).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed.error });
     expect(refused.output).toMatch(/\S/);
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
   });
@@ -159,13 +159,13 @@ describe.each<[string, Build]>([
   test('a repository over the size limit is refused with 422 and leaves nothing', async () => {
     const { api, address } = await open({ sources: [{ path: 'acme/orders.git', large: true }] });
 
-    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 422, message: CLONE_REFUSALS.tooLarge });
+    expect(await refusalOf(api.clone(address('acme/orders.git')))).toMatchObject({ status: 422, message: CLONE_REFUSALS.tooLarge.error });
     expect(await api.list()).toMatchObject({ packages: [], others: [] });
   }, 60_000);
 
   test('a read-only server refuses it with 403, and so does the page of another site', async () => {
     const readOnly = await open({ readOnly: true, sources: [{ path: 'acme/orders.git' }] });
-    expect(await refusalOf(readOnly.api.clone(readOnly.address('acme/orders.git')))).toMatchObject({ status: 403, message: CLONE_REFUSALS.readOnly });
+    expect(await refusalOf(readOnly.api.clone(readOnly.address('acme/orders.git')))).toMatchObject({ status: 403, message: CLONE_REFUSALS.readOnly.error });
     expect((await readOnly.api.list()).others).toEqual([]);
     await readOnly.close();
 
@@ -329,7 +329,7 @@ describe('Get a package on the real git half only', () => {
 
     const refused = await refusalOf(api.clone('https://files.example.com/orders.git'));
 
-    expect(refused).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed, output: expect.stringContaining("transport 'file' not allowed") });
+    expect(refused).toMatchObject({ status: 422, message: CLONE_REFUSALS.gitFailed.error, output: expect.stringContaining("transport 'file' not allowed") });
     expect(await readdir(workingFolder!)).toEqual([]);
   });
 

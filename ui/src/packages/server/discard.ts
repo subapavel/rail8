@@ -2,27 +2,28 @@ import { lstat, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { DiscardBody } from '../api.ts';
-import { discardBodyOf as discardBodyRules, indexFrom, inPackage, staleChoice, statusCompared } from '../rules.ts';
-import { BUSY, COMMIT_LIMITS, indexLocked } from './commit.ts';
+import { COMMIT_REFUSALS, DISCARD_REFUSALS, discardBodyOf as discardBodyRules, indexFrom, inPackage, staleChoice, statusCompared, type Refused } from '../rules.ts';
+import { COMMIT_LIMITS, indexLocked } from './commit.ts';
 import { formatted } from './formatter.ts';
 import { catFile, parseStatus, parseTree, read } from './git.ts';
 import { diskAt, inClone } from './package.ts';
 import { busyOf, statusOf } from './packages.ts';
+import { refusal } from './refused.ts';
 import type { Runner } from './runner.ts';
 
 /** `body` as a discard of the package `repository` takes it, refused as {@link discardBodyRules} refuses it. */
 export function discardBodyOf(repository: string, body: unknown): DiscardBody {
   const found = discardBodyRules(repository, body);
-  if ('error' in found) throw new Refusal(found.status, found.error);
+  if ('error' in found) throw refusal(found.status, found);
   return found;
 }
 
-/** A refused discard: its status, its error, and what git said. */
+/** A refused discard: its status, its refusal, and what git said. */
 export class DiscardRefused extends Refusal {
   readonly output: string;
 
-  constructor(status: number, message: string, output: string) {
-    super(status, message);
+  constructor(status: number, refused: Refused, output: string) {
+    super(status, refused.code, refused.error, refused.values);
     this.output = output;
   }
 }
@@ -34,7 +35,6 @@ export interface DiscardDone {
   problem?: string;
 }
 
-const NOTHING = 'nothing was discarded';
 const ZEROS = '0'.repeat(40);
 const literal = (inside: string) => `:(literal)${inside}`;
 const textOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -107,15 +107,15 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
   return lock(async () => {
     const status = await statusOf(git, clone);
     const busy = await busyOf(clone, status);
-    if (busy !== null) throw new Refusal(409, `the clone is busy: ${BUSY[busy]}; finish it in a terminal, then discard`);
-    if (await indexLocked(clone)) throw new Refusal(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
-    if (status.oid !== body.head) throw new Refusal(412, `HEAD is now ${status.oid ?? '(no commit yet)'}, not the HEAD you saw; ${NOTHING}`);
+    if (busy !== null) throw refusal(409, DISCARD_REFUSALS.busy({ busy }));
+    if (await indexLocked(clone)) throw refusal(409, COMMIT_REFUSALS.indexLocked);
+    if (status.oid !== body.head) throw refusal(412, status.oid === null ? DISCARD_REFUSALS.movedUnborn : DISCARD_REFUSALS.moved({ head: status.oid }));
 
     const named = body.paths.map((p) => (inPackage(repository, p.path) as { inside: string }).inside);
     const disk = await Promise.all(named.map((inside) => diskAt(clone, inside)));
     const compared = statusCompared(status.entries);
-    const stale = staleChoice(repository, body.paths.map((p, n) => ({ path: p.path, inside: named[n]!, tag: p.tag, onDisk: disk[n] !== null })), compared, NOTHING);
-    if (stale !== null) throw new Refusal(412, stale);
+    const stale = staleChoice(repository, body.paths.map((p, n) => ({ path: p.path, inside: named[n]!, tag: p.tag, onDisk: disk[n] !== null })), compared, DISCARD_REFUSALS);
+    if (stale !== null) throw refusal(412, stale);
     // each path's index state as its row shows it now; null: the path a chosen renamed change was renamed from, with no row of its own
     const rows = new Set(compared.map((c) => c.inside));
     const fromChosen = new Set(compared.filter((c) => c.renamedFrom !== undefined && named.includes(c.inside)).map((c) => c.renamedFrom!));
@@ -124,13 +124,13 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
     body.paths.forEach((p, n) => {
       const index = now[n]!;
       const moved = index === null ? p.index !== null || !fromChosen.has(named[n]!) : p.index === null || (index !== 'differs' && index !== p.index);
-      if (moved) throw new Refusal(412, `${p.path} was staged or unstaged since you saw it; ${NOTHING}`);
+      if (moved) throw refusal(412, DISCARD_REFUSALS.restaged({ path: p.path }));
     });
     for (const [n, p] of body.paths.entries()) {
-      if (await escapes(clone, named[n]!)) throw new Refusal(403, `${p.path} leads out of the package's folder, or into its .git folder; ${NOTHING}`);
+      if (await escapes(clone, named[n]!)) throw refusal(403, DISCARD_REFUSALS.leadsOut({ path: p.path }));
     }
     body.paths.forEach((p, n) => {
-      if ((disk[n]?.tag ?? null) !== p.tag) throw new Refusal(412, `${p.path} changed since you saw it; ${NOTHING}`);
+      if ((disk[n]?.tag ?? null) !== p.tag) throw refusal(412, DISCARD_REFUSALS.changed({ path: p.path }));
     });
 
     // what the last commit and the index hold of the chosen paths; a listing cut at its cap fails the read, and nothing is written
@@ -142,25 +142,24 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
     const entry = new Map(listed.filter((e) => chosen.has(e.path) && e.stage === '0').map((e) => [e.path, e]));
     const onDisk = await Promise.all(named.map((inside) => lstatOf(join(clone, ...inside.split('/')))));
 
-    const conflict = (message: string): never => {
-      throw new Refusal(409, `${message}; ${NOTHING}`);
+    const conflict = (refused: Refused): never => {
+      throw refusal(409, refused);
     };
     const known = [...listed.map((e) => e.path), ...status.entries.flatMap((e) => [e.path, ...(e.from === undefined ? [] : [e.from])])];
     body.paths.forEach((p, n) => {
       const inside = named[n]!;
-      if (now[n] === 'differs') conflict(`${p.path} is staged in a terminal with other content: discard or unstage it there`);
-      if (status.entries.some((e) => e.kind === 'ordinary' && e.path === inside && e.xy === '.A')) conflict(`git holds ${p.path} as intent to add (git add -N): discard it in a terminal`);
-      if (onDisk[n]?.isSymbolicLink()) conflict(`${p.path} is a symbolic link on disk: discard it in a terminal`);
-      if (held.get(inside)?.mode === '160000' || entry.get(inside)?.mode === '160000') conflict(`${p.path} is a submodule: discard it in a terminal`);
-      if (entry.get(inside)?.tag === 'S') conflict(`${p.path} is outside the sparse checkout (skip-worktree): discard it in a terminal`);
+      if (now[n] === 'differs') conflict(DISCARD_REFUSALS.staged({ path: p.path }));
+      if (status.entries.some((e) => e.kind === 'ordinary' && e.path === inside && e.xy === '.A')) conflict(DISCARD_REFUSALS.intentToAdd({ path: p.path }));
+      if (onDisk[n]?.isSymbolicLink()) conflict(DISCARD_REFUSALS.symbolicLink({ path: p.path }));
+      if (held.get(inside)?.mode === '160000' || entry.get(inside)?.mode === '160000') conflict(DISCARD_REFUSALS.submodule({ path: p.path }));
+      if (entry.get(inside)?.tag === 'S') conflict(DISCARD_REFUSALS.sparse({ path: p.path }));
       const lower = inside.toLowerCase();
       const alias = [...named.filter((other) => other !== inside), ...known].find((other) => other !== inside && other.toLowerCase() === lower);
-      if (alias !== undefined) conflict(`${p.path} and ${repository}/${alias} are the same but for letter case: discard them in a terminal`);
+      if (alias !== undefined) conflict(DISCARD_REFUSALS.letterCase({ path: p.path, other: `${repository}/${alias}` }));
     });
 
     // git deletes a file or a folder of the same name in its way without a word, so every such meeting is refused
-    const meet = (p: string, other: string): never =>
-      conflict(`${p} and ${repository}/${other} are a file and a folder of the same name: discard them one at a time, or in a terminal`);
+    const meet = (p: string, other: string): never => conflict(DISCARD_REFUSALS.fileAndFolder({ path: p, other: `${repository}/${other}` }));
     for (const [n, p] of body.paths.entries()) {
       const inside = named[n]!;
       for (const folder of leadingOf(inside)) {
@@ -197,8 +196,8 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
       try {
         const ran = await git.run({ args: ['update-index', '-z', '--index-info'], clone, mode: 'write', stdin: lines.join(''), limits: COMMIT_LIMITS });
         if (ran.code !== 0) {
-          if (await indexLocked(clone)) throw new DiscardRefused(409, `the clone is busy: another git holds its index (.git/index.lock); try again once it ends; ${NOTHING}`, saidBy(ran));
-          throw new DiscardRefused(500, `git update-index failed, as git says; ${NOTHING}`, saidBy(ran));
+          if (await indexLocked(clone)) throw new DiscardRefused(409, DISCARD_REFUSALS.indexLocked, saidBy(ran));
+          throw new DiscardRefused(500, DISCARD_REFUSALS.updateIndexFailed, saidBy(ran));
         }
       } catch (error) {
         if (error instanceof DiscardRefused) throw error;
@@ -253,7 +252,7 @@ export async function discardPaths(git: Runner, lock: WorkingFolderLock, clone: 
     try {
       entries = parseStatus(await read(git, clone, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--', ...named.map(literal)])).entries;
     } catch (error) {
-      throw new Refusal(500, `the discard ran, but what it changed could not be read: ${textOf(error)}; the package's Changes show it`);
+      throw refusal(500, DISCARD_REFUSALS.unread(textOf(error)));
     }
     // a chosen path is left while git lists it, or an untracked file in the folder at its place
     const isLeft = (inside: string) => entries.some((e) => e.path === inside || e.from === inside || (e.kind === 'untracked' && e.path.startsWith(`${inside}/`)));

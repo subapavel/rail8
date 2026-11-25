@@ -1,6 +1,6 @@
 import type { PackagesApi } from '../api';
 import { fakeLock, fakePackagesApi, tagOf, type FakeCommit, type FakeFolder, type FakeLock, type FakeNodeRefusal, type FakeSent, type FakeSource, type FakeState } from '../fake';
-import { GIT_MISSING, gitTooOld, inPackage } from '../rules';
+import { GIT_REFUSALS, inPackage } from '../rules';
 
 /**
  * A working folder, its git and its node, as data that each world builds the same way: the http world with real git
@@ -440,7 +440,7 @@ export function fakeStateOf(seed: Seed): { state: FakeState; ids: Map<string, st
     workspace: seed.workspace !== false,
     writable: !seed.readOnly,
     foreignPage: seed.foreignPage ?? false,
-    git: seed.git === 'missing' ? GIT_MISSING : seed.git === 'old' ? gitTooOld(OLD_GIT) : null,
+    git: seed.git === 'missing' ? GIT_REFUSALS.missing : seed.git === 'old' ? GIT_REFUSALS.tooOld({ version: OLD_GIT }) : null,
     identity: seed.identity === null ? null : { ...AUTHOR },
     node,
     sent: [],

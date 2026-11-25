@@ -1428,7 +1428,7 @@ class NodeIT {
 
             assertEquals(422, put.statusCode(), put.body());
             JsonObject body = new JsonObject(put.body());
-            assertEquals(Set.of("error", "problems"), body.fieldNames(), body.encode());
+            assertEquals(Set.of("error", "code", "values", "problems"), body.fieldNames(), body.encode());
             assertTrue(body.getJsonArray("problems").stream().map(String::valueOf).anyMatch(l -> l.contains("invoice-sync") && l.contains("invoice-to-partner.xsl")),
                     "a problem names the flow and its stylesheet: " + body);
             assertEquals(v1Flow, flowItem(admin), "the flow is listed as v1: same hash, commit and state");
@@ -1633,7 +1633,7 @@ class NodeIT {
             HttpResponse<String> unknownDlqRoute = authed(client, "POST", admin, "/admin/dlq/" + id + "/nonesuch", new byte[0], token);
             for (HttpResponse<String> unknown : List.of(unknownMessageRoute, unknownDlqRoute)) {
                 assertEquals(404, unknown.statusCode(), "fixture: an unregistered POST path is the router's 404: " + unknown.body());
-                assertEquals(new JsonObject().put("error", "no such route"), new JsonObject(unknown.body()), "fixture: the router's own body");
+                assertEquals(new JsonObject().put("error", "no such route").put("code", "no-route").put("values", new JsonObject()), new JsonObject(unknown.body()), "fixture: the router's own body");
             }
 
             for (String path : List.of("/admin/messages/" + id + "/replay?from=3", "/admin/messages/" + id + "/replay?from=1",

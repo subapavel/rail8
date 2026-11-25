@@ -1,10 +1,11 @@
 import { Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import type { RemoteBody } from '../api.ts';
-import { remoteBodyOf as remoteBodyRules, REMOTE_REFUSALS } from '../rules.ts';
-import { BUSY, indexLocked } from './commit.ts';
+import { COMMIT_REFUSALS, remoteBodyOf as remoteBodyRules, REMOTE_REFUSALS, type Refused } from '../rules.ts';
+import { indexLocked } from './commit.ts';
 import { formatted } from './formatter.ts';
 import { holds, parseDiffTree, read, type Status } from './git.ts';
 import { busyOf, statusOf } from './packages.ts';
+import { refusal } from './refused.ts';
 import type { Call, Limits, Ran, Runner } from './runner.ts';
 
 /** A fetch, a pull's merge and a push: 120 s each, and 1 MiB on each stream. */
@@ -13,16 +14,16 @@ export const REMOTE_LIMITS: Limits = { ms: 120_000, bytes: 1024 * 1024 };
 /** `body` as a pull or a push takes it, refused as {@link remoteBodyRules} refuses it. */
 export function remoteBodyOf(body: unknown): RemoteBody {
   const found = remoteBodyRules(body);
-  if ('error' in found) throw new Refusal(found.status, found.error);
+  if ('error' in found) throw refusal(found.status, found);
   return found;
 }
 
-/** A refused fetch, pull or push: its status, its error, and what git said. */
+/** A refused fetch, pull or push: its status, its refusal, and what git said. */
 export class RemoteRefused extends Refusal {
   readonly output: string;
 
-  constructor(status: number, message: string, output: string) {
-    super(status, message);
+  constructor(status: number, refused: Refused, output: string) {
+    super(status, refused.code, refused.error, refused.values);
     this.output = output;
   }
 }
@@ -62,21 +63,21 @@ async function upstreamOf(git: Runner, clone: string, branch: string): Promise<U
 async function checked(git: Runner, clone: string, body: RemoteBody | null): Promise<{ status: Status; upstream: Upstream }> {
   const status = await statusOf(git, clone);
   const busy = await busyOf(clone, status);
-  if (busy !== null) throw new Refusal(409, `the clone is busy: ${BUSY[busy]}; finish it in a terminal first`);
-  if (await indexLocked(clone)) throw new Refusal(409, 'the clone is busy: another git holds its index (.git/index.lock); try again once it ends');
-  if (status.branch === null) throw new Refusal(409, REMOTE_REFUSALS.detached);
+  if (busy !== null) throw refusal(409, REMOTE_REFUSALS.busy({ busy }));
+  if (await indexLocked(clone)) throw refusal(409, COMMIT_REFUSALS.indexLocked);
+  if (status.branch === null) throw refusal(409, REMOTE_REFUSALS.detached);
   if (body !== null && (status.branch !== body.branch || status.oid !== body.head || (status.upstream?.name ?? null) !== body.upstream)) {
-    throw new Refusal(412, REMOTE_REFUSALS.stale);
+    throw refusal(412, REMOTE_REFUSALS.stale);
   }
   const upstream = status.upstream === null ? null : await upstreamOf(git, clone, status.branch);
-  if (upstream === null) throw new Refusal(409, REMOTE_REFUSALS.noUpstream);
+  if (upstream === null) throw refusal(409, REMOTE_REFUSALS.noUpstream);
   return { status, upstream };
 }
 
 /** `git fetch -- <remote>`; 422 with what git said when it fails. */
 async function fetched(git: Runner, clone: string, remote: string): Promise<void> {
   const ran = await git.run(remoteCall(clone, ['fetch', '--', remote]));
-  if (ran.code !== 0) throw new RemoteRefused(422, REMOTE_REFUSALS.failed('fetch'), saidBy(ran));
+  if (ran.code !== 0) throw new RemoteRefused(422, REMOTE_REFUSALS.fetchFailed, saidBy(ran));
 }
 
 /**
@@ -111,7 +112,7 @@ export async function pullRemote(
     const isAncestor = (older: string, newer: string) => holds(git, clone, ['merge-base', '--is-ancestor', '--end-of-options', older, newer], [1]);
     // an upstream that HEAD holds already, or HEAD itself, leaves nothing to pull
     if (await isAncestor(target, body.head)) return { head: body.head, changed: [] };
-    if (!(await isAncestor(body.head, target))) throw new Refusal(409, REMOTE_REFUSALS.diverged);
+    if (!(await isAncestor(body.head, target))) throw refusal(409, REMOTE_REFUSALS.diverged);
     const ran = await git.run({ args: ['merge', '--ff-only', '--no-overwrite-ignore', '--end-of-options', target], clone, mode: 'write', limits: REMOTE_LIMITS });
     if (ran.code !== 0) throw new RemoteRefused(409, REMOTE_REFUSALS.overwrites, saidBy(ran));
     try {
@@ -136,7 +137,7 @@ export async function pushRemote(git: Runner, clone: string, body: RemoteBody): 
   if (ran.code !== 0) {
     // --porcelain marks each ref the remote rejected with ! and a tab
     const rejected = ran.stdout.toString('utf8').split('\n').some((line) => line.startsWith('!\t'));
-    throw new RemoteRefused(rejected ? 409 : 422, rejected ? REMOTE_REFUSALS.rejected : REMOTE_REFUSALS.failed('push'), saidBy(ran));
+    throw new RemoteRefused(rejected ? 409 : 422, rejected ? REMOTE_REFUSALS.rejected : REMOTE_REFUSALS.pushFailed, saidBy(ran));
   }
   return { ref: upstream.merge, from, to: body.head };
 }

@@ -2,6 +2,7 @@ import { currentLanguage, textsIn } from '../../language';
 import type { FlowFile, FlowItem } from '../files/flowFiles';
 import type { NodeComponents } from '../api';
 import type { FlowIngress, ServedSteps } from './types';
+import { refusalText } from '../../refusal';
 import { uiFetch } from '../../session';
 
 export type { FlowFile, FlowItem };
@@ -50,8 +51,7 @@ export class FlowsError extends Error {
 async function refusal(res: Response): Promise<FlowsError> {
   let text = `${res.status} ${res.statusText}`.trim();
   try {
-    const body: unknown = await res.json();
-    if (typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string') text = body.error;
+    text = refusalText(await res.json()) ?? text;
   } catch {
     // not JSON: the status line stands
   }

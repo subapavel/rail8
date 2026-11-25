@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import { chooseLanguage } from '../../language';
 import { ApiProblem, describeError, isSaveConflict } from './client';
 
 describe('a save conflict', () => {
@@ -28,6 +29,20 @@ describe('describing a failed call', () => {
     const error = new ApiProblem({ type: 'urn:x', title: 'Not found', status: 404, detail: 'no mapping m' });
 
     expect(describeError(error)).toEqual({ title: 'Not found', detail: 'no mapping m', diagnostics: [] });
+  });
+
+  test("a problem whose code the UI knows shows in the UI's language, and one of an unknown code in its English", () => {
+    const exists = new ApiProblem({ type: 'urn:rail8:mapping:problem:mapping-exists', code: 'mapping-exists', values: {}, title: 'Mapping exists', status: 409, detail: 'a mapping with this id exists' });
+    const unknown = new ApiProblem({ type: 'urn:rail8:mapping:problem:not-a-code-of-the-ui', code: 'not-a-code-of-the-ui', values: {}, title: 'Refused', status: 409, detail: 'the studio says no' });
+    vi.stubGlobal('document', { documentElement: {} });
+    chooseLanguage('cs');
+    try {
+      expect(describeError(exists)).toEqual({ title: 'Mapování s tímto id už existuje.', detail: '', diagnostics: [] });
+      expect(describeError(unknown)).toEqual({ title: 'Refused', detail: 'the studio says no', diagnostics: [] });
+    } finally {
+      chooseLanguage('en');
+      vi.unstubAllGlobals();
+    }
   });
 
   test('an error that is no problem, such as a lost connection, shows its message', () => {

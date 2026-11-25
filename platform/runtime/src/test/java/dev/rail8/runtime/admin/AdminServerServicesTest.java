@@ -44,6 +44,7 @@ import static dev.rail8.runtime.admin.AdminServerDeployTest.read;
 import static dev.rail8.runtime.admin.AdminServerDeployTest.write;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -153,7 +154,10 @@ class AdminServerServicesTest {
         assertEquals(json, r.body(), what + ": the reply's JSON as it is");
     }
 
-    /** A problem of the node's own: {@code application/problem+json} of type {@code urn:rail8:admin:problem:<slug>}. */
+    /**
+     * A problem of the node's own: {@code application/problem+json} of type {@code urn:rail8:admin:problem:<slug>}, whose
+     * {@code code} is the slug and whose {@code values} are an object.
+     */
     static void assertProblem(int status, String slug, Raw r, String what) {
         assertEquals(status, r.status(), what + ": " + r.body());
         assertEquals("application/problem+json", r.headers().get("content-type"), what);
@@ -161,6 +165,8 @@ class AdminServerServicesTest {
         assertEquals("urn:rail8:admin:problem:" + slug, problem.getString("type"), what + ": " + problem);
         assertEquals(status, problem.getInteger("status"), what + ": " + problem);
         assertFalse(problem.getString("title").isBlank() || problem.getString("detail").isBlank(), what + ": a title and a detail: " + problem);
+        assertEquals(slug, problem.getString("code"), what + ": the code is the slug: " + problem);
+        assertInstanceOf(JsonObject.class, problem.getValue("values"), what + ": the values: " + problem);
     }
 
     // --- what a call is given and what its reply becomes

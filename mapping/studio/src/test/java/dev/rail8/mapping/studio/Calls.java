@@ -164,7 +164,9 @@ final class Calls {
     assertThat(problem.path("type").textValue()).as("%s", reply).isEqualTo(FILES_NEEDED);
     assertThat(Wire.names(problem))
         .as("members of %s", reply)
-        .containsExactly("type", "title", "status", "detail", "references");
+        .containsExactly("type", "title", "status", "detail", "code", "values", "references");
+    assertThat(problem.path("code").textValue()).isEqualTo("files-needed");
+    assertThat(problem.path("values").isEmpty()).isTrue();
     assertThat(problem.path("title").textValue()).isEqualTo("Files needed");
     assertThat(problem.path("status").isInt()).isTrue();
     assertThat(problem.path("status").intValue()).isEqualTo(409);

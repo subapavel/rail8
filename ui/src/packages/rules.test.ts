@@ -122,8 +122,8 @@ describe('the address rule of Get a package', () => {
     ['git@github.com:acme/NUL', ADDRESS_REFUSALS.device],
     ['https://github.com/acme/com1.txt', ADDRESS_REFUSALS.device],
     ['https://github.com/acme/Lpt9.orders.git', ADDRESS_REFUSALS.device],
-  ])('%j is refused: %s', (address, error) => {
-    expect(cloneSourceOf(address)).toEqual({ status: 400, error });
+  ])('%j is refused: %s', (address, refused) => {
+    expect(cloneSourceOf(address)).toEqual({ status: 400, ...refused });
   });
 
   test('a device name in another position, or with more letters, is a name like any other', () => {
@@ -133,12 +133,12 @@ describe('the address rule of Get a package', () => {
   });
 
   test('anything but text is refused', () => {
-    expect(cloneSourceOf(undefined)).toEqual({ status: 400, error: ADDRESS_REFUSALS.notText });
-    expect(cloneSourceOf(['https://github.com/acme/orders'])).toEqual({ status: 400, error: ADDRESS_REFUSALS.notText });
+    expect(cloneSourceOf(undefined)).toEqual({ status: 400, ...ADDRESS_REFUSALS.notText });
+    expect(cloneSourceOf(['https://github.com/acme/orders'])).toEqual({ status: 400, ...ADDRESS_REFUSALS.notText });
   });
 
   test('no refusal repeats the address or any part of it', () => {
-    for (const error of Object.values(ADDRESS_REFUSALS)) expect(error).not.toMatch(/acme|github|secret|orders/);
+    for (const { error } of Object.values(ADDRESS_REFUSALS)) expect(error).not.toMatch(/acme|github|secret|orders/);
   });
 });
 
@@ -164,7 +164,9 @@ describe('the body of a discard', () => {
     ['a path of another package', { head, paths: [{ ...one, path: 'billing/a.txt' }] }, 404, 'billing/a.txt lies outside the package orders'],
     ['no path', { head, paths: [] }, 422, 'nothing to discard: no path is chosen'],
   ])('%s is refused', (_, body, status, error) => {
-    expect(discardBodyOf('orders', body)).toEqual({ status, error });
+    const code = { 400: 'bad-request', 404: 'path-outside-package', 422: 'discard-nothing-chosen' }[status];
+    const values = status === 404 ? { path: 'billing/a.txt', repository: 'orders' } : {};
+    expect(discardBodyOf('orders', body)).toEqual({ status, code, error, values });
   });
 });
 

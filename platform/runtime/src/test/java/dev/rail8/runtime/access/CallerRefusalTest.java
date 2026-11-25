@@ -56,11 +56,11 @@ class CallerRefusalTest {
     @Test
     void eachCodeComesFromWhoTheCallerIs() {
         Caller first = CALLERS.get(4);
-        assertEquals(Optional.of("password-change-required"), first.refusal(Action.MESSAGE_READ, PackageRef.ANY).orElseThrow().code());
+        assertEquals("password-change-required", first.refusal(Action.MESSAGE_READ, PackageRef.ANY).orElseThrow().code().code());
         Caller token = CALLERS.get(5);
-        assertEquals(Optional.of("session-required"), token.refusal(Action.USER_CREATE, PackageRef.ANY).orElseThrow().code());
+        assertEquals("session-required", token.refusal(Action.USER_CREATE, PackageRef.ANY).orElseThrow().code().code());
         Caller operator = CALLERS.get(3);
-        assertEquals(Optional.of("not-allowed"), operator.refusal(Action.PACKAGE_DEPLOY, PackageRef.ANY).orElseThrow().code());
+        assertEquals("not-allowed", operator.refusal(Action.PACKAGE_DEPLOY, PackageRef.ANY).orElseThrow().code().code());
         assertEquals(Set.of(Role.DEVELOPER), operator.refusal(Action.PACKAGE_DEPLOY, PackageRef.ANY).orElseThrow().needs());
     }
 }

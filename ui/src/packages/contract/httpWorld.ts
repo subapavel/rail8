@@ -424,13 +424,16 @@ export const httpWorld: Build = async (seed) => {
   const deploy = (check: boolean, asked: { repository: string; commit: string; expect?: string }, actor: string, res: ServerResponse) => {
     sent.push({ check, body: asked, actor });
     if (typeof seed.deploys === 'object') {
-      answer(res, seed.deploys.status, { error: seed.deploys.error, ...(seed.deploys.problems === undefined ? {} : { problems: seed.deploys.problems }) });
+      const { status, error, code, values, problems } = seed.deploys;
+      answer(res, status, { error, ...(code === undefined ? {} : { code, values: values ?? {} }), ...(problems === undefined ? {} : { problems }) });
       return;
     }
     const record = running.get(asked.repository);
     const replaces = record?.commit ?? 'none';
     if (!check && asked.expect !== replaces) {
-      answer(res, 412, { error: `the pool records ${replaces}, not ${asked.expect}`, replaces });
+      const name = manifestOf(git(join(work, asked.repository), 'show', `${asked.commit}:package.yaml`)).package?.name ?? asked.repository;
+      const values = { package: name, expect: asked.expect ?? '', records: replaces };
+      answer(res, 412, { error: `the pool records ${replaces}, not ${asked.expect}`, code: 'deploy-stale', values, replaces });
       return;
     }
     if (!check && seed.deploys === 'silent') {
@@ -625,7 +628,7 @@ export const httpWorld: Build = async (seed) => {
       try {
         await admitted(writes, (lock) =>
           replaceFile(lock, file, text, async () => {
-            if (etagOf(await readFile(file)) !== tag) throw new Refusal(412, `${path} changed since it was read`);
+            if (etagOf(await readFile(file)) !== tag) throw new Refusal(412, 'file-changed', `${path} changed since it was read`, { path });
           }),
         );
         return 200;

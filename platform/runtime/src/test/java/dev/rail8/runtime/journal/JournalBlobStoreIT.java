@@ -409,7 +409,8 @@ class JournalBlobStoreIT {
             staleEntry(a, "m-stale", bytes);
             Answer gone = get(client, port, "/admin/messages/m-stale/steps/0/body");
             assertEquals(404, gone.status(), "the admin read answers what Postgres names, not a stale index entry: " + gone.body().length() + " bytes answered");
-            assertEquals(new JsonObject().put("error", "the bytes of step 0 of message m-stale are no longer stored (removed by retention)"), gone.json());
+            assertEquals(new JsonObject().put("error", "the bytes of step 0 of message m-stale are no longer stored (removed by retention)").put("code", "body-removed")
+                    .put("values", new JsonObject().put("id", "m-stale").put("step", 0)), gone.json());
         } finally {
             server.stop().await();
             client.close().await();

@@ -27,7 +27,9 @@ class CallTest {
   private static String detail(Studio.Reply reply) {
     assertThat(reply.status()).as("%s", reply).isEqualTo(400);
     JsonNode problem = Wire.read(reply.json().getBytes(UTF_8));
-    assertThat(Wire.names(problem)).containsExactly("type", "title", "status", "detail");
+    assertThat(Wire.names(problem))
+        .containsExactly("type", "title", "status", "detail", "code", "values");
+    assertThat(problem.path("code").textValue()).isEqualTo("invalid-request");
     assertThat(problem.path("type").textValue())
         .isEqualTo("urn:rail8:mapping:problem:invalid-request");
     assertThat(problem.path("title").textValue()).isEqualTo("Not a request of this endpoint");

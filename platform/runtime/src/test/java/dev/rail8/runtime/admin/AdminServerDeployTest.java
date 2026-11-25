@@ -244,22 +244,23 @@ class AdminServerDeployTest {
         assertTrue(a.contentType().startsWith("application/json"), what + ": " + a.contentType());
     }
 
-    /** A {@code {error}} body and nothing else. */
+    /** A {@code {error, code, values}} body and nothing else. */
     static void assertError(int status, Answer a, String what) {
         assertJson(status, a, what);
         JsonObject body = a.json();
-        assertEquals(Set.of("error"), body.fieldNames(), what + ": the body is {error} only: " + body);
+        assertEquals(Set.of("error", "code", "values"), body.fieldNames(), what + ": the body is {error, code, values} only: " + body);
         assertTrue(!body.getString("error").isBlank(), what + ": {error} names the failure");
+        AdminServerTest.assertCoded(body, what);
     }
 
     /**
-     * The admin API's 401: {@code {error, code}}, the code {@code no-credential} when the request carried no Authorization
+     * The admin API's 401: {@code {error, code, values}}, the code {@code no-credential} when the request carried no Authorization
      * header ({@code auth} null) and {@code unknown-credential} when it carried one the node does not know.
      */
     static void assertUnauthenticated(Answer a, String auth, String what) {
         assertJson(401, a, what);
         JsonObject body = a.json();
-        assertEquals(Set.of("error", "code"), body.fieldNames(), what + ": the body is {error, code}: " + body);
+        assertEquals(Set.of("error", "code", "values"), body.fieldNames(), what + ": the body is {error, code, values}: " + body);
         assertTrue(!body.getString("error").isBlank(), what + ": {error} names the failure");
         assertEquals(auth == null ? "no-credential" : "unknown-credential", body.getString("code"), what);
     }
@@ -515,7 +516,7 @@ class AdminServerDeployTest {
     }
 
     /**
-     * A deploy, or a check, that expects another state than the pool records is 412 {@code {error, replaces}}, {@code replaces}
+     * A deploy, or a check, that expects another state than the pool records is 412 {@code {error, code, values, replaces}}, {@code replaces}
      * the commit the pool records or {@code none}, and nothing changes: no flow starts or stops, the package listed is as it was,
      * nothing is left in {@code .incoming}. The deploy that expects what the pool records is applied and answers it as
      * {@code replaces}.
@@ -540,12 +541,20 @@ class AdminServerDeployTest {
         assertEquals(v1, applied.json().getString("replaces"), "it replaced v1");
     }
 
-    /** A 412 {@code {error, replaces}}, {@code replaces} the state the pool records. */
+    /**
+     * A 412 {@code {error, code, values, replaces}}, {@code replaces} the state the pool records; the code is
+     * {@code deploy-stale} and the values name the package, the state the deploy expects and the one the pool records.
+     */
     static void assertStale(Answer a, String replaces, String what) {
         assertJson(412, a, what);
-        assertEquals(Set.of("error", "replaces"), a.json().fieldNames(), what + ": " + a.json());
+        assertEquals(Set.of("error", "code", "values", "replaces"), a.json().fieldNames(), what + ": " + a.json());
         assertEquals(replaces, a.json().getString("replaces"), what + ": " + a.json());
         assertTrue(a.json().getString("error").contains(", but this deploy expects "), what + ": " + a.json());
+        assertEquals("deploy-stale", a.json().getString("code"), what);
+        JsonObject values = a.json().getJsonObject("values");
+        assertEquals(Set.of("package", "expect", "records"), values.fieldNames(), what + ": the values the text names");
+        assertEquals("shop", values.getString("package"), what);
+        assertEquals(replaces, values.getString("records"), what + ": what the pool records");
     }
 
     /**
@@ -593,7 +602,7 @@ class AdminServerDeployTest {
 
         assertJson(422, refused, "INVALID");
         JsonObject body = refused.json();
-        assertEquals(Set.of("error", "problems"), body.fieldNames(), "a 422 is {error, problems}: " + body);
+        assertEquals(Set.of("error", "code", "values", "problems"), body.fieldNames(), "a 422 is {error, code, values, problems}: " + body);
         assertTrue(body.getJsonArray("problems").stream().map(String.class::cast)
                         .anyMatch(l -> l.contains("orders'") && l.contains("step 1 'bad' (type 'sheet') option at '/template'")),
                 "a line names the flow, the step, its type and the option: " + body);
@@ -611,7 +620,7 @@ class AdminServerDeployTest {
         Answer unprocessable = deploy(invalid);
         assertJson(422, unprocessable, "INVALID");
         JsonObject body = unprocessable.json();
-        assertEquals(Set.of("error", "problems"), body.fieldNames(), "a 422 is {error, problems}: " + body);
+        assertEquals(Set.of("error", "code", "values", "problems"), body.fieldNames(), "a 422 is {error, code, values, problems}: " + body);
         assertTrue(!body.getString("error").isBlank());
         JsonArray problems = body.getJsonArray("problems");
         assertTrue(!problems.isEmpty() && problems.stream().allMatch(String.class::isInstance), "problems are lines: " + problems);
@@ -744,7 +753,7 @@ class AdminServerDeployTest {
 
         assertJson(500, a, "a redeploy whose start failed");
         JsonObject body = a.json();
-        assertEquals(Set.of("error", "problems"), body.fieldNames(), "a 500 of a failed start is {error, problems}: " + body);
+        assertEquals(Set.of("error", "code", "values", "problems"), body.fieldNames(), "a 500 of a failed start is {error, code, values, problems}: " + body);
         String error = body.getString("error");
         assertTrue(error.contains("version 1.1.0 did not start") && error.contains("1.0.0 runs again"), "the error says which version runs: " + body);
         JsonArray problems = body.getJsonArray("problems");
@@ -773,7 +782,7 @@ class AdminServerDeployTest {
         Answer a = deploy(ordersAndPing("1.1.0", "v2"));
 
         assertJson(500, a, "a redeploy whose rollback failed");
-        assertEquals(Set.of("error", "problems"), a.json().fieldNames(), "{error, problems}: " + a.json());
+        assertEquals(Set.of("error", "code", "values", "problems"), a.json().fieldNames(), "{error, code, values, problems}: " + a.json());
         assertTrue(a.json().getString("error").contains("flows [shop/orders] FAILED"), "the error names the FAILED flow: " + a.json());
         JsonObject expected = flowsBefore.copy();
         for (Object o : expected.getJsonArray("items")) {

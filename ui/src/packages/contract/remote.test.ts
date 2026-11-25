@@ -72,7 +72,7 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.pull('orders', bodyOf(await api.get('orders'))));
 
-    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.diverged });
+    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.diverged.error });
     expect((await api.get('orders')).head!.id).toBe(id('local'));
   });
 
@@ -86,7 +86,7 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.pull('orders', bodyOf(await api.get('orders'))));
 
-    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.overwrites, output: expect.stringContaining('a.txt') });
+    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.overwrites.error, output: expect.stringContaining('a.txt') });
     const after = await api.get('orders');
     expect(after).toMatchObject({ head: { id: id('first') }, upstream: { behind: 1 } });
     expect(await api.file('orders', 'work', 'orders/a.txt')).toMatchObject({ text: 'a, local\n' });
@@ -102,7 +102,7 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.pull('orders', bodyOf(await api.get('orders'))));
 
-    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.overwrites, output: expect.stringContaining('build.txt') });
+    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.overwrites.error, output: expect.stringContaining('build.txt') });
     expect((await api.get('orders')).head!.id).toBe(id('first'));
     expect(await api.file('orders', 'work', 'orders/build.txt')).toMatchObject({ text: 'built here\n' });
   });
@@ -137,7 +137,7 @@ describe.each<[string, Build]>([
 
     const refused = await refusalOf(api.push('orders', bodyOf(await api.get('orders'))));
 
-    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.rejected, output: expect.stringContaining('[rejected]') });
+    expect(refused).toMatchObject({ status: 409, message: REMOTE_REFUSALS.rejected.error, output: expect.stringContaining('[rejected]') });
     expect((await api.get('orders')).upstream).toMatchObject({ ahead: 1, behind: 0 });
   });
 
@@ -147,9 +147,9 @@ describe.each<[string, Build]>([
     expect(body.upstream).toBeNull();
 
     for (const call of [() => api.fetch('orders'), () => api.pull('orders', body), () => api.push('orders', body)]) {
-      expect(await refusalOf(call())).toMatchObject({ status: 409, message: REMOTE_REFUSALS.noUpstream });
+      expect(await refusalOf(call())).toMatchObject({ status: 409, message: REMOTE_REFUSALS.noUpstream.error });
     }
-    expect(REMOTE_REFUSALS.noUpstream).toContain('git push -u');
+    expect(REMOTE_REFUSALS.noUpstream.error).toContain('git push -u');
   });
 
   test('a pull or a push after the branch was switched at the same commit is refused with 412', async () => {
@@ -157,8 +157,8 @@ describe.each<[string, Build]>([
     const seen: RemoteBody = { branch: 'main', head: id('first'), upstream: 'origin/main' };
     expect((await api.get('orders')).branch).toBe('other');
 
-    expect(await refusalOf(api.pull('orders', seen))).toMatchObject({ status: 412, message: REMOTE_REFUSALS.stale });
-    expect(await refusalOf(api.push('orders', seen))).toMatchObject({ status: 412, message: REMOTE_REFUSALS.stale });
+    expect(await refusalOf(api.pull('orders', seen))).toMatchObject({ status: 412, message: REMOTE_REFUSALS.stale.error });
+    expect(await refusalOf(api.push('orders', seen))).toMatchObject({ status: 412, message: REMOTE_REFUSALS.stale.error });
   });
 
   test('a busy clone or a detached HEAD is refused with 409', async () => {
@@ -187,9 +187,9 @@ describe.each<[string, Build]>([
   test('under RAIL8_READ_ONLY=true, and for a foreign page, a fetch, a pull and a push are refused with 403', async () => {
     const { api } = await one({ upstream: { at: 'first' } }, { readOnly: true });
     const body = bodyOf(await api.get('orders'));
-    expect(await refusalOf(api.fetch('orders'))).toMatchObject({ status: 403, message: REMOTE_REFUSALS.readOnly('fetched') });
-    expect(await refusalOf(api.pull('orders', body))).toMatchObject({ status: 403, message: REMOTE_REFUSALS.readOnly('pulled') });
-    expect(await refusalOf(api.push('orders', body))).toMatchObject({ status: 403, message: REMOTE_REFUSALS.readOnly('pushed') });
+    expect(await refusalOf(api.fetch('orders'))).toMatchObject({ status: 403, code: REMOTE_REFUSALS.fetchReadOnly.code, message: REMOTE_REFUSALS.fetchReadOnly.error });
+    expect(await refusalOf(api.pull('orders', body))).toMatchObject({ status: 403, code: REMOTE_REFUSALS.pullReadOnly.code, message: REMOTE_REFUSALS.pullReadOnly.error });
+    expect(await refusalOf(api.push('orders', body))).toMatchObject({ status: 403, code: REMOTE_REFUSALS.pushReadOnly.code, message: REMOTE_REFUSALS.pushReadOnly.error });
     await world!.close();
 
     const foreign = await one({ upstream: { at: 'first' } }, { foreignPage: true });
@@ -207,9 +207,9 @@ describe.each<[string, Build]>([
       const { api } = await one({ commits: ['first', 'local'], upstream: { at: 'first', signIn: true } }, { author: { env: { SSH_ASKPASS: askpass, DISPLAY: ':0' } } });
       const body = bodyOf(await api.get('orders'));
 
-      expect(await refusalOf(api.fetch('orders'))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.failed('fetch'), output: expect.stringContaining('terminal prompts disabled') });
-      expect(await refusalOf(api.pull('orders', body))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.failed('fetch'), output: expect.stringContaining('terminal prompts disabled') });
-      expect(await refusalOf(api.push('orders', body))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.failed('push'), output: expect.stringContaining('terminal prompts disabled') });
+      expect(await refusalOf(api.fetch('orders'))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.fetchFailed.error, output: expect.stringContaining('terminal prompts disabled') });
+      expect(await refusalOf(api.pull('orders', body))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.fetchFailed.error, output: expect.stringContaining('terminal prompts disabled') });
+      expect(await refusalOf(api.push('orders', body))).toMatchObject({ status: 422, message: REMOTE_REFUSALS.pushFailed.error, output: expect.stringContaining('terminal prompts disabled') });
       expect(existsSync(marker)).toBe(false);
       expect((await api.get('orders')).head!.id).toBe(id('local'));
     } finally {

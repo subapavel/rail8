@@ -1,6 +1,8 @@
 import type { Artifact, ChangeStatus, Kind } from '../artifacts';
 import { currentLanguage, textsIn } from '../language';
+import { refusalOf, refusalText, type RefusalValues } from '../refusal';
 import { uiFetch } from '../session';
+import { PACKAGE_WORDS } from './refusals';
 
 export type { Artifact, ChangeStatus, Kind };
 
@@ -445,36 +447,51 @@ export interface PackagesApi {
   push(repository: string, body: RemoteBody): Promise<PushAnswer>;
 }
 
-/** A refusal: its HTTP status (0 when the server did not answer), the error text it gave, and the problems or output it named. */
+/**
+ * A refusal: its HTTP status (0 when the server did not answer), its text in the language the UI showed when it came,
+ * the problems or output it named, and as the server gave them its code (undefined: none), the values its text names
+ * and its English text.
+ */
 export class PackagesError extends Error {
   readonly status: number;
   readonly problems?: string[];
   readonly output?: string;
+  readonly code: string | undefined;
+  readonly values: RefusalValues;
+  readonly english: string;
 
-  constructor(status: number, message: string, problems?: string[], output?: string) {
+  constructor(status: number, message: string, problems?: string[], output?: string, refusal: { code?: string; values?: RefusalValues; english?: string } = {}) {
     super(message);
     this.name = 'PackagesError';
     this.status = status;
     if (problems !== undefined) this.problems = problems;
     if (output !== undefined) this.output = output;
+    this.code = refusal.code;
+    this.values = refusal.values ?? {};
+    this.english = refusal.english ?? message;
+  }
+
+  /**
+   * The refusal `body` of `status`, `{error, code, values}` with its `problems` or `output`: its text is the packages' or
+   * the shell's own for its code, in the language the UI shows, else its English `error`, else `fallback`.
+   */
+  static of(status: number, body: unknown, fallback = String(status)): PackagesError {
+    const { code, values, english } = refusalOf(body);
+    const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+    const problems = Array.isArray(record.problems) ? record.problems.filter((p): p is string => typeof p === 'string') : undefined;
+    const output = typeof record.output === 'string' ? record.output : undefined;
+    return new PackagesError(status, refusalText(body, PACKAGE_WORDS) ?? fallback, problems, output, { code, values, english: english ?? fallback });
   }
 }
 
 async function refusal(res: Response): Promise<PackagesError> {
-  let text = `${res.status} ${res.statusText}`.trim();
-  let problems: string[] | undefined;
-  let output: string | undefined;
+  let body: unknown;
   try {
-    const body: unknown = await res.json();
-    if (typeof body === 'object' && body !== null) {
-      if ('error' in body && typeof body.error === 'string') text = body.error;
-      if ('problems' in body && Array.isArray(body.problems)) problems = body.problems.filter((p): p is string => typeof p === 'string');
-      if ('output' in body && typeof body.output === 'string') output = body.output;
-    }
+    body = await res.json();
   } catch {
     // not JSON: the status line stands
   }
-  return new PackagesError(res.status, text, problems, output);
+  return PackagesError.of(res.status, body, `${res.status} ${res.statusText}`.trim());
 }
 
 /** The git half of the server that serves the UI, under `/git`, through `send` (the page's `uiFetch` by default). */

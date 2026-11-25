@@ -107,7 +107,7 @@ describe('the session gate', () => {
   test('says why the session could not be read, with Try again', async () => {
     const w = render(() => json(503, { error: 'the node is busy', code: 'busy' }, { 'retry-after': '2' }));
     await expect.element(page.getByText('The session could not be read')).toBeVisible();
-    await expect.element(page.getByText('the node is busy. Try again in 2 s.')).toBeVisible();
+    await expect.element(page.getByText('The node is busy; nothing was done. Try again. Try again in 2 s.')).toBeVisible();
     w.state.answer = () => json(200, ME);
     await button('Try again').click();
     await expect.element(page.getByRole('heading', { name: 'Home', level: 1 })).toBeVisible();

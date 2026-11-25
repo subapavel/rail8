@@ -1,6 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { foreign } from '../../../server/adminProxy.ts';
+import { refusalBody } from '../../../server/refusal.ts';
 import { EndpointFileError, readEndpoint, writeConfig, type EndpointDocument } from './endpointYaml.ts';
 import {
   admitted,
@@ -67,10 +68,10 @@ export async function listEndpoints(root: string): Promise<{ items: EndpointItem
 function endpointOf(text: string, path: string, editable: boolean): EndpointFile {
   try {
     const doc = readEndpoint(text);
-    if (doc === null) throw new Refusal(404, `${path} is not an endpoint file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (doc === null) throw new Refusal(404, 'not-endpoint-file', `${path} is not an endpoint file`, { path }); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     return { path, editable, ...doc };
   } catch (error) {
-    if (error instanceof EndpointFileError) throw new Refusal(422, error.message);
+    if (error instanceof EndpointFileError) throw new Refusal(422, 'endpoint-file-refused', error.message);
     throw error;
   }
 }
@@ -99,7 +100,7 @@ function endpointOf(text: string, path: string, editable: boolean): EndpointFile
 export function endpointFiles(options: EndpointFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
   const rootOf = async () => {
-    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (options.workspace === undefined) throw new Refusal(404, 'no-workspace', 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     return realpath(options.workspace);
   };
 
@@ -116,45 +117,45 @@ export function endpointFiles(options: EndpointFilesOptions) {
 
   const create = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
     const sent = await jsonBody(req);
-    if (typeof sent !== 'object' || sent === null || !('text' in sent) || typeof sent.text !== 'string') throw new Refusal(400, 'a create sends {"text": "..."}');
+    if (typeof sent !== 'object' || sent === null || !('text' in sent) || typeof sent.text !== 'string') throw new Refusal(400, 'bad-request', 'a create sends {"text": "..."}');
     const text = sent.text;
-    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'file-too-large', 'the text is over 1 MiB', { max: MAX_FILE_BYTES }); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     let file: EndpointFile;
     try {
       file = endpointOf(text, path, options.editable);
     } catch (error) {
-      throw error instanceof Refusal && error.status === 404 ? new Refusal(422, 'the text is not an endpoint file') : error; // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      throw error instanceof Refusal && error.status === 404 ? new Refusal(422, 'not-endpoint-text', 'the text is not an endpoint file') : error; // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     }
     await createFile(lock, await rootOf(), path, isYaml, 'endpoint file', text); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return { file, etag: etagOf(text), created: true };
   };
 
   const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
-    if (!options.editable) throw new Refusal(403, 'this server shows endpoint files read-only'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (!options.editable) throw new Refusal(403, 'read-only', 'this server shows endpoint files read-only'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'bad-request', 'a save sends If-Match or If-None-Match, not both'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     if (ifNoneMatch === '*') return create(req, path, lock);
-    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (ifMatch === undefined) throw new Refusal(428, 'version-required', 'a save names the version it changes in If-Match'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const sent = await jsonBody(req);
-    if (typeof sent !== 'object' || sent === null || !('config' in sent)) throw new Refusal(400, 'a save sends {"config": {...}}');
+    if (typeof sent !== 'object' || sent === null || !('config' in sent)) throw new Refusal(400, 'bad-request', 'a save sends {"config": {...}}');
     const config = sent.config;
-    if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Refusal(400, 'config is a JSON object'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) throw new Refusal(400, 'bad-request', 'config is a JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const file = await locate(await rootOf(), path, isYaml, 'endpoint file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file);
     // under the lock: a file that is gone, or a path that now leads to another file, has changed too
     const unchanged = async () => {
       const now = await locate(await rootOf(), path, isYaml, 'endpoint file').catch(() => undefined); // untranslated: the development server refuses with this text, as the node does, and it has no translations
-      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     };
-    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'file-changed', 'the file changed since it was read; nothing was saved'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     const text = bytes.toString('utf8');
     endpointOf(text, path, options.editable);
     let written: string;
     try {
       written = writeConfig(text, config as Record<string, unknown>);
     } catch (error) {
-      if (error instanceof EndpointFileError) throw new Refusal(422, error.message);
+      if (error instanceof EndpointFileError) throw new Refusal(422, 'endpoint-file-refused', error.message);
       throw error;
     }
     await replaceFile(lock, file, written, unchanged);
@@ -169,7 +170,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
     }
     const refused = foreign(req.headers, options.origins, 'the working folder'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (refused !== undefined) {
-      send(res, 403, { error: refused });
+      send(res, 403, refusalBody('foreign-origin', refused));
       return;
     }
     const path = url.pathname.slice(PREFIX.length + 1);
@@ -185,7 +186,7 @@ export function endpointFiles(options: EndpointFilesOptions) {
           return done;
         });
         send(res, created ? 201 : 200, file, etag);
-      } else send(res, 405, { error: 'the working folder takes GET, and PUT of one file' }); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      } else send(res, 405, refusalBody('method-not-allowed', 'the working folder takes GET, and PUT of one file')); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
     };
     answer().catch((error: unknown) => sendFailure(res, error));
   };

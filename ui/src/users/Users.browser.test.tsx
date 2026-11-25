@@ -296,7 +296,7 @@ describe('the Users screen', () => {
     await dialog().getByLabelText('Administrator').click();
     await button('Save').click();
     await expect.element(dialog().getByText('The roles were not changed')).toBeVisible();
-    await expect.element(dialog().getByText('At least one unblocked person holds the administrator role.')).toBeVisible();
+    await expect.element(dialog().getByText('At least one unblocked person must hold the administrator role.')).toBeVisible();
   });
 
   test('blocks and unblocks a user, resets a password and ends sessions', async () => {

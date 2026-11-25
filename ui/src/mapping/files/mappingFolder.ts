@@ -4,23 +4,29 @@ import { walk } from '../../../server/workingFolder.ts';
 
 /**
  * A refused request of the mapping studio's API: an RFC 9457 problem with the HTTP status it is answered with, its
- * type, title and detail.
+ * type, title and detail, its stable code and the values the detail names, by which the UI shows it in the user's
+ * language.
  */
 export class Problem extends Error {
   readonly status: number;
   readonly type: string;
   readonly title: string;
+  readonly code: string;
+  readonly values: Readonly<Record<string, string | number>>;
 
-  constructor(status: number, type: string, title: string, detail: string) {
+  /** A problem whose `code` is `code`, or else the last part of `type`, and whose `values` are those `detail` names. */
+  constructor(status: number, type: string, title: string, detail: string, values: Readonly<Record<string, string | number>> = {}, code = type.slice(type.lastIndexOf(':') + 1)) {
     super(detail);
     this.status = status;
     this.type = type;
     this.title = title;
+    this.code = code;
+    this.values = values;
   }
 
   /** The problem as JSON. */
   json(): Record<string, unknown> {
-    return { type: this.type, title: this.title, status: this.status, detail: this.message };
+    return { type: this.type, title: this.title, status: this.status, detail: this.message, code: this.code, values: this.values };
   }
 }
 

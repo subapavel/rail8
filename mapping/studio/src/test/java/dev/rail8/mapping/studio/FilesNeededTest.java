@@ -45,7 +45,8 @@ class FilesNeededTest {
     assertThat(reply.status()).as("%s", reply).isEqualTo(409);
     JsonNode problem = Wire.read(reply.json().getBytes(UTF_8));
     assertThat(Wire.names(problem))
-        .containsExactly("type", "title", "status", "detail", "references");
+        .containsExactly("type", "title", "status", "detail", "code", "values", "references");
+    assertThat(problem.path("code").textValue()).isEqualTo("files-needed");
     assertThat(problem.path("type").textValue())
         .isEqualTo("urn:rail8:mapping:problem:files-needed");
     assertThat(problem.path("title").textValue()).isEqualTo("Files needed");

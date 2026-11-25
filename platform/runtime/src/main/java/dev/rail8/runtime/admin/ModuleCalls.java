@@ -4,6 +4,7 @@ import dev.rail8.api.plugin.AdminReply;
 import dev.rail8.api.plugin.AdminRequest;
 import dev.rail8.api.plugin.AdminService;
 import dev.rail8.runtime.access.Action;
+import dev.rail8.runtime.refusal.RefusalCode;
 import io.vertx.core.Context;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpHeaders;
@@ -19,7 +20,9 @@ import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -38,7 +41,7 @@ import java.util.concurrent.Semaphore;
  * <p>The thread of a running call is interrupted when its client's connection closes, and so when the server stops: closing the
  * server closes every connection. A client that goes away while its body is read frees the call's place. An answer given before the request's body was read to
  * its end closes the connection once written: the rest is never read. The node's own answers are problems (RFC 9457) of type
- * {@code urn:rail8:admin:problem:<slug>}.
+ * {@code urn:rail8:admin:problem:<code>}, with that {@code code} and the {@code values} the {@code detail} names.
  */
 final class ModuleCalls {
 
@@ -79,11 +82,11 @@ final class ModuleCalls {
         // Netty refused a Content-Length that is not a non-negative number before routing
         String declared = req.getHeader(HttpHeaders.CONTENT_LENGTH);
         if (post && !json(req.getHeader(HttpHeaders.CONTENT_TYPE))) {
-            answer(ctx, problem(415, "unsupported-media-type", "Unsupported media type", "the body of a POST to an admin service is " + JSON));
+            answer(ctx, problem(415, RefusalCode.UNSUPPORTED_MEDIA_TYPE, "Unsupported media type", "the body of a POST to an admin service is " + JSON, Map.of()));
         } else if (declared != null && Long.parseLong(declared) > AdminService.MAX_REQUEST_BYTES) {
             answer(ctx, tooLarge());
         } else if (!places.tryAcquire()) {
-            answer(ctx, problem(503, "busy", "Busy", CALLS + " calls of this plugin run already; try again later"));
+            answer(ctx, problem(503, RefusalCode.BUSY, "Busy", CALLS + " calls of this plugin run already; try again later", Map.of()));
         } else {
             new Call(ctx, what, service, places).begin(post);
         }
@@ -167,7 +170,7 @@ final class ModuleCalls {
                 try {
                     json = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(body.getBytes())).toString();
                 } catch (CharacterCodingException notUtf8) {
-                    return problem(400, "not-utf-8", "Not UTF-8", "the body is not UTF-8");
+                    return problem(400, RefusalCode.NOT_UTF_8, "Not UTF-8", "the body is not UTF-8", Map.of());
                 }
                 return valid(service.handle(new AdminRequest(json, modules.clock())));
             } catch (InterruptedException interrupted) {   // its client went away, or the server stops: no one reads the answer
@@ -220,16 +223,17 @@ final class ModuleCalls {
     private record Answer(int status, String type, Buffer body) {}
 
     private static Answer invalidReply() {
-        return problem(500, "invalid-reply", "Invalid reply", "the admin service did not answer as it must; the node's log says why");
+        return problem(500, RefusalCode.INVALID_REPLY, "Invalid reply", "the admin service did not answer as it must; the node's log says why", Map.of());
     }
 
     private static Answer tooLarge() {
-        return problem(413, "too-large", "Request too large", "the body is above " + AdminService.MAX_REQUEST_BYTES + " bytes");
+        return problem(413, RefusalCode.TOO_LARGE, "Request too large", "the body is above " + AdminService.MAX_REQUEST_BYTES + " bytes",
+                Map.of("max", AdminService.MAX_REQUEST_BYTES));
     }
 
-    private static Answer problem(int status, String slug, String title, String detail) {
-        return new Answer(status, PROBLEM, new JsonObject().put("type", "urn:rail8:admin:problem:" + slug).put("title", title)
-                .put("status", status).put("detail", detail).toBuffer());
+    private static Answer problem(int status, RefusalCode code, String title, String detail, Map<String, Object> values) {
+        return new Answer(status, PROBLEM, new JsonObject().put("type", "urn:rail8:admin:problem:" + code.code()).put("title", title)
+                .put("status", status).put("detail", detail).put("code", code.code()).put("values", new JsonObject(new TreeMap<>(values))).toBuffer());
     }
 
     /**

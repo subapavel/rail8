@@ -132,7 +132,7 @@ class RetentionRetryIT {
 
         AdminPgFixture.Answer kBody = node.send(HttpMethod.GET, "/admin/messages/" + k + "/steps/0/body");
         assertEquals(404, kBody.status(), "the GET of an aged body of a finished message: " + kBody.body());
-        assertEquals(new JsonObject().put("error", "no step 0 recorded for message " + k), kBody.json(), "the route's own 404, not the router's");
+        assertEquals(new JsonObject().put("error", "no step 0 recorded for message " + k).put("code", "no-step").put("values", new JsonObject().put("id", k).put("step", 0)), kBody.json(), "the route's own 404, not the router's");
         AdminPgFixture.Answer xBody = node.send(HttpMethod.GET, "/admin/messages/" + x + "/steps/0/body");
         assertEquals(200, xBody.status(), "X's body still reads: " + xBody.body());
         assertEquals(ORDER, xBody.body().toString(), "its bytes as accepted");

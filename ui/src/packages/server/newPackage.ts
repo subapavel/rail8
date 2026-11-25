@@ -1,10 +1,11 @@
 import { lstat, mkdir, mkdtemp, rm, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { moveIntoPlace, Refusal, type WorkingFolderLock } from '../../../server/workingFolder.ts';
+import { moveIntoPlace, type WorkingFolderLock } from '../../../server/workingFolder.ts';
 import { NEW_PACKAGE_REFUSALS, newPackageFiles, newPackageMessage } from '../rules.ts';
 import { COMMIT_LIMITS, CommitRefused } from './commit.ts';
 import { formatted } from './formatter.ts';
 import { identityOf } from './package.ts';
+import { refusal } from './refused.ts';
 import type { Ran, Runner } from './runner.ts';
 
 /** The name of a hidden folder a new package is made in, before the six random characters mkdtemp adds. */
@@ -42,7 +43,7 @@ export function createPackage(git: Runner, lock: WorkingFolderLock, root: string
       () => false,
       (error: unknown) => ((error as NodeJS.ErrnoException).code === 'ENOENT' ? true : Promise.reject(error)),
     );
-    if (!free) throw new Refusal(409, NEW_PACKAGE_REFUSALS.exists);
+    if (!free) throw refusal(409, NEW_PACKAGE_REFUSALS.exists);
 
     let temp: string | undefined;
     return git.undoable(
@@ -56,10 +57,10 @@ export function createPackage(git: Runner, lock: WorkingFolderLock, root: string
           if (ran.code !== 0) throw new CommitRefused(422, NEW_PACKAGE_REFUSALS.gitFailed, saidBy(ran));
         };
         await write(['init', '--quiet', '-b', 'main']);
-        if ((await identityOf(git, made)) === null) throw new Refusal(422, NEW_PACKAGE_REFUSALS.noIdentity);
+        if ((await identityOf(git, made)) === null) throw refusal(422, NEW_PACKAGE_REFUSALS.noIdentity);
         await write(['add', '-A']);
         await write(['commit', '--quiet', '-F', '-'], newPackageMessage(name));
-        if (!(await moveIntoPlace(made, target))) throw new Refusal(409, NEW_PACKAGE_REFUSALS.exists);
+        if (!(await moveIntoPlace(made, target))) throw refusal(409, NEW_PACKAGE_REFUSALS.exists);
         try {
           await rmdir(temp);
           return { clone: target };
@@ -72,7 +73,7 @@ export function createPackage(git: Runner, lock: WorkingFolderLock, root: string
         try {
           await rm(temp, { recursive: true, force: true, maxRetries: 3 });
         } catch (error) {
-          throw new Refusal(500, `the new package failed, and the hidden folder ${temp} it was made in could not be removed: ${error instanceof Error ? error.message : String(error)}; delete it`);
+          throw refusal(500, NEW_PACKAGE_REFUSALS.cleanupFailed(error instanceof Error ? error.message : String(error), { folder: temp }));
         }
       },
     );

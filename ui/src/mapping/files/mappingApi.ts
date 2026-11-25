@@ -62,7 +62,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 /** `"sha256:<hex>"` of the bytes, quoted: a strong tag. */
 const etagOf = (bytes: Buffer) => `"sha256:${createHash('sha256').update(bytes).digest('hex')}"`;
 
-const tooLarge = (detail: string) => new Problem(413, mappingProblem('too-large'), 'Request too large', detail);
+/** A 413 `too-large` problem; with `max`, the bytes the request may have, which the UI's text of the refusal names. */
+const tooLarge = (detail: string, max?: number) => new Problem(413, mappingProblem('too-large'), 'Request too large', detail, max === undefined ? {} : { max }); // untranslated: the English title beside the problem's code, by which the UI shows it in the user's language
 
 /** Whether a `Content-Type` names `application/json`, in any case, with or without parameters. */
 const isJson = (contentType: string | undefined) => contentType?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json';
@@ -75,13 +76,13 @@ async function bodyOf(req: IncomingMessage): Promise<Buffer> {
     size += chunk.length;
     if (size <= MAX_RAW_BYTES) chunks.push(chunk);
   }
-  if (size > MAX_RAW_BYTES) throw tooLarge('the request is over 12 MiB');
+  if (size > MAX_RAW_BYTES) throw tooLarge('the request is over 12 MiB', MAX_RAW_BYTES); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
   return Buffer.concat(chunks);
 }
 
 /** The bytes of a stored mapping file, refused with 413 over {@link MAX_RAW_BYTES}. */
 async function storedBytes(file: string): Promise<Buffer> {
-  if ((await stat(file)).size > MAX_RAW_BYTES) throw tooLarge('the mapping file is over 12 MiB');
+  if ((await stat(file)).size > MAX_RAW_BYTES) throw tooLarge('the mapping file is over 12 MiB'); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
   return readFile(file);
 }
 
@@ -102,13 +103,13 @@ type Route = { op: 'list' } | { op: 'create' } | { op: 'structure' } | { op: 'ca
 function routeOf(method: string, path: string): Route {
   const allowed = (methods: Record<string, Route>) => {
     const route = methods[method];
-    if (route === undefined) throw new Problem(405, 'about:blank', 'Method Not Allowed', `${path} takes ${Object.keys(methods).join(' and ')}`);
+    if (route === undefined) throw new Problem(405, mappingProblem('method-not-allowed'), 'Method Not Allowed', `${path} takes ${Object.keys(methods).join(' and ')}`); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
     return route;
   };
   if (path === '/api/mappings') return allowed({ GET: { op: 'list' }, POST: { op: 'create' } });
   if (path === '/api/structures') return allowed({ POST: { op: 'structure' } });
   if (path === '/api/catalogue') return allowed({ GET: { op: 'catalogue' } });
-  if (!path.startsWith('/api/mappings/')) throw new Problem(404, 'about:blank', 'Not Found', `no route ${path} in the mapping studio's API`);
+  if (!path.startsWith('/api/mappings/')) throw new Problem(404, mappingProblem('no-route'), 'Not Found', `no route ${path} in the mapping studio's API`); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
   const raw = path.slice('/api/mappings/'.length).split('/');
   const action = raw.at(-1) ?? '';
   const decoded = (segments: string[]) => {
@@ -170,7 +171,7 @@ export function mappingApi(options: MappingApiOptions) {
     let body: string | undefined;
     if (call !== undefined) {
       body = JSON.stringify(call);
-      if (Buffer.byteLength(body) > MAX_CALL_BYTES) throw tooLarge('the request and the bundle files it reads are over what the node takes in one call');
+      if (Buffer.byteLength(body) > MAX_CALL_BYTES) throw tooLarge('the request and the bundle files it reads are over what the node takes in one call', MAX_CALL_BYTES); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
       headers['content-type'] = 'application/json';
     }
     const deadline = options.deadline?.() ?? AbortSignal.timeout(CALL_SECONDS * 1000);
@@ -233,7 +234,7 @@ export function mappingApi(options: MappingApiOptions) {
       }
       if (found.kind === 'unsent') continue;
       total += found.size;
-      if (total > MAX_RAW_BYTES) throw tooLarge(`the request and the bundle files it reads are over 12 MiB, at ${reference}`);
+      if (total > MAX_RAW_BYTES) throw tooLarge(`the request and the bundle files it reads are over 12 MiB, at ${reference}`, MAX_RAW_BYTES); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
       files[reference] = (await readFile(found.path)).toString('base64');
     }
     const second = await ask(node, op, { ...call, files, escaping }, signal);
@@ -365,7 +366,7 @@ export function mappingApi(options: MappingApiOptions) {
           // too many writes of the working folder are under way: nothing was done, and the request may be sent again
           reply(res, { status: 503, body: Buffer.from(JSON.stringify(new Problem(503, BUSY, 'Busy', error.message).json())) });
         } else {
-          const failed = new Problem(500, 'about:blank', 'Internal Server Error', `the working folder could not be read or written: ${String(error)}`);
+          const failed = new Problem(500, mappingProblem('internal-error'), 'Internal Server Error', `the working folder could not be read or written: ${String(error)}`); // untranslated: the English text beside the problem's code, by which the UI shows it in the user's language
           reply(res, { status: 500, body: Buffer.from(JSON.stringify(failed.json())) });
         }
       },
