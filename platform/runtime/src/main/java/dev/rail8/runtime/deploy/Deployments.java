@@ -1455,7 +1455,7 @@ public final class Deployments {
         Recipe recipe = f.recipe();
         Map<String, EndpointConfig> endpoints = new LinkedHashMap<>();
         recipe.written().forEach((id, written) -> {
-            JsonObject values = resolved(id, new JsonObject(written.options()), problems);
+            JsonObject values = resolved(id, components.get(written.uri().getScheme()), new JsonObject(written.options()), problems);
             if (values != null) endpoints.put(id, endpoint(id, written.uri().getScheme(), values));
         });
         if (problems.isEmpty()) {
@@ -2225,7 +2225,7 @@ public final class Deployments {
                 for (String p : refused) problems.add("endpoint '" + id + "' config (environment " + config.env() + ") at " + p);
                 valid = refused.isEmpty();
             }
-            JsonObject values = resolved(id, cfg, problems);   // null: a reference did not resolve, its problem is listed
+            JsonObject values = resolved(id, component, cfg, problems);   // null: a reference did not resolve, its problem is listed
             if (values != null) resolved.put(id, values);
             if ("in".equals(endpoint.getString("direction"))) {
                 for (String key : RESERVED) {
@@ -2681,7 +2681,7 @@ public final class Deployments {
             Component component = components.get(scheme);
             JsonObject cfg = overlaid(endpoint);
             if (component == null || !refusedBy(component, cfg, endpoint.getString("direction")).isEmpty()) return;
-            JsonObject values = resolved(id, cfg, dropped);
+            JsonObject values = resolved(id, component, cfg, dropped);
             if (values != null) ("in".equals(endpoint.getString("direction")) ? ins : outs).put(id, endpoint(id, scheme, values));
         });
         Map<String, FlowDefinition> flows = new HashMap<>();
@@ -2757,31 +2757,44 @@ public final class Deployments {
     }
 
     /**
-     * A copy of the endpoint config {@code cfg} with every string value that starts with {@code secret://}, at any depth of its
-     * objects and arrays, replaced by the node's value of that reference ({@link NodeConfig#secrets()}); a string that
-     * merely contains one is kept as written. Null, with a line added to {@code problems} per reference, when one is malformed
-     * ({@code endpoint '<id>': } and the refusal naming it) or not set ({@code endpoint '<id>': secret '<reference>' is not set
-     * (<variable>)}): no line carries a value.
+     * A copy of {@code cfg}, the options of endpoint {@code id} served by {@code component}, with every string value that starts
+     * with {@code secret://}, at any depth of its objects and arrays, replaced by the node's value of that reference; a string that
+     * merely contains one is kept as written. In an option the component's settings declare a secret field, the value is the
+     * store's, else the variable's ({@link Secrets#resolve}); in any other option, the variable's alone ({@link Secrets#variableOnly}).
+     * Null, with a line added to {@code problems} per reference, when one is malformed ({@code endpoint '<id>': } and the refusal
+     * naming it) or not set ({@code endpoint '<id>': secret '<reference>' is not set (<source>)}, for an option that is no secret
+     * field on a node with a store followed by {@code : the option '<option>' is not a secret field, so it reads its variable only}):
+     * no line carries a value.
      */
-    private JsonObject resolved(String id, JsonObject cfg, List<String> problems) {
+    private JsonObject resolved(String id, Component component, JsonObject cfg, List<String> problems) {
         int before = problems.size();
-        JsonObject values = (JsonObject) resolved(id, (Object) cfg, problems);
+        Set<String> fields = secretFields(component);
+        JsonObject values = new JsonObject();
+        cfg.forEach(e -> values.put(e.getKey(), resolved(id, e.getKey(), fields.contains(e.getKey()), e.getValue(), problems)));
         return problems.size() == before ? values : null;
     }
 
-    private Object resolved(String id, Object value, List<String> problems) {
+    private Object resolved(String id, String option, boolean secretField, Object value, List<String> problems) {
         if (value instanceof JsonObject object) {
             JsonObject copy = new JsonObject();
-            object.forEach(e -> copy.put(e.getKey(), resolved(id, e.getValue(), problems)));
+            object.forEach(e -> copy.put(e.getKey(), resolved(id, option, secretField, e.getValue(), problems)));
             return copy;
         }
         if (value instanceof JsonArray array) {
             JsonArray copy = new JsonArray();
-            array.forEach(item -> copy.add(resolved(id, item, problems)));
+            array.forEach(item -> copy.add(resolved(id, option, secretField, item, problems)));
             return copy;
         }
         if (!(value instanceof String reference) || !reference.startsWith(Secrets.SCHEME)) return value;
         try {
+            if (!secretField) {
+                Optional<String> secret = config.secrets().variableOnly(reference);
+                if (secret.isEmpty()) {
+                    problems.add("endpoint '" + id + "': secret '" + reference + "' is not set (" + Secrets.where(reference) + ")"
+                            + (config.secrets().store().isPresent() ? ": the option '" + option + "' is not a secret field, so it reads its variable only" : ""));
+                }
+                return secret.orElse(null);
+            }
             Optional<String> problem = config.secrets().problem(reference, PLAIN);
             if (problem.isPresent()) {
                 problems.add("endpoint '" + id + "': " + problem.get());
@@ -2794,6 +2807,23 @@ public final class Deployments {
             problems.add("endpoint '" + id + "': " + malformed.getMessage());
             return null;
         }
+    }
+
+    /**
+     * The options {@code component}'s settings declare secret fields, which alone the secret store serves; none for a component
+     * that describes nothing, or none on this node.
+     */
+    private static Set<String> secretFields(Component component) {
+        if (component == null) return Set.of();
+        Settings settings = component.settings();
+        if (!settings.described()) return Set.of();
+        Set<String> fields = new HashSet<>();
+        if (settings.toJson().get("fields") instanceof List<?> all) {
+            for (Object f : all) {
+                if (f instanceof Map<?, ?> field && "secret".equals(field.get("type")) && field.get("name") instanceof String name) fields.add(name);
+            }
+        }
+        return Set.copyOf(fields);
     }
 
     /**
@@ -2863,11 +2893,16 @@ public final class Deployments {
         for (String endpoint : endpointsOf(def)) {
             EndpointConfig written = recipe.written().get(endpoint);
             if (written == null) continue;
-            references(written.options(), reference -> {
+            Set<String> fields = secretFields(components.get(written.uri().getScheme()));
+            written.options().forEach((option, value) -> references(value, reference -> {
+                if (!fields.contains(option)) {   // no use, no rebuild: it reads its variable only
+                    config.secrets().variableOnly(reference).ifPresent(v -> held.put(reference, v));
+                    return;
+                }
                 resolved.add(Secrets.name(reference));
                 use(uses, Secrets.name(reference), PLAIN);
-                config.secrets().resolve(reference).ifPresent(value -> held.put(reference, value));
-            });
+                config.secrets().resolve(reference).ifPresent(v -> held.put(reference, v));
+            }));
         }
         builder.reads(reads::add).dependencies(recipe.dependencies().dirs()).heldSecrets(held).secrets((SecretSource) (reference, kinds) -> {
             Secret handle = config.secrets().handle(reference, kinds);

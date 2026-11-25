@@ -113,6 +113,18 @@ public final class Secrets {
     }
 
     /**
+     * The value of {@code reference} from its variable alone, as before the store: an endpoint option that is no secret field
+     * reads only that, whatever the store holds. Empty when the variable is not set; the placeholder off the node.
+     *
+     * @throws IllegalArgumentException {@code reference} is malformed or under {@code rail8.}; the message names the reference
+     */
+    public Optional<String> variableOnly(String reference) {
+        String name = name(reference);
+        if (variables == null) return Optional.of(PLACEHOLDER);
+        return Optional.ofNullable(variableValue(name));
+    }
+
+    /**
      * Why {@code reference} cannot be read as one of {@code kinds} now, naming the reference and its source, never a value;
      * empty when it can.
      *
