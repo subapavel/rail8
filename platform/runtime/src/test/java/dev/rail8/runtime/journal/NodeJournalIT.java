@@ -97,6 +97,8 @@ class NodeJournalIT {
     static final String GENERATE = "RAIL8_JOURNAL_KEY_GENERATE";
     static final byte[] MASTER_A = material(201, 32);
     static final byte[] MASTER_B = material(202, 32);
+    /** The secret store's key of every node of the cases: a node starts only with one, and it is never a journal's key. */
+    static final byte[] STORE_KEY = material(203, 32);
     static final String NODE_ID = "node-it";
     /** NODE: magic RJN1 · version u8 · journal id (CORE-3 item 1, the identity file). */
     static final int ID_AT = 5;
@@ -173,6 +175,7 @@ class NodeJournalIT {
         env.put("RAIL8_PG_PASSWORD", pg.getPassword());
         env.put("RAIL8_PG_POOL_SIZE", "4");
         env.put(KEY, base64(MASTER_A));
+        env.put("RAIL8_SECRETS_KEY", base64(STORE_KEY));
         return env;
     }
 
