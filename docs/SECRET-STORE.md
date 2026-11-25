@@ -47,9 +47,11 @@ These limits are accepted. They are stated first, and the operator's documentati
   1 to 128 characters. References in flows do not change.
 - The scope is `installation` for every secret now. It is part of a row's key and of what the encryption binds, so a
   narrower scope can come later with no migration of values.
-- There are three kinds: a plain value, credentials (a user and a password), and a key pair with its certificates.
+- There are three kinds: a plain value, credentials (a user and a password), and a key pair with its certificates. A
+  fourth, `verifier`, is planned with the check of a flow's callers (`docs/WHO-MAY-SEND.md`).
 - The role `secret-administrator` creates, overwrites and deletes. Nobody reads a value back: no route, no answer, no log
-  line and no audit row holds one.
+  line and no audit row holds one. The planned verifier is the one exception: its generated value is answered once,
+  when it is made.
 - A developer sees each secret's name, kind, who changed it last and when, and who uses it: the deployed flows, the
   connections and credentials, and the platform.
 - Values are sealed in Postgres under the store's key, which comes from the node's environment or a file.
@@ -211,7 +213,8 @@ alter table deployments add column secret_uses_known boolean not null default fa
 
 - The value is a JSON object in UTF-8: `{"value"}`, `{"user", "password"}`, or `{"privateKey", "publicKey",
   "certificates"}` in base64. It is padded with spaces to the next multiple of 256 bytes, so a row tells no value's
-  length within 256 bytes. No digest of a value is stored anywhere.
+  length within 256 bytes. No digest of a value is stored anywhere, except a planned verifier, which is a digest by its
+  nature and joins the check on `kind` (`docs/WHO-MAY-SEND.md`).
 - Format 1 seals with AES-256-GCM under a key derived from the store's key by HKDF-SHA256 (info `rail8 secrets v1 seal`),
   with a random 96-bit nonce for every seal. The associated data is the format, the scope, the name, the kind and the key's
   id. So a sealed value moved to another row or another kind does not open. A later format, such as a key from a KMS,
@@ -574,8 +577,8 @@ It must not:
 - Binding a secret to a package, and scopes narrower than the installation.
 - Credentials or key pairs from the environment.
 - A command of the command line for secrets.
-- **Open point:** a kind that holds only a verifier (a salted hash) of an inbound caller's password or key, so that the
-  node can check a caller without holding a value it could send on.
+- A kind that holds only a verifier of an inbound caller's password or key, so that the node can check a caller without
+  holding a value it could send on: designed in `docs/WHO-MAY-SEND.md`.
 
 ## Steps
 
