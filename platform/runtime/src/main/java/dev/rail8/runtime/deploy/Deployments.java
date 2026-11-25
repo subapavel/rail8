@@ -3052,9 +3052,6 @@ public final class Deployments {
         return uses;
     }
 
-    /** The kinds a plain value's reference takes: an endpoint's option holds a plain value only. */
-    private static final Set<Secret.Kind> PLAIN = EnumSet.of(Secret.Kind.VALUE);
-
     /** The ids of the endpoints {@code def} names: its in endpoint, then those it sends to. */
     private static List<String> endpointsOf(FlowDefinition def) {
         List<String> ids = new ArrayList<>();

@@ -114,8 +114,8 @@ class PollingConsumerContractSelfTest {
         String scheme = "polling";
         /** What {@link #forms} answers on each call; the correct variant's are {@link #FORMS}. */
         Supplier<Forms> forms = () -> FORMS;
-        /** Broken: building a consumer reads every secret of its connection. */
-        boolean readsSecretsAtBuild;
+        /** Broken: building a consumer reads every secret of this kind of its connection; null: none. */
+        Secret.Kind readsSecretsAtBuild;
         /** Broken: health reports UP whether or not a consumer runs. */
         boolean healthAlwaysUp;
         /** Broken: files taken in name order, not oldest first. */
@@ -183,7 +183,7 @@ class PollingConsumerContractSelfTest {
         @Override public Forms forms() { return forms.get(); }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
-            if (readsSecretsAtBuild) in.connection().ifPresent(c -> c.secrets().values().forEach(ComponentContractSelfTest::read));
+            if (readsSecretsAtBuild != null) in.connection().ifPresent(c -> ComponentContractSelfTest.read(c, readsSecretsAtBuild));
             return new Poller(handler);
         }
 
@@ -409,7 +409,9 @@ class PollingConsumerContractSelfTest {
 
     @Test
     void aConsumerThatReadsASecretWhileItIsBuiltFailsOnlyTheSecretCase() {
-        assertEquals(Set.of(SECRET), failing(v -> v.readsSecretsAtBuild = true));
+        for (Secret.Kind kind : Secret.Kind.values()) {
+            assertEquals(Set.of(SECRET), failing(v -> v.readsSecretsAtBuild = kind), "the secret of kind " + kind + " is read while the consumer is built");
+        }
     }
 
     @Test
