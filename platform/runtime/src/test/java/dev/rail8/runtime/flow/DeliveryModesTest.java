@@ -400,7 +400,11 @@ class DeliveryModesTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (!round.isComplete() && System.nanoTime() < deadline) {
             // a pause of the step's retry (at most 100 ms) is driven, so a second send would come; the run's time limit is not
-            if (rt.timer().pending() > 0 && rt.timer().nextDelay().compareTo(Duration.ofMillis(100)) <= 0) rt.clock().advance(rt.timer().nextDelay());
+            Duration due = null;
+            synchronized (rt.timer()) {   // one read of the timer: the worker cancels the send's own bound between two
+                if (rt.timer().pending() > 0) due = rt.timer().nextDelay();
+            }
+            if (due != null && due.compareTo(Duration.ofMillis(100)) <= 0) rt.clock().advance(due);
             Thread.onSpinWait();
         }
         assertEquals(1, round.await(), "one claim ran it");

@@ -608,6 +608,12 @@ class DeploymentsSecretStoreTest {
         assertEquals(List.of("endpoint 'orders-in': secret 'secret://in-token' is a secret of kind credentials in the secret store: the option 'url' is not a "
                 + "secret field, so it takes a plain value only"), a.refused(text).problems());
         assertFalse(String.join(" ", a.refused(text).problems()).contains("pw-0815"));
+
+        MemorySecretStores.createKeyPair(a.store, "in-key");
+        PackageDraft key = logins();
+        key.endpointDoc("orders-in").getJsonObject("config").put("login", "secret://in-key");
+        assertEquals(List.of("endpoint 'orders-in': the option 'login': secret 'secret://in-key' is a secret of kind key-pair in the secret store, "
+                + "taken here as [value, credentials]"), a.refused(key).problems(), "the field takes a plain value or credentials, not a key pair");
     }
 
     @Test

@@ -66,6 +66,13 @@ public final class MemorySecretStores {
         done(store.create(ADMIN, new JsonObject().put("name", name).put("kind", "credentials").put("user", user).put("password", password)));
     }
 
+    /** {@code store} creates the key pair {@code name}: the placeholder's private key, with no certificate. */
+    public static void createKeyPair(SecretStore store, String name) {
+        String pem = "-----BEGIN PRIVATE KEY-----\n" + java.util.Base64.getMimeEncoder().encodeToString(SecretStore.placeholderKeyPair().privateKey().getEncoded())
+                + "\n-----END PRIVATE KEY-----\n";
+        done(store.create(ADMIN, new JsonObject().put("name", name).put("kind", "key-pair").put("privateKey", pem)));
+    }
+
     /** {@code store} overwrites the credentials {@code name}. */
     public static void overwriteCredentials(SecretStore store, String name, String user, String password) {
         done(store.overwrite(ADMIN, name, new JsonObject().put("kind", "credentials").put("user", user).put("password", password)));

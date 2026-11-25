@@ -110,8 +110,8 @@ class ComponentContractSelfTest {
         private volatile Running last;
         /** Broken: a send reaches the consumer started last, whatever the {@code address} of its call. */
         boolean ignoresTheCall;
-        /** Broken: building a consumer or a producer reads every secret of its connection. */
-        boolean readsSecretsAtBuild;
+        /** Broken: building a consumer or a producer reads every secret of this kind of its connection; null: none. */
+        Secret.Kind readsSecretsAtBuild;
         /** Broken: a producer answers every reply send with the first reply it ever got. */
         boolean firstReplyForEverySend;
         /** Broken: closing a producer ends every producer built before the close. */
@@ -190,8 +190,8 @@ class ComponentContractSelfTest {
         /** The correct variant whose directions reach a connection, as {@link ConnectedContractTest} hands one over. */
         static Variant connected() { return formed(ComponentContractSelfTest.forms(Forms.Reach.CONNECTION, Settings.NONE)); }
 
-        /** {@link #connected} that reads the connection's secrets while it builds a consumer or a producer. */
-        static Variant readsSecretsAtBuild() { Variant v = connected(); v.readsSecretsAtBuild = true; return v; }
+        /** {@link #connected} that reads the connection's secrets of {@code kind} while it builds a consumer or a producer. */
+        static Variant readsSecretsAtBuild(Secret.Kind kind) { Variant v = connected(); v.readsSecretsAtBuild = kind; return v; }
 
         static Variant stopBreaks() { Variant v = correct(); v.stopBreaks = true; return v; }
         static Variant nackBreaks() { Variant v = correct(); v.nackBreaks = true; return v; }
@@ -329,7 +329,7 @@ class ComponentContractSelfTest {
         }
 
         private void readSecrets(Optional<Connection> connection) {
-            if (readsSecretsAtBuild) connection.ifPresent(c -> c.secrets().values().forEach(ComponentContractSelfTest::read));
+            if (readsSecretsAtBuild != null) connection.ifPresent(c -> read(c, readsSecretsAtBuild));
         }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
@@ -512,12 +512,15 @@ class ComponentContractSelfTest {
 
     static final String SECRET = "noSecretHandleIsReadWhileAConsumerOrAProducerIsBuilt";
 
-    /** Reads {@code handle} as its kind when it is credentials or a key pair: a typed read counts as any other. */
-    static void read(Secret handle) {
-        switch (handle.kind()) {
-            case VALUE -> { }
-            case CREDENTIALS -> handle.credentials();
-            case KEY_PAIR -> handle.keyPair();
+    /** Reads each handle of {@code c} that is of {@code kind}, as that kind: a typed read counts as any other. */
+    static void read(Connection c, Secret.Kind kind) {
+        for (Secret handle : c.secrets().values()) {
+            if (handle.kind() != kind) continue;
+            switch (kind) {
+                case VALUE -> handle.value();
+                case CREDENTIALS -> handle.credentials();
+                case KEY_PAIR -> handle.keyPair();
+            }
         }
     }
 
@@ -525,8 +528,10 @@ class ComponentContractSelfTest {
     void aComponentThatReadsASecretWhileItBuildsFailsOnlyTheSecretCase() {
         current = Variant.connected();
         assertEquals(Set.of(), failing(ConnectedContractTest.class), "over a connection with a secret, the correct variant passes");
-        current = Variant.readsSecretsAtBuild();
-        assertEquals(Set.of(SECRET), failing(ConnectedContractTest.class), "the password is read while the consumer and the producer are built");
+        for (Secret.Kind kind : Secret.Kind.values()) {
+            current = Variant.readsSecretsAtBuild(kind);
+            assertEquals(Set.of(SECRET), failing(ConnectedContractTest.class), "the secret of kind " + kind + " is read while the consumer and the producer are built");
+        }
         current = Variant.correct();
     }
 
