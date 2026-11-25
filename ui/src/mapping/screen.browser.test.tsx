@@ -260,6 +260,18 @@ describe('the mapping studio in the shell', () => {
     return box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth && box.height > 0;
   };
 
+  test('the canvas counts its nodes and connections in the language chosen while it is open', async () => {
+    render(fakeApiClient());
+    await openMapping('order-id-copy');
+    await shellTab('Definition').click();
+    await fields('target').getByRole('button', { name: 'OrderId', exact: true }).click();
+    await expect.element(nodeFooter()).toHaveTextContent('2 nodes · 1 connection');
+
+    chooseLanguage('cs');
+
+    await expect.element(page.getByRole('region', { name: 'Plocha mapování pole' }).getByText('2 uzly · 1 spojení')).toBeVisible();
+  });
+
   test('at 1440 x 900 the studio fills the window without a page scroll, on the Definition and on the Test tab', async () => {
     await page.viewport(1440, 900);
     render(fakeApiClient());
