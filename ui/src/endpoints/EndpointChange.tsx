@@ -1,7 +1,7 @@
 import { Alert, Flex, Table, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { Side } from '../artifacts';
-import { useText, type Texts } from '../language';
+import { say, useText, type Texts } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import type { EndpointsApi } from './api';
 import { endpointChanges, type EndpointChanges } from './endpointChanges';
@@ -75,7 +75,7 @@ export function EndpointChange({ api, path, before, after }: EndpointChangeProps
     return (
       <Flex vertical gap="small">
         {changes.unreadable.map((u) => (
-          <Alert key={u.side} type="error" showIcon title={t(u.side === 'before' ? 'endpoints.change.olderUnread' : 'endpoints.change.newerUnread')} description={u.message} />
+          <Alert key={u.side} type="error" showIcon title={t(u.side === 'before' ? 'endpoints.change.olderUnread' : 'endpoints.change.newerUnread')} description={say(texts, u.message)} />
         ))}
       </Flex>
     );

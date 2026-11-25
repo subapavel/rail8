@@ -2,6 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import type { Side } from '../artifacts';
+import { chooseLanguage } from '../language';
 import { Rail8Theme } from '../theme';
 import type { EndpointsApi, NodeComponents } from './api';
 import { EndpointChange } from './EndpointChange';
@@ -61,6 +62,8 @@ afterEach(() => {
   root?.unmount();
   root = undefined;
   document.body.innerHTML = '';
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
 });
 
 describe('the readable change of an endpoint', () => {
@@ -98,5 +101,14 @@ describe('the readable change of an endpoint', () => {
     draw(apiOf(async () => NODE), side('a'.repeat(40), 'kind: endpoint\nid: x\n'), side('work', endpoint('http://a', 'p')));
     await expect.element(page.getByText('The older version cannot be read')).toBeVisible();
     await expect.element(page.getByText('an endpoint file names its id and scheme')).toBeVisible();
+  });
+
+  test('says why a version cannot be read in the language chosen while it is open', async () => {
+    draw(apiOf(async () => NODE), side('a'.repeat(40), 'schemaVersion: 1\nkind: flow\nid: x\n'), side('work', endpoint('http://a', 'p')));
+    await expect.element(page.getByText('the file is not an endpoint')).toBeVisible();
+
+    chooseLanguage('cs');
+    await expect.element(page.getByText('Starší verzi nelze přečíst')).toBeVisible();
+    await expect.element(page.getByText('soubor není koncový bod')).toBeVisible();
   });
 });
