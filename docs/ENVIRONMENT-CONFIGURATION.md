@@ -58,7 +58,7 @@ connection key `eshop/rest` or `acme/erp/rest`.
 
 | Kind | Key | Body | Complete when |
 | --- | --- | --- | --- |
-| `connection` | a connection key, two or three segments | `{adapter, values, mock?}` | mocked, in an environment that allows mocks; or `values` pass the adapter's connection form for the directions it is used in, every secret it names is set, of a kind its field takes |
+| `connection` | a connection key, two or three segments | `{adapter, values, mock?}` | mocked, in an environment that allows mocks; or `values` pass the adapter's connection form for at least one direction its adapter connects, and every secret it names is set, of a kind its field takes. A direction a use needs that stays incomplete asks the one confirmation below |
 | `system` | a system key, one or two segments | `{instanceName}`, 1 to 128 printable characters | always, once its shape is right |
 
 - An instance name of a system in use, one whose connection a deployed flow uses as `deployment_connection_uses` names
@@ -864,6 +864,9 @@ here unchanged.
        case of the tests below that names no node's read, deploy, send, route or import. Step 2b adds those of a node
        and the routes; step 3 those of the import and the pipeline; the step of systems and flows by name those of the
        deploy and the send path.
+     - The one parser of system and connection keys, in `rail8-core`, with `rail8`, `subscribers` and `by-agreement`
+       never first, and its test; the store, its routes and its import read every key through it, and the step of
+       systems and flows by name uses it.
      - The objects `connection` and `system`; drafts, activation, removal, going back; the numbers and tokens; the one
        confirmation; the instance name in use.
      - The consent on the object, by the same act too; the binding of the body in force and of the history's
