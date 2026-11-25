@@ -252,7 +252,7 @@ public final class NodeBenchMain {
             drop trigger if exists bench_claim on work;
             drop trigger if exists bench_complete on work;
             do $$ begin execute (select 'truncate ' || string_agg(format('%I', tablename), ', ') from pg_tables
-              where schemaname = current_schema() and tablename not in ('flyway_schema_history', 'deploy_pool', 'admin_bridge', 'token_ceiling')); end $$;
+              where schemaname = current_schema() and tablename not in ('flyway_schema_history', 'deploy_pool', 'admin_bridge', 'token_ceiling', 'secret_store')); end $$;
             """;
 
     /**
