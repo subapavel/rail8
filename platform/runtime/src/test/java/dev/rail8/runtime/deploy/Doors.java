@@ -7,6 +7,7 @@ import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.testkit.RecordingComponent;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -98,6 +99,7 @@ public final class Doors implements Component {
     private volatile java.util.function.Consumer<String> trace = e -> {};
     private volatile java.util.function.Consumer<EndpointConfig> onConsumer = c -> {};
     private volatile Function<EndpointConfig, Optional<String>> naming = c -> Optional.empty();
+    private volatile Settings settings = Settings.NONE;
     private int starts;   // guarded by this: start() calls so far
     private final Map<String, java.util.Queue<Gate>> startGates = new ConcurrentHashMap<>();
     private final Map<String, java.util.Queue<Gate>> stopGates = new ConcurrentHashMap<>();
@@ -227,6 +229,15 @@ public final class Doors implements Component {
     @Override public String scheme() { return scheme; }
 
     @Override public String configSchema() { return CONFIG_SCHEMA; }
+
+    /** What {@link #describe} set; {@link Settings#NONE} until then, so its options are judged by {@link #CONFIG_SCHEMA}. */
+    @Override public Settings settings() { return settings; }
+
+    /** From now on this component describes its options as {@code described}, and a deploy judges them by that alone. */
+    public Doors describe(Settings described) {
+        this.settings = Objects.requireNonNull(described, "described");
+        return this;
+    }
 
     /**
      * Where a consumer of {@code cfg} would listen (P1-09g, {@code Component.listensOn}): empty without a {@code port} option, else

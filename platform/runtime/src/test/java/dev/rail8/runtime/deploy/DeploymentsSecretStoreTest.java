@@ -2,6 +2,10 @@ package dev.rail8.runtime.deploy;
 
 import dev.rail8.api.Component;
 import dev.rail8.api.Runtime;
+import dev.rail8.api.Secret;
+import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Settings;
+import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.runtime.node.NodeConfig;
@@ -9,6 +13,7 @@ import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.testkit.FakeRuntime;
+import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -20,16 +25,20 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * An endpoint option's {@code secret://} reference on nodes with a secret store: the store's plain value wins over the variable,
- * a name of another kind or under {@code rail8.} refuses the deploy, and in the interim, while endpoint files hold references, a
- * change of a name an endpoint resolved builds again on every node the flows that hold it, and no other; one whose secret is gone
- * is stopped and listed FAILED until a tick finds it again.
+ * An endpoint option's {@code secret://} reference on nodes with a secret store. In an option the component declares a secret
+ * field, the store's plain value wins over the variable, a name of another kind or under {@code rail8.} refuses the deploy, and in
+ * the interim, while endpoint files hold references, a change of a name such a field resolved builds again on every node the flows
+ * that hold it, and no other; one whose secret is gone is stopped and listed FAILED until a tick finds it again. Any other option
+ * reads its variable only: the store never serves it, it is no use, and a change in the store rebuilds nothing.
  */
 class DeploymentsSecretStoreTest {
 
@@ -39,7 +48,7 @@ class DeploymentsSecretStoreTest {
     GitRepos repos;
     final FakeRuntime rt = FakeRuntime.create();
     final MemorySecretStores stores = new MemorySecretStores();
-    final InMemoryDeploymentStore records = new InMemoryDeploymentStore();
+    final UsesKept records = new UsesKept(new InMemoryDeploymentStore());
     final List<Node> nodes = new ArrayList<>();
 
     @AfterEach
@@ -51,9 +60,45 @@ class DeploymentsSecretStoreTest {
         });
     }
 
+    /** {@code inner}, keeping the uses each save of a package writes, by its name: the record of uses a pool of Postgres writes. */
+    static final class UsesKept implements DeploymentStore {
+        final DeploymentStore inner;
+        final Map<String, Map<String, Map<String, Set<Secret.Kind>>>> uses = new ConcurrentHashMap<>();
+
+        UsesKept(DeploymentStore inner) {
+            this.inner = inner;
+        }
+
+        @Override public Future<Snapshot> read() { return inner.read(); }
+        @Override public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) { return inner.writeListing(node, epoch, packages); }
+        @Override public Future<Listings> listings() { return inner.listings(); }
+        @Override public Future<Void> endMarks() { return inner.endMarks(); }
+        @Override public Future<Void> audit(Actor by, String repository, JsonObject detail) { return inner.audit(by, repository, detail); }
+
+        @Override
+        public Future<java.util.Optional<PoolLock>> lock() {
+            return inner.lock().map(held -> held.map(lock -> new PoolLock() {
+                @Override public Snapshot snapshot() { return lock.snapshot(); }
+                @Override public Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail) { return lock.save(record, by, detail); }
+                @Override public Future<Long> delete(String name, Actor by, JsonObject detail) { return lock.delete(name, by, detail); }
+                @Override public Future<Void> close() { return lock.close(); }
+
+                @Override
+                public Future<Long> save(DeploymentRecord record, Map<String, Map<String, Set<Secret.Kind>>> written, Actor by, JsonObject detail) {
+                    uses.put(record.name(), written);
+                    return lock.save(record, written, by, detail);
+                }
+            }));
+        }
+    }
+
     /** One node: its own data directory and Doors, the pool's records, and its store over the shared secret database. */
+    /** The options of this test's Doors: {@code token} a secret field, the rest text. */
+    static final Settings DESCRIBED = Settings.of(Field.text("path", "Where it listens.").in(), Field.text("url", "Where it sends."),
+            Field.secret("token", "What it presents."));
+
     final class Node {
-        final Doors doors = new Doors();
+        final Doors doors = new Doors().describe(DESCRIBED);
         final SecretStore store;
         final Deployments deployments;
 
@@ -106,21 +151,22 @@ class DeploymentsSecretStoreTest {
             return doors.doors().stream().filter(d -> flow.equals(d.flow())).count();
         }
 
-        /** The url the newest consumer of {@code flow} got. */
-        Object url(String flow) {
-            return doors.door(flow).cfg().options().get("url");
+        /** The value of {@code option} the newest consumer of {@code flow} got. */
+        Object option(String flow, String option) {
+            return doors.door(flow).cfg().options().get(option);
         }
+
 
         DeployedFlow.State state(String flow) {
             return deployments.flows().stream().filter(f -> f.id().equals(flow)).findFirst().orElseThrow().state();
         }
     }
 
-    /** {@code orders}, whose in endpoint's url is {@code secret://in-url}, and {@code ping}, whose in endpoint holds no secret. */
+    /** {@code orders}, whose in endpoint's token is {@code secret://in-token}, and {@code ping}, whose in endpoint holds no secret. */
     static PackageDraft shop() {
         return PackageDraft.of("shop", "1.0.0")
-                .endpoint("orders-in", "in", new JsonObject().put("path", "/orders").put("url", "secret://in-url"))
-                .endpoint("ping-in", "in", new JsonObject().put("path", "/ping").put("url", "rec://ping"))
+                .endpoint("orders-in", "in", new JsonObject().put("path", "/orders").put("token", "secret://in-token"))
+                .endpoint("ping-in", "in", new JsonObject().put("path", "/ping"))
                 .endpoint("partner", "out", new JsonObject().put("url", "rec://partner"))
                 .flow("orders", "1.0.0", "sync", "orders-in", 4096, PackageDraft.toPartner())
                 .flow("ping", "1.0.0", "at-most-once", "ping-in", 2048, PackageDraft.toPartner());
@@ -128,25 +174,25 @@ class DeploymentsSecretStoreTest {
 
     @Test
     void theStoresValueWinsOverTheVariable() throws Exception {
-        Node a = new Node("node-1", Map.of("RAIL8_SECRET_IN_URL", "rec://from-the-variable"));
-        MemorySecretStores.createValue(a.store, "in-url", "rec://from-the-store");
+        Node a = new Node("node-1", Map.of("RAIL8_SECRET_IN_TOKEN", "from-the-variable"));
+        MemorySecretStores.createValue(a.store, "in-token", "from-the-store");
         a.deploy(shop());
-        assertEquals("rec://from-the-store", a.url("shop/orders"));
+        assertEquals("from-the-store", a.option("shop/orders", "token"));
     }
 
     @Test
     void anOverwriteRebuildsTheFlowThatResolvedItOnEveryNodeAndNoOther() throws Exception {
         Node a = new Node("node-1", Map.of());
         Node b = new Node("node-2", Map.of());
-        MemorySecretStores.createValue(a.store, "in-url", "rec://one");
+        MemorySecretStores.createValue(a.store, "in-token", "one");
         a.deploy(shop());
         b.restore();
-        assertEquals("rec://one", b.url("shop/orders"));
+        assertEquals("one", b.option("shop/orders", "token"));
 
-        MemorySecretStores.overwriteValue(b.store, "in-url", "rec://two");
+        MemorySecretStores.overwriteValue(b.store, "in-token", "two");
         for (Node n : List.of(a, b)) {
             n.follow();
-            assertEquals("rec://two", n.url("shop/orders"), "the flow is built again with the new value");
+            assertEquals("two", n.option("shop/orders", "token"), "the flow is built again with the new value");
             assertEquals(2, n.built("shop/orders"));
             assertEquals(1, n.built("shop/ping"), "no other flow is built again");
             assertEquals(DeployedFlow.State.RUNNING, n.state("shop/orders"));
@@ -158,10 +204,10 @@ class DeploymentsSecretStoreTest {
     @Test
     void aDeleteStopsTheFlowAndListsItFailedUntilATickFindsTheSecretAgain() throws Exception {
         Node a = new Node("node-1", Map.of());
-        MemorySecretStores.createValue(a.store, "in-url", "rec://one");
+        MemorySecretStores.createValue(a.store, "in-token", "one");
         a.deploy(shop());
 
-        MemorySecretStores.delete(a.store, "in-url");
+        MemorySecretStores.delete(a.store, "in-token");
         a.follow();
         assertEquals(DeployedFlow.State.FAILED, a.state("shop/orders"), "never left running on its old value");
         assertTrue(a.doors.door("shop/orders").stopped(), "its consumer stopped");
@@ -169,26 +215,70 @@ class DeploymentsSecretStoreTest {
         a.follow();
         assertEquals(DeployedFlow.State.FAILED, a.state("shop/orders"), "each tick tries again");
 
-        MemorySecretStores.createValue(a.store, "in-url", "rec://three");
+        MemorySecretStores.createValue(a.store, "in-token", "three");
         rt.clock().advance(Duration.ofSeconds(5));
         a.follow();
         assertEquals(DeployedFlow.State.RUNNING, a.state("shop/orders"));
-        assertEquals("rec://three", a.url("shop/orders"));
+        assertEquals("three", a.option("shop/orders", "token"));
     }
 
     @Test
     void aNameOfAnotherKindOrOfThePlatformRefusesTheDeploy() {
         Node a = new Node("node-1", Map.of());
-        MemorySecretStores.createCredentials(a.store, "in-url", "app", "pw-0815");
+        MemorySecretStores.createCredentials(a.store, "in-token", "app", "pw-0815");
         DeployRefusedException kind = a.refused(shop());
-        assertEquals(List.of("endpoint 'orders-in': secret 'secret://in-url' is a secret of kind credentials in the secret store, taken here as [value]"),
+        assertEquals(List.of("endpoint 'orders-in': secret 'secret://in-token' is a secret of kind credentials in the secret store, taken here as [value]"),
                 kind.problems());
 
         PackageDraft platform = shop();
-        platform.endpointDoc("orders-in").getJsonObject("config").put("url", "secret://rail8.git");
+        platform.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://rail8.git");
         DeployRefusedException reserved = a.refused(platform);
         assertEquals(1, reserved.problems().size(), reserved.problems().toString());
         assertTrue(reserved.problems().getFirst().startsWith("endpoint 'orders-in': 'secret://rail8.git' names a secret of the platform"),
                 reserved.problems().toString());
+    }
+
+    /** {@code orders} again, its in endpoint's url {@code secret://k}, an option that is no secret field, and its token {@code secret://p}. */
+    static PackageDraft pointed() {
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").put("url", "secret://k").put("token", "secret://p");
+        return p;
+    }
+
+    @Test
+    void aReferenceOutsideASecretFieldReadsItsVariableOnlyAndAStoreChangeRebuildsNothing() throws Exception {
+        Node a = new Node("node-1", Map.of("RAIL8_SECRET_K", "rec://from-the-variable"));
+        MemorySecretStores.createValue(a.store, "k", "rec://from-the-store");
+        MemorySecretStores.createValue(a.store, "p", "p-1");
+        a.deploy(pointed());
+        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"), "the store never serves an option that is no secret field");
+        assertEquals("p-1", a.option("shop/orders", "token"));
+        assertEquals(Map.of("orders", Map.of("p", Set.of(Secret.Kind.VALUE)), "ping", Map.of()), records.uses.get("shop"),
+                "a reference outside a secret field is no use");
+
+        a.follow();   // the tick after the deploy takes the creates of k and p that came before it
+        long built = a.built("shop/orders");
+
+        MemorySecretStores.overwriteValue(a.store, "k", "rec://elsewhere");
+        a.follow();
+        assertEquals(built, a.built("shop/orders"), "a change of k rebuilds nothing");
+        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"));
+
+        MemorySecretStores.overwriteValue(a.store, "p", "p-2");
+        a.follow();
+        assertEquals(built + 1, a.built("shop/orders"), "a change of p rebuilds its flow");
+        assertEquals("rec://from-the-variable", a.option("shop/orders", "url"));
+        assertEquals("p-2", a.option("shop/orders", "token"));
+    }
+
+    @Test
+    void aReferenceOutsideASecretFieldWithoutItsVariableRefusesTheDeployThoughTheStoreHoldsIt() {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "k", "rec://from-the-store");
+        MemorySecretStores.createValue(a.store, "p", "p-1");
+        DeployRefusedException refused = a.refused(pointed());
+        assertEquals(List.of("endpoint 'orders-in': secret 'secret://k' is not set (RAIL8_SECRET_K): the option 'url' is not a secret field,"
+                + " so it reads its variable only"), refused.problems());
+        assertFalse(refused.getMessage().contains("rec://from-the-store"));
     }
 }
