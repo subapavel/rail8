@@ -7,9 +7,11 @@ import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Secret stores of several nodes over one in-memory database, for tests outside this package: each node's store started, and
@@ -21,6 +23,7 @@ public final class MemorySecretStores {
     public static final Actor ADMIN = new Actor("admin", OptionalLong.of(1), "session", Optional.empty(), "127.0.0.1");
 
     private final MemorySecretRows.Db db = new MemorySecretRows.Db();
+    private final List<String> warnings = new CopyOnWriteArrayList<>();
     private long epochs;
 
     /**
@@ -31,10 +34,26 @@ public final class MemorySecretStores {
         Secrets secrets = Secrets.fromEnv(env);
         long epoch = ++epochs;
         db.node(node, epoch, true);
-        SecretStore store = new SecretStore(new MemorySecretRows(db), secrets.key(), node, secrets.variableNames(), clock, timer, Runnable::run, warning -> { });
+        SecretStore store = new SecretStore(new MemorySecretRows(db), secrets.key(), node, secrets.variableNames(), clock, timer, Runnable::run, warnings::add);
         db.listen(store::notice);
         done(store.start(epoch));
         return store;
+    }
+
+    /** The warnings every store logged, in order. */
+    public List<String> warnings() {
+        return List.copyOf(warnings);
+    }
+
+    /** The audit rows written, in order: each {@code {actor, via, action, subject, detail}}. */
+    public List<JsonObject> audit() {
+        return db.audit().stream().map(a -> new JsonObject().put("actor", a.who().name()).put("via", a.who().via()).put("action", a.action())
+                .put("subject", a.subject()).put("detail", a.detail())).toList();
+    }
+
+    /** Whether every audit row fails from now on. */
+    public void auditFails(boolean fails) {
+        db.auditFails(fails);
     }
 
     /** {@code store} creates the plain value {@code name}. */

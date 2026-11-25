@@ -51,6 +51,7 @@ import dev.rail8.runtime.lease.InMemoryPollerLeases;
 import dev.rail8.runtime.lease.PollerLeases;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.refusal.RefusalCode;
+import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.schemas.Package;
 import dev.rail8.schemas.Schemas;
 import io.vertx.core.Future;
@@ -782,6 +783,11 @@ public final class Deployments {
      */
     public Optional<CredentialsCheck> credentials() {
         return credentials;
+    }
+
+    /** The node's secret store, whose rows the flows' references read first; empty for a node built without one. */
+    public Optional<SecretStore> secretStore() {
+        return config.secrets().store();
     }
 
     /** Every package deployed, sorted by name; during a deploy as before it. */

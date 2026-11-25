@@ -39,6 +39,8 @@ import dev.rail8.runtime.deploy.DeployedPackage;
 import dev.rail8.runtime.deploy.DeploymentStore;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.UndeployResult;
+import dev.rail8.runtime.secret.SecretRefused;
+import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.pg.PgTx;
 import dev.rail8.runtime.plugin.Plugins;
@@ -280,6 +282,8 @@ public final class AdminServer {
 
     /** The largest body of {@code POST /admin/deploy}, in bytes. */
     static final int DEPLOY_BODY_MAX = 4 * 1024;
+    /** The largest body of a secret's create or overwrite (bytes): a plain value of 32 KiB, escaped, or a key pair with its certificates. */
+    static final int SECRET_BODY_MAX = 64 * 1024;
     /** The largest body of a login, {@code POST /admin/sessions}, in bytes. */
     static final int LOGIN_BODY_MAX = 1024;
     /** The largest body of the routes of users and of the caller's own password, in bytes. */
@@ -715,6 +719,19 @@ public final class AdminServer {
                 admin.get("/admin/steps", Action.DEPLOYMENT_READ, (c, who) -> steps(d));
                 admin.get("/admin/flows/:flow/cpu", Action.DEPLOYMENT_READ, (c, who) -> cpu(c, d));
             });
+            deployments.flatMap(Deployments::secretStore).ifPresent(store -> {
+                admin.get("/admin/secrets", Action.SECRET_LIST, (c, who) -> Json.of(200, store.list().await()));
+                admin.get("/admin/secrets/:name", Action.SECRET_LIST, (c, who) -> secret(c, store));
+                admin.post("/admin/secrets", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.of(201,
+                        store.create(who.acting(Action.SECRET_WRITE, PackageRef.ANY, remote(c)), secretBody(c, true)).await()));
+                admin.post("/admin/secrets/:name", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.of(200,
+                        store.overwrite(who.acting(Action.SECRET_WRITE, PackageRef.ANY, remote(c)), c.pathParam("name"), secretBody(c, false)).await()));
+                admin.delete("/admin/secrets/:name", Action.SECRET_DELETE, (c, who) -> {
+                    store.delete(who.acting(Action.SECRET_DELETE, PackageRef.ANY, remote(c)), c.pathParam("name"),
+                            Optional.ofNullable(c.request().getParam("confirm"))).await();
+                    return NO_CONTENT;
+                });
+            });
             work.ifPresent(q -> {
                 admin.get("/admin/work/held", Action.MESSAGE_READ, (c, who) -> held(c, q));
                 admin.get("/admin/work/stopped", Action.MESSAGE_READ, (c, who) -> stopped(c, q));
@@ -959,6 +976,7 @@ public final class AdminServer {
     private static Reply failed(Throwable failure, RoutingContext ctx) {
         if (failure instanceof Refused refused) return Json.of(400, error(refused.code, "bad request: " + refused.getMessage(), Map.of()));
         if (failure instanceof AccessRefused refused) return refusal(refused, ctx.request().path().startsWith(MODULES));
+        if (failure instanceof SecretRefused refused) return Json.of(refused.status(), refused.body());
         if (PgTx.refusedByThePool(failure)) return busy();
         LOG.log(System.Logger.Level.WARNING, "admin request " + Access.redacted(ctx.request().path()) + " failed", failure);
         return Json.of(500, error(RefusalCode.INTERNAL_ERROR, "internal error", Map.of()));
@@ -1623,6 +1641,25 @@ public final class AdminServer {
     }
 
     /** 200 {@code {name}}, the user of the route's path. */
+    /** The entry of the secret {@code :name}: 404 {@code not-found} when no source holds it and nothing uses it. */
+    private static Reply secret(RoutingContext ctx, SecretStore store) {
+        String name = ctx.pathParam("name");
+        return store.entry(name).await().map(entry -> Json.of(200, entry)).orElseGet(() -> Json.of(404, new JsonObject()
+                .put("error", "no source holds the secret '" + name + "' and nothing uses it").put("code", "not-found")
+                .put("values", new JsonObject().put("name", name))));
+    }
+
+    /**
+     * The body of a secret's create ({@code named}) or overwrite: a JSON object of its kind's members, which the store checks;
+     * else a 400 saying the shape. A refusal never echoes the body.
+     */
+    private static JsonObject secretBody(RoutingContext ctx, boolean named) {
+        String shape = "the body is {" + (named ? "\"name\": \"<name>\", " : "") + "\"kind\": \"value\", \"value\": …}, {"
+                + (named ? "\"name\", " : "") + "\"kind\": \"credentials\", \"user\", \"password\"} or {" + (named ? "\"name\", " : "")
+                + "\"kind\": \"key-pair\", \"privateKey\", \"certificates\"}";
+        return object(ctx, shape, named ? Set.of("name", "kind") : Set.of("kind"), Set.of("value", "user", "password", "privateKey", "certificates"));
+    }
+
     private static Reply named(RoutingContext ctx) {
         return Json.of(200, new JsonObject().put("name", ctx.pathParam("name")));
     }
