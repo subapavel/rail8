@@ -40,7 +40,7 @@ test('@stack list, New mapping, Signature, a wire and a moved box on Definition,
   await fields(page, 'target').getByRole('button', { name: 'OrderId', exact: true }).click();
   await fields(page, 'source').getByRole('button', { name: 'OrderId', exact: true }).dblclick();
   await expect(node(page, /^Source field OrderId\. Complete/)).toBeVisible();
-  await expect(page.getByText('2 nodes · 1 connections')).toBeVisible();
+  await expect(page.getByText('2 nodes · 1 connection', { exact: true })).toBeVisible();
 
   // the source field box moves; React Flow moves a node from the second drag event on
   const before = await transformOf(page, /^Source field OrderId/);
@@ -69,7 +69,7 @@ test('@stack list, New mapping, Signature, a wire and a moved box on Definition,
   await expect(page.getByRole('tab', { name: 'Definition', exact: true })).toHaveAttribute('aria-selected', 'true');
   await fields(page, 'target').getByRole('button', { name: 'OrderId', exact: true }).click();
   await expect(node(page, /^Source field OrderId\. Complete/)).toBeVisible();
-  await expect(page.getByText('2 nodes · 1 connections')).toBeVisible();
+  await expect(page.getByText('2 nodes · 1 connection', { exact: true })).toBeVisible();
   expect(await transformOf(page, /^Source field OrderId/)).toBe(moved);
 
   // opened again it is read-only; Edit makes it editable, with nothing to save
