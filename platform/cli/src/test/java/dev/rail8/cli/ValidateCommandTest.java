@@ -69,8 +69,6 @@ class ValidateCommandTest {
             "fixtures/  -  -",
             "fixtures/inbox/  -  -",
             "flows/  -  -",
-            "  greet.test.yaml  test  -",
-            "  greet.yaml  flow  greet",
             "  invoice-async.test.yaml  test  -",
             "  invoice-async.yaml  flow  invoice-async",
             "  invoice-sync.test.yaml  test  -",
@@ -81,9 +79,12 @@ class ValidateCommandTest {
             "  order-partner.yaml  flow  order-partner",
             "  sftp-invoice.test.yaml  test  -",
             "  sftp-invoice.yaml  flow  sftp-invoice",
-            "mappings/  -  -",
-            "structures/  -  -",
-            "structures/greeting/  -  -");
+            "greeting/  urn:rail8:demo:greeting  Greet a person with a mapping of the studio.",
+            "  greet.test.yaml  test  -",
+            "  greet.yaml  flow  greet",
+            "greeting/mappings/  -  -",
+            "greeting/structures/  -  -",
+            "greeting/structures/greeting/  -  -");
 
     /** The {@code tree} fixture: a root endpoint, folder.yaml with both fields and with a description only, a nested folder. */
     static final List<String> TREE = List.of(

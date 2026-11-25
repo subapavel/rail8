@@ -1,6 +1,6 @@
-import { parse } from 'yaml';
+import { parse, parseDocument, stringify } from 'yaml';
 import type { RefusalValues } from '../refusal';
-import type { Artifact, Busy, Change, ChangeStatus, CommitBody, DeployBody, DiscardBody, Dependency, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
+import type { Artifact, Busy, Change, ChangeStatus, CommitBody, DeployBody, DiscardBody, Dependency, FolderBody, Kind, LockBody, LockedPin, PackageRow, Pin, RemoteBody } from './api';
 
 /** At most this many packages are listed, and at most this many folders that are no package. */
 export const MAX_PACKAGES = 100;
@@ -531,7 +531,7 @@ export async function artifactsOf(
     const path = `${repository}/${inside}`;
     const { kind, id } = kindOf(path, text);
     if (kind === 'file') continue;
-    artifacts.set(inside, { path, kind, ...(id === undefined ? {} : { id }) });
+    artifacts.set(inside, { path, kind, ...(id === undefined ? {} : { id }), ...(kind === 'folder' && text !== null ? folderFieldsOf(text) : {}) });
     if (text === null) continue;
     for (const other of namedPaths(inside, text)) {
       if (other === inside) continue;
@@ -871,6 +871,25 @@ export const LOCK_REFUSALS = {
   noPins: fixed('lock-no-pins', 'rail8 lock printed lines that are no pins: the command line may be another version than this UI'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
 } as const;
 
+/** What a write of a folder's `folder.yaml` is refused for. */
+export const FOLDER_REFUSALS = {
+  readOnly: fixed('folder-read-only', 'this server shows the working folder read-only (RAIL8_READ_ONLY is true); nothing was written'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  root: fixed('folder-root', "the package's own folder holds package.yaml, not folder.yaml: choose a folder inside it"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  name: worded<{ name: string }>(
+    'folder-name',
+    ({ name }) => `${name} is no name of a folder: it starts with a small letter and holds small letters, digits and '-', at most 64 characters`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  deep: worded<{ max: number }>('folder-too-deep', ({ max }) => `a folder lies at most ${max} folders deep in its package`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  namespaceLength: worded<{ max: number }>('folder-namespace-length', ({ max }) => `a namespace holds 1 to ${max} characters`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  namespaceTaken: worded<{ namespace: string; folder: string }>(
+    'folder-namespace-taken',
+    ({ namespace, folder }) => `the namespace ${namespace} is the namespace of the folder ${folder} already: one namespace belongs to one folder`, // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  ),
+  inTheWay: worded<{ path: string }>('folder-in-the-way', ({ path }) => `${path} is a file or a link, not a folder; nothing was written`), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  exists: fixed('folder-exists', 'the folder has a folder.yaml already: open the folder again to change it; nothing was written'), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  stale: fixed('folder-stale', "the folder's folder.yaml is no longer what you saw: open the folder again; nothing was written"), // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+} as const;
+
 /**
  * The code of every entry of the records of the packages, in the order of the records: a code of the UI's server that an
  * entry shares, such as `bad-request`, once for each entry that gives it.
@@ -888,6 +907,7 @@ export const PACKAGE_REFUSAL_CODES: readonly string[] = [
   CLONE_REFUSALS,
   NEW_PACKAGE_REFUSALS,
   LOCK_REFUSALS,
+  FOLDER_REFUSALS,
 ].flatMap((record): string[] => Object.values(record).map((entry: { code: string }) => entry.code));
 
 /** The dependencies a `package.yaml` of `text` declares, the first declaration of each name, sorted by name; none when it cannot be read. */
@@ -1012,4 +1032,92 @@ export function lockedPinsOf(said: string): LockedPin[] | null {
     pins.push({ name: words[0]!.slice(0, at), version: words[0]!.slice(at + 1), repository: words[1]!, commit: words[2]!, content: words[3]! });
   }
   return pins;
+}
+
+/** A folder of a package lies at most this many folders deep, and its name holds at most this many characters. */
+export const MAX_FOLDER_DEPTH = 4;
+export const MAX_FOLDER_NAME = 64;
+/** A folder's namespace holds at most this many characters. */
+export const MAX_NAMESPACE = 1024;
+
+const FOLDER_NAME = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * Why the folder at `inside`, a path within its package, cannot hold a `folder.yaml`: it is the package's own folder, a
+ * name is no name of a folder (a small letter, then small letters, digits and `-`, at most 64 characters), or it lies
+ * deeper than four folders; null when it can.
+ */
+export function folderPathRefused(inside: string): Refused | null {
+  if (inside === '') return FOLDER_REFUSALS.root;
+  const names = inside.split('/');
+  const wrong = names.find((name) => !FOLDER_NAME.test(name) || name.length > MAX_FOLDER_NAME);
+  if (wrong !== undefined) return FOLDER_REFUSALS.name({ name: wrong });
+  if (names.length > MAX_FOLDER_DEPTH) return FOLDER_REFUSALS.deep({ max: MAX_FOLDER_DEPTH });
+  return null;
+}
+
+/** Why `namespace` cannot be a folder's: it is empty or longer than 1024 characters; null when it can. */
+export function namespaceRefused(namespace: string): Refused | null {
+  const length = [...namespace].length;
+  return length < 1 || length > MAX_NAMESPACE ? FOLDER_REFUSALS.namespaceLength({ max: MAX_NAMESPACE }) : null;
+}
+
+/**
+ * Why the folder at `inside` cannot take `namespace`: another folder of `folders`, each a path within the package
+ * with its namespace, has it already, compared byte for byte; null when none has it.
+ */
+export function namespaceTaken(namespace: string, inside: string, folders: readonly { inside: string; namespace?: string }[]): Refused | null {
+  const other = folders.find((f) => f.inside !== inside && f.namespace === namespace);
+  return other === undefined ? null : FOLDER_REFUSALS.namespaceTaken({ namespace, folder: other.inside });
+}
+
+/** The namespace and the description a `folder.yaml` of `text` gives, each when it is text; none when it cannot be read. */
+export function folderFieldsOf(text: string): { namespace?: string; description?: string } {
+  let doc: unknown;
+  try {
+    doc = parse(text);
+  } catch {
+    return {};
+  }
+  if (!isRecord(doc)) return {};
+  return {
+    ...(typeof doc.namespace === 'string' ? { namespace: doc.namespace } : {}),
+    ...(typeof doc.description === 'string' ? { description: doc.description } : {}),
+  };
+}
+
+/**
+ * The text of a folder's `folder.yaml` with `namespace` and `description`, each left out when null: a new file when
+ * `before` is null, else `before` with those two fields set or removed, its comments and other keys kept.
+ */
+export function folderText(before: string | null, namespace: string | null, description: string | null): string {
+  if (before === null) {
+    return stringify({ schemaVersion: 1, kind: 'folder', ...(namespace === null ? {} : { namespace }), ...(description === null ? {} : { description }) });
+  }
+  const doc = parseDocument(before);
+  for (const [key, value] of [['namespace', namespace], ['description', description]] as const) {
+    if (value === null) doc.delete(key);
+    else doc.set(key, value);
+  }
+  return doc.toString();
+}
+
+/**
+ * `body` as a write of a folder's `folder.yaml` in the package `repository` takes it, with the folder's path within the
+ * package; refused with 400 when it is no `{path, tag, namespace, description}` (the path relative to the working
+ * folder, each of the others text or null) or the path is malformed, 404 when the path lies outside the package, and
+ * 422 when the folder cannot hold a `folder.yaml` or the namespace is no namespace.
+ */
+export function folderBodyOf(repository: string, body: unknown): (FolderBody & { inside: string }) | (Refused & { status: 400 | 404 | 422 }) {
+  if (!isRecord(body)) return badRequest('the request is no JSON object'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  const { path, tag, namespace, description } = body;
+  const text = (value: unknown) => value === null || typeof value === 'string';
+  if (typeof path !== 'string' || !text(tag) || !text(namespace) || !text(description)) {
+    return badRequest('the request is {path, tag, namespace, description}: the path is text, each of the others text or null'); // untranslated: the English text beside the refusal's code, by which the UI shows it in the user's language
+  }
+  const found = path === repository ? { inside: '' } : inPackage(repository, path);
+  if ('error' in found) return found;
+  const refused = folderPathRefused(found.inside) ?? (namespace === null ? null : namespaceRefused(namespace as string));
+  if (refused !== null) return { status: 422, ...refused };
+  return { path, tag: tag as string | null, namespace: namespace as string | null, description: description as string | null, inside: found.inside };
 }

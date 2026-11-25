@@ -1,5 +1,5 @@
-# Maps a JSON person to an XML greeting with the mapping of the studio mappings/greeting.mapping.json and answers with
-# the greeting, so a change of the mapping shows in the reply once it is deployed.
+# Maps a JSON person to an XML greeting with the mapping of the studio greeting/mappings/greeting.mapping.json and answers
+# with the greeting, so a change of the mapping shows in the reply once it is deployed.
 schemaVersion: 1
 kind: flow
 id: greet
@@ -17,4 +17,4 @@ limits:
 steps:
   - type: mapping
     name: greeting
-    mapping: mappings/greeting.mapping.json
+    mapping: greeting/mappings/greeting.mapping.json

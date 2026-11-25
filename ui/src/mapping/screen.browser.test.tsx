@@ -35,8 +35,8 @@ function memoryBrowserState(): BrowserStateStore {
   return { read: (key) => values.get(key), write: (key, value) => void values.set(key, value) };
 }
 
-/** The buttons of the mappings of the working folder, each opening its studio, and New mapping in `folder` beside `beside`. */
-function Mappings({ api, open, folder, beside }: { api: ApiClient; open: (screen: Screen) => void; folder: string; beside?: string }) {
+/** The buttons of the mappings of the working folder, each opening its studio, and New mapping in the folder `within` of `folder`. */
+function Mappings({ api, open, folder, within }: { api: ApiClient; open: (screen: Screen) => void; folder: string; within?: string }) {
   const [kind] = useState(() => mappingKind(api, memoryBrowserState()));
   const [ids, setIds] = useState<string[]>([]);
   useEffect(() => void api.listMappings().then(({ mappings }) => setIds(mappings.map(({ id }) => id))), [api]);
@@ -48,17 +48,17 @@ function Mappings({ api, open, folder, beside }: { api: ApiClient; open: (screen
           {id.slice(id.lastIndexOf('/') + 1)}
         </Button>
       ))}
-      <New folder={folder} beside={beside} open={open} onCreated={() => {}} />
+      <New folder={folder} within={within} open={open} onCreated={() => {}} />
     </Flex>
   );
 }
 
-function render(api: ApiClient, folder = 'mappings', beside = 'mappings/order-id-copy.mapping.json') {
+function render(api: ApiClient, folder = 'mappings', within?: string) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   // the screen the tests open mappings from, as a folder's tab opens them
-  const files: Screen = { id: 'files', title: 'Files', render: (open) => <Mappings api={api} open={open} folder={folder} beside={beside} /> };
+  const files: Screen = { id: 'files', title: 'Files', render: (open) => <Mappings api={api} open={open} folder={folder} within={within} /> };
   root.render(<Shell screens={[probed(files)]} start="files" />);
 }
 
@@ -134,10 +134,10 @@ describe('mappings in the shell', () => {
     await expect.poll(() => crumbs.elements().map((crumb) => crumb.textContent)).toEqual(['Workspace', 'Files', 'order-id-copy']);
   });
 
-  test('New mapping starts in the folder of the mapping beside it, below the folder it shows, and makes the id of them', async () => {
+  test('New mapping starts in the folder it is given, below the folder it shows, and makes the id of them', async () => {
     const fake = fakeApiClient();
     const createMapping = vi.fn(fake.createMapping);
-    render({ ...fake, createMapping }, 'orders', 'orders/mappings/in/order.mapping.json');
+    render({ ...fake, createMapping }, 'orders', 'mappings/in');
     await page.getByRole('button', { name: 'New mapping' }).click();
     const dialog = page.getByRole('dialog', { name: 'New mapping' });
     await expect.element(dialog.getByRole('textbox', { name: 'Folder' })).toHaveValue('mappings/in');

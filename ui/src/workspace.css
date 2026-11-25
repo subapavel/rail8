@@ -159,3 +159,10 @@ body {
   margin: 0;
   font-size: var(--ant-font-size-heading-4);
 }
+/* the folder of the artifact tree that the New actions write into */
+.rail8-chosen > td.ant-table-cell {
+  background: var(--ant-color-primary-bg);
+}
+.rail8-chosen .ant-btn[aria-pressed='true'] {
+  font-weight: var(--ant-font-weight-strong);
+}

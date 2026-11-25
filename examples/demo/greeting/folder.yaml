@@ -1,0 +1,5 @@
+# The greeting: the flow greet, its test, its mapping and the structures the mapping reads, in one folder.
+schemaVersion: 1
+kind: folder
+namespace: urn:rail8:demo:greeting
+description: Greet a person with a mapping of the studio.

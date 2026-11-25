@@ -386,6 +386,24 @@ export type CloneAnswer =
  */
 export type NewPackageAnswer = { repository: string; package: PackageState } | { repository: string; package: null; problem: string };
 
+/**
+ * A write of a folder's `folder.yaml`: the folder's path relative to the working folder, with `/`, inside the package;
+ * the git half's tag of the `folder.yaml` the author saw (null: there was none, and the folder may not exist yet); and
+ * the namespace and the description it gives the folder, each left out of the file when null.
+ */
+export interface FolderBody {
+  path: string;
+  tag: string | null;
+  namespace: string | null;
+  description: string | null;
+}
+
+/** What a write of a folder's `folder.yaml` answers: the package's state after it (null when it could not be read, and `problem` says why). */
+export interface FolderAnswer {
+  package: PackageState | null;
+  problem?: string;
+}
+
 /** What the screens of packages ask of the development server's git half. Every call rejects with a {@link PackagesError} when it is refused. */
 export interface PackagesApi {
   list(): Promise<PackageList>;
@@ -445,6 +463,12 @@ export interface PackagesApi {
   pull(repository: string, body: RemoteBody): Promise<PullAnswer>;
   /** Pushes `HEAD`, as the commit the body names, to the upstream's branch of its remote; never forced. */
   push(repository: string, body: RemoteBody): Promise<PushAnswer>;
+  /**
+   * Writes the `folder.yaml` of a folder of the package, making the folder and those above it when they are missing,
+   * once it has checked under the working folder's lock that the file is still the one the author saw and that no other
+   * folder of the package has the namespace. It commits nothing.
+   */
+  folder(repository: string, body: FolderBody): Promise<FolderAnswer>;
 }
 
 /**
@@ -536,5 +560,6 @@ export function httpPackagesApi(send: typeof fetch = uiFetch): PackagesApi {
     fetch: (repository) => post<FetchAnswer>(of(repository, '/fetch'), {}),
     pull: (repository, body) => post<PullAnswer>(of(repository, '/pull'), body),
     push: (repository, body) => post<PushAnswer>(of(repository, '/push'), body),
+    folder: (repository, body) => post<FolderAnswer>(of(repository, '/folder'), body),
   };
 }

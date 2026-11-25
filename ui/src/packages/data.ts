@@ -27,16 +27,6 @@ export const KIND: Record<Kind, Label> = {
   file: msg('packages.kind.file'),
 };
 
-/** The kinds the artifacts are grouped by, in their order, each under its title. */
-export const GROUPS: { key: string; title: Message; kinds: Kind[] }[] = [
-  { key: 'flows', title: msg('packages.group.flows'), kinds: ['flow'] },
-  { key: 'endpoints', title: msg('packages.group.endpoints'), kinds: ['endpoint'] },
-  { key: 'mappings', title: msg('packages.group.mappings'), kinds: ['mapping'] },
-  { key: 'tests', title: msg('packages.group.tests'), kinds: ['test'] },
-  { key: 'package', title: msg('packages.group.package'), kinds: ['package', 'lock', 'folder'] },
-  { key: 'files', title: msg('packages.group.files'), kinds: ['file'] },
-];
-
 /** The path of `path` within its package: the working folder's path without its first segment. */
 export const inside = (path: string) => path.slice(path.indexOf('/') + 1);
 

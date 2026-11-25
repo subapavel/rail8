@@ -5,12 +5,13 @@ import { isSessionRefused, nodeFor, refusedSession } from '../../../server/sessi
 import { refusalBody } from '../../../server/refusal.ts';
 import { admitted, jsonBody, send, sendFailure, type WorkingFolderWrites } from '../../../server/workingFolder.ts';
 import type { CloneAnswer, NewPackageAnswer, PackageList, PackageState } from '../api.ts';
-import { cloneSourceOf, CLONE_REFUSALS, COMMIT_REFUSALS, DEPLOY_REFUSALS, DISCARD_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS, newPackageBodyOf, PACKAGE_REFUSALS, REMOTE_REFUSALS, type Refused } from '../rules.ts';
+import { cloneSourceOf, CLONE_REFUSALS, COMMIT_REFUSALS, DEPLOY_REFUSALS, DISCARD_REFUSALS, FOLDER_REFUSALS, LOCK_REFUSALS, NEW_PACKAGE_REFUSALS, newPackageBodyOf, PACKAGE_REFUSALS, REMOTE_REFUSALS, type Refused } from '../rules.ts';
 import { cloneInto, CloneRefused } from './clone.ts';
 import { commitBodyOf, commitPaths, CommitRefused } from './commit.ts';
 import { deployBodyFrom, deployCommit, DeployRefused } from './deploy.ts';
 import { discardBodyOf, discardPaths, DiscardRefused } from './discard.ts';
 import { lockBodyOf, lockPackage, LockRefused } from './lock.ts';
+import { folderBodyOf, writeFolder } from './folder.ts';
 import { createPackage } from './newPackage.ts';
 import { artifactsAt, changesOf, cloneOf, fileOf, logOf, stateOf } from './package.ts';
 import { folderOf, listPackages, type NodeState } from './packages.ts';
@@ -99,6 +100,13 @@ const PREFIX = '/git';
  *   Each of the three is refused with 403 under RAIL8_READ_ONLY=true and with 413 for a body over 1 MiB, and answers
  *   `package: null` and `problem` when the package's state cannot be read after it; a refusal of git carries its
  *   `output`. Fetch and push take no lock of the working folder, as they change no file of it.
+ * - `POST …/{repository}/folder` `{path, tag, namespace, description}`: 200 `{package}`, the folder's `folder.yaml`
+ *   written (see {@link writeFolder}), with the package's state after it. Refused with 403 under RAIL8_READ_ONLY=true,
+ *   with 503 before its body is read while 9 writes of the working folder are under way, with 413 for a body over
+ *   1 MiB, with 400 for a body of another shape, with 422 for a folder that cannot hold a `folder.yaml` (the package's
+ *   own folder, a name that is no folder's name, deeper than four folders), for a namespace that is no namespace or
+ *   that another folder has, with 409 when a file is in the folder's way, and with 412 when the `folder.yaml` on disk
+ *   is not the one `tag` states.
  *
  * A revision is `work` or a commit of 40 hex digits, never a name such as `HEAD`. Under a package, 400 refuses a
  * malformed repository name, revision or path, or a path with a `.git` segment; 404 a folder that is no package, a
@@ -204,6 +212,16 @@ export function gitPackages(options: GitPackagesOptions) {
     });
   };
 
+  const folder = (req: IncomingMessage, repository: string) => {
+    if (!options.writable) throw refusal(403, FOLDER_REFUSALS.readOnly);
+    return admitted(options.writes, async (held) => {
+      const body = folderBodyOf(repository, await jsonBody(req));
+      const clone = await cloneIn(repository);
+      await writeFolder(held, clone, repository, body);
+      return withState(req, clone, repository, 'the write of folder.yaml', {});
+    });
+  };
+
   let cloning = false;
   const clone = (req: IncomingMessage): Promise<CloneAnswer> => {
     if (!options.writable) throw refusal(403, CLONE_REFUSALS.readOnly);
@@ -304,7 +322,7 @@ export function gitPackages(options: GitPackagesOptions) {
     if (path === '/git/packages' && req.method !== 'GET') throw refusal(405, PACKAGE_REFUSALS.onlyGetAndPost({ path }));
     const under = /^\/git\/packages\/([^/]+)(?:\/([^/]+))?$/.exec(path);
     if (path !== '/git/packages' && under === null) throw refusal(404, PACKAGE_REFUSALS.noRoute({ path }));
-    const writes = ['commit', 'discard', 'deploy', 'lock', 'fetch', 'pull', 'push'];
+    const writes = ['commit', 'discard', 'deploy', 'lock', 'fetch', 'pull', 'push', 'folder'];
     const method = under?.[2] !== undefined && writes.includes(under[2]) ? 'POST' : 'GET';
     if (req.method !== method) throw refusal(405, PACKAGE_REFUSALS.onlyMethod({ method, path }));
     if (under === null) return { value: await list(req) };
@@ -316,6 +334,7 @@ export function gitPackages(options: GitPackagesOptions) {
     }
     if (under[2] === 'fetch' || under[2] === 'pull' || under[2] === 'push') return { value: await remote(req, repository, under[2]) };
     if (under[2] === 'lock') return { value: await lock(req, repository) };
+    if (under[2] === 'folder') return { value: await folder(req, repository) };
     if (under[2] === 'discard') return { value: await discard(req, repository) };
     if (method === 'POST') return { value: await (under[2] === 'commit' ? commit(req, repository) : deploy(req, repository)) };
     return one(req, repository, under[2], url.searchParams);

@@ -9,8 +9,8 @@ export type Side = 'source' | 'target';
  */
 export const ownPage = { 'sec-fetch-site': 'same-origin' };
 
-/** The table of the Mappings card of a folder's tab. */
-export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Mappings' });
+/** The tree of the artifacts of a folder's tab. */
+export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Artifacts' });
 
 /**
  * Loads the application and opens the tab of the folder `mappings`, which is no package, from its row on the Packages

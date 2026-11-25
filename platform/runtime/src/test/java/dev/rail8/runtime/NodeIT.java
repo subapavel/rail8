@@ -690,8 +690,8 @@ class NodeIT {
 
     /**
      * The demo files that are not part of invoice-sync: the async door, the SFTP inbox (its secrets are references only a stack node
-     * has), the jq order door and its fixture, the endpoints of the order-partner flow it calls, the greeting's door, its mapping,
-     * the mapping's schemas and its fixtures, and the flows of them. The ITs that
+     * has), the jq order door and its fixture, the endpoints of the order-partner flow it calls, the greeting's door, its folder with
+     * the flow, its test, its mapping and the mapping's schemas, its fixtures, and the flows of them. The ITs that
      * mean "the demo" mean its invoice-sync flow behind http-in, which is what {@link #demoFiles} keeps.
      */
     static boolean addedByP206(String path) {
@@ -699,8 +699,8 @@ class NodeIT {
                 || path.equals("endpoints/http-in-order.yaml") || path.startsWith("flows/order-jq.") || path.equals("fixtures/sample-order.json")
                 || path.startsWith("endpoints/order-partner-") || path.startsWith("flows/order-partner.")
                 || path.startsWith("flows/invoice-async.") || path.startsWith("flows/sftp-invoice.") || path.startsWith("fixtures/inbox/")
-                || path.equals("endpoints/http-in-greet.yaml") || path.startsWith("flows/greet.") || path.startsWith("mappings/")
-                || path.startsWith("structures/") || path.equals("fixtures/person.json") || path.equals("fixtures/not-json.txt");
+                || path.equals("endpoints/http-in-greet.yaml") || path.startsWith("greeting/")
+                || path.equals("fixtures/person.json") || path.equals("fixtures/not-json.txt");
     }
 
     /**

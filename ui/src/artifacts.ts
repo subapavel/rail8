@@ -12,8 +12,9 @@ export type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 /**
  * One artifact of a package at a revision: its path relative to the working folder, with `/`, as the editors' routes
- * name it; its kind; its id when the file gives one; how it changed since the last commit, for the files on disk; and,
- * for a file of the kind `file`, the paths of the artifacts that name its path from the package's root.
+ * name it; its kind; its id when the file gives one; how it changed since the last commit, for the files on disk; for
+ * a file of the kind `file`, the paths of the artifacts that name its path from the package's root; and for a
+ * `folder.yaml`, the namespace and the description it gives its folder.
  */
 export interface Artifact {
   path: string;
@@ -21,6 +22,8 @@ export interface Artifact {
   id?: string;
   change?: ChangeStatus;
   usedBy?: string[];
+  namespace?: string;
+  description?: string;
 }
 
 /** One version of a file, with the files of its package at the same revision. */
@@ -38,8 +41,11 @@ export interface Side {
 export interface NewArtifactProps {
   /** The folder directly in the working folder the new file goes in: a package's, or a folder that is no package. */
   folder: string;
-  /** The path of a file of the kind already in `folder`, relative to the working folder, beside which the new one goes; undefined when there is none. */
-  beside?: string;
+  /**
+   * The folder within `folder` the new file goes in, with `/` between its names and none at either end, such as
+   * `billing/invoices`, as the tab's tree chose it; undefined when none is chosen, and the kind's own folder is the default.
+   */
+  within?: string;
   /** Opens a screen in a tab of its own: the new file's editor. */
   open: (screen: Screen) => void;
   /** Told once the file is written, before its editor opens. */

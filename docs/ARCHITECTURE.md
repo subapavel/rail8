@@ -1206,7 +1206,7 @@ latest attempt failed, its error is shown above the cards and the header offers 
 
 A mapping of the working folder (`RAIL8_WORKSPACE`) opens from its package's Artifacts tab, or from the tab of a folder
 that is no package, and from Quick open, each in a tab of its own, so that several mappings can be open at once; New
-mapping in the Mappings card creates one. A mapping's tab is the mapping studio: it opens read-only; Edit, then Save (with `If-Match`, and a
+mapping above the tree of artifacts creates one, in the folder chosen in the tree. A mapping's tab is the mapping studio: it opens read-only; Edit, then Save (with `If-Match`, and a
 dialog when the file changed on disk), Cancel and Check; and its tabs Overview, Signature,
 Definition (the message trees, the field mappings and the expression canvas, on React Flow), Test
 and Functions. Closing the tab of a mapping with unsaved changes asks first. The studio's types are

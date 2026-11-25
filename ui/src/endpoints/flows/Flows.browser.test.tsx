@@ -159,7 +159,7 @@ function Probe() {
 /** `screen` with the probe of the working files beside what it shows. */
 const probed = (screen: Screen): Screen => ({ ...screen, render: (open) => <><Probe />{screen.render(open)}</> });
 
-function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints(), beside = 'demo/flows/invoice.yaml') {
+function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints(), within?: string) {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -167,7 +167,7 @@ function render(flows: FlowsApi, endpoints: EndpointsApi = fakeEndpoints(), besi
   const files = filesScreen(
     () => flows.list(),
     tab,
-    (open) => <NewFlow api={flows} folder="demo" beside={beside} onCreated={() => {}} openFlow={(path, id) => open(tab(path, id))} />,
+    (open) => <NewFlow api={flows} folder="demo" within={within} onCreated={() => {}} openFlow={(path, id) => open(tab(path, id))} />,
   );
   root.render(<Shell screens={[probed(files)]} start="files" />);
 }
@@ -863,9 +863,23 @@ steps:
     await expect.element(page.getByRole('heading', { name: 'payment', level: 1 })).toBeVisible();
   });
 
-  test('New flow starts beside the flow it is given, keeps a typed path, and refuses one that leaves its folder', async () => {
+  test('New flow starts in flows/ when it is given no folder', async () => {
+    render(fakeFlows());
+    await button('New flow').click();
+    await page.getByRole('textbox', { name: 'Id' }).fill('refund');
+    await expect.element(page.getByRole('textbox', { name: 'File' })).toHaveValue('flows/refund.yaml');
+  });
+
+  test('New flow starts at the root of its folder when it is given the root', async () => {
+    render(fakeFlows(), undefined, '');
+    await button('New flow').click();
+    await page.getByRole('textbox', { name: 'Id' }).fill('refund');
+    await expect.element(page.getByRole('textbox', { name: 'File' })).toHaveValue('refund.yaml');
+  });
+
+  test('New flow starts in the folder it is given, keeps a typed path, and refuses one that leaves its folder', async () => {
     const flows = fakeFlows();
-    render(flows, undefined, 'demo/orders/inbound/invoice.yaml');
+    render(flows, undefined, 'orders/inbound');
     await button('New flow').click();
     const file = page.getByRole('textbox', { name: 'File' });
     await page.getByRole('textbox', { name: 'Id' }).fill('refund');
