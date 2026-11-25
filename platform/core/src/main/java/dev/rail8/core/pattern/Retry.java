@@ -29,8 +29,8 @@ import java.util.concurrent.CountDownLatch;
  * {@link InterruptedException}: a cancelled run, rethrown at once with the interrupt flag restored and, on an attempt after
  * the first, the earlier attempts' failures suppressed on it in attempt order; and a {@link FencedException}: the
  * node's fence is closed, so no attempt may send, and it is thrown at once with the earlier failures suppressed. A failure
- * with a {@link Fault} of kind {@link Fault.Kind#INVALID} in its cause chain (a send refused as invalid) fails again however
- * often it runs, so it is thrown at once too, with the earlier failures suppressed. A failure
+ * whose first {@link Fault} in its cause chain is of kind {@link Fault.Kind#INVALID} (a send refused as invalid) fails again
+ * however often it runs, so it is thrown at once too, with the earlier failures suppressed. A failure
  * while the message's run is stopped ({@link Runs#why()}: its time limit passed or it was cancelled) is thrown at once too,
  * with no pause and no further attempt. An {@link Error} is not a transient failure and is never caught.
  *
