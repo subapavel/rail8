@@ -943,9 +943,10 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    `order-jq` through `direct` to `order-partner` run for real; its endpoint files gone), the template's package with
    the configuration's files for its partner on port 18091, `rail8 new-adapter` and `bin/run-adapter`, which imports
    and activates them with its technical account's token after `rail8 bootstrap --role connection-administrator --role
-   secret-administrator`, as the quickstart does, the quickstart check of `ci/check` (which creates
-   `endpoints/call-audit.yaml` and looks for `partner-domestic` in invoice-sync's file), and the quickstart's text. From
-   this step a deploy warns of each file of the old shape. No change to the database.
+   secret-administrator`, as the quickstart does (the account keeps `operator` and `message-bodies`, and the script's
+   header and `docs/ADAPTERS.md` name the two roles, given on purpose elsewhere), the quickstart check of `ci/check`
+   (which creates `endpoints/call-audit.yaml` and looks for `partner-domestic` in invoice-sync's file), and the
+   quickstart's text. From this step a deploy warns of each file of the old shape. No change to the database.
 5. **The Systems screen under Configure.** Every system with the package that defines it, its connections, their
    adapters, the flows that use each and whether it is set, mocked, stopped or missing in the environment, and the
    instance names; editing the values comes with the configuration's own screen, and until then the quickstart's text
