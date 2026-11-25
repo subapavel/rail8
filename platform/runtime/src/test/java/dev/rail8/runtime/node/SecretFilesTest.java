@@ -67,7 +67,27 @@ class SecretFilesTest {
                 () -> assertEquals(Optional.of(URI.create("redis://user:pw@valkey:6379")), c.leases().valkey()),
                 () -> assertEquals(Optional.of("partner-token"), c.secrets().resolve("secret://partner-token")),
                 () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token-file"),
-                        "the file form's own key is gone: no path is held as a secret's value"));
+                        "the file form's own key is gone: no path is held as a secret's value"),
+                () -> assertEquals(java.util.List.of("RAIL8_SECRET_PARTNER_TOKEN"), c.secrets().variableNames(),
+                        "the store is told the effective variable, not its file form"));
+    }
+
+    /** The secret store's key and its previous one are read from their files, as {@code openssl rand -base64 32 > file} writes them. */
+    @Test
+    void theStoresKeysAreReadFromTheirFiles() throws IOException {
+        byte[] key = new byte[32];
+        java.util.Arrays.fill(key, (byte) 5);
+        byte[] previous = new byte[32];
+        java.util.Arrays.fill(previous, (byte) 6);
+        Map<String, String> env = minimal();
+        env.put("RAIL8_SECRETS_KEY_FILE", file("key", java.util.Base64.getEncoder().encodeToString(key) + "\n").toString());
+        env.put("RAIL8_SECRETS_KEY_PREVIOUS_FILE", file("previous", java.util.Base64.getEncoder().encodeToString(previous) + "\n").toString());
+
+        NodeConfig c = NodeConfig.from(env);
+
+        assertTrue(c.secrets().key().present(), "the key is held");
+        assertTrue(c.secrets().key().equalsKey(key), "the key is the file's");
+        assertFalse(c.secrets().key().equalsKey(previous), "the previous key is not taken for the key");
     }
 
     /** One trailing \n or \r\n is dropped, nothing else: a second line end, inner lines and spaces stay. */

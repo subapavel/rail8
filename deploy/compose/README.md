@@ -67,3 +67,22 @@ after that: `docker volume ls` shows it under the former name, `docker volume rm
   docker compose cp ../../examples/demo/fixtures/inbox/invoice-4711.xml sftp:/home/demo/inbox/
   # or over SFTP from the sftp container: docker compose exec sftp sftp demo@localhost (password above), then: put <file> inbox
   ```
+
+## The secret store
+
+The stack starts without the store's key: each node reads its secrets from its `RAIL8_SECRET_*` variables only, and a
+write to `/admin/secrets` is 503 `no-key`. To keep secrets in the store, give every node of the installation the same key,
+the base64 of 256 random bits (`openssl rand -base64 32`), as `RAIL8_SECRETS_KEY_FILE` (preferred) or `RAIL8_SECRETS_KEY`.
+It is never the journal's key. What the store holds is sealed in Postgres under that key, and Postgres never holds the key.
+
+- **A lost key loses every secret.** Back the key up apart from the database and its backups: a backup of the database
+  without the key holds nothing that can be read.
+- **It protects a database at rest, not access to the server.** Whoever reads a node's memory, its environment or the file
+  of its key reads every secret. The store is not a vault.
+- **Whoever deploys can reach every secret**: a flow names any secret by its name, and its code can send the value anywhere.
+- **The limits**: 1,000 secrets and 16 MiB of sealed values; a plain value of 32 KiB, a user of 256 characters, a password
+  of 4,096 characters; a name of 128 characters, `[a-z0-9][a-z0-9._-]*`, never under `rail8.` but `rail8.git`.
+- **After a lost key.** A node with rows that no key opens refuses its start. Stop every node, run `delete from secrets;
+  update secret_store set generation = generation + 1, stamp = floor(random() * 9.2e18)::bigint;`, start every node with a
+  new key, and enter each secret again. The uses stay, and the list shows each name as missing, with its users.
+- **Changing the key** takes two rolls of the nodes; `docs/SECRET-STORE.md` says how.

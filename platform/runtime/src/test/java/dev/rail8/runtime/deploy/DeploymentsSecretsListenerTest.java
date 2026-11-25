@@ -68,14 +68,17 @@ class DeploymentsSecretsListenerTest {
         return refused;
     }
 
-    /** {@code a-in}'s host is a reference to 10.0.0.5, {@code b-in}'s is 10.0.0.5 as written, both on 9100: they overlap. */
+    /**
+     * {@code a-in}'s host is a reference to 10.0.0.5, {@code b-in}'s is 10.0.0.5 as written, both on 9100: they overlap. The
+     * problem shows the host as the reference, as every text the node writes shows a secret's value.
+     */
     @Test
     void listensOnIsAskedOnTheResolvedConfig() {
         PackageDraft p = listening(listening(pkg("hosts"), "a", on("secret://listen-host", 9100)), "b", on("10.0.0.5", 9100));
 
         DeployRefusedException refused = refused(node(true), p);
 
-        assertEquals(List.of(line("b", "b-in", "10.0.0.5:9100", "10.0.0.5:9100", flowOf("a", "a-in"))), refused.problems());
+        assertEquals(List.of(line("b", "b-in", "secret://listen-host:9100", "secret://listen-host:9100", flowOf("a", "a-in"))), refused.problems());
     }
 
     /**

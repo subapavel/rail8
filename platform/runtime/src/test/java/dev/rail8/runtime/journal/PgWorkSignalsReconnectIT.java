@@ -133,7 +133,7 @@ class PgWorkSignalsReconnectIT {
     @Test
     void aReconnectWhoseListenFailsIsTriedAgainAfterADoubledBackoffAndWakesOnceItListens() throws Exception {
         int mark = listenWire.mark();
-        PgWire.FatalReply refused = listenWire.fatalReplyTo(PgWire.query("LISTEN " + PgWorkSignals.CHANNEL));
+        PgWire.FatalReply refused = listenWire.fatalReplyTo(PgWire.query(PgWorkSignals.LISTEN));
         assertEquals(1, db.count("select count(pg_terminate_backend(pid)) " + LISTENING), "fixture: the listener terminated");
 
         armedIn(Duration.ofMillis(100));   // the first reconnect: its LISTEN answered FATAL
@@ -172,7 +172,7 @@ class PgWorkSignalsReconnectIT {
 
     /** The hot standby's answer to {@code LISTEN}: a plain ERROR, the connection left open and usable (review r1 V2). */
     PgWire.ErrorReply standbyRefusesTheNextListen() {
-        return listenWire.errorReplyTo(PgWire.query("LISTEN " + PgWorkSignals.CHANNEL), "25006", "cannot execute LISTEN during recovery");
+        return listenWire.errorReplyTo(PgWire.query(PgWorkSignals.LISTEN), "25006", "cannot execute LISTEN during recovery");
     }
 
     /** The relayed connection that sent the first LISTEN after {@code mark}. */
@@ -224,7 +224,7 @@ class PgWorkSignalsReconnectIT {
 
     /** The node's listener terminated and its reconnect fired: the reconnect's LISTEN is held at the relay, {@code held}. */
     PgWire.Held reconnectHeldAtItsListen() throws Exception {
-        PgWire.Held held = listenWire.holdNext(PgWire.query("LISTEN " + PgWorkSignals.CHANNEL));
+        PgWire.Held held = listenWire.holdNext(PgWire.query(PgWorkSignals.LISTEN));
         assertEquals(1, db.count("select count(pg_terminate_backend(pid)) " + LISTENING), "fixture: the listener terminated");
         armedIn(Duration.ofMillis(100));
         held.awaitReached();

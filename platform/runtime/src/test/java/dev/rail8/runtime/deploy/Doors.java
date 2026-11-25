@@ -119,6 +119,7 @@ public final class Doors implements Component {
     private volatile java.util.function.Consumer<String> trace = e -> {};
     private volatile java.util.function.Consumer<EndpointConfig> onConsumer = c -> {};
     private volatile Function<EndpointConfig, Optional<String>> naming = c -> Optional.empty();
+    private volatile Forms forms = FORMS;
     private int starts;   // guarded by this: start() calls so far
     private final Map<String, java.util.Queue<Gate>> startGates = new ConcurrentHashMap<>();
     private final Map<String, java.util.Queue<Gate>> stopGates = new ConcurrentHashMap<>();
@@ -229,6 +230,9 @@ public final class Doors implements Component {
     /** The stop() of the door with flow option {@code flow} fails with {@code message} once its answers have completed. */
     public void failStop(String flow, String message) { stopFailures.put(flow, message); }
 
+    /** From now on a stop of a door of {@code flow} succeeds again, as before {@link #failStop}. */
+    public void stopCleanly(String flow) { stopFailures.remove(flow); }
+
     /** Runs inside every door's stop(), on the stopping thread, before the stop returns. */
     public void onStop(java.util.function.Consumer<Door> hook) { this.onStop = Objects.requireNonNull(hook, "hook"); }
 
@@ -247,12 +251,14 @@ public final class Doors implements Component {
 
     @Override public String scheme() { return scheme; }
 
-    @Override public Forms forms() { return FORMS; }
+    /** {@link #FORMS} until {@link #describe} gives the connection form. */
+    @Override public Forms forms() { return forms; }
 
-    /** The endpoint of {@code connection} as this fixture's tests read it: the key, {@code <scheme>://<key>}, every value in one map. */
+    /** The endpoint of {@code connection} as this fixture's tests read it: the key, {@code <scheme>://<key>}, every value in one map, a secret's its plain value. */
     private EndpointConfig view(Optional<Connection> connection, Map<String, Object> settings, Map<String, Object> more) {
         Connection c = connection.orElseThrow(() -> new IllegalArgumentException("a " + scheme + " endpoint reaches a connection"));
         Map<String, Object> options = new LinkedHashMap<>(c.values());
+        c.secrets().forEach((field, secret) -> options.put(field, secret.value()));
         options.putAll(settings);
         options.putAll(more);
         return new EndpointConfig(c.key(), URI.create(scheme + "://" + c.key()), options);
@@ -261,6 +267,12 @@ public final class Doors implements Component {
     /** The in endpoint {@code in} stands for, as the consumers of this component read it. */
     public EndpointConfig endpoint(Inbound in) {
         return view(in.connection(), in.settings(), Map.of("flow", in.flow(), "maxBodyBytes", in.maxBodyBytes()));
+    }
+
+    /** From now on this component's connection form is {@code connection}, beside the flow form of {@link #FORMS}. */
+    public Doors describe(Settings connection) {
+        this.forms = new Forms(Objects.requireNonNull(connection, "connection"), FORMS.flow(), FORMS.reach());
+        return this;
     }
 
     /**

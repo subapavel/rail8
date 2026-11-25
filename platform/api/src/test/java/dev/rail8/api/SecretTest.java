@@ -56,4 +56,40 @@ class SecretTest {
         assertEquals(a, a);
         assertNotEquals(a, b);
     }
+
+    @Test
+    void eachKindHasItsIdAndAReadOfAnotherKindFailsNamingTheReferenceAndBothKinds() {
+        assertEquals("value", Secret.Kind.VALUE.id());
+        assertEquals("credentials", Secret.Kind.CREDENTIALS.id());
+        assertEquals("key-pair", Secret.Kind.KEY_PAIR.id());
+        Secret login = Secret.credentials("secret://login", () -> new Secret.Credentials("acme", "pa55"));
+        assertEquals(Secret.Kind.CREDENTIALS, login.kind());
+        assertEquals("pa55", login.credentials().password());
+        IllegalStateException e = assertThrows(IllegalStateException.class, login::value);
+        assertTrue(e.getMessage().contains("secret://login") && e.getMessage().contains("credentials") && e.getMessage().contains("value"), e.getMessage());
+        assertThrows(IllegalStateException.class, login::keyPair);
+        assertEquals(Secret.Kind.VALUE, Secret.of("secret://v", () -> "x").kind());
+    }
+
+    @Test
+    void credentialsNameTheUserOnly() {
+        Secret.Credentials c = new Secret.Credentials("acme", "pa55-w0rd");
+        assertTrue(c.toString().contains("acme"), c.toString());
+        assertTrue(!c.toString().contains("pa55-w0rd"), c.toString());
+        assertEquals("secret://login", Secret.credentials("secret://login", () -> c).toString());
+    }
+
+    @Test
+    void aKeyPairNamesItsAlgorithmOnlyAndGivesTheJdkPair() throws Exception {
+        java.security.KeyPairGenerator g = java.security.KeyPairGenerator.getInstance("EC");
+        g.initialize(256);
+        java.security.KeyPair jdk = g.generateKeyPair();
+        Secret.KeyPair pair = new Secret.KeyPair(jdk.getPrivate(), jdk.getPublic(), java.util.List.of());
+        assertEquals("KeyPair[EC]", pair.toString());
+        assertEquals(jdk.getPrivate(), pair.pair().getPrivate());
+        assertEquals(jdk.getPublic(), pair.pair().getPublic());
+        Secret s = Secret.keyPair("secret://tls", () -> pair);
+        assertEquals(Secret.Kind.KEY_PAIR, s.kind());
+        assertEquals(pair, s.keyPair());
+    }
 }

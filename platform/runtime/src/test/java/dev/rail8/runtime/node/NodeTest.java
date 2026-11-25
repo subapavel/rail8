@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -105,6 +106,25 @@ class NodeTest {
                 "RAIL8_PG_HOST", "127.0.0.1", "RAIL8_PG_PORT", String.valueOf(closedPort())));
         TestJournalKey.with(m);   // the master key is loaded before Postgres: a required configuration
         return m;
+    }
+
+    /** A node whose store's key equals its journal's refuses its start before any Postgres statement, naming no key. */
+    @ParameterizedTest
+    @ValueSource(strings = {"dev", "prod"})
+    void aStoresKeyEqualToTheJournalsKeyRefusesTheStart(String env) throws Exception {
+        Map<String, String> config = closedPostgres(env, data);
+        byte[] same = new byte[32];
+        new java.security.SecureRandom().nextBytes(same);
+        String key = java.util.Base64.getEncoder().encodeToString(same);
+        config.put("RAIL8_JOURNAL_KEY", key);
+        config.put("RAIL8_SECRETS_KEY", key);
+        Throwable failure = assertThrows(Throwable.class,
+                () -> OnVirtualThread.call(() -> Node.start(NodeConfig.from(config), vertx, ctx -> List.of(new PlainComponent("jms")), List.of(), List.of())));
+        Throwable cause = failure;
+        while (cause != null && !(cause instanceof IllegalStateException)) cause = cause.getCause();
+        assertTrue(cause != null && cause.getMessage().startsWith("RAIL8_SECRETS_KEY equals the journal's key"), "refused for the key: " + failure);
+        assertFalse(refusedConnection(failure), "before any Postgres statement: " + failure);
+        assertFalse(String.valueOf(cause.getMessage()).contains(key), "the refusal names no key");
     }
 
     static boolean refusedConnection(Throwable t) {
