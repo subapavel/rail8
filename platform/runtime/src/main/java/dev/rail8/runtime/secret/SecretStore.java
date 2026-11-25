@@ -856,17 +856,31 @@ public final class SecretStore {
 
     /**
      * Replaces the uses of every flow of package {@code pkg}, by flow the names it uses: those of the flows {@code uses} names
-     * with theirs, those of the package's other flows with none. One call of {@link #replaceUses}'s rules over all its users.
+     * with theirs, those of the package's other flows with none. {@code draining} names, by qualified id, every flow of the
+     * package marked to drain now: one that has no {@code drain} rows takes its {@code flow} rows as its {@code drain} rows; a
+     * flow of the package with {@code drain} rows that is not in it, revived or done, has them deleted. One call of
+     * {@link #replaceUses}'s rules over all its users.
      */
-    public Future<List<String>> replacePackageUses(SqlConnection tx, String pkg, Map<String, Map<String, Set<Secret.Kind>>> uses) {
-        return PgSecretRows.packageUsers(tx, pkg).compose(before -> {
+    public Future<List<String>> replacePackageUses(SqlConnection tx, String pkg, Map<String, Map<String, Set<Secret.Kind>>> uses, Set<String> draining) {
+        return PgSecretRows.packageUses(tx, pkg).compose(before -> {
+            Map<String, Map<String, Set<Secret.Kind>>> flows = before.get("flow");
+            Map<String, Map<String, Set<Secret.Kind>>> drains = before.get("drain");
             Map<String, Map<String, Set<Secret.Kind>>> all = new TreeMap<>();
-            before.forEach(flow -> all.put(flow, Map.of()));
-            all.putAll(uses);
+            flows.keySet().forEach(id -> all.put(id, Map.of()));
+            uses.forEach((flow, names) -> all.put(pkg + "/" + flow, names));
             List<Uses> users = new ArrayList<>();
-            all.forEach((flow, names) -> users.add(new Uses("flow", pkg + "/" + flow, names)));
+            all.forEach((id, names) -> users.add(new Uses("flow", id, names)));
+            for (String id : new TreeSet<>(draining)) {
+                if (!drains.containsKey(id) && flows.containsKey(id)) users.add(new Uses("drain", id, flows.get(id)));
+            }
+            drains.keySet().stream().filter(id -> !draining.contains(id)).forEach(id -> users.add(new Uses("drain", id, Map.of())));
             return replaceUses(tx, users);
         });
+    }
+
+    /** Deletes the {@code drain} rows of {@code flow}, by qualified id, in {@code tx}: its mark has ended. */
+    public Future<Void> endDrain(SqlConnection tx, String flow) {
+        return replaceUses(tx, List.of(new Uses("drain", flow, Map.of()))).mapEmpty();
     }
 
     // ---------------------------------------------------------------------------------------------------------------- the key

@@ -25,7 +25,7 @@ create table secrets (
 create table secret_uses (
     scope     text   not null,
     name      text   not null,
-    user_kind text   not null check (user_kind in ('flow', 'connection', 'credential', 'platform')),
+    user_kind text   not null check (user_kind in ('flow', 'drain', 'connection', 'credential', 'platform')),
     user_id   text   not null,
     kinds     text[] not null,
     primary key (scope, name, user_kind, user_id)
