@@ -1,6 +1,7 @@
 import { Alert, Form, Input, Select } from 'antd';
 import { MountedModal } from '../../../MountedModal';
 import { useId, useState } from 'react';
+import { useText } from '../../../language';
 import type { Diagnostic } from '../../api/client';
 import { choiceOf, draftOf, ROOT_KINDS, type ChoiceDraft, type Direction } from './message-choice';
 import type { MessageChoice, RootKind } from '../shared/structure-names';
@@ -36,6 +37,7 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
   const choice = choiceOf(draft);
   const set = (change: Partial<ChoiceDraft>) => setDraft((current) => ({ ...current, ...change }));
   const fieldId = (name: string) => `${formId}-${name}`;
+  const { t } = useText();
 
   // A form submits only by its default button, Apply, also on Enter (HTML implicit submission); Apply is disabled
   // without a choice and while one is applied.
@@ -58,10 +60,10 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
     <MountedModal
       title={title}
       onCancel={onClose}
-      cancelText="Cancel"
-      okText="Apply"
+      cancelText={t('frame.cancel')}
+      okText={t('studio.apply')}
       confirmLoading={applying}
-      okButtonProps={{ 'aria-label': 'Apply', form: formId, htmlType: 'submit', disabled: !choice || applying }}
+      okButtonProps={{ 'aria-label': t('studio.apply'), form: formId, htmlType: 'submit', disabled: !choice || applying }}
     >
       <p>{description}</p>
       <Form colon={false} layout="vertical" id={formId} onFinish={submit}>
@@ -71,43 +73,43 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
             showIcon
             title={<h3>{failure.title}</h3>}
             description={
-              <ul aria-label="Message diagnostics">
+              <ul aria-label={t('studio.choice.diagnostics')}>
                 {failure.diagnostics.map(({ severity, code, message }, i) => (
                   <li key={i}>
-                    {severity} <code>{code}</code>: {message}
+                    {t(`studio.severity.${severity}`)} <code>{code}</code>: {message}
                   </li>
                 ))}
               </ul>
             }
           />
         )}
-        <Form.Item label="Bundle" htmlFor={fieldId('bundle')}>
+        <Form.Item label={t('studio.choice.bundle')} htmlFor={fieldId('bundle')}>
           <Input.TextArea
-            aria-label="Bundle"
+            aria-label={t('studio.choice.bundle')}
             id={fieldId('bundle')}
             value={draft.bundle}
             onChange={(e) => set({ bundle: e.target.value })}
-            placeholder="One path per line, relative to the mapping's package"
+            placeholder={t('studio.choice.bundle.placeholder')}
           />
         </Form.Item>
-        <Form.Item label="Root" htmlFor={fieldId('kind')}>
+        <Form.Item label={t('studio.choice.root')} htmlFor={fieldId('kind')}>
           <Select
-            aria-label="Root"
+            aria-label={t('studio.choice.root')}
             id={fieldId('kind')}
             virtual={false}
             value={draft.kind}
-            options={ROOT_KINDS.map(([value, label]) => ({ value, label }))}
+            options={ROOT_KINDS.map(([value, label]) => ({ value, label: t(label) }))}
             onChange={(kind) => set({ kind })}
           />
         </Form.Item>
-        {draft.kind === 'element' && text('element', 'Root element', draft.element, (element) => set({ element }))}
+        {draft.kind === 'element' && text('element', t('studio.choice.element'), draft.element, (element) => set({ element }))}
         {draft.kind === 'wsdl' && (
           <>
-            {text('interface', 'Interface', draft.wsdlInterface, (wsdlInterface) => set({ wsdlInterface }))}
-            {text('operation', 'Operation', draft.operation, (operation) => set({ operation }))}
-            <Form.Item label="Direction" htmlFor={fieldId('direction')}>
+            {text('interface', t('studio.choice.interface'), draft.wsdlInterface, (wsdlInterface) => set({ wsdlInterface }))}
+            {text('operation', t('studio.choice.operation'), draft.operation, (operation) => set({ operation }))}
+            <Form.Item label={t('studio.choice.direction')} htmlFor={fieldId('direction')}>
               <Select
-                aria-label="Direction"
+                aria-label={t('studio.choice.direction')}
                 id={fieldId('direction')}
                 virtual={false}
                 value={draft.direction}
@@ -115,7 +117,7 @@ export function MessageChoiceModal({ title, description, initial, kind, onApply,
                 onChange={(direction: Direction) => set({ direction })}
               />
             </Form.Item>
-            {draft.direction === 'fault' && text('fault', 'Fault', draft.fault, (fault) => set({ fault }))}
+            {draft.direction === 'fault' && text('fault', t('studio.choice.fault'), draft.fault, (fault) => set({ fault }))}
           </>
         )}
       </Form>

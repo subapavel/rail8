@@ -2,6 +2,7 @@ import { Flex } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../language';
 import type { ApiClient, StructureLoaded } from '../../api/client';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath, stepName } from '../../model/field-path';
@@ -84,6 +85,7 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
   const mappings = model.targetFieldMappings ?? {};
   const [dataFlow, setDataFlow] = useState(true);
   const [clearing, setClearing] = useState(false);
+  const { t } = useText();
   const dependencies = useDependencies(browserState, mappingId);
   const catalogue = useQuery({ queryKey: ['catalogue'], queryFn: () => api.getCatalogue() });
   const { menu, showMenu, element: menuElement } = useActionMenu();
@@ -126,23 +128,23 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
    * target field onto the selected target's expression (grouping), and a variable is added under a structure field.
    */
   const targetActions = (path: FieldPath): ActionMenuItem[] => {
-    const addVariableItem = { label: 'Add Variable', run: () => setVariableParent(path), disabled: !editing || targetTypes.get(path) !== 'structure' };
+    const addVariableItem = { label: t('studio.variable.add'), run: () => setVariableParent(path), disabled: !editing || targetTypes.get(path) !== 'structure' };
     if (variables.includes(path)) {
       const destinations = variableTargets(variables, [...targetTypes.keys()], path);
       const add = (target: FieldPath) => addPreviewNode(target, { kind: 'variable', ref: path });
       // on the selected target's expression at once, else on the one chosen
       const here = selectedTarget !== null && destinations.includes(selectedTarget);
       const addToExpression: ActionMenuItem = here
-        ? { label: 'Add variable to expression', run: () => add(selectedTarget), disabled: !editing }
+        ? { label: t('studio.variable.toExpression'), run: () => add(selectedTarget), disabled: !editing }
         : {
-            label: 'Add variable to expression',
+            label: t('studio.variable.toExpression'),
             disabled: !editing || destinations.length === 0,
             children: destinations.map((target) => ({ label: `/${localPath(target)}`, key: target, run: () => add(target) })),
           };
       return [addToExpression, addVariableItem];
     }
     const grouped = selectedTarget === null || selectedTarget === path || canvasOf(preview, selectedTarget).nodes.some((n) => n.kind === 'target' && n.ref === path);
-    const addTarget = { label: 'Add target to expression', run: () => addPreviewNode(selectedTarget!, { kind: 'target', ref: path }), disabled: !editing || grouped };
+    const addTarget = { label: t('studio.target.toExpression'), run: () => addPreviewNode(selectedTarget!, { kind: 'target', ref: path }), disabled: !editing || grouped };
     return [addTarget, addVariableItem];
   };
   /** A field's menu: Where Used for a source field, the previews for a target field, and Dependencies. */
@@ -152,14 +154,14 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
       side === 'source'
         ? [
             {
-              label: 'Where Used',
+              label: t('studio.parameters.whereUsed'),
               items: matches.length
                 ? matches.map((target) => ({ label: `/${localPath(target)}`, run: () => store.getState().selectTarget(target) }))
-                : [{ label: 'No target field reads it', disabled: true }],
+                : [{ label: t('studio.field.unused'), disabled: true }],
             },
           ]
         : [{ items: targetActions(path) }];
-    showMenu({ label: `Field actions for ${stepName(path)}`, anchor, groups: [...groups, { label: 'Dependencies', items: dependencies.items(matches) }] });
+    showMenu({ label: t('studio.field.actions', { name: stepName(path) }), anchor, groups: [...groups, { label: t('studio.dependencies'), items: dependencies.items(matches) }] });
   };
 
   const pane = (side: Side) => (
@@ -206,7 +208,7 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
       <Flex
         vertical
         component="section"
-        aria-label="Mapping definition"
+        aria-label={t('studio.definition')}
         onKeyDown={(e) => {
           if (e.key !== 'Escape' || e.defaultPrevented || view === 'split' || menu || clearing) return;
           e.preventDefault();
@@ -228,7 +230,7 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
           <VerticalSplitLayout
-            label="Resize mapping area"
+            label={t('studio.definition.resizeArea')}
             lowerId={`${mappingId}-mapping-area`}
             upper={
               <MessageOverview
@@ -265,8 +267,8 @@ export function DefinitionTab({ mappingId, api, store, session, browserState, on
           >
             {dataFlow ? (
               selectedTarget === null || !catalogue.data ? (
-                <section aria-label="Field mapping canvas" style={{ padding: 'var(--ant-size)' }}>
-                  <p>{selectedTarget === null ? 'Select a target field to see its mapping expression.' : 'Loading the function catalogue…'}</p>
+                <section aria-label={t('studio.canvas.region')} style={{ padding: 'var(--ant-size)' }}>
+                  <p>{selectedTarget === null ? t('studio.definition.selectTarget') : t('studio.definition.loadingCatalogue')}</p>
                 </section>
               ) : (
                 <Canvas

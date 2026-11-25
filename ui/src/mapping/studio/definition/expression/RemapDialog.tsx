@@ -1,6 +1,7 @@
 import { Form, Select } from 'antd';
 import { MountedModal } from '../../../../MountedModal';
 import { useState } from 'react';
+import { useText } from '../../../../language';
 import type { FieldPath } from '../../../generated/mapping-model';
 import { localPath, stepName } from '../../../model/field-path';
 
@@ -19,17 +20,18 @@ export interface RemapDialogProps {
  */
 export function RemapDialog({ field, choices, remap, close }: RemapDialogProps) {
   const [choice, setChoice] = useState('');
-  const title = `Remap · ${stepName(field)}`;
+  const { t } = useText();
+  const title = t('studio.remap.title', { name: stepName(field) });
   return (
-    <MountedModal title={title} onCancel={close} okText="Remap" okButtonProps={{ htmlType: 'submit', form: 'remap-form', disabled: !choice }}>
+    <MountedModal title={title} onCancel={close} okText={t('studio.canvas.remap')} okButtonProps={{ htmlType: 'submit', form: 'remap-form', disabled: !choice }}>
       <Form layout="vertical" id="remap-form" onFinish={() => remap(choice)}>
-        <p>The source structure has no field /{localPath(field)}. Choose the source field the box reads instead; it keeps its connections.</p>
-        <Form.Item label="Source field" htmlFor="remap-source-field">
+        <p>{t('studio.remap.why', { path: `/${localPath(field)}` })}</p>
+        <Form.Item label={t('studio.role.source')} htmlFor="remap-source-field">
           <Select
             id="remap-source-field"
-            aria-label="Source field"
+            aria-label={t('studio.role.source')}
             showSearch={{ optionFilterProp: 'label' }}
-            placeholder="Choose a source field"
+            placeholder={t('studio.remap.choose')}
             value={choice || undefined}
             onChange={setChoice}
             options={choices.map((path) => ({ value: path, label: `/${localPath(path)}` }))}

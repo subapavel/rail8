@@ -131,14 +131,14 @@ describe('the functions drilldown', () => {
     const groups = drilldown(catalogue);
 
     expect(groups.map((g) => [g.group, g.functions.length])).toEqual([
-      ['Arithmetic', 21],
-      ['Boolean', 10],
-      ['Text', 16],
-      ['Conversions', 4],
-      ['Date', 5],
-      ['Constants', 5],
-      ['Node Functions', 11],
-      ['Statistic', 4],
+      ['arithmetic', 21],
+      ['boolean', 10],
+      ['text', 16],
+      ['conversions', 4],
+      ['date', 5],
+      ['constants', 5],
+      ['node', 11],
+      ['statistic', 4],
     ]);
     const all = groups.flatMap((g) => g.functions);
     expect(all.filter((f) => f.fn !== undefined)).toHaveLength(65);

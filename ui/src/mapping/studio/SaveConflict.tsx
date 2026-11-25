@@ -1,6 +1,7 @@
 import { Alert, Modal } from 'antd';
 import { useMutation } from '@tanstack/react-query';
 import { useStore } from 'zustand';
+import { useText } from '../../language';
 import { describeError } from '../api/client';
 import type { WorkingCopyStore } from './store/working-copy';
 
@@ -12,6 +13,7 @@ export function SaveConflict({ store }: { store: WorkingCopyStore }) {
   const open = useStore(store, (s) => s.conflict);
   const reload = useMutation({ mutationFn: () => store.getState().reload() });
   const failure = reload.isError ? describeError(reload.error) : undefined;
+  const { t } = useText();
   const keepEditing = () => {
     reload.reset();
     store.getState().keepEditing();
@@ -19,17 +21,17 @@ export function SaveConflict({ store }: { store: WorkingCopyStore }) {
 
   return (
     <Modal
-      title="Save conflict"
+      title={t('studio.conflict')}
       open={open}
       onCancel={keepEditing}
-      cancelText="Keep editing"
-      okText="Reload"
+      cancelText={t('frame.discard.keep')}
+      okText={t('studio.conflict.reload')}
       onOk={() => reload.mutate()}
       confirmLoading={reload.isPending}
       okButtonProps={{ disabled: reload.isPending }}
     >
-      <p>The mapping changed on disk since it was opened, so it was not saved.</p>
-      <p>Reload drops your changes and the undo history and opens the file from disk.</p>
+      <p>{t('studio.conflict.why')}</p>
+      <p>{t('studio.conflict.reload.what')}</p>
       {failure && <Alert type="error" showIcon title={<h3>{failure.title}</h3>} description={failure.detail} />}
     </Modal>
   );

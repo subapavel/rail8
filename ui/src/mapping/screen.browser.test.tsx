@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { chooseLanguage } from '../language';
 import type { Screen } from '../screens';
 import { Shell } from '../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
@@ -66,6 +67,8 @@ afterEach(() => {
   host?.remove();
   root = undefined;
   working = undefined;
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
   // every test fails on console.error
   expect(consoleError).not.toHaveBeenCalled();
   consoleError.mockRestore();
@@ -213,10 +216,42 @@ describe('the Mappings screen in the shell', () => {
   });
 });
 
+describe('the Mappings screen and the studio in another language', () => {
+  test('show their texts, a count in its plural form and Ant Design in the language chosen', async () => {
+    render(fakeApiClient());
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Mappings' })).toBeVisible();
+
+    chooseLanguage('cs');
+
+    await expect.element(page.getByRole('heading', { level: 1, name: 'Mapování' })).toBeVisible();
+    const table = page.getByRole('table', { name: 'Mapování' });
+    await expect.element(table.getByRole('columnheader', { name: 'Složka' })).toBeVisible();
+    await expect.element(page.getByRole('textbox', { name: 'Najít mapování' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Nové mapování' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Nové mapování' });
+    await expect.element(dialog.getByRole('textbox', { name: 'Popis' })).toBeVisible();
+    await expect.element(dialog).toMatchTextContent(/Nejvýše 4\s000 znaků\./);
+    await dialog.getByRole('textbox', { name: 'Název' }).fill('.bad');
+    await expect.element(dialog).toMatchTextContent(/Použijte písmena, číslice/);
+    await dialog.getByRole('button', { name: 'Zavřít', exact: true }).click();
+    await expect.element(dialog).not.toBeInTheDocument();
+
+    await row('order-id-copy').getByRole('button', { name: 'Otevřít ve studiu' }).click();
+    await expect.element(page.getByRole('heading', { level: 1, name: 'order-id-copy' })).toBeVisible();
+    await expect.element(page.getByRole('heading', { name: 'Podrobnosti mapování' })).toBeVisible();
+    await expect.element(page.getByRole('tab', { name: 'Přehled', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await button('Upravit').click();
+    await expect.element(button('Zrušit')).toBeVisible();
+    await page.getByRole('tab', { name: 'Signatura', exact: true }).click();
+    await expect.element(page.getByRole('region', { name: 'Zdrojové zprávy' })).toBeVisible();
+  });
+});
+
 describe('the mapping studio in the shell', () => {
   const fields = (side: 'source' | 'target') => page.getByRole('region', { name: `${side} message` }).getByRole('table', { name: `${side} fields` });
   const canvasNode = (name: RegExp) => page.getByRole('group', { name: 'Mapping canvas' }).getByRole('group', { name });
-  const nodeFooter = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByText(/nodes · /);
+  const nodeFooter = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByText(/ nodes? · /);
   /** How far the document scrolls vertically: 0 when the page fits the window. */
   const verticalScroll = () => document.documentElement.scrollHeight - document.documentElement.clientHeight;
   /** Whether `element` is wholly inside the window. */
@@ -232,7 +267,7 @@ describe('the mapping studio in the shell', () => {
     await shellTab('Definition').click();
     await fields('target').getByRole('button', { name: 'OrderId', exact: true }).click();
 
-    await expect.element(nodeFooter()).toHaveTextContent('2 nodes · 1 connections');
+    await expect.element(nodeFooter()).toHaveTextContent('2 nodes · 1 connection');
     for (const part of [
       fields('source'),
       fields('target'),

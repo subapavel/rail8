@@ -2,6 +2,7 @@
  * Export Source Text and Import Source Text of the Functions tab: one Java class
  * whose editable sections sit between marker comments, so that a file edited elsewhere can be read back.
  */
+import { currentLanguage, textsIn, type Texts } from '../../../language';
 import { AREAS, ATTRIBUTES, builtIn, declaration, metadata, type AreaName, type FunctionsState, type JavaArea, type Udf } from '../mock/function-model';
 
 /** A section's marker: a stable hash of its identity, across saves in the browser and method renames. */
@@ -36,7 +37,7 @@ function sections(mappingId: string, state: FunctionsState): Section[] {
       signature: '',
     },
     ...editable.map((fn) => ({
-      key: fn.name === ATTRIBUTES ? 'attributes and methods' : fn.name,
+      key: fn.name === ATTRIBUTES ? 'attributes and methods' : fn.name, // untranslated: a section marker in the Java source
       tag: marker(`${mappingId}/${fn.id ?? fn.name}`),
       content: fn.body,
       signature: fn.name === ATTRIBUTES ? '' : declaration(fn),
@@ -57,9 +58,10 @@ export function exportSource(mappingId: string, state: FunctionsState): string {
 
 /**
  * The state with the sections of `text`, a source exported for these functions: its import instructions and the body of
- * each area and function. Throws an `Error` that says what is wrong when the markers do not fit.
+ * each area and function. Throws an `Error` that says what is wrong, in the language of `texts`, when the markers do
+ * not fit.
  */
-export function importSource(mappingId: string, state: FunctionsState, text: string): FunctionsState {
+export function importSource(mappingId: string, state: FunctionsState, text: string, { t }: Texts = textsIn(currentLanguage())): FunctionsState {
   const all = sections(mappingId, state);
   const found = new Map<string, string>();
   const lines = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n');
@@ -73,17 +75,17 @@ export function importSource(mappingId: string, state: FunctionsState, text: str
     }
     const [, boundary, name, tag] = match as unknown as [string, string, string, string];
     if (boundary === 'beginning') {
-      if (open || found.has(tag)) throw new Error('Overlapping or duplicate source sections.');
+      if (open || found.has(tag)) throw new Error(t('studio.functions.import.overlap'));
       open = { name, tag };
       body = [];
     } else {
-      if (open?.tag !== tag || open.name !== name) throw new Error('Source section markers do not match.');
+      if (open?.tag !== tag || open.name !== name) throw new Error(t('studio.functions.import.markers'));
       found.set(tag, body.join('\n'));
       open = null;
     }
   }
   if (open || !all.every((s) => found.has(s.tag)) || all.length !== found.size) {
-    throw new Error('Choose a source file exported for these functions. Check its section markers.');
+    throw new Error(t('studio.functions.import.foreign'));
   }
   const imports = found
     .get(all[0]!.tag)!
@@ -92,7 +94,7 @@ export function importSource(mappingId: string, state: FunctionsState, text: str
     .filter(Boolean)
     .map((s) => {
       const match = /^import\s+([\w$.*]+);$/.exec(s);
-      if (!match) throw new Error(`Invalid import instruction: ${s}`);
+      if (!match) throw new Error(t('studio.functions.import.instruction', { instruction: s }));
       return match[1]!;
     });
   const javaAreas = { ...state.javaAreas };

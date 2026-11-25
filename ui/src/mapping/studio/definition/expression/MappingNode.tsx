@@ -2,6 +2,7 @@ import { Button, Flex } from 'antd';
 import { CheckCircleOutlined, SettingOutlined, ExclamationCircleOutlined, WarningOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
 import { useEffect, useRef, type CSSProperties } from 'react';
+import { useText, type Texts } from '../../../../language';
 import type { FieldPath } from '../../../generated/mapping-model';
 import { localPath, stepName } from '../../../model/field-path';
 import { properAncestors } from '../../../model/set-context';
@@ -10,16 +11,16 @@ import { FieldTypeIcon } from '../../shared/FieldTypeIcon';
 import { SOURCE_FIELD_DRAG } from '../../store/drag';
 import { NODE_WIDTH, nodeHeight, type ExpressionNode, type NodeState, type Port } from './expression-graph';
 
-const ROLES = { source: 'Source field', function: 'Node function', target: 'Target field' } as const;
+const ROLES = { source: 'studio.role.source', function: 'studio.role.function', target: 'studio.role.target' } as const;
 
-/** What a node is, in words: a mapping variable says so. */
+/** The id of the text that says what a node is: a mapping variable says so. */
 export const nodeRole = (node: ExpressionNode) => node.role ?? ROLES[node.kind];
 
-/** A node state's mark and its colour: complete, incomplete, or with no path to the target. */
+/** A node state's mark, its colour and the id of its name: complete, incomplete, or with no path to the target. */
 export const STATE_MARKS = {
-  complete: { icon: CheckCircleOutlined, color: 'var(--ant-color-success)', label: 'Complete' },
-  incomplete: { icon: ExclamationCircleOutlined, color: 'var(--ant-color-warning)', label: 'Incomplete' },
-  detached: { icon: MinusCircleOutlined, color: 'var(--ant-color-text-secondary)', label: 'No target path' },
+  complete: { icon: CheckCircleOutlined, color: 'var(--ant-color-success)', label: 'studio.state.complete' },
+  incomplete: { icon: ExclamationCircleOutlined, color: 'var(--ant-color-warning)', label: 'studio.state.incomplete' },
+  detached: { icon: MinusCircleOutlined, color: 'var(--ant-color-text-secondary)', label: 'studio.state.detached' },
 } as const;
 
 /** The data of a canvas node: the graph node, its state, its field's type and the opener of its parameters. */
@@ -40,9 +41,6 @@ export type MappingNodeData = {
   remap?: (field: FieldPath) => void;
 };
 
-/** What an orphaned box's mark says. */
-const ORPHANED_HINT = 'Orphaned reference: the source structure has no such field. Drop a source field here, or choose Remap in the node menu.';
-
 export type MappingFlowNode = Node<MappingNodeData, 'mapping'>;
 
 /** The colour of each kind of node's symbol: its background and its text. */
@@ -52,16 +50,16 @@ const SYMBOL_COLOURS = {
   target: ['var(--ant-blue-1)', 'var(--ant-blue-8)'],
 } as const;
 
-function portHint(node: ExpressionNode, port: Port | undefined, input: boolean, index: number): string[] {
-  const direction = input ? 'Input' : 'Output';
-  if (node.kind !== 'function') return [direction, `/${localPath(node.path!)}`];
-  return [`${direction} ${index + 1}: ${port ? port.label : 'out'}`, node.name];
+function portHint(t: Texts['t'], node: ExpressionNode, port: Port | undefined, input: boolean, index: number): string[] {
+  if (node.kind !== 'function') return [t(input ? 'studio.port.input' : 'studio.port.output'), `/${localPath(node.path!)}`];
+  return [input ? t('studio.port.inputAt', { n: index + 1, name: port!.label }) : t('studio.port.outputAt', { n: index + 1 }), node.name];
 }
 
 function PortHandle({ node, state, port, index, count, input }: { node: ExpressionNode; state: NodeState; port?: Port; index: number; count: number; input: boolean }) {
-  const hint = portHint(node, port, input, index);
+  const { t } = useText();
+  const hint = portHint(t, node, port, input, index);
   const missing = input && state.missing.includes(port!.id);
-  if (missing) hint.push('Missing connection');
+  if (missing) hint.push(t('studio.port.missing'));
   return (
     <Handle
       id={port ? port.id : 'out'}
@@ -90,6 +88,8 @@ function PortHandle({ node, state, port, index, count, input }: { node: Expressi
  */
 export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) {
   const { node, state, fieldType, editParameters, settings, note, orphaned, remap } = data;
+  const { t } = useText();
+  const orphanedHint = t('studio.node.orphaned.why');
   const refresh = useUpdateNodeInternals();
   const ports = JSON.stringify(node.inputs.map((p) => p.id));
   const previousPorts = useRef(ports);
@@ -104,11 +104,11 @@ export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) 
   const defaultContext = isSource ? (properAncestors(node.path!)[0] ?? '') : '';
   const context = node.context ?? defaultContext;
   const changedContext = isSource && context !== defaultContext;
-  const contextLabel = isSource ? `Context · ${context ? stepName(context) : 'root'}` : '';
+  const contextLabel = isSource ? (context ? t('studio.node.context', { context: stepName(context) }) : t('studio.node.context.root')) : '';
   const openInputs = isFunction ? node.inputs.filter((p) => state.missing.includes(p.id)) : [];
-  const portNote = openInputs.length ? `Missing: ${openInputs.map((p) => p.label).join(', ')}` : '';
+  const portNote = openInputs.length ? t('studio.node.missing', { inputs: openInputs.map((p) => p.label).join(', ') }) : '';
   const path = node.path ? `/${localPath(node.path)}` : '';
-  const details = [node.name, nodeRole(node) + (fieldType ? ` · ${fieldType}` : ''), path, contextLabel, settings, note, orphaned && ORPHANED_HINT, state.description]
+  const details = [node.name, t(nodeRole(node)) + (fieldType ? ` · ${fieldType}` : ''), path, contextLabel, settings, note, orphaned && orphanedHint, state.description]
     .filter(Boolean)
     .join('\n');
   const mark = STATE_MARKS[state.kind];
@@ -186,8 +186,8 @@ export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) 
             >
               {node.name}
             </strong>
-            {orphaned && <WarningOutlined aria-label="Orphaned reference" title={ORPHANED_HINT} style={{ color: 'var(--ant-color-warning)' }} />}
-            {node.preview && <PreviewBadge {...node.preview} />}
+            {orphaned && <WarningOutlined aria-label={t('studio.field.orphaned')} title={orphanedHint} style={{ color: 'var(--ant-color-warning)' }} />}
+            {node.preview && <PreviewBadge feature={t(node.preview.feature)} issue={node.preview.issue} />}
           </Flex>
           {(portNote || changedContext || settings) && (
             <small style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -200,9 +200,9 @@ export function MappingNode({ id, data, selected }: NodeProps<MappingFlowNode>) 
             <Button
               type="text"
               size="small"
-              className="nodrag nopan"
-              aria-label={`Parameters for ${node.name}`}
-              data-mapping-hint={`Function parameters\n${details}`}
+              className="nodrag nopan" // untranslated: React Flow class names
+              aria-label={t('studio.node.parameters', { name: node.name })}
+              data-mapping-hint={`${t('studio.node.parameters.title')}\n${details}`}
               icon={<SettingOutlined aria-hidden />}
               onDoubleClick={(e) => e.stopPropagation()}
               onClick={(e) => {

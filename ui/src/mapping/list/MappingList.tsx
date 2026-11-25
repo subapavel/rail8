@@ -3,12 +3,15 @@ import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Empty, Flex, Input } from 'antd';
 import { useEffect, useState, type TableHTMLAttributes } from 'react';
+import { useText } from '../../language';
 import { packageColumn } from '../../packageColumn';
 import { ReadSpinner } from '../../ReadSpinner';
 import { describeError, type ApiClient, type MappingSummary } from '../api/client';
 import { NewMappingModal } from './NewMappingModal';
 
-const MappingsTable = (props: TableHTMLAttributes<HTMLTableElement>) => <table {...props} aria-label="Mappings" />;
+function MappingsTable(props: TableHTMLAttributes<HTMLTableElement>) {
+  return <table {...props} aria-label={useText().t('mapping.screen.title')} />;
+}
 
 const PAGE_SIZE = 25;
 
@@ -41,6 +44,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
+  const { t } = useText();
   const changeSearch = (value: string) => {
     setSearch(value);
     setPage(1);
@@ -62,7 +66,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
   const empty = mappings.isPending ? (
     <div role="status">
       <ReadSpinner />
-      <h2>Loading the mappings</h2>
+      <h2>{t('mapping.list.loading')}</h2>
     </div>
   ) : failure ? (
     <Alert type="error" showIcon title={<h2>{failure.title}</h2>} description={failure.detail} />
@@ -71,18 +75,18 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
       description={
         mappings.data?.mappings.length ? (
           <>
-            <h2>No mappings match</h2>
-            <p>No mapping's name, package, messages or description contain "{term}".</p>
+            <h2>{t('mapping.list.noMatch')}</h2>
+            <p>{t('mapping.list.noMatch.hint', { term })}</p>
           </>
         ) : (
           <>
-            <h2>No mappings yet</h2>
-            <p>Choose New mapping to create one; its messages are chosen in the studio.</p>
+            <h2>{t('mapping.list.none')}</h2>
+            <p>{t('mapping.list.none.hint')}</p>
           </>
         )
       }
     >
-      {mappings.data?.mappings.length ? <Button onClick={() => changeSearch('')}>Clear search</Button> : null}
+      {mappings.data?.mappings.length ? <Button onClick={() => changeSearch('')}>{t('mapping.list.clearSearch')}</Button> : null}
     </Empty>
   );
   const column = (key: 'name' | 'package' | 'source' | 'target' | 'description', title: string) => ({
@@ -91,18 +95,18 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
     render: (_: unknown, row: MappingSummary) => orDash(row[key]),
   });
   const columns: ProColumns<MappingSummary>[] = [
-    column('name', 'Name'),
+    column('name', t('mapping.list.name')),
     packageColumn(mappings.data?.mappings ?? [], (row) => row.id),
-    column('package', 'Folder'),
-    column('source', 'Source'),
-    column('target', 'Target'),
-    column('description', 'Description'),
+    column('package', t('mapping.list.folder')),
+    column('source', t('mapping.list.source')),
+    column('target', t('mapping.list.target')),
+    column('description', t('mapping.list.description')),
     {
-      title: 'Actions',
+      title: t('mapping.list.actions'),
       key: 'open',
       render: (_, row) => (
         <Button type="link" onClick={() => onOpen(row.id)}>
-          Open in studio
+          {t('mapping.list.open')}
         </Button>
       ),
     },
@@ -110,8 +114,8 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
 
   return (
     <section className="rail8-page">
-      <h1>Mappings</h1>
-      {mappings.data?.truncated && <Alert type="warning" showIcon title="Only the first 1,000 mapping files of the working folder are listed" />}
+      <h1>{t('mapping.screen.title')}</h1>
+      {mappings.data?.truncated && <Alert type="warning" showIcon title={t('mapping.list.truncated', { count: 1000 })} />}
       <ProTable<MappingSummary>
         rowKey="id"
         columns={columns}
@@ -125,14 +129,14 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
         toolBarRender={() => [
           <Flex key="search" align="center">
             <Input
-              aria-label="Find mappings"
-              placeholder="Find mappings"
+              aria-label={t('mapping.list.find')}
+              placeholder={t('mapping.list.find')}
               prefix={<SearchOutlined aria-hidden />}
               value={search}
               onChange={(event) => changeSearch(event.target.value)}
               suffix={
                 search && (
-                  <Button type="text" size="small" aria-label="Reset" onClick={() => changeSearch('')}>
+                  <Button type="text" size="small" aria-label={t('mapping.list.reset')} onClick={() => changeSearch('')}>
                     ×
                   </Button>
                 )
@@ -140,7 +144,7 @@ export function MappingList({ api, onOpen, onCreated }: MappingListProps) {
             />
           </Flex>,
           <Button key="new" type="primary" icon={<PlusOutlined aria-hidden />} onClick={() => setCreating(true)}>
-            New mapping
+            {t('mapping.list.new')}
           </Button>,
         ]}
       />

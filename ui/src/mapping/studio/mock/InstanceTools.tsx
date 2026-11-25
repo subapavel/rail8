@@ -3,6 +3,7 @@ import { MountedModal } from '../../../MountedModal';
 import { UploadOutlined, FileAddOutlined, SaveOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../language';
 import { Tool } from '../shared/Tool';
 import { PreviewBadge } from './PreviewBadge';
 import {
@@ -31,6 +32,7 @@ export interface InstanceToolsProps {
   disabled: boolean;
   /** Whether a file read must parse as the format before it loads (the queue test input). */
   validateFile?: boolean;
+  /** The name of the select; "Select test instance" when none is given. */
   selectLabel?: string;
 }
 
@@ -51,8 +53,9 @@ export function InstanceTools({
   editing,
   disabled,
   validateFile = false,
-  selectLabel = 'Select test instance',
+  selectLabel,
 }: InstanceToolsProps) {
+  const { t } = useText();
   const list = useStore(library, (s) => s.value);
   const chosen = useStore(instanceChoice(library), (s) => s.id);
   const entries = instancesOf(list, format);
@@ -81,7 +84,7 @@ export function InstanceTools({
       if (validateFile) parseDocument(text, format);
       onLoad(text);
     } catch {
-      setNotice(`Could not read this file. Choose a valid ${format} test input.`);
+      setNotice(t('studio.instances.unreadable', { format }));
     } finally {
       setReading(false);
     }
@@ -103,10 +106,10 @@ export function InstanceTools({
 
   return (
     <>
-      <PreviewBadge feature="Test instances" issue={TEST_INSTANCES_ISSUE} />
-      <Tool label="Load Test Instance" icon={UploadOutlined} disabled={locked} onClick={() => file.current?.click()} />
+      <PreviewBadge feature={t('studio.preview.instances')} issue={TEST_INSTANCES_ISSUE} />
+      <Tool label={t('studio.instances.load')} icon={UploadOutlined} disabled={locked} onClick={() => file.current?.click()} />
       <Tool
-        label="Add Test Instance"
+        label={t('studio.instances.add')}
         icon={FileAddOutlined}
         disabled={locked}
         onClick={() => {
@@ -116,16 +119,16 @@ export function InstanceTools({
         }}
       />
       <Tool
-        label="Save Test Instance"
+        label={t('studio.instances.save')}
         icon={SaveOutlined}
         disabled={locked || !current}
         onClick={() => {
           actions.save(resource());
-          setNotice('Test instance saved. Save the mapping to keep it in this browser.');
+          setNotice(t('studio.instances.saved'));
         }}
       />
       <Tool
-        label="Delete Test Instance"
+        label={t('studio.instances.delete')}
         icon={DeleteOutlined}
         disabled={locked || !current}
         onClick={() => {
@@ -135,7 +138,7 @@ export function InstanceTools({
       />
       <Select
         virtual={entries.length > 100}
-        aria-label={selectLabel}
+        aria-label={selectLabel ?? t('studio.instances.select')}
         value={shown?.id ?? ''}
         disabled={busy || !current}
         onChange={(value) => (editing ? actions.select(value) : instanceChoice(library).getState().choose(value))}
@@ -146,7 +149,7 @@ export function InstanceTools({
         type="file"
         hidden
         disabled={locked}
-        aria-label="Test instance file"
+        aria-label={t('studio.instances.file')}
         accept={`.${format.toLowerCase()},.zip`}
         onChange={(e) => void load(e)}
       />
@@ -154,14 +157,14 @@ export function InstanceTools({
 
       {dialog === 'add' && (
         <MountedModal
-          title="Add Test Instance"
+          title={t('studio.instances.add')}
           onCancel={close}
-          cancelText="Cancel"
-          okText="OK"
+          cancelText={t('frame.cancel')}
+          okText={t('studio.instances.ok')}
           okButtonProps={{ htmlType: 'submit', form: fieldId + '-form', disabled: !name.trim() }}
         >
           <Form layout="vertical" id={fieldId + '-form'} onFinish={add}>
-            <Form.Item label="Test instance name" htmlFor={fieldId}>
+            <Form.Item label={t('studio.instances.name')} htmlFor={fieldId}>
               <Input id={fieldId} autoFocus maxLength={100} value={name} onChange={(event) => setName(event.target.value)} />
             </Form.Item>
             {notice && <Alert type="error" title={notice} />}
@@ -170,17 +173,17 @@ export function InstanceTools({
       )}
       {dialog === 'delete' && current && (
         <MountedModal
-          title="Delete Test Instance"
+          title={t('studio.instances.delete')}
           onCancel={close}
-          cancelText="Cancel"
-          okText="Delete"
+          cancelText={t('frame.cancel')}
+          okText={t('studio.delete')}
           okButtonProps={{ danger: true }}
           onOk={() => {
             actions.remove();
             setDialog(null);
           }}
         >
-          Delete {current.name} from this browser?
+          {t('studio.instances.delete.confirm', { name: current.name })}
         </MountedModal>
       )}
     </>

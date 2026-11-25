@@ -10,6 +10,7 @@ import {
   RightOutlined,
 } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
+import { useText } from '../../../language';
 import { PreviewBadge } from '../mock/PreviewBadge';
 import { PARAMETERS_ISSUE } from '../mock/signature-mock';
 import { zipInstance } from '../mock/test-instances';
@@ -26,6 +27,14 @@ export type DocumentMode = (typeof DOCUMENT_MODES)[number];
 
 const SECTIONS = ['Document', 'Parameters'] as const;
 type Section = (typeof SECTIONS)[number];
+
+/** The id of the name of each view and section. */
+const NAMES: Record<DocumentMode | Section, string> = {
+  Tree: 'studio.view.tree',
+  Text: 'studio.view.text',
+  Document: 'studio.document.document',
+  Parameters: 'studio.parameters',
+};
 
 /** A row of a pane's parameter tables (a preview): its id among the values, its label and its default. */
 export interface ParameterRow {
@@ -81,8 +90,9 @@ export function TestDocument({
   onParameter,
   valuesReadOnly = readOnly,
 }: TestDocumentProps) {
+  const { t } = useText();
   const input = side === 'Input';
-  const title = input ? 'Source' : 'Result';
+  const title = t(input ? 'studio.document.source' : 'studio.document.result');
   const [section, setSection] = useState<Section>('Document');
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const [selection, select] = useState<string | null>(null);
@@ -94,11 +104,11 @@ export function TestDocument({
   const treeMode = mode === 'Tree';
   const rows = useMemo(() => {
     try {
-      return available ? documentRows(displayed, format, input ? 'Source' : 'Result') : [];
+      return available ? documentRows(displayed, format, title) : [];
     } catch {
       return null;
     }
-  }, [available, displayed, format, input]);
+  }, [available, displayed, format, title]);
   // a closed branch hides the rows below it
   const visible = useMemo(() => {
     const shown = [];
@@ -130,19 +140,19 @@ export function TestDocument({
       else setFormatted({ original: text!, text: value });
       setError('');
     } catch (e) {
-      setError(`Cannot process this ${format} document. ${(e as Error).message}`);
+      setError(t('studio.document.unprocessable', { format, reason: (e as Error).message }));
     }
   };
   const download = () => downloadFile('schema.zip', new Blob([zipInstance(displayed, format)], { type: 'application/zip' }));
 
-  const empty = <Empty description={failed ? 'The simulation failed.' : `Run the simulation to display the ${format} result.`} />;
+  const empty = <Empty description={failed ? t('studio.document.failed') : t('studio.document.empty', { format })} />;
   const tree = !available ? (
     empty
   ) : rows === null ? (
-    <p role="status">The {format} cannot be displayed as a tree. Open Text to correct it.</p>
+    <p role="status">{t('studio.document.noTree', { format })}</p>
   ) : (
     <Table
-      aria-label={`${input ? 'Input' : 'Result'} structure and values`}
+      aria-label={t('studio.document.structure', { side })}
       size="small"
       pagination={false}
       rowKey="id"
@@ -150,7 +160,7 @@ export function TestDocument({
       dataSource={visible}
       columns={[
         {
-          title: 'Structure',
+          title: t('studio.pane.structure'),
           key: 'structure',
           render: (_, row) => (
             <Flex align="center" gap="small" style={{ paddingInlineStart: `calc(${row.level} * var(--ant-padding, 16px))` }}>
@@ -159,7 +169,7 @@ export function TestDocument({
                   size="small"
                   type="text"
                   aria-expanded={!closed.has(row.id)}
-                  aria-label={`${closed.has(row.id) ? 'Expand' : 'Collapse'} ${row.name}`}
+                  aria-label={t(closed.has(row.id) ? 'studio.field.expand' : 'studio.field.collapse', { path: row.name })}
                   icon={closed.has(row.id) ? <RightOutlined /> : <DownOutlined />}
                   onClick={() => toggleRow(row.id)}
                 />
@@ -178,15 +188,15 @@ export function TestDocument({
             </Flex>
           ),
         },
-        { title: 'Value', dataIndex: 'value' },
+        { title: t('studio.document.value'), dataIndex: 'value' },
       ]}
     />
   );
-  const toggles = <T extends string>(label: string, names: readonly T[], chosen: T, change: (name: T) => void) => (
+  const toggles = <T extends DocumentMode | Section>(label: string, names: readonly T[], chosen: T, change: (name: T) => void) => (
     <Flex role="group" aria-label={label} gap={0}>
       {names.map((name) => (
         <Button size="small" key={name} aria-pressed={chosen === name} type={chosen === name ? 'primary' : 'default'} onClick={() => change(name)}>
-          {name}
+          {t(NAMES[name])}
         </Button>
       ))}
     </Flex>
@@ -206,8 +216,8 @@ export function TestDocument({
       extra={
         <>
           {stale && (
-            <Tag color="orange" title="The working copy changed since this run.">
-              stale
+            <Tag color="orange" title={t('studio.queue.stale.why')}>
+              {t('studio.queue.stale')}
             </Tag>
           )}
           <Tag>{format}</Tag>
@@ -217,24 +227,24 @@ export function TestDocument({
       {section === 'Document' ? (
         <>
           <Flex gap="small" align="center" wrap>
-            {toggles(`${side} document view`, DOCUMENT_MODES, mode, switchMode)}
-            <Flex role="toolbar" aria-label={`${side} document tools`}>
+            {toggles(t('studio.document.view', { side }), DOCUMENT_MODES, mode, switchMode)}
+            <Flex role="toolbar" aria-label={t('studio.document.tools', { side })}>
               {treeMode ? (
                 <>
                   <Tool
-                    label={closed.size > 0 ? 'Expand Tree' : 'Collapse Tree'}
+                    label={t(closed.size > 0 ? 'studio.tree.expand' : 'studio.tree.collapse')}
                     icon={closed.size > 0 ? PlusSquareOutlined : MinusSquareOutlined}
                     disabled={!rows?.length}
                     onClick={toggleExpand}
                   />
-                  <Tool label="Show Full Path" icon={BranchesOutlined} pressed={fullPath} onClick={() => setFullPath((v) => !v)} />
+                  <Tool label={t('studio.tree.fullPath')} icon={BranchesOutlined} pressed={fullPath} onClick={() => setFullPath((v) => !v)} />
                 </>
               ) : (
                 <>
-                  <Tool label="Pretty Print" icon={AlignLeftOutlined} disabled={!available || readOnly} onClick={prettyPrint} />
+                  <Tool label={t('studio.document.pretty')} icon={AlignLeftOutlined} disabled={!available || readOnly} onClick={prettyPrint} />
                 </>
               )}
-              <Tool label="Save Document Source" icon={DownloadOutlined} disabled={!available} onClick={download} />
+              <Tool label={t('studio.tree.download')} icon={DownloadOutlined} disabled={!available} onClick={download} />
             </Flex>
           </Flex>
           {error && <Alert type="error" showIcon title={error} />}
@@ -243,18 +253,18 @@ export function TestDocument({
           ) : input ? (
             <Flex gap="small" style={SCROLL_AREA}>
               <Input.TextArea
-                aria-label={`Input ${format}`}
+                aria-label={t('studio.document.input', { format })}
                 spellCheck={false}
                 readOnly={readOnly}
                 value={displayed}
                 onChange={(e) => edit?.(e.target.value)}
                 style={{ ...MONO, resize: 'none' }}
               />
-              <CopyTextButton label={`input ${format}`} text={displayed} />
+              <CopyTextButton label={t('studio.document.copyInput', { format })} text={displayed} />
             </Flex>
           ) : available ? (
             <div style={SCROLL_AREA}>
-              <CopyTextButton label={`result ${format}`} text={displayed} />
+              <CopyTextButton label={t('studio.document.copyResult', { format })} text={displayed} />
               <pre>{displayed}</pre>
             </div>
           ) : (
@@ -263,14 +273,14 @@ export function TestDocument({
           {treeMode && fullPath && (
             <div>
               <code>{selectedPath}</code>
-              <CopyTextButton label={`${side.toLowerCase()} path`} text={selectedPath} />
+              <CopyTextButton label={t('studio.document.copyPath', { side })} text={selectedPath} />
             </div>
           )}
         </>
       ) : (
         <div style={SCROLL_AREA}>
           <p>
-            Parameters of the test run <PreviewBadge feature="Mapping parameters and message headers" issue={PARAMETERS_ISSUE} />
+            {t('studio.document.parameters')} <PreviewBadge feature={t('studio.preview.testParameters')} issue={PARAMETERS_ISSUE} />
           </p>
           {parameters.map(({ title: group, rows: entries }) => (
             <div key={group}>
@@ -281,11 +291,11 @@ export function TestDocument({
                 rowKey="id"
                 pagination={false}
                 dataSource={entries}
-                locale={{ emptyText: `No ${input ? 'import' : 'export'} parameters defined.` }}
+                locale={{ emptyText: t(input ? 'studio.document.noImports' : 'studio.document.noExports') }}
                 columns={[
-                  { title: 'Name', dataIndex: 'label' },
+                  { title: t('studio.name'), dataIndex: 'label' },
                   {
-                    title: 'Value',
+                    title: t('studio.document.value'),
                     key: 'value',
                     render: (_, r) =>
                       onParameter && (
@@ -303,7 +313,7 @@ export function TestDocument({
           ))}
         </div>
       )}
-      {toggles(`${side} panel`, SECTIONS, section, setSection)}
+      {toggles(t('studio.document.panel', { side }), SECTIONS, section, setSection)}
     </Card>
   );
 }

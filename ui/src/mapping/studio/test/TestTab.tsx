@@ -3,6 +3,7 @@ import { MountedModal } from '../../../MountedModal';
 import { CaretRightOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../language';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import { InstanceTools } from '../mock/InstanceTools';
 import { PreviewBadge } from '../mock/PreviewBadge';
@@ -37,6 +38,15 @@ function parameterRows(parameters: readonly PreviewParameter[], direction: Previ
   return parameters.filter((p) => p.direction === direction && p.name.trim()).map((p) => ({ id: `param:${p.id}`, label: p.name, initial: '' }));
 }
 
+/** The id of the name of each trace level. */
+const TRACE_NAMES: Record<TraceLevel, string> = {
+  'No trace': 'studio.trace.none', // untranslated: a stored value, the key of its name
+  Warning: 'studio.trace.warning',
+  Info: 'studio.trace.info',
+  Debug: 'studio.trace.debug',
+  All: 'studio.trace.all',
+};
+
 const HEADER_ROWS: ParameterRow[] = Object.entries(HEADER_DEFAULTS).map(([key, value]) => ({ id: `header:${key}`, label: key, initial: value }));
 
 /** The lines of the processing log in the monospace font: a section's time before its first line, its details indented. */
@@ -61,6 +71,7 @@ function LogBody({ lines }: { lines: readonly LogLine[] }) {
  * parameters and the test instances are previews and never reach the service. Escape restores the split view.
  */
 export function TestTab({ mappingId, store, session, browserState }: TestTabProps) {
+  const { t } = useText();
   const editing = useStore(store, (s) => s.editing);
   const model = useStore(store, (s) => s.workingCopy);
   const lastRun = useStore(store, (s) => s.lastRun);
@@ -94,19 +105,21 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
     savePanelPreference(browserState, viewKey(pane), mode);
   };
   const run = () => void session.getState().runTest(trace);
+  /** A trace level's name: a level the tab offers in the user's language, another one as it is. */
+  const traceName = (level: string) => (Object.hasOwn(TRACE_NAMES, level) ? t(TRACE_NAMES[level as TraceLevel]) : level);
 
   return (
     <Flex
       vertical
       component="section"
-      aria-label="Test"
+      aria-label={t('studio.tab.test')}
       onKeyDown={(event) => {
         if (event.key !== 'Escape' || event.defaultPrevented || layout.view === 'split' || expanded) return;
         event.preventDefault();
         layout.setView('split');
       }}
     >
-      <Flex align="center" gap="small" wrap role="toolbar" aria-label="Test instance actions">
+      <Flex align="center" gap="small" wrap role="toolbar" aria-label={t('studio.test.instanceActions')}>
         <Flex align="center" gap="small" wrap>
           <InstanceTools
             library={library}
@@ -118,19 +131,23 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
           />
         </Flex>
         <div style={{ marginInlineStart: 'auto' }}>
-          <PaneSizeTools upper pane="input and result" label="Input and result layout" view={layout.view} onChange={layout.setView} />
+          <PaneSizeTools
+            upper
+            names={{ minimize: t('studio.test.panes.minimize'), maximize: t('studio.test.panes.maximize') }}
+            label={t('studio.test.panes.layout')}
+            view={layout.view} onChange={layout.setView} />
         </div>
       </Flex>
 
       <div style={{ display: 'flex', flexDirection: 'column', height: SPLIT_HEIGHT }}>
         <VerticalSplitLayout
-          label="Resize processing log"
+          label={t('studio.test.resizeLog')}
           lowerId={`${mappingId}-processing-log`}
           initialShare={layout.share}
           onCommit={layout.setShare}
           view={layout.view}
           upper={
-            <SideBySide label="Resize input and result panels" leftId="test-input-pane" browserState={browserState} widthKey={`test.${src}.width`}>
+            <SideBySide label={t('studio.test.resizePanes')} leftId="test-input-pane" browserState={browserState} widthKey={`test.${src}.width`}>
               <TestDocument
                 side="Input"
                 format={src}
@@ -140,8 +157,8 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
                 edit={(value) => session.getState().setSource(value)}
                 readOnly={running}
                 parameters={[
-                  { title: 'Import Parameters', rows: parameterRows(signatureParameters, 'Import') },
-                  { title: 'Header Parameters', rows: HEADER_ROWS },
+                  { title: t('studio.test.importParameters'), rows: parameterRows(signatureParameters, 'Import') },
+                  { title: t('studio.test.headerParameters'), rows: HEADER_ROWS },
                 ]}
                 values={values}
                 onParameter={(id, value) => preview.getState().setValue(id, value)}
@@ -157,38 +174,41 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
                 mode={views.result}
                 onMode={(mode) => setView('result', mode)}
                 readOnly={false}
-                parameters={[{ title: 'Export Parameters', rows: parameterRows(signatureParameters, 'Export') }]}
+                parameters={[{ title: t('studio.test.exportParameters'), rows: parameterRows(signatureParameters, 'Export') }]}
                 values={values}
               />
             </SideBySide>
           }
           toolbar={
-            <Flex align="center" gap="small" wrap role="toolbar" aria-label="Simulation controls">
+            <Flex align="center" gap="small" wrap role="toolbar" aria-label={t('studio.test.controls')}>
               <Button
                 size="small"
                 icon={<CaretRightOutlined aria-hidden />}
                 disabled={running}
                 loading={running}
-                title="Start the Transformation"
+                title={t('studio.test.run.title')}
                 onClick={run}
               >
-                Run simulation
+                {t('studio.test.run')}
               </Button>
               <Divider vertical />
               <Flex align="center" gap="small" wrap>
-                <small aria-hidden="true">Trace Level</small>
+                <small aria-hidden="true">{t('studio.test.trace')}</small>
                 <Select
                   virtual={false}
-                  aria-label="Trace Level"
+                  aria-label={t('studio.test.trace')}
                   value={trace}
                   disabled={!editing || running}
                   onChange={(value) => preview.getState().setTraceLevel(value as TraceLevel)}
-                  options={TRACE_LEVELS.map((level) => ({ value: level, label: level }))}
+                  options={TRACE_LEVELS.map((level) => ({ value: level, label: t(TRACE_NAMES[level]) }))}
                 />
-                <PreviewBadge feature="Trace level" issue={TRACE_LEVEL_ISSUE} />
+                <PreviewBadge feature={t('studio.preview.trace')} issue={TRACE_LEVEL_ISSUE} />
               </Flex>
               <div style={{ marginInlineStart: 'auto' }}>
-                <PaneSizeTools pane="processing log" label="Processing log layout" view={layout.view} onChange={layout.setView} />
+                <PaneSizeTools
+                  names={{ minimize: t('studio.test.log.minimize'), maximize: t('studio.test.log.maximize') }}
+                  label={t('studio.test.log.layout')}
+                  view={layout.view} onChange={layout.setView} />
               </div>
             </Flex>
           }
@@ -199,27 +219,27 @@ export function TestTab({ mappingId, store, session, browserState }: TestTabProp
             role="region"
             aria-labelledby={`${mappingId}-processing-log-heading`}
             tabIndex={0}
-            title={<h2 id={`${mappingId}-processing-log-heading`}>Processing log</h2>}
+            title={<h2 id={`${mappingId}-processing-log-heading`}>{t('studio.test.log')}</h2>}
             extra={
               lines.length > 0 && (
                 <>
-                  {runLog && <small>Last run · {runLog.level}</small>}
+                  {runLog && <small>{t('studio.test.lastRun', { level: traceName(runLog.level) })}</small>}
                   <Button size="small" type="link" onClick={() => setExpanded(true)}>
-                    Expand log
+                    {t('studio.test.expandLog')}
                   </Button>
-                  <CopyTextButton label="processing log" text={text} />
+                  <CopyTextButton label={t('studio.log.copy')} text={text} />
                 </>
               )
             }
           >
-            {lines.length > 0 ? <LogBody lines={lines} /> : <p role="status">{running ? 'Running the simulation…' : 'Ready.'}</p>}
+            {lines.length > 0 ? <LogBody lines={lines} /> : <p role="status">{t(running ? 'studio.queue.running' : 'studio.test.ready')}</p>}
           </Card>
         </VerticalSplitLayout>
       </div>
       {expanded && (
-        <MountedModal title="Processing Log" onCancel={() => setExpanded(false)} footer={<Button onClick={() => setExpanded(false)}>Close</Button>}>
-          <p>{runLog ? `Simulation · ${runLog.level}` : 'Compile of the working copy'}</p>
-          <CopyTextButton label="processing log" text={text} />
+        <MountedModal title={t('studio.log')} onCancel={() => setExpanded(false)} footer={<Button onClick={() => setExpanded(false)}>{t('frame.tab.close')}</Button>}>
+          <p>{runLog ? t('studio.test.simulation', { level: traceName(runLog.level) }) : t('studio.log.compile')}</p>
+          <CopyTextButton label={t('studio.log.copy')} text={text} />
           <LogBody lines={lines} />
         </MountedModal>
       )}

@@ -9,25 +9,25 @@ import type { Positions } from './expression-layout';
 /** The gap between a placed preview node and the node above it (the layout's gap). */
 const GAP = 24;
 
-/** The Preview mark of a variable's nodes. */
-export const VARIABLES = { feature: 'Variables', issue: VARIABLES_ISSUE };
+/** The Preview mark of a variable's nodes: the id of its feature's name and its follow-up issue. */
+export const VARIABLES = { feature: 'studio.preview.variables', issue: VARIABLES_ISSUE };
 
-/** What a node that reads or defines a mapping variable is, in words. */
-export const VARIABLE_ROLE = 'Mapping variable';
+/** The id of the text that says what a node that reads or defines a mapping variable is. */
+export const VARIABLE_ROLE = 'studio.role.variable';
 
 /** A preview node as a canvas node, with its feature's Preview mark. */
 function canvasNode(node: PreviewNode, catalogue: FunctionCatalogue): ExpressionNode {
   const { id, kind, ref } = node;
   const params = node.params as Params | undefined;
   if (kind === 'target') {
-    return { id, kind, name: stepName(ref), path: ref, inputs: [{ id: portId(0), label: stepName(ref), slot: 0 }], output: false, preview: { feature: 'Grouped expressions', issue: GROUPED_ISSUE } };
+    return { id, kind, name: stepName(ref), path: ref, inputs: [{ id: portId(0), label: stepName(ref), slot: 0 }], output: false, preview: { feature: 'studio.preview.grouped', issue: GROUPED_ISSUE } };
   }
   if (kind === 'variable') return { id, kind: 'source', name: variableName(ref), path: ref, inputs: [], output: true, preview: VARIABLES, role: VARIABLE_ROLE };
   if (kind === 'source') return { id, kind, name: stepName(ref), path: ref, inputs: [], output: true, preview: VARIABLES };
   const stand = previewFunction(ref);
   if (stand) {
     const inputs = stand.inputs.map((label, slot) => ({ id: portId(slot), label, slot }));
-    const feature = stand.key === 'valuemap' ? 'Value mapping' : 'Lookups';
+    const feature = stand.key === 'valuemap' ? 'studio.preview.valueMapping' : 'studio.preview.lookups';
     return { id, kind, name: stand.name, inputs, output: stand.output, ...(params && { params }), preview: { feature, issue: stand.issue } };
   }
   // a catalogue function in a variable's expression

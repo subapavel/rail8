@@ -1,6 +1,7 @@
 import { Form, Input } from 'antd';
 import { MountedModal } from '../../../MountedModal';
 import { useId, useState } from 'react';
+import { useText } from '../../../language';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
 
@@ -25,8 +26,9 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
   const value = name.trim();
   const valid = NAME.test(value) && value.length <= 90;
   const used = valid && taken(`${parent}/$${value}`);
+  const { t } = useText();
   return (
-    <MountedModal title="Add Variable" onCancel={close} okText="Create" okButtonProps={{ htmlType: 'submit', form: formId, disabled: !valid || used }}>
+    <MountedModal title={t('studio.variable.add')} onCancel={close} okText={t('mapping.new.create')} okButtonProps={{ htmlType: 'submit', form: formId, disabled: !valid || used }}>
       <p>/{localPath(parent)}</p>
       <Form
         layout="vertical"
@@ -36,15 +38,15 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
         }}
       >
         <Form.Item
-          label="Variable name"
+          label={t('studio.variable.name')}
           htmlFor={`${formId}-name`}
           required
           validateStatus={value && (!valid || used) ? 'error' : undefined}
-          help={<span id={`${formId}-help`}>{used ? 'This field already has a variable or a child of that name.' : 'A letter or _, then letters, digits or _.'}</span>}
+          help={<span id={`${formId}-help`}>{used ? t('studio.variable.taken') : t('studio.variable.rule')}</span>}
         >
           <Input
             id={`${formId}-name`}
-            aria-label="Variable name"
+            aria-label={t('studio.variable.name')}
             required
             maxLength={90}
             value={name}
@@ -54,7 +56,7 @@ export function AddVariable({ parent, taken, create, close }: AddVariableProps) 
           />
         </Form.Item>
       </Form>
-      <small>A preview: the variable is kept in this browser only, never in the mapping file.</small>
+      <small>{t('studio.variable.preview')}</small>
     </MountedModal>
   );
 }

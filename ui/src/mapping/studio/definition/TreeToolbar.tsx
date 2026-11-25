@@ -10,12 +10,23 @@ import {
   BorderOutlined,
   CheckSquareOutlined,
 } from '@ant-design/icons';
+import { useText } from '../../../language';
 import { FILTERS, type Side } from './definition-model';
 import { Tool, ToolMenu, type ToolMenuItem } from '../shared/Tool';
 
 export type ViewMode = 'Tree' | 'Table' | 'Text';
 
 export const VIEW_MODES: readonly ViewMode[] = ['Tree', 'Table', 'Text'];
+
+/** The id of the name of each view. */
+const VIEW_NAMES: Readonly<Record<ViewMode, string>> = { Tree: 'studio.view.tree', Table: 'studio.view.table', Text: 'studio.view.text' };
+
+/** The id of the name of each change of the selection. */
+const SELECTION_NAMES: Readonly<Record<SelectionChange, string>> = {
+  all: 'studio.selection.all',
+  none: 'studio.selection.none',
+  inverse: 'studio.selection.inverse',
+};
 
 /** Whether the tree filter is on, and which of `FILTERS` it applies. */
 export interface TreeFilter {
@@ -24,7 +35,7 @@ export interface TreeFilter {
 }
 
 /** How Select All, Select None and Inverse Selection change the selected fields. */
-export type SelectionChange = 'Select All' | 'Select None' | 'Inverse Selection';
+export type SelectionChange = 'all' | 'none' | 'inverse';
 
 interface TreeToolbarProps {
   side: Side;
@@ -57,47 +68,47 @@ export function TreeToolbar(props: TreeToolbarProps) {
   const { side, mode, onMode, fullPath, onPath, collapseNext, expand, filter, chooseFilter, onToggleFilter, searchOpen, onSearch, onDownload } = props;
   const { mappingColumn, onMapping, selectionColumn, onSelection, onSelectionChange } = props;
   const target = side === 'target';
-  const title = target ? 'Target' : 'Source';
+  const { t } = useText();
   const filterItems: ToolMenuItem[] = [
-    { label: filter.active ? 'Switch Off' : 'Switch On', run: onToggleFilter },
-    ...(target ? FILTERS : FILTERS.slice(0, 2)).map((name, i) => ({ label: name, run: () => chooseFilter(i), checked: i === filter.kind })),
+    { label: filter.active ? t('studio.filter.off') : t('studio.filter.on'), run: onToggleFilter },
+    ...(target ? FILTERS : FILTERS.slice(0, 2)).map((name, i) => ({ label: t(name), run: () => chooseFilter(i), checked: i === filter.kind })),
   ];
   const selectionItems: ToolMenuItem[] = [
-    { label: selectionColumn ? 'Hide Selection Column' : 'Show Selection Column', run: () => onSelection(!selectionColumn) },
-    ...(['Select All', 'Select None', 'Inverse Selection'] as const).map((change) => ({ label: change, run: () => onSelectionChange(change) })),
+    { label: selectionColumn ? t('studio.selection.hide') : t('studio.selection.show'), run: () => onSelection(!selectionColumn) },
+    ...(['all', 'none', 'inverse'] as const).map((change) => ({ label: t(SELECTION_NAMES[change]), run: () => onSelectionChange(change) })),
   ];
   return (
     <Flex wrap align="center" gap="small">
-      <Space.Compact role="group" aria-label={`${title} message view`}>
+      <Space.Compact role="group" aria-label={t('studio.tree.view', { side })}>
         {VIEW_MODES.map((name) => (
           <Button key={name} size="small" type={mode === name ? 'primary' : 'default'} aria-pressed={mode === name} onClick={() => onMode(name)}>
-            {name}
+            {t(VIEW_NAMES[name])}
           </Button>
         ))}
       </Space.Compact>
-      <Flex wrap align="center" role="toolbar" aria-label={`${side} tree tools`}>
+      <Flex wrap align="center" role="toolbar" aria-label={t('studio.tree.tools', { side })}>
         {mode !== 'Text' && (
           <>
-            <Tool label={collapseNext ? 'Collapse Tree' : 'Expand Tree'} icon={collapseNext ? UpOutlined : DownOutlined} onClick={expand} />
-            <Tool label="Show Full Path" icon={NodeIndexOutlined} pressed={fullPath} onClick={onPath} />
-            <Tool label="Filter Tree" icon={FilterOutlined} pressed={filter.active} onClick={onToggleFilter} />
-            <ToolMenu label="Filter Tree options" items={filterItems} />
+            <Tool label={collapseNext ? t('studio.tree.collapse') : t('studio.tree.expand')} icon={collapseNext ? UpOutlined : DownOutlined} onClick={expand} />
+            <Tool label={t('studio.tree.fullPath')} icon={NodeIndexOutlined} pressed={fullPath} onClick={onPath} />
+            <Tool label={t('studio.filter')} icon={FilterOutlined} pressed={filter.active} onClick={onToggleFilter} />
+            <ToolMenu label={t('studio.filter.options')} items={filterItems} />
             {target && (
               <>
-                <Tool label="Show Mapping Column" icon={TableOutlined} pressed={mappingColumn} onClick={onMapping} />
+                <Tool label={t('studio.tree.mappingColumn')} icon={TableOutlined} pressed={mappingColumn} onClick={onMapping} />
                 <Tool
-                  label="Show Selection Column"
+                  label={t('studio.selection.show')}
                   icon={selectionColumn ? CheckSquareOutlined : BorderOutlined}
                   pressed={selectionColumn}
                   onClick={() => onSelection(!selectionColumn)}
                 />
-                <ToolMenu label="Selection column options" items={selectionItems} />
+                <ToolMenu label={t('studio.selection.options')} items={selectionItems} />
               </>
             )}
           </>
         )}
-        <Tool label={searchOpen ? 'Close Search' : 'Open Search'} icon={SearchOutlined} pressed={searchOpen} onClick={onSearch} />
-        <Tool label="Save Document Source" icon={DownloadOutlined} onClick={onDownload} />
+        <Tool label={searchOpen ? t('studio.search.close') : t('studio.search.open')} icon={SearchOutlined} pressed={searchOpen} onClick={onSearch} />
+        <Tool label={t('studio.tree.download')} icon={DownloadOutlined} onClick={onDownload} />
       </Flex>
     </Flex>
   );

@@ -1,7 +1,7 @@
 import type { FunctionCatalogue } from '../../../api/client';
 
-/** The drilldown's groups, in the order of the SAP PO StandardFunctions library. */
-export const GROUPS = ['Arithmetic', 'Boolean', 'Text', 'Conversions', 'Date', 'Constants', 'Node Functions', 'Statistic'] as const;
+/** The drilldown's groups, in the order of the SAP PO StandardFunctions library; `node` is Node Functions. */
+export const GROUPS = ['arithmetic', 'boolean', 'text', 'conversions', 'date', 'constants', 'node', 'statistic'] as const;
 export type Group = (typeof GROUPS)[number];
 
 /** The follow-up issues of the functions the catalogue lacks. */
@@ -16,52 +16,52 @@ const MISSING_FUNCTIONS = 172;
  */
 const PROTOTYPE: readonly (readonly [Group, string] | readonly [Group, string, number, number])[] = [
   ...(['add', 'subtract', 'equalsA', 'abs', 'sqrt', 'sqr', 'sign', 'neg', 'inv', 'power', 'less', 'greater', 'multiply', 'divide', 'max', 'min', 'ceil', 'floor', 'round', 'counter'].map(
-    (fn) => ['Arithmetic', fn] as const,
+    (fn) => ['arithmetic', fn] as const,
   )),
-  ...(['and', 'or', 'not', 'equals', 'notEquals', 'if'].map((fn) => ['Boolean', fn] as const)),
-  ['Boolean', 'ifS', 3, MISSING_FUNCTIONS],
-  ['Text', 'substring'],
-  ['Conversions', 'fixValues'],
-  ['Arithmetic', 'formatNum'],
-  ['Text', 'concat'],
-  ['Text', 'equalsS'],
-  ['Text', 'indexOf'],
-  ['Text', 'indexOf', 3, MISSING_FUNCTIONS],
-  ...(['currentDate', 'dateTrans', 'dateBefore', 'dateAfter', 'compareDates'].map((fn) => ['Date', fn] as const)),
-  ['Text', 'lastIndexOf'],
-  ['Text', 'lastIndexOf', 3, MISSING_FUNCTIONS],
-  ...(['compare', 'replaceString', 'length', 'endsWith', 'startsWith'].map((fn) => ['Text', fn] as const)),
-  ['Text', 'startsWith', 3, MISSING_FUNCTIONS],
-  ...(['toUpperCase', 'trim', 'toLowerCase'].map((fn) => ['Text', fn] as const)),
-  ['Constants', 'constant'],
-  ['Constants', 'copyValue'],
-  ...(['createIf', 'removeContexts', 'replaceValue', 'exists'].map((fn) => ['Node Functions', fn] as const)),
-  ['Boolean', 'ifWithoutElse'],
-  ['Boolean', 'ifSWithoutElse', 2, MISSING_FUNCTIONS],
-  ['Node Functions', 'splitByValue'],
-  ['Node Functions', 'collapseContexts'],
-  ['Conversions', 'Value mapping', 1, VALUE_MAPPING],
-  ...(['sum', 'average', 'count', 'index'].map((fn) => ['Statistic', fn] as const)),
-  ['Node Functions', 'useOneAsMany'],
-  ['Constants', 'sender', 0, MISSING_FUNCTIONS],
-  ['Constants', 'receiver', 0, MISSING_FUNCTIONS],
-  ...(['sort', 'sortByKey', 'mapWithDefault', 'formatByExample'].map((fn) => ['Node Functions', fn] as const)),
-  ['Conversions', 'JDBC Lookup', 1, LOOKUPS],
-  ['Conversions', 'RFC Lookup', 0, LOOKUPS],
-  ['Constants', 'xsi:nil', 0, MISSING_FUNCTIONS],
-  ['Boolean', 'isNil'],
+  ...(['and', 'or', 'not', 'equals', 'notEquals', 'if'].map((fn) => ['boolean', fn] as const)),
+  ['boolean', 'ifS', 3, MISSING_FUNCTIONS],
+  ['text', 'substring'],
+  ['conversions', 'fixValues'],
+  ['arithmetic', 'formatNum'],
+  ['text', 'concat'],
+  ['text', 'equalsS'],
+  ['text', 'indexOf'],
+  ['text', 'indexOf', 3, MISSING_FUNCTIONS],
+  ...(['currentDate', 'dateTrans', 'dateBefore', 'dateAfter', 'compareDates'].map((fn) => ['date', fn] as const)),
+  ['text', 'lastIndexOf'],
+  ['text', 'lastIndexOf', 3, MISSING_FUNCTIONS],
+  ...(['compare', 'replaceString', 'length', 'endsWith', 'startsWith'].map((fn) => ['text', fn] as const)),
+  ['text', 'startsWith', 3, MISSING_FUNCTIONS],
+  ...(['toUpperCase', 'trim', 'toLowerCase'].map((fn) => ['text', fn] as const)),
+  ['constants', 'constant'],
+  ['constants', 'copyValue'],
+  ...(['createIf', 'removeContexts', 'replaceValue', 'exists'].map((fn) => ['node', fn] as const)),
+  ['boolean', 'ifWithoutElse'],
+  ['boolean', 'ifSWithoutElse', 2, MISSING_FUNCTIONS],
+  ['node', 'splitByValue'],
+  ['node', 'collapseContexts'],
+  ['conversions', 'Value mapping', 1, VALUE_MAPPING], // untranslated: the function's name in SAP PO
+  ...(['sum', 'average', 'count', 'index'].map((fn) => ['statistic', fn] as const)),
+  ['node', 'useOneAsMany'],
+  ['constants', 'sender', 0, MISSING_FUNCTIONS],
+  ['constants', 'receiver', 0, MISSING_FUNCTIONS],
+  ...(['sort', 'sortByKey', 'mapWithDefault', 'formatByExample'].map((fn) => ['node', fn] as const)),
+  ['conversions', 'JDBC Lookup', 1, LOOKUPS], // untranslated: the function's name in SAP PO
+  ['conversions', 'RFC Lookup', 0, LOOKUPS], // untranslated: the function's name in SAP PO
+  ['constants', 'xsi:nil', 0, MISSING_FUNCTIONS],
+  ['boolean', 'isNil'],
 ];
 
 /** The group of a catalogue function the entries do not list, by its function family. */
 const FAMILY_GROUPS: Record<string, Group> = {
-  arithmetic: 'Arithmetic',
-  boolean: 'Boolean',
-  text: 'Text',
-  conversions: 'Conversions',
-  date: 'Date',
-  constant: 'Constants',
-  context: 'Node Functions',
-  statistic: 'Statistic',
+  arithmetic: 'arithmetic',
+  boolean: 'boolean',
+  text: 'text',
+  conversions: 'conversions',
+  date: 'date',
+  constant: 'constants',
+  context: 'node',
+  statistic: 'statistic',
 };
 
 /** The listed names with an overload, which show their input count. */
@@ -85,7 +85,7 @@ export interface DrilldownFunction {
 }
 
 /** The listed names of the functions offered as previews, and their keys. */
-const PREVIEWS: Record<string, string> = { 'Value mapping': 'valuemap', 'JDBC Lookup': 'tableLookup', 'RFC Lookup': 'rfclookup' };
+const PREVIEWS: Record<string, string> = { 'Value mapping': 'valuemap', 'JDBC Lookup': 'tableLookup', 'RFC Lookup': 'rfclookup' }; // untranslated: the functions' names in SAP PO
 
 export interface DrilldownGroup {
   group: Group;
@@ -119,7 +119,7 @@ export function drilldown(catalogue: FunctionCatalogue): DrilldownGroup[] {
   }
   for (const name of Object.keys(catalogue).sort()) {
     if (listed.has(name)) continue;
-    groups.get(FAMILY_GROUPS[catalogue[name]!.family] ?? 'Node Functions')!.push({ key: name, name, fn: name, configurable: configurable(name) });
+    groups.get(FAMILY_GROUPS[catalogue[name]!.family] ?? 'node')!.push({ key: name, name, fn: name, configurable: configurable(name) });
   }
   return GROUPS.map((group) => ({ group, functions: groups.get(group)! }));
 }

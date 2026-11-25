@@ -1,3 +1,4 @@
+import { currentLanguage, textsIn } from '../../../language';
 import type { StructureRef } from '../../generated/mapping-model';
 
 /** A test document's format, by the root of the message's structure. */
@@ -15,7 +16,7 @@ export function parseDocument(text: string, format: DocumentFormat): unknown {
   if (format === 'JSON') return JSON.parse(text);
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   if (doc.documentElement.localName === 'parsererror' || PARSER_ERROR.some((ns) => doc.getElementsByTagNameNS(ns, 'parsererror').length > 0)) {
-    throw new Error('The text is not well-formed XML.');
+    throw new Error(textsIn(currentLanguage()).t('studio.document.notXml'));
   }
   return doc;
 }

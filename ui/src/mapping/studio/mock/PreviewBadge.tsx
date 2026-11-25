@@ -1,8 +1,9 @@
 import { Tag, Tooltip } from 'antd';
 import { useState } from 'react';
+import { useText } from '../../../language';
 
 export interface PreviewBadgeProps {
-  /** The preview feature's name. */
+  /** The preview feature's name, in the language the UI shows. */
   feature: string;
   /** Its follow-up issue. */
   issue: number;
@@ -15,16 +16,17 @@ export interface PreviewBadgeProps {
 export function PreviewBadge({ feature, issue }: PreviewBadgeProps) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  const { t } = useText();
   return (
     <Tooltip
       destroyOnHidden
       trigger="hover"
       open={hovered || focused}
       onOpenChange={setHovered}
-      title={`${feature}: a preview kept in this browser only, never in the mapping file (#${issue}).`}
+      title={t('studio.preview.tip', { feature, issue })}
     >
       <Tag tabIndex={0} color="purple" onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
-        Preview
+        {t('studio.preview')}
       </Tag>
     </Tooltip>
   );

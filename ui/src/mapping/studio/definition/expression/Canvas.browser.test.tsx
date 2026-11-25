@@ -62,7 +62,7 @@ const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: tru
 const flyoutItem = (name: string) => page.getByRole('menuitem', { name, exact: true });
 const targetRow = (name: string) =>
   page.getByRole('table', { name: 'target fields' }).getByRole('row').filter({ has: page.getByRole('button', { name, exact: true }) });
-const footer = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByText(/nodes · /);
+const footer = () => page.getByRole('region', { name: 'Field mapping canvas' }).getByText(/ nodes? · /);
 const integers = (layout: TargetFieldMapping['layout']) =>
   Object.values({ ...layout?.boxes, ...(layout?.target && { t: layout.target }) }).every(({ x, y }) => Number.isInteger(x) && Number.isInteger(y));
 
@@ -95,7 +95,7 @@ describe('the mapping expression canvas', () => {
     await expect.element(page.getByRole('toolbar', { name: 'Mapping expression' })).toMatchTextContent('/Order/OrderId');
     await expect.element(node(/^Source field OrderId\. Complete/)).toBeVisible();
     await expect.element(node(/^Target field OrderId\. Complete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connection');
     expect(mappingOf(store).layout).toBeUndefined();
     expect(selectUnsaved(store.getState())).toBe(false);
   });
@@ -138,7 +138,7 @@ describe('the mapping expression canvas', () => {
     await renderCanvas({ target: NOTE });
 
     await expect.element(node(/^Target field Note\. Incomplete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('1 nodes · 0 connections');
+    await expect.element(footer()).toHaveTextContent('1 node · 0 connections');
   });
 
   test('in view mode the editing tools are disabled and nodes do not move', async () => {
@@ -163,7 +163,7 @@ describe('the mapping expression canvas', () => {
     expect(Object.keys(mapping.layout!.boxes!).sort()).toEqual(['a1', boxOf(store, 'concat')].sort());
     expect(integers(mapping.layout)).toBe(true);
     expect(store.getState().past).toHaveLength(1);
-    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connection');
   });
 
   test('a function dragged from the drilldown onto the canvas is added where it is dropped', async () => {
@@ -202,7 +202,7 @@ describe('the mapping expression canvas', () => {
 
     expect(mappingOf(store).result).toBe(concat);
     await expect.element(node(/^Source field OrderId\. Detached/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connection');
   });
 
   test('a wire that would close a cycle is not offered, nor one the input already has', async () => {
@@ -233,7 +233,7 @@ describe('the mapping expression canvas', () => {
     expect(mappingOf(store).result).toBeNull();
     expect(store.getState().past).toHaveLength(1);
     store.getState().undo();
-    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connection');
     await canvas().getByRole('group', { name: /^Edge from a1/ }).click({ button: 'right' });
     await menuItem('Disconnect').click();
     expect(mappingOf(store).result).toBeNull();
@@ -250,7 +250,7 @@ describe('the mapping expression canvas', () => {
 
     // the delete box command drops a mapping left without boxes
     expect(store.getState().workingCopy.targetFieldMappings).toBeUndefined();
-    await expect.element(footer()).toHaveTextContent('1 nodes · 0 connections');
+    await expect.element(footer()).toHaveTextContent('1 node · 0 connections');
   });
 
   test('parameter edit: the gear opens the parameters, Apply saves them all as one undo step', async () => {
@@ -347,7 +347,7 @@ describe('the mapping expression canvas', () => {
     const boxes = Object.values(mappingOf(store).boxes);
     expect(boxes).toHaveLength(2);
     expect(boxes.every((box) => box.kind === 'source')).toBe(true);
-    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('3 nodes · 1 connection');
   });
 
   test("the canvas selection is the store's UI slice: a click selects the box, a paste selects the pasted copy instead", async () => {
@@ -635,7 +635,7 @@ describe('an orphaned reference and its remap', () => {
     await expect.element(remapDialog()).not.toBeInTheDocument();
     expect(mappingOf(store)).toMatchObject({ result: 'a1', boxes: { a1: { kind: 'source', field: ORDER_ID } } });
     await expect.element(node(/^Source field OrderId\. Complete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connection');
     await expect.element(canvas().getByRole('img', { name: 'Orphaned reference' })).not.toBeInTheDocument();
     await expect.element(targetRow('OrderId').getByRole('img', { name: 'Connected' })).toBeVisible();
 
