@@ -30,7 +30,7 @@ public enum RefusalCode {
     INVALID_REPLY("invalid-reply"),
     /** 503: the node's Postgres pool is busy. */
     POOL_BUSY("pool-busy"),
-    /** 503: the node is busy, hashing passwords or running a plugin's calls; nothing was done. */
+    /** 503: the node is busy, hashing passwords, running a plugin's calls or waiting for the secret store's locks; nothing was done. */
     BUSY("busy"),
     /** 503: a required row of the audit was not written, so nothing ran. */
     UNAUDITED("unaudited"),
@@ -166,6 +166,31 @@ public enum RefusalCode {
     /** 404: no queued, running or parked at-least-once message {@code id}. */
     NOT_CANCELLABLE("not-cancellable"),
 
+    // --- secrets
+
+    /** 404: the store holds no secret {@code name}, or no source holds it and nothing uses it. */
+    NO_SECRET("no-secret"),
+    /** 409: the store holds a secret {@code name}. */
+    EXISTS("exists"),
+    /** 409: the secret {@code name} is of kind {@code kind}, not {@code asked}: it is deleted and created again instead. */
+    KIND_DIFFERS("kind-differs"),
+    /** 409: a user of the secret {@code name} takes it as another kind than {@code kind}. */
+    KIND_IN_USE("kind-in-use"),
+    /** 409: the secret {@code name} is used, or may be; a delete names it in {@code ?confirm}. */
+    IN_USE("in-use"),
+    /** 409: a live node does not hold the key {@code key} this node seals under. */
+    KEYS_DIFFER("keys-differ"),
+    /** 409: the secret store is full: it holds the most secrets, or the most bytes of sealed values, it holds. */
+    STORE_FULL("store-full"),
+    /** 409: the name {@code name} is under {@code rail8.}, which belongs to the platform. */
+    RESERVED("reserved"),
+    /** 422: the secret's {@code field} is of the wrong form or out of its limits; its value is never echoed. */
+    INVALID("invalid"),
+    /** 503: this node holds no key of the secret store. */
+    NO_KEY("no-key"),
+    /** 503: the change is written, but this node could not read it back: it is in force within one tick. */
+    WRITTEN_UNREAD("written-unread"),
+
     // --- deploys
 
     /** 403 or 500: the node has no {@code RAIL8_GIT_BASE}. */
@@ -226,7 +251,7 @@ public enum RefusalCode {
     DEPLOY_RECORD_UNKNOWN("deploy-record-unknown"),
     /** 500 or 503: version {@code version} did not start; {@code running} runs again. */
     ROLLED_BACK_UNSTARTED("rolled-back-unstarted"),
-    /** 500 or 503: version {@code version} was not recorded; {@code running} runs again. */
+    /** 422, 500 or 503: version {@code version} was not recorded; {@code running} runs again. */
     ROLLED_BACK_UNRECORDED("rolled-back-unrecorded");
 
     private final String code;

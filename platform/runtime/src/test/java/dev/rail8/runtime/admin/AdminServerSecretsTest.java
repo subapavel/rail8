@@ -129,7 +129,7 @@ class AdminServerSecretsTest extends AdminAccessFixture {
         Answer one = call("GET", "/admin/secrets/login", Optional.of(token(developer, "cli")), null);
         assertEquals(200, one.status(), one.body());
         assertEquals("credentials", one.json().getString("kind"));
-        refused(call("GET", "/admin/secrets/nobody", Optional.of(developer), null), 404, "not-found");
+        refused(call("GET", "/admin/secrets/nobody", Optional.of(developer), null), 404, "no-secret");
 
         Answer overwritten = call("POST", "/admin/secrets/db", token, new JsonObject().put("kind", "value").put("value", "plain-value-2").encode());
         assertEquals(200, overwritten.status(), overwritten.body());
@@ -154,8 +154,8 @@ class AdminServerSecretsTest extends AdminAccessFixture {
         assertEquals(201, create(session, value("db", "plain-value-3")).status());
 
         refused(create(session, value("db", "plain-value-3")), 409, "exists");
-        refused(call("POST", "/admin/secrets/nobody", session, new JsonObject().put("kind", "value").put("value", "plain-value-3").encode()), 404, "not-found");
-        refused(call("DELETE", "/admin/secrets/nobody", session, null), 404, "not-found");
+        refused(call("POST", "/admin/secrets/nobody", session, new JsonObject().put("kind", "value").put("value", "plain-value-3").encode()), 404, "no-secret");
+        refused(call("DELETE", "/admin/secrets/nobody", session, null), 404, "no-secret");
         refused(call("POST", "/admin/secrets/db", session, new JsonObject().put("kind", "credentials").put("user", "u").put("password", "the-password-2")
                 .encode()), 409, "kind-differs");
         refused(create(session, value("rail8.git", "rejected-value")), 409, "kind-in-use");   // the platform takes it as credentials
@@ -177,9 +177,9 @@ class AdminServerSecretsTest extends AdminAccessFixture {
         for (int i = 0; i < 999; i++) MemorySecretStores.delete(secrets, "s" + i);
 
         secretDb.auditFails(true);
-        refused(create(session, value("unaudited", "rejected-value")), 503, "audit-unavailable");
+        refused(create(session, value("unaudited", "rejected-value")), 503, "unaudited");
         secretDb.auditFails(false);
-        refused(call("GET", "/admin/secrets/unaudited", session, null), 404, "not-found");
+        refused(call("GET", "/admin/secrets/unaudited", session, null), 404, "no-secret");
 
         assertNoValueCaptured();
     }

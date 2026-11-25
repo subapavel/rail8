@@ -1,5 +1,7 @@
 package dev.rail8.runtime.secret;
 
+import dev.rail8.runtime.refusal.RefusalCode;
+
 import dev.rail8.api.Health;
 import dev.rail8.api.Secret;
 import dev.rail8.api.Timer;
@@ -504,7 +506,7 @@ public final class SecretStore {
      * or {@code {name, kind:"key-pair", privateKey, certificates}}. Answers its entry of the list.
      *
      * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
-     *         {@code exists}, {@code kind-in-use}, {@code store-full}, {@code audit-unavailable}
+     *         {@code exists}, {@code kind-in-use}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> create(Actor who, JsonObject body) {
         String name;
@@ -518,13 +520,13 @@ public final class SecretStore {
         StoreKey k = key;
         return rows.<SecretRows.Head>write(List.of(name), tx -> keyCheck(tx, k).compose(v -> tx.rows()).compose(all -> {
             if (all.stream().anyMatch(m -> m.name().equals(name))) {
-                return refuse(409, "exists", "the secret '" + name + "' exists: overwrite it, or delete it first", name);
+                return refuse(409, RefusalCode.EXISTS, "the secret '" + name + "' exists: overwrite it, or delete it first", name);
             }
-            if (all.size() >= MAX_SECRETS) return refuse(409, "store-full", "the store holds " + MAX_SECRETS + " secrets, its most", name);
+            if (all.size() >= MAX_SECRETS) return refuse(409, RefusalCode.STORE_FULL, "the store holds " + MAX_SECRETS + " secrets, its most", name);
             return tx.uses(name).compose(uses -> {
                 for (SecretRows.Use use : uses) {
                     if (!use.kinds().contains(value.kind())) {
-                        return Future.failedFuture(new SecretRefused(409, "kind-in-use", use.userKind() + " '" + use.userId() + "' uses '" + name
+                        return Future.failedFuture(new SecretRefused(409, RefusalCode.KIND_IN_USE, use.userKind() + " '" + use.userId() + "' uses '" + name
                                 + "' as " + ids(use.kinds()) + ", not as " + value.kind().id(), new JsonObject().put("name", name)
                                 .put("kind", value.kind().id()).put("user", user(use))));
                     }
@@ -541,7 +543,7 @@ public final class SecretStore {
      * Overwrites {@code name} with the value of {@code body}, of its kind; the last writer wins. Answers its entry of the list.
      *
      * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code no-key}, {@code keys-differ},
-     *         {@code not-found}, {@code kind-differs}, {@code store-full}, {@code audit-unavailable}
+     *         {@code no-secret}, {@code kind-differs}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> overwrite(Actor who, String name, JsonObject body) {
         SecretValue value;
@@ -554,9 +556,9 @@ public final class SecretStore {
         StoreKey k = key;
         return rows.<SecretRows.Head>write(List.of(), tx -> keyCheck(tx, k).compose(v -> tx.rows()).compose(all -> {
             SecretRows.Meta old = all.stream().filter(m -> m.name().equals(name)).findFirst().orElse(null);
-            if (old == null) return refuse(404, "not-found", "the store holds no secret '" + name + "'", name);
+            if (old == null) return refuse(404, RefusalCode.NO_SECRET, "the store holds no secret '" + name + "'", name);
             if (old.kind() != value.kind()) {
-                return Future.failedFuture(new SecretRefused(409, "kind-differs", "'" + name + "' is a secret of kind " + old.kind().id()
+                return Future.failedFuture(new SecretRefused(409, RefusalCode.KIND_DIFFERS, "'" + name + "' is a secret of kind " + old.kind().id()
                         + ", not " + value.kind().id() + ": delete it and create it again", new JsonObject().put("name", name)
                         .put("kind", old.kind().id()).put("asked", value.kind().id())));
             }
@@ -571,7 +573,7 @@ public final class SecretStore {
      * Deletes {@code name}. A name with a use, or while a record's uses are not known, is deleted only when {@code confirm}
      * equals it.
      *
-     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code not-found}, {@code in-use}, {@code audit-unavailable}
+     * @return fails with a {@link SecretRefused}: {@code invalid}, {@code no-secret}, {@code in-use}, {@code unaudited}
      */
     public Future<Void> delete(Actor who, String name, Optional<String> confirm) {
         try {
@@ -581,12 +583,12 @@ public final class SecretStore {
         }
         boolean confirmed = confirm.filter(name::equals).isPresent();
         return rows.<SecretRows.Head>write(List.of(name), tx -> tx.row(name).compose(row -> {
-            if (row.isEmpty()) return refuse(404, "not-found", "the store holds no secret '" + name + "'", name);
+            if (row.isEmpty()) return refuse(404, RefusalCode.NO_SECRET, "the store holds no secret '" + name + "'", name);
             return tx.uses(name).compose(uses -> tx.unknownRecords().compose(unknown -> {
                 JsonArray usedBy = users(uses);
                 JsonArray mayUse = new JsonArray(unknown.subList(0, Math.min(MAX_USERS_NAMED, unknown.size())));
                 if ((!uses.isEmpty() || !unknown.isEmpty()) && !confirmed) {
-                    return Future.failedFuture(new SecretRefused(409, "in-use", "'" + name + "' is used"
+                    return Future.failedFuture(new SecretRefused(409, RefusalCode.IN_USE, "'" + name + "' is used"
                             + (uses.isEmpty() ? "" : " by " + uses.getFirst().userKind() + " '" + uses.getFirst().userId() + "'")
                             + (uses.size() > 1 ? " and " + (uses.size() - 1) + " more" : "")
                             + (unknown.isEmpty() ? "" : (uses.isEmpty() ? " perhaps" : ", and perhaps") + " by the package '" + unknown.getFirst() + "'")
@@ -608,7 +610,7 @@ public final class SecretStore {
     }
 
     private static <T> Future<T> writtenUnread(Throwable failure) {
-        return Future.failedFuture(new SecretRefused(503, "written-unread", "the change is written, but this node could not read it back: it is in force"
+        return Future.failedFuture(new SecretRefused(503, RefusalCode.WRITTEN_UNREAD, "the change is written, but this node could not read it back: it is in force"
                 + " within " + TICK_SECONDS + " s; do not send it again", new JsonObject()));
     }
 
@@ -619,7 +621,7 @@ public final class SecretStore {
     }
 
     private static <T> Future<T> noKey() {
-        return Future.failedFuture(new SecretRefused(503, "no-key", "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
+        return Future.failedFuture(new SecretRefused(503, RefusalCode.NO_KEY, "this node holds no key of the secret store: start it with " + StoreKey.VARIABLE));
     }
 
     private static Future<Void> keyCheck(List<SecretRows.NodeKeys> nodes, StoreKey k) {
@@ -627,7 +629,7 @@ public final class SecretStore {
         byte[] id = Seal.keyId(k.current().orElseThrow());
         List<String> lacking = nodes.stream().filter(n -> !n.holds(id)).map(SecretRows.NodeKeys::node).sorted().toList();
         if (lacking.isEmpty()) return Future.succeededFuture();
-        return Future.failedFuture(new SecretRefused(409, "keys-differ", "the nodes " + lacking + " do not hold the key " + HEX.formatHex(id)
+        return Future.failedFuture(new SecretRefused(409, RefusalCode.KEYS_DIFFER, "the nodes " + lacking + " do not hold the key " + HEX.formatHex(id)
                 + " this node seals under: try again once the roll of the key has ended", new JsonObject().put("key", HEX.formatHex(id))
                 .put("nodes", new JsonArray(lacking))));
     }
@@ -637,16 +639,16 @@ public final class SecretStore {
         long total = sealed.sealed().length;
         for (SecretRows.Meta m : all) if (m != replaced) total += m.sealedBytes();
         if (total <= MAX_SEALED_BYTES) return Future.succeededFuture();
-        return Future.failedFuture(new SecretRefused(409, "store-full", "the sealed values would take more than " + MAX_SEALED_BYTES + " bytes, the store's most",
+        return Future.failedFuture(new SecretRefused(409, RefusalCode.STORE_FULL, "the sealed values would take more than " + MAX_SEALED_BYTES + " bytes, the store's most",
                 new JsonObject().put("bytes", MAX_SEALED_BYTES)));
     }
 
     private static Future<Void> audit(SecretRows.Tx tx, Actor who, String action, String name, JsonObject detail) {
-        return tx.audit(who, action, "secret/" + name, detail).recover(failure -> Future.failedFuture(new SecretRefused(503, "audit-unavailable",
+        return tx.audit(who, action, "secret/" + name, detail).recover(failure -> Future.failedFuture(new SecretRefused(503, RefusalCode.UNAUDITED,
                 "the audit row could not be written, so nothing was changed: try again")));
     }
 
-    private static <T> Future<T> refuse(int status, String code, String text, String name) {
+    private static <T> Future<T> refuse(int status, RefusalCode code, String text, String name) {
         return Future.failedFuture(new SecretRefused(status, code, text, new JsonObject().put("name", name)));
     }
 
@@ -681,7 +683,7 @@ public final class SecretStore {
     static String writable(Object raw) throws SecretRefused {
         String name = name(raw);
         if (name.startsWith(RESERVED) && !name.equals(GIT)) {
-            throw new SecretRefused(409, "reserved", "names under " + RESERVED + " belong to the platform: of them, only " + GIT + " may be written",
+            throw new SecretRefused(409, RefusalCode.RESERVED, "names under " + RESERVED + " belong to the platform: of them, only " + GIT + " may be written",
                     new JsonObject().put("name", name));
         }
         return name;

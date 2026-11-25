@@ -1,5 +1,7 @@
 package dev.rail8.runtime.secret;
 
+import dev.rail8.runtime.refusal.RefusalCode;
+
 import dev.rail8.api.Secret;
 import dev.rail8.core.audit.Actor;
 import io.vertx.core.Future;
@@ -118,7 +120,7 @@ final class PgSecretRows implements SecretRows {
                 .compose(v -> lockNames(tx, names)).compose(v -> tx.query(LOCK_STORE).execute())
                 .compose(head -> work.apply(new PgTx(tx, head(head.iterator().next())))))
                 .recover(failure -> Future.failedFuture(failure instanceof PgException pg && LOCK_NOT_AVAILABLE.equals(pg.getSqlState())
-                        ? new SecretRefused(503, "busy", "another change of the secret store holds its locks: try again", new JsonObject())
+                        ? new SecretRefused(503, RefusalCode.BUSY, "another change of the secret store holds its locks: try again", new JsonObject())
                         : failure));
     }
 

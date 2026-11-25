@@ -535,7 +535,7 @@ abstract class SecretStoreContract {
         Node a = start("a", K1);
         create(a, value("db", "the-value"));
         assertEquals("exists", refused(a.store.create(ALICE, value("db", "again-value"))).code());
-        assertEquals("not-found", refused(a.store.overwrite(ALICE, "nothing", value("nothing", "x-value"))).code());
+        assertEquals("no-secret", refused(a.store.overwrite(ALICE, "nothing", value("nothing", "x-value"))).code());
         assertEquals(404, refused(a.store.delete(ALICE, "nothing", Optional.empty())).status());
         assertEquals("kind-differs", refused(a.store.overwrite(ALICE, "db", credentials("db", "user", "pass-word"))).code());
         use("login", "flow", "pkg/orders", Set.of(Secret.Kind.VALUE));
@@ -554,7 +554,7 @@ abstract class SecretStoreContract {
         auditFails(true);
         SecretRefused audit = refused(a.store.overwrite(ALICE, "db", value("db", "unaudited-value")));
         assertEquals(503, audit.status());
-        assertEquals("audit-unavailable", audit.code());
+        assertEquals("unaudited", audit.code());
         auditFails(false);
         assertEquals(Optional.of("the-value"), read(a, "db"), "a change whose audit row fails does not happen");
         assertNoValueCaptured();

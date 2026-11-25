@@ -1978,7 +1978,7 @@ public final class Deployments {
                 saved.otherwiseEmpty().await();
                 if (saved.failed() && saved.cause() instanceof SecretUsesRefused changed) {   // checked again in the record's transaction
                     if (running == null) throw invalid(name, changed.problems());
-                    throw rollBack(Kind.INVALID, version, "was not recorded", changed.problems(), running, retiring, started, packageDir, built, again);
+                    throw rollBack(Kind.INVALID, RefusalCode.ROLLED_BACK_UNRECORDED, version, "was not recorded", changed.problems(), running, retiring, started, packageDir, built, again);
                 }
                 if (saved.failed()) {
                     // the generation this node applied stays behind: its next tick installs whatever the pool holds
@@ -3347,8 +3347,10 @@ public final class Deployments {
         Scrubber scrubber = scrubber();
         String error = scrubber.text(refused.error());
         List<String> problems = scrubber.texts(refused.problems());
-        if (error.equals(refused.error()) && problems.equals(refused.problems())) return refused;
-        return new DeployRefusedException(refused.kind(), error, problems, refused.replaces());
+        Map<String, Object> values = new LinkedHashMap<>();
+        refused.values().forEach((key, value) -> values.put(key, value instanceof String text ? scrubber.text(text) : value));
+        if (error.equals(refused.error()) && problems.equals(refused.problems()) && values.equals(refused.values())) return refused;
+        return new DeployRefusedException(refused.kind(), refused.code(), error, values, problems, refused.replaces());
     }
 
     private static String reason(Throwable failure) {

@@ -412,7 +412,7 @@ stays in a variable.
 | Route | Action | Does |
 | --- | --- | --- |
 | `GET /admin/secrets` | `secret.list` | every secret, the names used but not stored, and the key's state (below) |
-| `GET /admin/secrets/{name}` | `secret.list` | one of them; 404 `not-found` when no source holds it and nothing uses it |
+| `GET /admin/secrets/{name}` | `secret.list` | one of them; 404 `no-secret` when no source holds it and nothing uses it |
 | `POST /admin/secrets` | `secret.write` | creates `{name, kind, value}`, `{name, kind, user, password}` or `{name, kind, privateKey, certificates}` |
 | `POST /admin/secrets/{name}` | `secret.write` | overwrites it with a value of the same kind; the last writer wins |
 | `DELETE /admin/secrets/{name}` | `secret.delete` | deletes it; 409 `in-use` with its users unless `?confirm=<name>` names it |
@@ -436,7 +436,7 @@ The refusals and their codes:
 
 | Status | Code | When |
 | --- | --- | --- |
-| 404 | `not-found` | an overwrite or delete of a name the store does not hold |
+| 404 | `no-secret` | an overwrite or delete of a name the store does not hold |
 | 409 | `exists` | a create of a name the store holds |
 | 409 | `kind-differs` | an overwrite with another kind: delete and create instead |
 | 409 | `kind-in-use` | a create of a kind that a use of the name does not take |
@@ -448,7 +448,7 @@ The refusals and their codes:
 | 503 | `no-key` | a write on a node without the store's key |
 | 503 | `busy` | a write that waited 5 s for its locks |
 | 503 | `written-unread` | a write that committed but that its node could not read back: it is in force within one tick, not to be sent again |
-| 503 | `audit-unavailable` | a write whose audit row cannot be written |
+| 503 | `unaudited` | a write whose audit row cannot be written |
 
 - `secret.list` holds no value. The developer, the secret administrator, and the roles that edit an installation's
   configuration (the connection administrator and the partner administrator) hold it, so that a connection's form can
