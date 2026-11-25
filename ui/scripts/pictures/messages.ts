@@ -50,18 +50,20 @@ const audited: Audited[] = [
   { id: 37, at: '2026-11-23T09:52:40Z', action: 'message.retry', actor: 'ci-ops', via: 'token', credential: 'a1d27c9e40f3b851', detail: {} },
 ];
 
-/** The messages of the pictures: a few recent orders, the first of which failed at its last step and has an audit; the others have none. */
+/** The messages of the list, newest first: one in each status. */
+const LISTED: Listed[] = [
+  listed('m-7f3b', 'running', '2026-11-23T09:51:30Z', 'A-8'),
+  listed(orders.id, 'failed', '2026-11-23T09:50:00Z', 'A-7'),
+  listed('m-7f39', 'completed', '2026-11-23T09:42:10Z', 'A-6'),
+  listed('m-7f38', 'completed', '2026-11-23T09:31:55Z', 'A-5'),
+  listed('m-7f37', 'cancelled', '2026-11-23T09:20:04Z', 'A-4'),
+];
+
+/** The messages of the pictures: a few recent orders, one in each status; the failed one failed at its last step and has an audit, the others have none. */
 export function pictureMessages(): AdminApi {
   return {
-    list: async () => ({
-      items: [
-        listed(orders.id, 'failed', '2026-11-23T09:50:00Z', 'A-7'),
-        listed('m-7f39', 'completed', '2026-11-23T09:42:10Z', 'A-6'),
-        listed('m-7f38', 'completed', '2026-11-23T09:31:55Z', 'A-5'),
-      ],
-      next: null,
-    }),
-    counts: async () => ({ completed: 2, failed: 1, running: 0, cancelled: 0 }),
+    list: async (query) => ({ items: LISTED.filter((row) => query.status === undefined || row.status === query.status), next: null }),
+    counts: async () => ({ completed: 2, failed: 1, running: 1, cancelled: 1 }),
     flows: async () => ['demo/orders'],
     timeline: async (id) => [orders, delivered].find((t) => t.id === id) ?? null,
     payload: async () => ({ contentType: 'application/json', text: '{"order":"A-7"}', complete: true }),

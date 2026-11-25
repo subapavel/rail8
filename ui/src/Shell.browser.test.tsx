@@ -167,6 +167,30 @@ describe('Shell', () => {
     await expect.element(menuItem('First')).not.toHaveAttribute('aria-current');
   });
 
+  test('marks the screen of the menu the breadcrumb of a tab another screen opened starts from', async () => {
+    const grandchild: Screen = { id: 'doc:grandchild', title: 'Grandchild', render: () => <Page title="Grandchild">Grandchild screen</Page> };
+    const child: Screen = { id: 'doc:child', title: 'Child', render: (open) => <Page title="Child"><button onClick={() => open(grandchild)}>Open grandchild</button></Page> };
+    const opener: Screen = { id: 'opener', title: 'Opener', group: 'Design', render: (open) => <button onClick={() => open(child)}>Open child</button> };
+    render([opener, ...plain('Other')], 'opener');
+    const marked = () => nav().element().querySelectorAll('.ant-menu-item-selected');
+    await button('Open child').click();
+    await expect.element(tab('Child')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(menuItem('Opener')).toHaveAttribute('aria-current', 'page');
+    await expect.element(menuItem('Opener')).toHaveClass('ant-menu-item-selected');
+    expect(marked()).toHaveLength(1);
+
+    await button('Open grandchild').click();
+    await button('Close Opener').click();
+    await expect.element(tab('Grandchild')).toHaveAttribute('aria-selected', 'true');
+    await expect.element(menuItem('Opener')).toHaveAttribute('aria-current', 'page');
+    await expect.element(menuItem('Opener')).toHaveClass('ant-menu-item-selected');
+
+    await navigate('Other');
+    await expect.element(menuItem('Other')).toHaveAttribute('aria-current', 'page');
+    await expect.element(menuItem('Opener')).not.toHaveAttribute('aria-current');
+    expect(marked()).toHaveLength(1);
+  });
+
   test('opens the tabs a screen asks for, one per id, and forgets one once it is closed', async () => {
     const opener: Screen = {
       id: 'opener',

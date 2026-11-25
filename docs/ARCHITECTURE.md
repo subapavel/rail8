@@ -1145,20 +1145,23 @@ git said, is on one list of codes left untranslated, and a test holds that every
 language.
 
 The Messages screen opens on the list of recent messages, newest first, a page at a time: each row has
-the message's start, flow, status (completed, failed, running or cancelled), duration and business keys,
-and its id opens the message in a tab of its own, as does an id typed in. Above the list, the time range
-(the last 15 minutes, hour, 24 hours or 7 days; the last hour when it opens), the flow and the status
-apply as soon as they are chosen; a business key (name and value) and the name of a step the message
-passed apply with Search, which also reads the list again up to now. Just above the list, a strip counts
-the messages of the time range and flow in each status; choosing a count narrows the list to that status,
-and choosing it again shows every status. A message's tab shows its flow, the state of its latest
-attempt and every attempt step by step: outcome, start, wall and CPU time, payload size and error;
-`ingress` times nothing and shows no wall or CPU time. Between two steps a row shows the time the message
-waited when it is at least 100 µs and 1% of its duration (saved and waiting for a worker after `ingress`,
-or between steps), and before a later attempt always (waiting to retry). Under the last attempt, the time
-between steps that no row shows and the total, the duration of the list, so the rows add up to it.
-The payload after a step opens in a dialog (its first MiB) when its bytes were kept; when the latest
-attempt failed, its error is shown with Restart (`POST /admin/dlq/{id}/retry`).
+the message's id, start, flow, status (completed, failed, running or cancelled), duration and business keys,
+and its id opens the message in a tab of its own, as does an id typed in the list's corner. In the search
+form above the list, the time range (the last 15 minutes, hour, 24 hours or 7 days; the last hour when it
+opens), the flow and the status apply as soon as they are chosen; a business key (name and value) and the
+name of a step the message passed apply with Search, which also reads the list again up to now, as Refresh
+does; Reset goes back to the last hour of every flow. Under the list's title, a strip counts the messages
+of the time range and flow in each status; choosing a count narrows the list to that status, and choosing
+it again shows every status. A message's tab is a detail page: its header holds the flow, the start, the
+number of attempts and the time between steps that no row shows, and at its right the state of the latest
+attempt and the message's duration, the duration of the list. Below, one card per attempt shows it step by
+step: outcome, start, wall and CPU time, payload size and error; `ingress` times nothing and shows no wall
+or CPU time. Between two steps a row shows the time the message waited when it is at least 100 µs and 1%
+of its duration (saved and waiting for a worker after `ingress`, or between steps), and before a later
+attempt always (waiting to retry). The Payloads card lists the payload after every step; a kept one opens
+in its row (its first MiB), read only then, and its size in the step's row opens it there too. When the
+latest attempt failed, its error is shown above the cards and the header offers Restart
+(`POST /admin/dlq/{id}/retry`).
 
 The Mappings screen lists the mappings of the working folder (`RAIL8_WORKSPACE`) in pages of 25. Its search covers
 every page. It creates mappings and opens each one in a tab of its own, so that several mappings can be open at once. A

@@ -24,7 +24,7 @@ Use Ant Design 6 for navigation, controls, forms, dialogs and status feedback. P
 | Area | Presentation | Behavior under test |
 | --- | --- | --- |
 | Shell and Home | Responsive sidebar, registered shortcuts, workspace tabs | Navigation order, focus, close guards, child tabs and empty workspace |
-| Monitoring | Cursor-paged message list, status filters, attempt timeline and payload dialog | Admin reads, counts, retained payload limits and restart |
+| Monitoring | Cursor-paged message list, status filters, attempt timeline and payloads that open in their rows | Admin reads, counts, retained payload limits and restart |
 | Endpoints | File list, schema-driven settings and raw JSON controls | Read-only access, validation, environments and conditional YAML writes |
 | Flows | File list, framed React Flow diagram, connection actions and resizable bottom properties | Selection, process calls, edits, undo, validation and save conflicts |
 | Mappings | List and creation, Overview, Definition, Signature, Functions and Test | Working copies, ETags, structure selection, compile diagnostics and engine runs |
