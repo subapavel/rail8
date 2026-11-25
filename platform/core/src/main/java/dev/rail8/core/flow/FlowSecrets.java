@@ -293,9 +293,15 @@ final class FlowSecrets {
         synchronized (earlier) {
             for (Earlier e : earlier) forms(e.value(), e.handle().inner.reference(), pairs);
         }
-        pairs.sort(Comparator.comparingInt((Map.Entry<String, String> p) -> p.getKey().length()).reversed());
+        return ordered(pairs);
+    }
+
+    /** {@code pairs} as a map from each form to its reference, longest form first; of two equal forms the first one's reference. */
+    static Map<String, String> ordered(List<Map.Entry<String, String>> pairs) {
+        List<Map.Entry<String, String>> sorted = new ArrayList<>(pairs);
+        sorted.sort(Comparator.comparingInt((Map.Entry<String, String> p) -> p.getKey().length()).reversed());
         Map<String, String> values = new LinkedHashMap<>();
-        pairs.forEach(p -> values.putIfAbsent(p.getKey(), p.getValue()));
+        sorted.forEach(p -> values.putIfAbsent(p.getKey(), p.getValue()));
         return values;
     }
 
@@ -350,7 +356,7 @@ final class FlowSecrets {
         return out.toString();
     }
 
-    private static boolean holds(Throwable t, Map<String, String> values, Set<Throwable> seen) {
+    static boolean holds(Throwable t, Map<String, String> values, Set<Throwable> seen) {
         if (t == null || !seen.add(t)) return false;
         String text = t.toString();
         for (String value : values.keySet()) if (text.contains(value)) return true;
@@ -359,7 +365,7 @@ final class FlowSecrets {
         return false;
     }
 
-    private static Throwable copy(Throwable t, Map<String, String> values, Map<Throwable, Throwable> copies) {
+    static Throwable copy(Throwable t, Map<String, String> values, Map<Throwable, Throwable> copies) {
         if (t == null) return null;
         Throwable done = copies.get(t);
         if (done != null) return done;
@@ -383,7 +389,7 @@ final class FlowSecrets {
      * {@code text} with each form of {@code values} replaced by its reference, in one pass over the original text: at each
      * position the longest form that starts there is replaced, and a reference put in is never searched again.
      */
-    private static String replaced(String text, Map<String, String> values) {
+    static String replaced(String text, Map<String, String> values) {
         if (text == null || values.isEmpty()) return text;
         StringBuilder out = new StringBuilder(text.length());
         int i = 0;

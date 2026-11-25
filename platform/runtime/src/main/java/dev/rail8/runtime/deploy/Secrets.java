@@ -4,8 +4,11 @@ import dev.rail8.api.Secret;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.runtime.secret.StoreKey;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -122,6 +125,30 @@ public final class Secrets {
         String name = name(reference);
         if (variables == null) return Optional.of(PLACEHOLDER);
         return Optional.ofNullable(variableValue(name));
+    }
+
+    /**
+     * The values the scrubber of the platform's own texts replaces for {@code references}, by reference: the value of each that
+     * the store holds readable now, of whatever kind, and its variable's; none for a malformed reference, and none for the
+     * placeholder.
+     */
+    public Map<String, List<Object>> scrubbed(Collection<String> references) {
+        Map<String, List<Object>> values = new LinkedHashMap<>();
+        if (variables == null) return values;
+        for (String reference : references) {
+            String name;
+            try {
+                name = name(reference);
+            } catch (IllegalArgumentException malformed) {
+                continue;
+            }
+            List<Object> each = new ArrayList<>();
+            if (store != null) store.held(name).map(SecretStore.Held::value).ifPresent(each::add);
+            String variable = variableValue(name);
+            if (variable != null) each.add(variable);
+            if (!each.isEmpty()) values.put(reference, each);
+        }
+        return values;
     }
 
     /**

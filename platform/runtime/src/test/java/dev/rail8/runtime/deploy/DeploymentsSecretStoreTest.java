@@ -16,9 +16,12 @@ import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -27,6 +30,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -48,11 +56,32 @@ class DeploymentsSecretStoreTest {
     GitRepos repos;
     final FakeRuntime rt = FakeRuntime.create();
     final MemorySecretStores stores = new MemorySecretStores();
-    final UsesKept records = new UsesKept(new InMemoryDeploymentStore());
+    final InMemoryDeploymentStore pool = new InMemoryDeploymentStore();
+    final UsesKept records = new UsesKept(pool);
+    /** Every line the node logged under {@code dev.rail8}, with its failure. */
+    final List<String> logged = new CopyOnWriteArrayList<>();
+    final Handler logs = new Handler() {
+        @Override public void publish(LogRecord r) {
+            StringWriter trace = new StringWriter();
+            if (r.getThrown() != null) r.getThrown().printStackTrace(new PrintWriter(trace));
+            logged.add(r.getMessage() + " " + trace);
+        }
+        @Override public void flush() { }
+        @Override public void close() { }
+    };
+    final Logger rail8 = Logger.getLogger("dev.rail8");
+
+    @BeforeEach
+    void hook() {
+        rail8.addHandler(logs);
+        rail8.setLevel(Level.ALL);
+    }
     final List<Node> nodes = new ArrayList<>();
 
     @AfterEach
     void closeEveryNode() throws Exception {
+        rail8.removeHandler(logs);
+        rail8.setLevel(null);
         for (Node n : nodes) n.doors.releaseAll();
         for (Node n : nodes) OnVirtualThread.call(() -> {
             n.deployments.close();
@@ -95,7 +124,7 @@ class DeploymentsSecretStoreTest {
     /** One node: its own data directory and Doors, the pool's records, and its store over the shared secret database. */
     /** The options of this test's Doors: {@code token} a secret field, the rest text. */
     static final Settings DESCRIBED = Settings.of(Field.text("path", "Where it listens.").in(), Field.text("url", "Where it sends."),
-            Field.secret("token", "What it presents."));
+            Field.secret("token", "What it presents."), Field.secret("refuse", "A text its consumer's build throws with."));
 
     final class Node {
         final Doors doors = new Doors().describe(DESCRIBED);
@@ -280,5 +309,79 @@ class DeploymentsSecretStoreTest {
         assertEquals(List.of("endpoint 'orders-in': secret 'secret://k' is not set (RAIL8_SECRET_K): the option 'url' is not a secret field,"
                 + " so it reads its variable only"), refused.problems());
         assertFalse(refused.getMessage().contains("rec://from-the-store"));
+    }
+
+    @Test
+    void aBuildThatThrowsWithAValueLeavesItOutOfTheAnswerTheProblemsTheAuditAndTheLog() {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "tok", "v4lue-tok");
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://tok").put("refuse", "secret://tok");
+        DeployRefusedException refused = a.refused(p);
+        String answer = refused.getMessage() + refused.error() + refused.problems();
+        assertTrue(answer.contains("secret://tok"), answer);
+        assertFalse(answer.contains("v4lue-tok"), answer);
+        assertFalse(pool.audited().toString().contains("v4lue-tok"), pool.audited().toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
+    }
+
+    @Test
+    void aStartThatFailsWithAValueLeavesItOutOfTheAnswerTheListingAndTheLog() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "tok", "v4lue-tok");
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://tok");
+        a.doors.failStartOf("shop/orders", "cannot log in with v4lue-tok");
+        DeployRefusedException refused = a.refused(p);
+        String answer = refused.getMessage() + refused.error() + refused.problems();
+        assertTrue(answer.contains("cannot log in with secret://tok"), answer);
+        assertFalse(answer.contains("v4lue-tok"), answer);
+
+        a.deploy(p);
+        Node b = new Node("node-2", Map.of());
+        b.doors.failStartOf("shop/orders", "cannot log in with v4lue-tok");
+        b.restore();
+        String listing = b.deployments.packages() + " " + b.deployments.flows() + " " + b.deployments.restarting();
+        assertFalse(listing.contains("v4lue-tok"), listing);
+        assertFalse(pool.audited().toString().contains("v4lue-tok"), pool.audited().toString());
+        assertTrue(logged.stream().anyMatch(l -> l.contains("cannot log in with secret://tok")), logged.toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
+    }
+
+    @Test
+    void aRestoreWhoseBuildThrowsWithAValueListsAndLogsItScrubbed() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "tok", "v4lue-tok");
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://tok");
+        a.deploy(p);
+        Node b = new Node("node-2", Map.of());
+        b.doors.onConsumer(cfg -> {
+            if ("v4lue-tok".equals(cfg.options().get("token"))) throw new IllegalStateException("no login with " + cfg.options().get("token"));
+        });
+        b.restore();
+        DeployedPackage listed = b.deployments.packages().stream().filter(x -> x.name().equals("shop")).findFirst().orElseThrow();
+        assertEquals(DeployedPackage.State.FAILED, listed.state());
+        assertTrue(listed.problems().toString().contains("no login with secret://tok"), listed.problems().toString());
+        assertFalse(listed.problems().toString().contains("v4lue-tok"), listed.problems().toString());
+        assertTrue(logged.stream().anyMatch(l -> l.contains("no login with secret://tok")), logged.toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
+    }
+
+    @Test
+    void aStopThatFailsWithTheValueBeforeAnOverwriteLogsItScrubbed() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "tok", "v4lue-tok");
+        PackageDraft p = shop();
+        p.endpointDoc("orders-in").getJsonObject("config").put("token", "secret://tok");
+        a.deploy(p);
+        a.follow();
+        a.doors.failStop("shop/orders", "no logout of v4lue-tok");
+        MemorySecretStores.overwriteValue(a.store, "tok", "n3w-tok");
+        a.follow();
+        a.doors.stopCleanly("shop/orders");
+        assertEquals("n3w-tok", a.option("shop/orders", "token"));
+        assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://tok")), logged.toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
     }
 }
