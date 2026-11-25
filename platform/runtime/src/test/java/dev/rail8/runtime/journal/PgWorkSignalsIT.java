@@ -417,4 +417,37 @@ class PgWorkSignalsIT {
         assertEquals(2, w.size(), "one WARNING per distinct prefix (hello, w9): " + w);
         assertTrue(w.stream().anyMatch(l -> l.contains("hello")) && w.stream().anyMatch(l -> l.contains("w9")), "each naming its prefix: " + w);
     }
+
+    /**
+     * The secret store's notices: each {@code pg_notify} on {@code rail8_secrets} runs the store's hook once, and so does each
+     * {@code LISTEN} acknowledged, the first and one after a terminated listener; a work event does not.
+     */
+    @Test
+    void theStoresNoticesAndEachListenRunItsHook() {
+        AtomicInteger notices = new AtomicInteger();
+        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-s", new Workers(), rt.timer(), notices::incrementAndGet);
+        try {
+            bounded(signals.start(), "the signals listen");
+            assertEquals(1, notices.get(), "the first LISTEN acknowledged");
+            bounded(db.pool().query("select pg_notify('rail8_secrets', '7')").execute(), "a store notice");
+            until(() -> notices.get() == 2, () -> "the store notice; notices " + notices);
+            notifyRaw("w1 n-x n-s orders");
+            bounded(db.pool().query("select pg_notify('rail8_secrets', '8')").execute(), "a later store notice");
+            until(() -> notices.get() == 3, () -> "the later store notice; notices " + notices);
+
+            bounded(observer.close(), "the observer closes");
+            String listening = "from pg_stat_activity where datname = current_database() and query ilike 'listen%' and pid <> pg_backend_pid()";
+            until(() -> db.count("select count(*) " + listening) == 1, () -> "fixture: the one listening backend");
+            assertEquals(1, db.count("select count(pg_terminate_backend(pid)) " + listening), "fixture: the listener terminated");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+            while (notices.get() < 4) {
+                if (System.nanoTime() - deadline > 0) throw new AssertionError("no LISTEN again within 20 s; notices " + notices);
+                if (rt.timer().pending() > 0 && rt.timer().nextDelay().compareTo(Duration.ofMinutes(1)) <= 0) rt.clock().advance(rt.timer().nextDelay());
+                Thread.onSpinWait();
+            }
+            assertEquals(4, notices.get(), "the LISTEN after the reconnect");
+        } finally {
+            bounded(signals.close(), "the signals close");
+        }
+    }
 }

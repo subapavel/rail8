@@ -344,7 +344,7 @@ class PluginsTest {
                     () -> Plugins.load(rail8, Optional.empty(), Map.of()));
         }
         try (URLClassLoader next = classPath(moduleJar("next.jar", PluginFixtures.NextMinor.class))) {
-            assertRefused("module " + PluginFixtures.NextMinor.class.getName() + ": built against api 0.4, which a node of api " + Plugin.API + " does not load",
+            assertRefused("module " + PluginFixtures.NextMinor.class.getName() + ": built against api 0.5, which a node of api " + Plugin.API + " does not load",
                     () -> Plugins.load(next, Optional.empty(), Map.of()));
         }
         try (URLClassLoader failing = classPath(moduleJar("failing.jar", PluginFixtures.FailingSteps.class))) {
@@ -590,7 +590,7 @@ class PluginsTest {
     @Test
     void aPluginBuiltAgainstAnotherApiIsRefused() throws IOException {
         Path next = jar("next.jar", PluginFixtures.NextMinor.class);
-        assertRefused("plugin next.jar: built against api 0.4, which a node of api " + Plugin.API + " does not load", this::load);
+        assertRefused("plugin next.jar: built against api 0.5, which a node of api " + Plugin.API + " does not load", this::load);
         Files.delete(next);
         jar("latest.jar", PluginFixtures.NoVersion.class);
         assertRefused("plugin latest.jar: built against api latest, which a node of api " + Plugin.API + " does not load", this::load);
