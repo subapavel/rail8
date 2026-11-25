@@ -93,11 +93,11 @@ export function MessageView({ api, id }: MessageViewProps) {
     );
   };
 
-  // opens the payload after `step` in the Payloads card and brings its row into view
+  // opens the payload after `step` in the Payloads card and scrolls its row to the top, the payload under it
   const showPayload = (step: StepRecord) => {
     const key = payloadKey(step);
     setOpened((keys) => (keys.includes(key) ? keys : [...keys, key]));
-    requestAnimationFrame(() => document.getElementById(`payload-${id}-${key}`)?.scrollIntoView({ block: 'nearest' }));
+    requestAnimationFrame(() => document.getElementById(`payload-${id}-${key}`)?.scrollIntoView({ block: 'start' }));
   };
 
   const timeline = load.kind === 'loaded' ? load.timeline : null;
