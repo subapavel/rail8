@@ -43,7 +43,8 @@ import java.util.function.UnaryOperator;
  * their password in the same three forms and by the base64 of {@code user:password}; a key pair by the base64 of its private
  * key's PKCS#8 bytes, whole and in each 64-character line of its PEM. The plain values the flow's endpoints hold in their
  * options ({@link #FlowSecrets(SecretSource, Map)}) join them, and so do the handles of the endpoints' secret fields
- * ({@link #endpoints}). Longer texts are replaced first, in one pass over the text.
+ * ({@link #endpoints}) and the values the handles of the flow's consumer read ({@link #FlowSecrets(SecretSource, Map, FlowSecrets)}).
+ * Longer texts are replaced first, in one pass over the text.
  */
 public final class FlowSecrets {
 
@@ -58,6 +59,8 @@ public final class FlowSecrets {
     private final SecretSource source;
     /** The plain values the flow's endpoints hold, by reference. */
     private final Map<String, String> held;
+    /** The handles of the flow's consumer, whose values it replaces too; null for none. */
+    private final FlowSecrets consumer;
     private final List<Handle> handedOut = new CopyOnWriteArrayList<>();
     /** Every earlier value kept, the oldest first; guarded by itself. */
     private final Deque<Earlier> earlier = new ArrayDeque<>();
@@ -70,8 +73,22 @@ public final class FlowSecrets {
      * their options, which the scrubber replaces too.
      */
     public FlowSecrets(SecretSource source, Map<String, String> held) {
+        this(source, held, null);
+    }
+
+    /**
+     * As {@link #FlowSecrets(SecretSource, Map)}; the scrubber also replaces every value the handles of {@code consumer} read, now
+     * and earlier ({@link #seen}): those of the flow's consumer, which is built after the flow and may be built again while it runs.
+     */
+    public FlowSecrets(SecretSource source, Map<String, String> held, FlowSecrets consumer) {
         this.source = Objects.requireNonNull(source, "source");
         this.held = Map.copyOf(held);
+        this.consumer = consumer;
+    }
+
+    /** Whether it has nothing to replace: no handle handed out, no value held, here and in the consumer's. */
+    private boolean none() {
+        return handedOut.isEmpty() && held.isEmpty() && (consumer == null || consumer.none());
     }
 
     /**
@@ -282,7 +299,7 @@ public final class FlowSecrets {
     Stage scrubbing(Stage stage) {
         Objects.requireNonNull(stage, "stage");
         return (e, rest) -> {
-            if (handedOut.isEmpty() && held.isEmpty()) return stage.apply(e, rest);
+            if (none()) return stage.apply(e, rest);
             Set<Throwable> passedUp = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
             Pipeline watched = out -> {
                 try {
@@ -317,14 +334,15 @@ public final class FlowSecrets {
      * read once, now. Without a value handed out it is the identity.
      */
     UnaryOperator<String> scrubber() {
-        if (handedOut.isEmpty() && held.isEmpty()) return UnaryOperator.identity();
+        if (none()) return UnaryOperator.identity();
         Map<String, String> values = values();
         return text -> replaced(text, values);
     }
 
     /**
      * Each form of each value to replace, longest first, to its reference: the current value of each handle read now, the
-     * earlier values kept and the values the endpoints hold; a handle that cannot be read now gives only its earlier values.
+     * earlier values kept, the values the endpoints hold and those the consumer's handles read; a handle that cannot be read now
+     * gives only its earlier values.
      */
     private Map<String, String> values() {
         List<Map.Entry<String, String>> pairs = new ArrayList<>();
@@ -336,6 +354,7 @@ public final class FlowSecrets {
         synchronized (earlier) {
             for (Earlier e : earlier) forms(e.value(), e.handle().inner.reference(), pairs);
         }
+        if (consumer != null) consumer.seen().forEach((reference, each) -> each.forEach(value -> forms(value, reference, pairs)));
         return ordered(pairs);
     }
 

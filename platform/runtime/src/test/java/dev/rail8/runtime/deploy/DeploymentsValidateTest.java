@@ -285,6 +285,17 @@ class DeploymentsValidateTest {
         assertOnly(validate(shipped("dev"), "demo", noHost), "endpoint 'sftp-inbox' config (environment dev) at '/host': is required");
     }
 
+    /**
+     * An sftp endpoint without {@code user} validates off the node: its {@code password} reference may name credentials, which
+     * give the user, and no consumer is built off the node to tell.
+     */
+    @Test
+    void anSftpEndpointWithoutAUserValidatesForItsPasswordMayBeCredentials() throws Exception {
+        Path noUser = demoCopy("no-user", Map.of("endpoints/sftp-inbox.yaml", Map.of("  user: demo\n", "")));
+
+        assertEquals(List.of(), validate(shipped("dev"), "demo", noUser));
+    }
+
     /** An endpoint config its component's settings description refuses (http: an address is a path) is a problem naming endpoint, environment and pointer, and nothing else is. */
     @Test
     void anEndpointConfigOutsideItsComponentSchemaIsAProblem() throws Exception {
