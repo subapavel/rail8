@@ -36,14 +36,31 @@ export interface UnsavedChanges {
 }
 
 /**
+ * An artifact Quick open finds: the name it is found by, its id or its file's name; its path relative to the working
+ * folder; its kind, as a label; the tab it opens; and the screens its breadcrumb starts from, such as Packages and its
+ * package.
+ */
+export interface Found {
+  name: string;
+  path: string;
+  kind: Label;
+  screen: Screen;
+  trail: readonly Screen[];
+}
+
+/** Finds every artifact of the working folder, through the kinds of artifact the modules register. */
+export type Find = (kinds: ReadonlyMap<string, ArtifactKind>) => Promise<readonly Found[]>;
+
+/**
  * What the `module.tsx` of a module of the UI, a folder `src/<name>/`, default-exports: its place in the navigation,
- * after Home and before every module of a higher `order`, its screens, in the order the navigation lists them, and the
- * kinds of artifact it owns, which the tab of a package opens and compares through it.
+ * after Home and before every module of a higher `order`, its screens, in the order the navigation lists them, the
+ * kinds of artifact it owns, which the tab of a package opens and compares through it, and what it finds for Quick open.
  */
 export interface UiModule {
   order: number;
   screens: readonly Screen[];
   artifacts?: readonly ArtifactKind[];
+  find?: Find;
 }
 
 export const RegisteredScreens = createContext<readonly Screen[]>([]);
@@ -88,7 +105,8 @@ function isUiModule(value: unknown): value is UiModule {
     typeof value.order === 'number' &&
     Number.isFinite(value.order) &&
     Array.isArray(value.screens) &&
-    value.screens.every(isScreen)
+    value.screens.every(isScreen) &&
+    (value.find === undefined || typeof value.find === 'function')
   );
 }
 
@@ -108,7 +126,7 @@ export function screenList(home: Screen, found: Readonly<Record<string, unknown>
       const module = isRecord(exported) ? exported.default : undefined;
       if (!isUiModule(module)) {
         throw new Error(
-          `${file} does not default-export a UiModule: { order: a finite number, screens: [{ id: a plain name, title, render }] }`,
+          `${file} does not default-export a UiModule: { order: a finite number, screens: [{ id: a plain name, title, render }], find?: a function }`,
         );
       }
       return { file, module };
@@ -133,4 +151,20 @@ export function screenList(home: Screen, found: Readonly<Record<string, unknown>
     }
   }
   return list;
+}
+
+/**
+ * What Quick open finds, from what each module's file exports, keyed by the file, as `import.meta.glob` with `eager:
+ * true` gives it: everything every module's `find` finds, the modules in the order of their files. Without a module
+ * that finds, it finds nothing.
+ */
+export function finder(found: Readonly<Record<string, unknown>>): Find {
+  const finds = Object.keys(found)
+    .sort()
+    .map((file) => {
+      const exported = found[file];
+      return isRecord(exported) && isRecord(exported.default) ? exported.default.find : undefined;
+    })
+    .filter((find): find is Find => typeof find === 'function');
+  return async (kinds) => (await Promise.all(finds.map((find) => find(kinds)))).flat();
 }

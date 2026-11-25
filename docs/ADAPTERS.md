@@ -185,8 +185,9 @@ Messages reads what the node stored. Its token is in `target/run-adapter/token`.
 port, where the adapter's in endpoints are served, is `127.0.0.1:18090`. The ports 18081, 18090, 18091 and 5173 must be
 free; the quickstart's node may keep running, its UI may not.
 
-- **Endpoints** lists the endpoint files of the adapter's folder, which is the run's working folder. An endpoint's form is
-  drawn from your forms. Edit, change a setting, Check, and Save writes the file in your folder.
+- **Packages** lists `package` under the folders that are no package, since git keeps the adapter's whole folder, which
+  is the run's working folder. Its tab lists the package's flows and endpoints; an endpoint opens in its form, drawn from
+  your forms, and Ctrl+K finds it too. Edit, change a setting, Check, and Save writes the file in your folder.
 - **Send a test message** through the adapter. For the template's package, from another terminal:
 
   ```sh

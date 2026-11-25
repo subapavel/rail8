@@ -19,7 +19,7 @@ import { LanguageSwitch } from './LanguageSwitch';
 import { say, useText } from './language';
 import { ReadSpinner } from './ReadSpinner';
 import { SessionActions, SessionPrompt, useAccess } from './SessionGate';
-import { groupedScreens, RegisteredScreens, WORKSPACE, type Screen } from './screens';
+import { groupedScreens, RegisteredScreens, WORKSPACE, type Find, type Screen } from './screens';
 import { closedBy, closeTab, isPinned, noTabs, openTab, pinTab, unpinTab, type CloseCommand } from './tabs';
 import { Rail8Theme } from './theme';
 import { UnsavedDialog } from './UnsavedDialog';
@@ -31,6 +31,8 @@ export interface ShellProps {
   screens: readonly Screen[];
   /** The id of the screen open in a tab when the shell starts, if any. */
   start?: string;
+  /** What Quick open finds beside the screens and the open tabs: the artifacts of the working folder. */
+  find?: Find;
 }
 
 /** The items of a tab's menu that close tabs, with the command each one runs and the id of its text. */
@@ -72,11 +74,12 @@ interface Opened {
  * save fails stays open, and the first of them is shown, its screen saying why. When the row is too narrow, the button
  * with three dots at its end lists the tabs it hides.
  *
- * Quick open, also on Ctrl+K or ⌘K, finds a screen of `screens` or an open tab by name and shows it. `start` names the
+ * Quick open, also on Ctrl+K or ⌘K, finds a screen of `screens` or an open tab by name and shows it, and an artifact
+ * `find` finds, whose tab it opens after the screens that artifact's breadcrumb starts from. `start` names the
  * screen open at first; with no tab open the content says so. The editors in every tab register the files they hold
  * with the shell's working files, which `useWorkingFiles` answers there.
  */
-export function Shell({ screens, start }: ShellProps) {
+export function Shell({ screens, start, find }: ShellProps) {
   const [quickOpen, setQuickOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => matchMedia(narrow).matches);
   const [tabs, setTabs] = useState(() => (start === undefined ? noTabs : openTab(noTabs, start)));
@@ -443,10 +446,15 @@ export function Shell({ screens, start }: ShellProps) {
                 ...screens,
                 ...Array.from(opened.values(), ({ screen }) => screen).filter((screen) => !byId.has(screen.id)),
               ]}
+              find={find}
               refusedOf={refusedOf}
               dismiss={() => setQuickOpen(false)}
               choose={(screen) => {
                 open(screen);
+                setQuickOpen(false);
+              }}
+              chooseFound={({ screen, trail }) => {
+                openAfter(screen, () => trail);
                 setQuickOpen(false);
               }}
             />

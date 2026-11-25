@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 
-/** The helpers of the studio scenarios: the shell's Mappings screen, the studio's panes, its canvas and its Test tab. */
+/** The helpers of the studio scenarios: the folder of the corpus's mappings, Quick open, the studio's panes, its canvas and its Test tab. */
 export type Side = 'source' | 'target';
 
 /**
@@ -9,28 +9,40 @@ export type Side = 'source' | 'target';
  */
 export const ownPage = { 'sec-fetch-site': 'same-origin' };
 
-/** The table of the Mappings screen. */
+/** The table of the Mappings card of a folder's tab. */
 export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Mappings' });
 
-/** Loads the application and opens its Mappings screen from the menu. */
+/**
+ * Loads the application and opens the tab of the folder `mappings`, which is no package, from its row on the Packages
+ * screen.
+ */
 export async function openMappings(page: Page) {
   await page.goto('/');
-  await page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Mappings', exact: true }).click();
-  await expect(mappingsTable(page).getByRole('button', { name: 'Open in studio' }).first()).toBeVisible();
+  await page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Packages', exact: true }).click();
+  await page.getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name: 'mappings', exact: true }).click();
+  await expect(mappingsTable(page).getByRole('button').first()).toBeVisible();
 }
 
 /**
- * Loads the application and opens mapping `mapping` (its id, `<package>/<name>`) from the Mappings screen in its studio
- * tab, waits for the mapping's title and shows the studio's tab `tab`; without `tab`, the studio stays on the tab it
- * opened on.
+ * Finds the artifact whose path is `path` with Quick open, Ctrl+K, by `term`, and opens it.
+ */
+export async function quickOpen(page: Page, term: string, path: string) {
+  await expect(page.getByRole('navigation', { name: 'Screens' })).toBeVisible();
+  await page.keyboard.press('Control+k');
+  const dialog = page.getByRole('dialog', { name: 'Quick open' });
+  await dialog.getByRole('textbox', { name: 'Find a screen, a tab or an artifact' }).fill(term);
+  await dialog.getByRole('button').filter({ hasText: path }).click();
+}
+
+/**
+ * Loads the application and opens mapping `mapping` (its id, `<folder>/<name>`) with Quick open in its studio tab,
+ * waits for the mapping's title and shows the studio's tab `tab`; without `tab`, the studio stays on the tab it opened
+ * on.
  */
 export async function openStudio(page: Page, mapping: string, tab?: string) {
-  await openMappings(page);
-  const name = mapping.slice(mapping.lastIndexOf('/') + 1);
-  await page.getByRole('textbox', { name: 'Find mappings' }).fill(name);
-  const row = mappingsTable(page).getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) });
-  await row.getByRole('button', { name: 'Open in studio' }).click();
-  await expect(page.getByRole('heading', { level: 1, name })).toBeVisible();
+  await page.goto('/');
+  await quickOpen(page, mapping, `${mapping}.mapping.json`);
+  await expect(page.getByRole('heading', { level: 1, name: mapping.slice(mapping.lastIndexOf('/') + 1) })).toBeVisible();
   if (tab) await page.getByRole('tab', { name: tab, exact: true }).click();
 }
 

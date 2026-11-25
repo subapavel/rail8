@@ -51,8 +51,8 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
  * and eight files differ from the last commit, of every kind but `package.yaml` and `folder.yaml`. Of its three
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
  * `customers` runs on the node one commit behind its `HEAD`, and two packages the node runs from other repositories pin
- * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, and a folder that is no
- * package is listed below them.
+ * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, and two folders that are
+ * no package are listed below them: `mappings`, which holds the fake mapping service's mappings, and `notes`.
  * The node's pool has three nodes: `node-b` still runs the commit before the pool's record of `orders`, as it could not
  * fetch the record's commit.
  */
@@ -67,6 +67,7 @@ const SEED: Seed = {
         'flows/orders.xsl': XSL,
         'schemas/order.xsd': '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>\n',
         'endpoints/orders-in.yaml': endpoint('orders-in', 'http', 'in', '/orders'),
+        'endpoints/invoice-files.yaml': endpoint('invoice-files', 'sftp', 'in', '/inbox'),
         'tests/legacy.test.yaml': test('orders', 'fixtures/legacy-order.xml', 'fixtures/legacy-ack.xml'),
         'package.lock': lock('1.1.0'),
       },
@@ -99,7 +100,7 @@ const SEED: Seed = {
       },
     },
   ],
-  plain: ['notes'],
+  plain: ['mappings', 'notes'],
   sources: [
     { path: 'acme/invoices.git', commits: ['Start the invoices package', 'Send each invoice to the ledger'] },
     { path: 'acme/payroll.git', fails: 'credentials' },

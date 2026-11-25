@@ -19,8 +19,8 @@
 #   5. starts a partner that answers every request with the body it was sent on 127.0.0.1:18091, the port the template's out
 #      endpoint calls;
 #   6. runs the UI on http://localhost:5173 with <adapter-dir> as its working folder, without a login, as the account
-#      deploy: the Endpoints screen shows the adapter's settings forms, and Save writes the endpoint files there; the
-#      Messages screen finds what the node stored.
+#      deploy: the tab of the folder package, from the Packages screen, shows the adapter's settings forms, and Save
+#      writes the endpoint files there; the Messages screen finds what the node stored.
 # Ctrl+C stops the UI, the partner and the node, and removes the Postgres container. Each run starts empty and deploys the
 # package as committed: after a change to the package, commit it and run the script again; a change to the adapter's code
 # is built as it is on disk.
@@ -179,8 +179,8 @@ scheme=$(sed -n 's/^scheme: *//p' "$dir/package/endpoints/orders-in.yaml" 2> /de
 
 cat << EOF
 
-The adapter runs. Open http://localhost:$ui_port: Endpoints shows the package's endpoint files and their settings forms
-(Save writes them into $dir), Messages finds what the node stored.
+The adapter runs. Open http://localhost:$ui_port: on Packages, the folder package opens the package's endpoint files and
+their settings forms (Save writes them into $dir), Messages finds what the node stored.
 A test message to the template's in endpoint, from another terminal:
   curl -X POST --data-binary @$dir/package/fixtures/order.xml -H 'Content-Type: application/xml' localhost:$http_port/$scheme/orders
 Then search Messages by key name orderId and value 7. Logs: $run. Ctrl+C stops everything.

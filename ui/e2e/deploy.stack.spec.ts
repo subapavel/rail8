@@ -64,15 +64,12 @@ test('@stack the real node: edit a flow, commit it, deploy the commit, and a mes
   const problems = collectProblems(page);
   await page.goto('/');
 
-  // edit the flow: its jq step now says hi
-  await page.getByRole('menuitem', { name: 'Flows' }).click();
-  // the working folder holds other packages, the demo's own flow greet among them: this one is the row of its file
-  await page
-    .getByRole('table', { name: 'Flow files' })
-    .getByRole('row')
-    .filter({ hasText: `${NAME}/flows/greet.yaml` })
-    .getByRole('button', { name: 'greet', exact: true })
-    .click();
+  // edit the flow, from the Artifacts of its package's tab: its jq step now says hi
+  await page.getByRole('menuitem', { name: 'Packages' }).click();
+  await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: NAME, exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: NAME })).toBeVisible();
+  await page.getByRole('tab', { name: /^Artifacts \(\d+\)$/ }).click();
+  await page.getByRole('table', { name: 'Flows' }).getByRole('button', { name: 'greet', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'greet' })).toBeVisible();
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await page.getByTestId('flow-canvas').getByText('greeting', { exact: true }).click();
@@ -80,9 +77,8 @@ test('@stack the real node: edit a flow, commit it, deploy the commit, and a mes
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
 
-  // commit it and deploy the commit: the check first, then the deploy
-  await page.getByRole('menuitem', { name: 'Packages' }).click();
-  await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: NAME, exact: true }).click();
+  // commit it and deploy the commit, in the package's tab: the check first, then the deploy
+  await page.getByRole('tab', { name: NAME, exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: NAME })).toBeVisible();
   await page.getByRole('button', { name: 'Commit…', exact: true }).click();
   const commit = page.getByRole('dialog', { name: 'Commit to main' });

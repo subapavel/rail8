@@ -1,13 +1,14 @@
-import { ApiOutlined, ApartmentOutlined } from '@ant-design/icons';
+import type { ArtifactKind, NewArtifactProps, Side } from '../artifacts';
 import { Page } from '../Page';
 import type { Screen, UnsavedChanges } from '../screens';
 import { msg } from '../language';
+import { EndpointChange } from './EndpointChange';
 import { EndpointForm } from './EndpointForm';
-import { EndpointList } from './EndpointList';
 import type { EndpointsApi } from './api';
-import { FlowList } from './flows/FlowList';
+import { FlowChange } from './flows/FlowChange';
 import { FlowPicture } from './flows/FlowPicture';
 import type { FlowsApi } from './flows/api';
+import { NewFlow } from './flows/NewFlow';
 
 /**
  * The tab of one endpoint file: its id is `endpoint:` and the file's path, its title the endpoint's id. Closing it while
@@ -28,22 +29,6 @@ export function endpointTab(api: EndpointsApi, path: string, id: string): Screen
       </Page>
     ),
     unsaved: () => guard,
-  };
-}
-
-/** The Endpoints screen over `api`: the working folder's endpoint files, each one's settings form opening in a tab of its own. */
-export function endpointsScreen(api: EndpointsApi): Screen {
-  return {
-    id: 'endpoints',
-    title: msg('endpoints.screen.title'),
-    group: msg('frame.group.design'),
-    icon: <ApiOutlined aria-hidden />,
-    description: msg('endpoints.screen.description'),
-    render: (open) => (
-      <Page title={false}>
-        <EndpointList api={api} onOpen={(path, id) => open(endpointTab(api, path, id))} />
-      </Page>
-    ),
   };
 }
 
@@ -89,18 +74,41 @@ export function flowTab(flows: FlowsApi, endpoints: EndpointsApi, path: string, 
   };
 }
 
-/** The Flows screen over `flows`: the working folder's flow files, each one's picture opening in a tab of its own. */
-export function flowsScreen(flows: FlowsApi, endpoints: EndpointsApi): Screen {
-  return {
-    id: 'flows',
-    title: msg('flows.screen.title'),
-    group: msg('frame.group.design'),
-    icon: <ApartmentOutlined aria-hidden />,
-    description: msg('flows.screen.description'),
-    render: (open) => (
-      <Page title={false}>
-        <FlowList api={flows} onOpen={(path, id) => open(flowTab(flows, endpoints, path, id))} />
-      </Page>
-    ),
-  };
+/** The id a tab shows for the file at `path`: its name without `.yaml` or `.yml`. */
+const idOf = (path: string) => path.slice(path.lastIndexOf('/') + 1).replace(/\.ya?ml$/, '');
+
+/** The artifacts of `kind` among the files `list` gives: each file that could be read, by its path and its id. */
+const listed = (kind: 'flow' | 'endpoint', { items }: { items: ({ path: string } & ({ id: string } | { problem: string }))[] }) =>
+  items.flatMap((item) => ('id' in item ? [{ path: item.path, kind, id: item.id }] : []));
+
+/**
+ * The kinds of artifact flow and endpoint over `flows` and `endpoints`: each file opens in its tab and draws its
+ * readable change, a flow's over the working folder's flows on disk, an endpoint's titled by the settings descriptions
+ * of the node's components; each lists its files of the working folder; New flow writes a flow file and opens it.
+ */
+export function flowKinds(flows: FlowsApi, endpoints: EndpointsApi): ArtifactKind[] {
+  function FlowFileChange(props: { path: string; before: Side | null; after: Side | null }) {
+    return <FlowChange api={flows} {...props} />;
+  }
+  function EndpointFileChange(props: { path: string; before: Side | null; after: Side | null }) {
+    return <EndpointChange api={endpoints} {...props} />;
+  }
+  function NewFlowFile({ open, ...props }: NewArtifactProps) {
+    return <NewFlow api={flows} {...props} openFlow={(path, id) => open(flowTab(flows, endpoints, path, id))} />;
+  }
+  return [
+    {
+      kind: 'flow',
+      open: (path) => flowTab(flows, endpoints, path, idOf(path)),
+      Change: FlowFileChange,
+      New: NewFlowFile,
+      list: async (signal) => listed('flow', await flows.list(signal)),
+    },
+    {
+      kind: 'endpoint',
+      open: (path) => endpointTab(endpoints, path, idOf(path)),
+      Change: EndpointFileChange,
+      list: async () => listed('endpoint', await endpoints.list()),
+    },
+  ];
 }

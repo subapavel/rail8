@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { screenList, type Screen } from './screens';
+import { finder, screenList, type Found, type Screen } from './screens';
 
 const screen = (id: string): Screen => ({ id, title: id, render: () => null });
 const home = screen('home');
@@ -26,7 +26,7 @@ describe('screenList', () => {
   });
 
   const shape = (file: string) =>
-    `${file} does not default-export a UiModule: { order: a finite number, screens: [{ id: a plain name, title, render }] }`;
+    `${file} does not default-export a UiModule: { order: a finite number, screens: [{ id: a plain name, title, render }], find?: a function }`;
 
   test.each([
     ['no default export', {}],
@@ -38,6 +38,7 @@ describe('screenList', () => {
     ['a screen without a title', { default: { order: 1, screens: [{ id: 'x', render: () => null }] } }],
     ['a screen whose id is no plain name', { default: { order: 1, screens: [screen('message:1')] } }],
     ['a screen whose id starts with a digit', { default: { order: 1, screens: [screen('1st')] } }],
+    ['a find that is no function', { default: { order: 1, screens: [], find: [] } }],
   ])('refuses a module.tsx with %s', (_what, exports) => {
     expect(() => screenList(home, { './a/module.tsx': uiModule(1, 'fine'), './x/module.tsx': exports })).toThrow(shape('./x/module.tsx'));
   });
@@ -64,5 +65,25 @@ describe('screenList', () => {
     expect(() => screenList(home, { './a/module.tsx': uiModule(1, 'flows', 'flows') })).toThrow(
       'the screen id "flows" is taken twice: by ./a/module.tsx and by ./a/module.tsx',
     );
+  });
+});
+
+describe('finder', () => {
+  const found = (name: string): Found => ({ name, path: `p/${name}`, kind: 'Flow', screen: screen(`flow:p/${name}`), trail: [] });
+
+  test('finds what every module finds, the modules in the order of their files, and is given the kinds', async () => {
+    const kinds = new Map();
+    const given: unknown[] = [];
+    const find = finder({
+      './b/module.tsx': { default: { order: 2, screens: [], find: async (k: unknown) => (given.push(k), [found('two')]) } },
+      './c/module.tsx': uiModule(3, 'other'),
+      './a/module.tsx': { default: { order: 1, screens: [], find: async () => [found('one')] } },
+    });
+    expect((await find(kinds)).map((f) => f.name)).toEqual(['one', 'two']);
+    expect(given).toEqual([kinds]);
+  });
+
+  test('finds nothing without a module that finds', async () => {
+    expect(await finder({ './a/module.tsx': uiModule(1, 'x') })(new Map())).toEqual([]);
   });
 });

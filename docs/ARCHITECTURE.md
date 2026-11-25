@@ -1147,7 +1147,9 @@ The screen registry supplies the menu's groups and the Home screen's shortcuts. 
 Quick open and the theme switch, a side menu that stays in place and collapses to its icons (Ctrl+B or Cmd+B, and by
 itself below 1280 px wide), and the workspace tabs in a row of their own under the header. Each screen draws its page in
 PageContainer, with a breadcrumb back to the screen that opened it; the flow editor and the mapping studio fill the
-content area. `docs/UI-PATTERNS.md` describes the pages. Quick open (Ctrl+K or Cmd+K) finds screens and open tabs.
+content area. `docs/UI-PATTERNS.md` describes the pages. Quick open (Ctrl+K or Cmd+K) finds screens, open tabs and, through the
+finder a module registers, the flows, endpoints, mappings and tests of every package by name or path; the menu has no
+list per kind of artifact, each editor opening from its package's tab or from Quick open.
 Opening a screen again selects its existing tab. A screen can open additional tabs and ask for confirmation when a user
 closes a dirty editor. Reloading starts again with Home. While the node finds its git credentials
 refused (part 4), Home and the Packages screen show a warning: a deploy fails, and a node that
@@ -1197,18 +1199,18 @@ in its row (its first MiB), read only then, and its size in the step's row opens
 latest attempt failed, its error is shown above the cards and the header offers Restart
 (`POST /admin/dlq/{id}/retry`).
 
-The Mappings screen lists the mappings of the working folder (`RAIL8_WORKSPACE`) in pages of 25. Its search covers
-every page. It creates mappings and opens each one in a tab of its own, so that several mappings can be open at once. A
-mapping's tab is the mapping studio: it opens read-only; Edit, then Save (with `If-Match`, and a
+A mapping of the working folder (`RAIL8_WORKSPACE`) opens from its package's Artifacts tab, or from the tab of a folder
+that is no package, and from Quick open, each in a tab of its own, so that several mappings can be open at once; New
+mapping in the Mappings card creates one. A mapping's tab is the mapping studio: it opens read-only; Edit, then Save (with `If-Match`, and a
 dialog when the file changed on disk), Cancel and Check; and its tabs Overview, Signature,
 Definition (the message trees, the field mappings and the expression canvas, on React Flow), Test
 and Functions. Closing the tab of a mapping with unsaved changes asks first. The studio's types are
 generated from its contract (`mapping/contract/openapi.json`, written by hand, `npm run gen:types`), and CI
 fails when they differ from it.
 
-The Endpoints screen lists the endpoint files of a working folder (`RAIL8_WORKSPACE`, a folder of packages; files
-are found by their `kind`, hidden folders, `node_modules` and `target` passed over) and opens each one in a tab of its
-own: the endpoint's settings form, drawn from its component's forms (`GET /admin/components`), the same
+The development server lists the endpoint files of a working folder (`RAIL8_WORKSPACE`, a folder of packages; files
+are found by their `kind`, hidden folders, `node_modules` and `target` passed over), and each opens, from its package or
+from Quick open, in a tab of its own: the endpoint's settings form, drawn from its component's forms (`GET /admin/components`), the same
 for a shipped component and a plugin's. It shows the platform's tabs around the component's own, the fields that serve
 the endpoint's direction and are visible, with their help texts, defaults and required marks, the environments that
 override settings, under the `address` of an in endpoint of a component with an HTTP prefix a preview of the URL
@@ -1223,8 +1225,8 @@ would not read back as sent. With `RAIL8_READ_ONLY=true`, as on a server, the fi
 Without the description the form shows the file's settings read-only and says why. The UI never changes the running
 node: an edited package is deployed as any other.
 
-The Flows screen, in the same UI module, lists the flow files of the working folder (`*.yaml` and `*.yml` of the kind
-`flow`) and opens each one in a tab of its own as a picture. The development server answers a flow
+A flow file of the working folder (`*.yaml` and `*.yml` of the kind `flow`), in the same UI module, opens from its
+package or from Quick open in a tab of its own as a picture. The development server answers a flow
 file with its text, its `ETag` and its context: the endpoints of its package (the nearest folder holding
 `package.yaml`) and the flows of the working folder with the `direct` address each one serves; it shares the walk, the
 path check and the `ETag` with the endpoint files. The browser reads the text with the `yaml` library and draws it in
@@ -1304,7 +1306,7 @@ public web page.
   runs that pin it, and push and pull, through the author's own git in the development server.
 - A server for the UI outside development, holding the token and talking to the node the same way.
 - The UI has three parts: Design (what is in git), Configure (what an environment holds) and Monitor.
-  The Systems screen under Configure replaces the Endpoints screen and the endpoint form: the
+  The Systems screen under Configure replaces the endpoint form: the
   settings of a connection are one form with its secrets, a change is saved as a draft and activated,
   every object has its history, and the screen shows which nodes have a change. The UI uses the admin
   API and nothing else. The secret store and the configuration of an environment are the two places
@@ -1314,7 +1316,7 @@ public web page.
   sign-in.
 - The UI in English, German, Czech and Russian, with language packs of data only (#446).
 - Writing a view of a payload (how a body is shown), later and simply.
-- Editing flow files on the Flows screen: Edit, Check and Save, as the mapping studio does.
+- Editing flow files in their tab: Edit, Check and Save, as the mapping studio does.
 
 ## 10. Operations
 

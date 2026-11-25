@@ -11,10 +11,10 @@ const ORDER = 'Q{urn:rail8:corpus:skeleton}Order';
 const ORDER_ID = `/${ORDER}/OrderId`;
 const transformOf = (page: Page, name: RegExp) => node(page, name).evaluate((element) => (element as HTMLElement).style.transform);
 
-// The studio's author journey over the real node: the Mappings screen, New mapping, the messages chosen on
-// Signature, a wire and a moved box on Definition, Save; the page loaded again opens the saved file on the tab it was
-// left on, with the wire and the box where it was put.
-test('@stack list, New mapping, Signature, a wire and a moved box on Definition, Save; a reload keeps the wire and the position', async ({ page }) => {
+// The studio's author journey over the real node: the tab of the folder mappings, New mapping, the messages chosen on
+// Signature, a wire and a moved box on Definition, Save; the page loaded again opens the saved file from Quick open on
+// the tab it was left on, with the wire and the box where it was put.
+test('@stack folder, New mapping, Signature, a wire and a moved box on Definition, Save; a reload keeps the wire and the position', async ({ page }) => {
   const problems = collectProblems(page);
   const mapping = 'mappings/e2e-journey';
   await openMappings(page);
@@ -22,7 +22,7 @@ test('@stack list, New mapping, Signature, a wire and a moved box on Definition,
   await page.getByRole('button', { name: 'New mapping' }).click();
   const modal = page.getByRole('dialog', { name: 'New mapping' });
   await modal.getByRole('textbox', { name: 'Name' }).fill('e2e-journey');
-  await modal.getByRole('textbox', { name: 'Package' }).fill('mappings');
+  await expect(modal.getByRole('textbox', { name: 'Folder' })).toHaveValue('');
   await modal.getByRole('button', { name: 'Create' }).click();
   await expect(page.getByRole('tab', { name: 'Signature' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
@@ -64,7 +64,7 @@ test('@stack list, New mapping, Signature, a wire and a moved box on Definition,
   expect(fieldMapping.boxes[fieldMapping.result]).toEqual({ kind: 'source', field: ORDER_ID });
   expect(fieldMapping.layout.boxes[fieldMapping.result]).toBeDefined();
 
-  // the page loaded again: the mapping opens from the list on the tab it was left on
+  // the page loaded again: the mapping opens from Quick open on the tab it was left on
   await openStudio(page, mapping);
   await expect(page.getByRole('tab', { name: 'Definition', exact: true })).toHaveAttribute('aria-selected', 'true');
   await fields(page, 'target').getByRole('button', { name: 'OrderId', exact: true }).click();

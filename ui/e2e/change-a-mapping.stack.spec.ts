@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
 import { collectProblems } from './problems';
 import { deployWorkspace, sessionPort } from './stack-workspace';
-import { edit, node, save, selectTarget, setParameters } from './studio';
+import { edit, node, quickOpen, save, selectTarget, setParameters } from './studio';
 
 test.use({ viewport: { width: 1440, height: 900 }, baseURL: `http://localhost:${sessionPort}` });
 
@@ -87,13 +87,20 @@ test('@stack the real node: a person greeted, the mapping changed in the studio,
   expect(before.status(), await before.text()).toBe(200);
   expect(await before.text()).toContain('<Text>Hello, Ann</Text>');
 
-  // 2. the mapping opened from the package's tab in the studio, its constant changed, and saved
+  // 2. the mapping opened in the studio from the package's tab, and again from Quick open, its constant changed, and saved
   await page.goto('/');
   await logIn(page);
   await openDemo(page);
   await shown(page).getByRole('tab', { name: /^Artifacts/ }).click();
   await shown(page).getByRole('table', { name: 'Mappings' }).getByRole('button', { name: 'greeting', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeVisible();
+  await page.getByRole('button', { name: 'Close greeting', exact: true }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeHidden();
+  await quickOpen(page, 'greeting', 'demo/mappings/greeting.mapping.json');
+  await expect(page.getByRole('heading', { level: 1, name: 'greeting' })).toBeVisible();
+  const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).filter({ visible: true }).getByRole('listitem');
+  await expect(crumbs).toHaveText(['Design', 'Packages', 'demo', 'greeting']);
+  await expect(page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Packages', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.getByRole('tab', { name: 'Definition', exact: true }).click();
   await edit(page);
   await selectTarget(page, TEXT);

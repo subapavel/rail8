@@ -728,7 +728,7 @@ The node reads both shapes while the steps land, and the last step removes the o
   environment. A system is named after its endpoint's id unless a map given to the command names its key. Secrets stay
   `secret://` references. It deletes nothing; its author reviews the result and commits it.
 - Once the demo, the template and the documents are on the new shape, the last step removes `kind: endpoint`,
-  `endpoint.schema.json`, flows of `schemaVersion: 1` and the Endpoints screen. A package that still holds them is refused,
+  `endpoint.schema.json`, flows of `schemaVersion: 1` and the endpoint form. A package that still holds them is refused,
   naming the file and what replaces it.
 
 `examples/demo` gets `systems/acme-erp.yaml`, `systems/globex-erp.yaml` and `systems/billing.yaml`; its flows and tests
@@ -824,7 +824,7 @@ endpoint's do today. A flow's own `secret://` references in its steps' options d
 - `from.endpoint`, `to.endpoint`, `to.byProp` and `to.endpoints` in `flow.schema.json`.
 - `EndpointConfig`, `Component.settings()`, `Component.configSchema()`, `Component.polls()` and
   `Producer.send(Envelope)` in `rail8-api`.
-- The Endpoints screen and the endpoint form, which become the Systems screen under Configure.
+- The endpoint form, which becomes the Systems screen under Configure.
 - In the documents: `docs/ARCHITECTURE.md` (packages and files, components, the UI), `docs/ADAPTERS.md`,
   `docs/FLOW-EDITOR.md`, `docs/PACKAGES-AND-GIT.md` (the lists of artifacts, an endpoint by its settings),
   `docs/QUICKSTART.md` and `docs/UI-PATTERNS.md` where they name endpoints. Each step rewrites those its change touches.
@@ -953,8 +953,8 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
 5. **The Systems screen under Configure.** Every system with the package that defines it, its connections, their
    adapters, the flows that use each and whether it is set, mocked, stopped or missing in the environment, and the
    instance names; editing the values comes with the configuration's own screen, and until then the quickstart's text
-   says how to change a file of `deploy/quickstart/config/` and run its script again, or use `rail8 config`. Replaces
-   the Endpoints screen's place. No change to the demo, the quickstart's files or the database.
+   says how to change a file of `deploy/quickstart/config/` and run its script again, or use `rail8 config`. Takes
+   the endpoint form's place. No change to the demo, the quickstart's files or the database.
 6. **The built-in mock of a connection**, after the record of receivers that the design of who may send to a flow
    writes. The mocked state as the store holds it, the platform's mock with its `fail`, its mark in the send step's
    record and in the receiver's facts, its count in `/health`. Changes the quickstart's configuration (the foreign
@@ -970,7 +970,7 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
 10. **`rail8 migrate`.** The command above, tried on the demo as it was before the second step. No change to the demo,
     the quickstart or the database.
 11. **The endpoint leaves Rail8**, after the two steps before it. `kind: endpoint`, `endpoint.schema.json`, flows of
-    `schemaVersion: 1`, the Endpoints screen and the words in the documents go. The
+    `schemaVersion: 1`, the endpoint form and the words in the documents go. The
     quickstart's text tells its reader to copy the demo again into `~/rail8-workspace/demo` and commit before pulling
     this release, and to run `rail8 migrate` on a package of their own, since a package of the old shape is refused at
     restore; the step is tried on a fresh install and on a restart with the volumes of the day before. Changes
