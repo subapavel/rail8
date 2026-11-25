@@ -17,11 +17,12 @@ const held: WorkingFolderLock = (work) => work();
 
 /**
  * Writes the `folder.yaml` of the folder at `inside`, a path within the package `repository` whose clone is at the
- * real path `clone`, as `body` states it, holding the working folder's `lock` from its checks to its end. It makes each
- * missing folder on the way, and refuses, writing nothing: with 409 when an entry on the way is a file or a link; with
- * 412 when `body.tag` is null and the folder has a `folder.yaml`, or when its tag is not that of the `folder.yaml` on
- * disk (or there is none); and with 422 when another folder of the package has the namespace. A new file holds the
- * schema's version, its kind and the two fields; an existing one keeps its comments and other keys.
+ * real path `clone`, as `body` states it, holding the working folder's `lock` from its checks to its end. It refuses,
+ * writing nothing: with 409 when an entry on the way is a file or a link; with 412 when `body.tag` is null and the
+ * folder has a `folder.yaml`, or when its tag is not that of the `folder.yaml` on disk (or there is none); and with 422
+ * when another folder of the package has the namespace. Once every check has passed, it makes each missing folder on
+ * the way. A new file holds the schema's version, its kind and the two fields; an existing one keeps its comments and
+ * other keys.
  */
 export async function writeFolder(lock: WorkingFolderLock, clone: string, repository: string, body: FolderBody & { inside: string }): Promise<void> {
   const names = body.inside.split('/');
@@ -36,12 +37,14 @@ export async function writeFolder(lock: WorkingFolderLock, clone: string, reposi
     for (const [n, name] of names.entries()) {
       folder = join(folder, name);
       const entry = await lstat(folder).catch(() => null);
-      if (entry === null) await mkdir(folder);
-      else if (!entry.isDirectory()) throw refusal(409, FOLDER_REFUSALS.inTheWay({ path: `${repository}/${names.slice(0, n + 1).join('/')}` }));
+      if (entry === null) break;
+      if (!entry.isDirectory()) throw refusal(409, FOLDER_REFUSALS.inTheWay({ path: `${repository}/${names.slice(0, n + 1).join('/')}` }));
     }
+    folder = join(clone, ...names);
     const file = join(folder, 'folder.yaml');
     const entry = await lstat(file).catch(() => null);
     if (body.tag === null) {
+      await mkdir(folder, { recursive: true });
       if (!(await writeNew(held, file, folderText(null, body.namespace, body.description)))) throw refusal(412, FOLDER_REFUSALS.exists);
       return;
     }
