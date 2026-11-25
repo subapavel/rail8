@@ -8,7 +8,7 @@ import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed, useMay } from '../SessionGate';
 import { PAYLOAD_SHOWN, type AdminApi, type Audited, type Outcome, type Payload, type StepRecord, type Timeline } from './admin';
-import { account, duration, INGRESS, latestState, type Row, type WaitReason } from './progress';
+import { account, byAttempt, duration, INGRESS, latestState, type Row, type WaitReason } from './progress';
 
 export interface MessageViewProps {
   api: AdminApi;
@@ -196,8 +196,8 @@ export function MessageView({ api, id }: MessageViewProps) {
   );
 }
 
-/** The steps in the order they were recorded: by attempt, then by step. */
-const byStart = (steps: readonly StepRecord[]) => [...steps].sort((a, b) => a.attempt - b.attempt || a.step - b.step);
+/** The steps by attempt, then by step. */
+const byStart = (steps: readonly StepRecord[]) => byAttempt(steps).flatMap((a) => a.steps);
 
 /**
  * The rows of one attempt: each recorded step, and each wait between two steps across the columns from the step's name to

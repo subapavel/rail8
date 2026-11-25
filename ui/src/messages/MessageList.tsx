@@ -1,7 +1,7 @@
 import { ReloadOutlined } from '@ant-design/icons';
 import { ProTable, type ProColumns, type ProFormInstance } from '@ant-design/pro-components';
 import { Alert, Badge, Button, Empty, Flex, Form, Input, Space } from 'antd';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type TableHTMLAttributes } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { msg, say, useText, type Message, type Texts } from '../language';
 import { Page } from '../Page';
 import { ReadSpinner } from '../ReadSpinner';
@@ -236,9 +236,10 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
     read(chosen);
   };
 
+  // a count sets the form's status and searches with the whole form, as choosing the status there does
   const chooseStatus = (status: Status | '') => {
     form.current?.setFieldsValue({ status });
-    readAgain({ ...filters, status });
+    form.current?.submit();
   };
 
   const loadMore = (shown: Shown) => {
@@ -315,7 +316,6 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
                 );
               return typeof table === 'function' ? table() : table;
             }}
-            components={{ table: MessagesTable }}
             options={false}
             pagination={false}
             scroll={{ x: 'max-content' }}
@@ -353,9 +353,4 @@ export function MessageList({ api, onOpen, now = BROWSER_CLOCK }: MessageListPro
       </OpenMessage.Provider>
     </Page>
   );
-}
-
-function MessagesTable(props: TableHTMLAttributes<HTMLTableElement>) {
-  const { t } = useText();
-  return <table {...props} aria-label={t('messages.screen.title')} />;
 }

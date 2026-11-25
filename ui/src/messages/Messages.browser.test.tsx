@@ -259,8 +259,10 @@ describe('Messages', () => {
     await vi.waitFor(() => expect(api.counts).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders' }));
     await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders', status: 'failed' }));
 
+    await page.getByRole('textbox', { name: 'Key name' }).fill('order');
+    await page.getByRole('textbox', { name: 'Key value' }).fill('A-7');
     await strip.getByRole('button', { name: 'Failed 2' }).click();
-    await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders' }));
+    await vi.waitFor(() => expect(api.list).toHaveBeenLastCalledWith({ ...lastHour, flow: 'demo/orders', key: { name: 'order', value: 'A-7' } }));
     await expect.element(strip.getByRole('button', { name: 'Failed 2' })).toHaveAttribute('aria-pressed', 'false');
     await expect.element(page.getByText('All statuses', { exact: true })).toBeVisible();
   });
