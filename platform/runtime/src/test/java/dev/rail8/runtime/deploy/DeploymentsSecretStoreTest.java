@@ -1,6 +1,9 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
+import dev.rail8.api.Envelope;
+import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.Secret;
 import dev.rail8.api.settings.Field;
@@ -14,6 +17,7 @@ import dev.rail8.runtime.secret.MemorySecretStores;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,8 +40,10 @@ import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
+import static dev.rail8.runtime.deploy.DeploymentsTest.within;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -129,6 +135,7 @@ class DeploymentsSecretStoreTest {
     final class Node {
         final Doors doors = new Doors().describe(DESCRIBED);
         final SecretStore store;
+        final CountingQueue queue = new CountingQueue(rt.clock());
         final Deployments deployments;
 
         Node(String id, Map<String, String> variables) {
@@ -146,7 +153,7 @@ class DeploymentsSecretStoreTest {
             Map<String, Component> components = Map.of(Doors.SCHEME, doors);
             Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components);
             deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), new InMemoryMessageStore(),
-                    new InMemoryDlq(), new CountingQueue(rt.clock()), () -> 0L, records);
+                    new InMemoryDlq(), queue, () -> 0L, records);
             nodes.add(this);
         }
 
@@ -173,6 +180,22 @@ class DeploymentsSecretStoreTest {
                 deployments.follow();
                 return null;
             });
+        }
+
+        void undeploy(String name) throws Exception {
+            OnVirtualThread.call(() -> deployments.undeploy(name, TestActors.named("test")));
+        }
+
+        /** A message accepted by the consumer of {@code flow}. */
+        void accept(String flow) throws Exception {
+            Envelope e = rt.ingress(flow, Headers.empty(), Buffer.buffer("<order/>"));
+            Doors.Door door = doors.door(flow);
+            assertInstanceOf(Ack.Accepted.class, within(door.deliver(e), door + "'s answer"), "fixture: " + door + " accepts");
+        }
+
+        /** The token each producer of the partner endpoint was built with, in the order they were built. */
+        List<Object> tokens() {
+            return doors.producerConfigs("partner").stream().map(c -> c.options().get("token")).toList();
         }
 
         /** How many consumers this node built of {@code flow}. */
@@ -383,5 +406,73 @@ class DeploymentsSecretStoreTest {
         assertEquals("n3w-tok", a.option("shop/orders", "token"));
         assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://tok")), logged.toString());
         assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-tok")), logged.toString());
+    }
+
+    /** {@code relay}, at-least-once and one message at a time, whose partner endpoint's token is {@code secret://out-token}. */
+    static PackageDraft relay() {
+        PackageDraft p = PackageDraft.of("relay", "1.0.0")
+                .endpoint("relay-in", "in", new JsonObject().put("path", "/relay"))
+                .endpoint("partner", "out", new JsonObject().put("url", "rec://partner").put("token", "secret://out-token"))
+                .flow("relay", "1.0.0", "at-least-once", "relay-in", 4096, PackageDraft.toPartner());
+        p.flowDoc("relay").getJsonObject("limits").put("maxInFlight", 1);
+        return p;
+    }
+
+    /**
+     * relay's partner holds every send, so its two messages stay in the work queue when it is undeployed: its drain is built with
+     * the store's value. An overwrite builds the drain again with the new value; a delete stops it, and it is not built again on its
+     * old value: the node is UNDRAINED until a tick finds the secret again and builds the drain with it.
+     */
+    @Test
+    void aDrainingFlowFollowsAChangeOfItsSecretAndIsNotRunOnAnOldValue() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "out-token", "one");
+        a.deploy(relay());
+        a.doors.partner().holdNext(100);
+        a.accept("relay/relay");
+        a.doors.partner().awaitSent(1);
+        a.accept("relay/relay");
+        assertEquals(2, a.queue.size(), "fixture: the first is held at the partner, the second waits behind it");
+
+        a.undeploy("relay");
+        assertEquals(List.of("one", "one"), a.tokens(), "the drain is built with the store's value");
+
+        MemorySecretStores.overwriteValue(a.store, "out-token", "two");
+        a.follow();
+        assertEquals(List.of("one", "one", "two"), a.tokens(), "the drain is built again with the new value");
+        assertTrue(a.deployments.health().detail() == null || !a.deployments.health().detail().contains("UNDRAINED"), "it drains");
+
+        MemorySecretStores.delete(a.store, "out-token");
+        a.follow();
+        a.follow();
+        assertEquals(List.of("one", "one", "two"), a.tokens(), "never built again on its old value");
+        assertTrue(a.deployments.health().detail().contains("UNDRAINED: flow relay/relay"), a.deployments.health().detail());
+
+        MemorySecretStores.createValue(a.store, "out-token", "three");
+        rt.clock().advance(Duration.ofSeconds(5));
+        a.follow();
+        assertEquals(List.of("one", "one", "two", "three"), a.tokens(), "a tick that finds the secret again builds the drain with it");
+        assertEquals(2, a.queue.size(), "every message is still to drain");
+    }
+
+    /** A drain whose stop for an overwrite fails with the value it was built with logs the failure with the reference in its place. */
+    @Test
+    void aDrainsStopThatFailsWithTheValueBeforeAnOverwriteLogsItScrubbed() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "out-token", "v4lue-one");
+        a.deploy(relay());
+        a.doors.partner().holdNext(100);
+        a.accept("relay/relay");
+        a.doors.partner().awaitSent(1);
+        a.undeploy("relay");
+        assertEquals(List.of("v4lue-one", "v4lue-one"), a.tokens(), "fixture: the drain runs on the first value");
+        a.doors.failProducerClose(2, "no logout of v4lue-one");
+
+        MemorySecretStores.overwriteValue(a.store, "out-token", "n3w-two");
+        a.follow();
+
+        assertEquals(List.of("v4lue-one", "v4lue-one", "n3w-two"), a.tokens());
+        assertTrue(logged.stream().anyMatch(l -> l.contains("no logout of secret://out-token")), logged.toString());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("v4lue-one")), logged.toString());
     }
 }
