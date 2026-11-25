@@ -136,7 +136,7 @@ class PollingConsumerContractSelfTest {
         boolean handlerOnTheRoundsThread;
         /** Broken: the round runs on the thread the timer fires it on. */
         boolean roundOnTheTimersThread;
-        /** Broken: stop() completes at once, whatever is in flight. */
+        /** Broken: stop() completes at once, whatever is in flight, so before the removal of the file in flight (which waits for the stop). */
         boolean stopAtOnce;
         /** Broken: stop() completes once the answer in flight is in, before that file's removal (which waits for the stop). */
         boolean stopBeforeTheRemoval;
@@ -165,7 +165,7 @@ class PollingConsumerContractSelfTest {
 
         void drop(String name, Buffer bytes) { dir.put(name, new File(name, mtimes.incrementAndGet(), bytes.copy())); }
 
-        /** With {@link #stopBeforeTheRemoval}: counted down by the first look at the directory once a stop has completed. */
+        /** With {@link #stopAtOnce} or {@link #stopBeforeTheRemoval}: counted down by the first look at the directory once a stop has completed. */
         private final CountDownLatch lookedAfterTheStop = new CountDownLatch(1);
         private volatile Poller stoppedOne;
 
@@ -281,7 +281,7 @@ class PollingConsumerContractSelfTest {
             }
 
             private boolean remove(File f) {
-                if (stopBeforeTheRemoval && stopping()) {   // the stop has completed: the removal waits until the case looked
+                if ((stopAtOnce || stopBeforeTheRemoval) && stopping()) {   // the stop has completed: the removal waits until the case looked
                     try {
                         if (!lookedAfterTheStop.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("nobody looked after the stop");
                     } catch (InterruptedException interrupted) {
@@ -318,7 +318,10 @@ class PollingConsumerContractSelfTest {
                     if (next != null) next.cancel();
                     inFlight = round;
                 }
-                if (stopAtOnce || inFlight == null) {
+                if (inFlight == null) {
+                    stopped.tryComplete();
+                } else if (stopAtOnce) {
+                    stoppedOne = this;
                     stopped.tryComplete();
                 } else if (stopBeforeTheRemoval) {
                     stoppedOne = this;
@@ -467,9 +470,9 @@ class PollingConsumerContractSelfTest {
     }
 
     @Test
-    void aStopThatCompletesAtOnceFailsOnlyTheStopCase() {
+    void aStopThatCompletesAtOnceFailsTheStopAndTheSuccessorCases() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.stopAtOnce = true));
-        assertEquals(Set.of(STOP_WAITS), f.keySet());
+        assertEquals(Set.of(STOP_WAITS, SUCCESSOR), f.keySet());
         ContractRun.caughtBy(f, STOP_WAITS, "stop waits for the delivery in flight");
     }
 

@@ -229,7 +229,7 @@ export function endpointSettings(forms: ComponentForms, direction: 'in' | 'out')
   });
   const reply: SettingsField[] =
     direction === 'out' && connects && forms.described.connection
-      ? [{ name: REPLY, type: 'integer', label: msg('endpoints.field.replyLimit'), help: msg('endpoints.field.replyLimit.help'), tab: 'general', directions: ['out'], min: 1, group: 'connection' }]
+      ? [{ name: REPLY, type: 'integer', label: msg('endpoints.field.replyLimit'), help: msg('endpoints.field.replyLimit.help'), tab: 'general', required: false, directions: ['out'], min: 1, group: 'connection' }]
       : [];
   return {
     format: forms.format,

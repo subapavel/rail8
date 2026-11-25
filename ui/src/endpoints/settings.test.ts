@@ -50,7 +50,7 @@ describe('endpointSettings', () => {
       ['path', 'flow'],
     ]);
     const reply = out.fields.find((f) => f.name === 'maxBodyBytes')!;
-    expect([reply.required, reply.min, say(en, reply.label!), say(en, reply.help)]).toEqual([undefined, 1, 'Largest reply', 'The largest reply body taken, in bytes.']);
+    expect([reply.required, reply.min, say(en, reply.label!), say(en, reply.help)]).toEqual([false, 1, 'Largest reply', 'The largest reply body taken, in bytes.']);
     expect(endpointSettings(HTTP_FORMS, 'in').fields.map((f) => f.name)).not.toContain('maxBodyBytes');
     expect(endpointSettings(DIRECT_FORMS, 'out').fields.map((f) => f.name)).toEqual(['address']);
   });
