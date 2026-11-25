@@ -697,8 +697,9 @@ builds on 1a2 and 1b, and the Secrets screen on 1a2.
     the WARNING.
   - The second source goes: `shadowedOn`, the variables in the list, and `nodes.secret_variables`.
   - The key mandatory: a node without it does not start, and `no-key` goes. The quickstart's `~/.rail8-secrets-key`,
-    `docker-compose.yml` and the stack of `deploy/compose` passing it, CI generating one per run, and
-    `docs/QUICKSTART.md` saying so, and that a value of the stack's `RAIL8_SECRET_*` variables changed after the first
+    `docker-compose.yml` and the stack of `deploy/compose` passing it, CI generating one per run, `bin/run-adapter`
+    generating one for each run as it makes the emergency key, and `docs/ADAPTERS.md` and `docs/QUICKSTART.md` saying
+    so. `docs/QUICKSTART.md` also says that a value of the stack's `RAIL8_SECRET_*` variables changed after the first
     start is not read: it is entered in the store, or the stack starts again after `docker compose down -v`.
   - Endpoint files: a reference reads the store in any option, and no flow is rebuilt for a secret: the rebuild, the
     stop of a flow whose rebuild fails, the change kept during a deploy and the drain's follow go.
@@ -722,6 +723,6 @@ builds on 1a2 and 1b, and the Secrets screen on 1a2.
   - A secret administrator's create, overwrite and delete, with the confirmation, and the key's state.
   - The create form is a component that a connection's form opens as it is, so the Systems screen reuses it.
   - Texts are translated by their codes.
-- **3. The end of a certificate.** `class:B`, labelled `later`, after 1b. A key pair whose leaf certificate ends within 30
-  days is a WARNING once a day and a warning on Home and on the Secrets screen. Partners' trusted certificates, when they
-  come, join the same watch.
+- **3. The end of a certificate.** `class:B`, labelled `later`, after 1b and the Secrets screen. A key pair whose leaf
+  certificate ends within 30 days is a WARNING once a day and a warning on Home and on the Secrets screen. Partners'
+  trusted certificates, when they come, join the same watch.

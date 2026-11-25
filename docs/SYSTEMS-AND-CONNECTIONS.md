@@ -917,12 +917,13 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    second starts after the first is merged and builds on its types. No change to the demo, the template's package, the
    quickstart or the database.
 2. **Systems and flows by name.** After the configuration's export and import. `system.schema.json`, flows and tests of
-   `schemaVersion: 2` with a sender and a send step by name, the key rules with `rail8`, `subscribers` and
-   `by-agreement` reserved in the one parser of keys, a system key defined by one package, the deploy's checks against
-   the pool's resulting state and the store's snapshot, its record in `deployments.config_generation`,
-   `deployment_systems` and `deployment_connection_uses`, `GET /admin/systems` reading the store, the producers per
-   connection and their swap, a send through a connection that cannot serve failing with its reason and retried, the
-   connection key in the history, `rail8 validate`, and `rail8 test` with `expect.sent.<key>.settings`. The Flows
+   `schemaVersion: 2` with a sender and a send step by name, the key rules through the one parser of keys, which the
+   configuration's store built with `rail8`, `subscribers` and `by-agreement` reserved, a system key defined by one
+   package, the deploy's checks against the pool's resulting state and the store's snapshot, its record in
+   `deployments.config_generation`, `deployment_systems` and `deployment_connection_uses`, `GET /admin/systems` reading
+   the store, the producers per connection and their swap, a send through a connection that cannot serve failing with
+   its reason and retried, the connection key in the history, `rail8 validate`, and `rail8 test` with
+   `expect.sent.<key>.settings`. The Flows
    screen draws a flow of either shape and edits only the old one. Changes `examples/demo` (its systems; `sftp-invoice`
    and its test on the new shape, which the quickstart does not edit) and the quickstart (`deploy/quickstart/config/`,
    `deploy/quickstart/configure` and `rail8 bootstrap --role`, run by the quickstart's text, the stack of
