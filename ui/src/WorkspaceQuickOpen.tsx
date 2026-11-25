@@ -1,6 +1,7 @@
 import { FileTextOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Typography, type InputRef } from 'antd';
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { say, useText } from './language';
 import { MountedModal } from './MountedModal';
 import type { Screen } from './screens';
 
@@ -14,10 +15,12 @@ export function WorkspaceQuickOpen({ screens, choose, dismiss, refusedOf = () =>
   choose: (screen: Screen) => void;
   dismiss: () => void;
 }) {
+  const texts = useText();
+  const { t } = texts;
   const [query, setQuery] = useState('');
   const field = useRef<InputRef>(null);
   const matches = screens.filter(({ id, title, group }) =>
-    `${title} ${id} ${group ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()),
+    `${say(texts, title)} ${id} ${group === undefined ? '' : say(texts, group)}`.toLowerCase().includes(query.trim().toLowerCase()),
   );
 
   function move(event: KeyboardEvent<HTMLDivElement>) {
@@ -32,7 +35,7 @@ export function WorkspaceQuickOpen({ screens, choose, dismiss, refusedOf = () =>
 
   return (
     <MountedModal
-      title="Quick open"
+      title={t('frame.quickOpen')}
       width={470}
       footer={null}
       onCancel={dismiss}
@@ -43,8 +46,8 @@ export function WorkspaceQuickOpen({ screens, choose, dismiss, refusedOf = () =>
           ref={field}
           allowClear
           prefix={<SearchOutlined />}
-          aria-label="Find a screen or open tab"
-          placeholder="Find a screen or open tab…"
+          aria-label={t('frame.quickOpen.find')}
+          placeholder={t('frame.quickOpen.placeholder')}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onPressEnter={() => {
@@ -63,14 +66,14 @@ export function WorkspaceQuickOpen({ screens, choose, dismiss, refusedOf = () =>
               icon={screen.icon ?? <FileTextOutlined aria-hidden />}
               onClick={() => choose(screen)}
             >
-              {screen.title}
+              {say(texts, screen.title)}
               <Typography.Text type="secondary" ellipsis>
-                {refused ?? (screen.id.includes(':') ? screen.id.slice(screen.id.indexOf(':') + 1) : screen.group)}
+                {refused ?? (screen.id.includes(':') ? screen.id.slice(screen.id.indexOf(':') + 1) : screen.group && say(texts, screen.group))}
               </Typography.Text>
             </Button>
           );
         })}
-        {matches.length === 0 && <Typography.Text type="secondary" role="status">No matching screens or tabs</Typography.Text>}
+        {matches.length === 0 && <Typography.Text type="secondary" role="status">{t('frame.quickOpen.none')}</Typography.Text>}
       </div>
     </MountedModal>
   );

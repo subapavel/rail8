@@ -1,8 +1,9 @@
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { Alert, Button, Flex, Typography } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { auditAction, auditActions, AuditHow } from '../audit';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AUDIT_ACTIONS, auditAction, auditActionName, AuditHow } from '../audit';
+import { useText, type Texts } from '../language';
 import { Page } from '../Page';
 import type { AuditApi, AuditEntry, AuditQuery } from './api';
 import { auditCsv, readAll } from './auditExport';
@@ -55,30 +56,31 @@ function queryOf(searched: Searched): AuditQuery {
   return query;
 }
 
-const columns: ProColumns<AuditEntry>[] = [
-  { title: 'User', dataIndex: 'user', hideInTable: true, fieldProps: { placeholder: 'Any user' } },
+/** The columns of the list and the fields of its search form, titled in `texts`' language. */
+const columnsIn = (texts: Texts): ProColumns<AuditEntry>[] => [
+  { title: texts.t('users.user'), dataIndex: 'user', hideInTable: true, fieldProps: { placeholder: texts.t('audit.anyUser') } },
   {
-    title: 'Time',
+    title: texts.t('audit.time'),
     dataIndex: 'time',
     valueType: 'dateTimeRange',
     hideInTable: true,
-    fieldProps: { placeholder: ['From', 'To'] },
+    fieldProps: { placeholder: [texts.t('audit.from'), texts.t('audit.to')] },
     search: { transform: (value?: [string, string]) => (value === undefined ? {} : { from: value[0], to: value[1] }) },
   },
-  { title: 'When', dataIndex: 'at', key: 'at', width: 230, search: false, render: (_, row) => row.at },
+  { title: texts.t('users.when'), dataIndex: 'at', key: 'at', width: 230, search: false, render: (_, row) => row.at },
   {
-    title: 'Action',
+    title: texts.t('audit.action'),
     dataIndex: 'action',
     valueType: 'select',
-    valueEnum: Object.fromEntries(Object.entries(auditActions).map(([id, text]) => [id, { text }])),
-    fieldProps: { showSearch: true, virtual: false, placeholder: 'Any action' },
-    render: (_, row) => auditAction(row),
+    valueEnum: Object.fromEntries(AUDIT_ACTIONS.map((id) => [id, { text: auditActionName(texts, id) }])),
+    fieldProps: { showSearch: true, virtual: false, placeholder: texts.t('audit.anyAction') },
+    render: (_, row) => auditAction(texts, row),
   },
-  { title: 'Subject', dataIndex: 'subject', search: false, render: (_, row) => row.subject },
-  { title: 'Who', dataIndex: 'actor', search: false, render: (_, row) => row.actor },
-  { title: 'How', key: 'how', search: false, render: (_, row) => <AuditHow row={row} /> },
+  { title: texts.t('audit.subject'), dataIndex: 'subject', search: false, render: (_, row) => row.subject },
+  { title: texts.t('audit.who'), dataIndex: 'actor', search: false, render: (_, row) => row.actor },
+  { title: texts.t('users.how'), key: 'how', search: false, render: (_, row) => <AuditHow row={row} /> },
   {
-    title: 'Detail',
+    title: texts.t('audit.detail'),
     key: 'detail',
     search: false,
     ellipsis: true,
@@ -99,6 +101,9 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
   const [exported, setExported] = useState<Export>({ kind: 'idle' });
   // only the answer to the latest read of the list is shown
   const latest = useRef(0);
+  const texts = useText();
+  const { t } = texts;
+  const columns = useMemo(() => columnsIn(texts), [texts]);
 
   useEffect(() => {
     const read = ++latest.current;
@@ -141,30 +146,30 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
 
   const reading = exported.kind === 'reading';
   return (
-    <Page title="Audit" content="Who did what on the installation, newest first. Export CSV saves every row the filters keep.">
+    <Page title={t('users.screen.audit')} content={t('audit.content')}>
       <Flex vertical gap="large">
         {exported.kind === 'too-many' && (
           <Alert
             type="warning"
             showIcon
-            closable={{ 'aria-label': 'Dismiss' }}
+            closable={{ 'aria-label': t('users.dismiss') }}
             onClose={() => setExported({ kind: 'idle' })}
-            title={`The list is longer than ${exported.max.toLocaleString('en')} rows`}
-            description="Choose a narrower time, then export again."
+            title={t('audit.tooMany', { max: exported.max })}
+            description={t('audit.tooMany.description')}
           />
         )}
         {exported.kind === 'failed' && (
           <Alert
             type="error"
             showIcon
-            closable={{ 'aria-label': 'Dismiss' }}
+            closable={{ 'aria-label': t('users.dismiss') }}
             onClose={() => setExported({ kind: 'idle' })}
-            title="The audit could not be exported"
+            title={t('audit.export.failed')}
             description={exported.message}
           />
         )}
         <ProTable<AuditEntry, Searched>
-          aria-label="Audit"
+          aria-label={t('users.screen.audit')}
           rowKey="id"
           size="small"
           columns={columns}
@@ -176,7 +181,7 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
           onReset={() => readAgain({})}
           tableViewRender={(_, table) =>
             shown.kind === 'failed' ? (
-              <Alert type="error" showIcon title="The audit could not be read" description={shown.message} action={<Button onClick={() => readAgain(query)}>Try again</Button>} />
+              <Alert type="error" showIcon title={t('audit.unread')} description={shown.message} action={<Button onClick={() => readAgain(query)}>{t('frame.tryAgain')}</Button>} />
             ) : typeof table === 'function' ? (
               table()
             ) : (
@@ -185,24 +190,22 @@ export function AuditList({ api, now = BROWSER_CLOCK, save = saveWithLink }: Aud
           }
           options={false}
           pagination={false}
-          locale={{ emptyText: 'No row of the audit matches the filters.' }}
-          headerTitle={<h2>Newest first</h2>}
+          locale={{ emptyText: t('audit.none') }}
+          headerTitle={<h2>{t('audit.newestFirst')}</h2>}
           toolBarRender={() => [
             <Button key="refresh" icon={<ReloadOutlined aria-hidden />} onClick={() => readAgain(query)}>
-              Refresh
+              {t('users.refresh')}
             </Button>,
             <Button key="export" type="primary" icon={<DownloadOutlined aria-hidden />} loading={reading} onClick={() => void exportCsv()}>
-              {reading ? `Exporting ${exported.count.toLocaleString('en')} rows` : 'Export CSV'}
+              {reading ? t('audit.exporting', { count: exported.count }) : t('audit.export')}
             </Button>,
           ]}
         />
-        {shown.kind === 'read' && typeof shown.more === 'object' && (
-          <Alert type="error" showIcon title="The older rows could not be read" description={shown.more.failed} />
-        )}
+        {shown.kind === 'read' && typeof shown.more === 'object' && <Alert type="error" showIcon title={t('audit.older.unread')} description={shown.more.failed} />}
         {shown.kind === 'read' && shown.next !== null && (
           <Flex justify="center">
             <Button loading={shown.more === 'reading'} onClick={() => shown.next !== null && loadMore(shown.rows, shown.next)}>
-              Load more
+              {t('audit.more')}
             </Button>
           </Flex>
         )}

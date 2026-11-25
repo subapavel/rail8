@@ -1,3 +1,4 @@
+import { msg, type Label, type Message } from './language';
 /**
  * Who uses the page, and the page's `fetch`.
  *
@@ -60,7 +61,7 @@ export interface Refused {
 
 export type SessionState =
   | { kind: 'starting' }
-  | { kind: 'failed'; error: string; retryAfter?: string }
+  | { kind: 'failed'; error: Label; retryAfter?: string }
   | { kind: 'out'; refusal?: Refused }
   | { kind: 'in'; me: Me }
   /** The session ended while tabs were open: the login, or the first password's change, is asked over them. */
@@ -89,14 +90,14 @@ export interface SessionClient {
   may(action: string): true | Refusal;
 }
 
-/** The node's refusal of a password change: its code (`wrong-password`, `too-many-attempts`, …) and what it said. */
+/** The node's refusal of a password change: its code (`wrong-password`, `too-many-attempts`, …) and what it said, or the UI's words for it. */
 export class PasswordRefused extends Error {
   constructor(
     readonly code: string,
-    message: string,
+    readonly reason: Label,
     readonly retryAfter?: string,
   ) {
-    super(message);
+    super(typeof reason === 'string' ? reason : reason.id);
   }
 }
 
@@ -138,7 +139,7 @@ async function codeOf(response: Response): Promise<string | null> {
   return null;
 }
 
-async function errorOf(response: Response): Promise<string> {
+async function errorOf(response: Response): Promise<Label> {
   try {
     const body = (await response.clone().json()) as { error?: unknown; detail?: unknown };
     if (typeof body.error === 'string') return body.error;
@@ -146,13 +147,13 @@ async function errorOf(response: Response): Promise<string> {
   } catch {
     // no JSON
   }
-  return `the UI server answered ${response.status}`;
+  return msg('frame.session.answered', { status: response.status });
 }
 
 const retryAfterOf = (response: Response) => response.headers.get('retry-after') ?? undefined;
 
 function unauthorized(): Response {
-  return new Response(JSON.stringify({ error: 'log in first', code: 'no-credential' }), {
+  return new Response(JSON.stringify({ error: 'log in first', code: 'no-credential' }), { // untranslated: the body of a refusal held back for the login, read by its code
     status: 401,
     headers: { 'content-type': 'application/json' },
   });
@@ -320,12 +321,12 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
       try {
         response = await Promise.race([send('/session', { headers: { accept: 'application/json' }, signal: stop.signal }), late]);
       } catch {
-        set({ kind: 'failed', error: 'the UI server did not answer' });
+        set({ kind: 'failed', error: msg('frame.session.noAnswer') });
         return;
       }
       if (response === null) {
         stop.abort();
-        set({ kind: 'failed', error: 'the UI server did not answer within 10 s' });
+        set({ kind: 'failed', error: msg('frame.session.late', { seconds: WAIT_MS / 1000 }) });
         return;
       }
       if (response.status === 200) {
@@ -375,7 +376,7 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
       try {
         response = await send('/admin/me/password', { method: 'POST', headers, body: JSON.stringify({ current: currentPassword, next }) });
       } catch {
-        throw new PasswordRefused('node-unavailable', 'the UI server did not answer');
+        throw new PasswordRefused('node-unavailable', msg('frame.session.noAnswer'));
       }
       if (response.status !== 204) {
         throw new PasswordRefused((await codeOf(response)) ?? String(response.status), await errorOf(response), retryAfterOf(response));
@@ -415,14 +416,14 @@ export function sessionClient(deps: { send: typeof fetch; reload: () => void; ti
 }
 
 /** The words for why an action is refused. */
-export function reasonOf(refusal: Refusal): string {
+export function reasonOf(refusal: Refusal): Message {
   switch (refusal.code) {
     case 'session-required':
-      return 'Needs a person logged in';
+      return msg('frame.access.session');
     case 'password-change-required':
-      return 'Change the first password first';
+      return msg('frame.access.firstPassword');
     default:
-      return refusal.needs.length > 0 ? `Needs the role ${refusal.needs.join(' or ')}` : 'Not allowed for this account';
+      return refusal.needs.length > 0 ? msg('frame.access.role', { roles: refusal.needs }) : msg('frame.access.denied');
   }
 }
 

@@ -132,9 +132,15 @@ body {
 }
 /* the pages of the session before the frame: the login, the first password, the failure */
 .rail8-gate {
+  position: relative;
   min-height: 100vh;
   padding: var(--ant-padding-lg);
   background: var(--ant-color-bg-layout);
+}
+.rail8-gate-language {
+  position: absolute;
+  top: var(--ant-padding);
+  right: var(--ant-padding-lg);
 }
 .rail8-gate h1.ant-typography {
   margin: 0;

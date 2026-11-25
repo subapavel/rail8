@@ -1,4 +1,5 @@
 import { Button } from 'antd';
+import { useText } from './language';
 import { MountedModal } from './MountedModal';
 
 export interface UnsavedDialogProps {
@@ -17,36 +18,35 @@ export interface UnsavedDialogProps {
  * it is answered.
  */
 export function UnsavedDialog({ titles, saving, onSave, onDiscard, onCancel }: UnsavedDialogProps) {
+  const { t, rich } = useText();
   const one = titles.length === 1 ? titles[0] : undefined;
   return (
     <MountedModal
-      title={one === undefined ? `Save changes to ${titles.length} tabs?` : `Save changes to ${one}?`}
+      title={one === undefined ? t('frame.unsaved.titleMany', { count: titles.length }) : t('frame.unsaved.title', { title: one })}
       onCancel={saving ? undefined : onCancel}
       footer={[
         <Button key="cancel" disabled={saving} onClick={onCancel}>
-          Cancel
+          {t('frame.cancel')}
         </Button>,
         <Button key="discard" danger disabled={saving} onClick={onDiscard}>
-          Close without saving
+          {t('frame.unsaved.discard')}
         </Button>,
         <Button key="save" type="primary" loading={saving} onClick={onSave}>
-          {one === undefined ? 'Save all and close' : 'Save and close'}
+          {t(one === undefined ? 'frame.unsaved.saveAll' : 'frame.unsaved.save')}
         </Button>,
       ]}
     >
       {one === undefined ? (
         <>
-          These tabs have unsaved changes:
-          <ul aria-label="Tabs with unsaved changes">
+          {t('frame.unsaved.many', { count: titles.length })}
+          <ul aria-label={t('frame.unsaved.list')}>
             {titles.map((title, i) => (
               <li key={i}>{title}</li>
             ))}
           </ul>
         </>
       ) : (
-        <>
-          <strong>{one}</strong> has unsaved changes.
-        </>
+        rich('frame.unsaved.one', { title: one, b: (chunks) => <strong>{chunks}</strong> })
       )}
     </MountedModal>
   );

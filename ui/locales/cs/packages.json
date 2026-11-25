@@ -1,0 +1,4 @@
+{
+  "packages.screen.description": "Každý balíček pracovní složky: jeho větev, poslední commit, změny a co z něj běží na uzlu.",
+  "packages.screen.title": "Balíčky"
+}

@@ -1,5 +1,6 @@
 import { BranchesOutlined } from '@ant-design/icons';
 import type { Screen } from '../screens';
+import { msg } from '../language';
 import { PackageList } from './PackageList';
 import { PackageTab } from './PackageTab';
 import type { PackagesApi } from './api';
@@ -14,7 +15,7 @@ export function packageTab(api: PackagesApi, repository: string, writable: boole
   return {
     id: `package:${repository}`,
     title: repository,
-    group: 'Design',
+    group: msg('frame.group.design'),
     icon: <BranchesOutlined aria-hidden />,
     render: (open) => <PackageTab api={api} repository={repository} now={now} open={open} writable={writable} />,
   };
@@ -27,10 +28,10 @@ export function packageTab(api: PackagesApi, repository: string, writable: boole
 export function packagesScreen(api: PackagesApi, now: () => Date = clock): Screen {
   return {
     id: 'packages',
-    title: 'Packages',
-    group: 'Design',
+    title: msg('packages.screen.title'),
+    group: msg('frame.group.design'),
     icon: <BranchesOutlined aria-hidden />,
-    description: 'See each package of the working folder: its branch, last commit, changes and what the node runs.',
+    description: msg('packages.screen.description'),
     render: (open) => <PackageList api={api} now={now} onOpen={(repository, writable) => open(packageTab(api, repository, writable, now))} />,
   };
 }

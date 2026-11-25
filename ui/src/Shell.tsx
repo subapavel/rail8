@@ -15,9 +15,11 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import { LanguageSwitch } from './LanguageSwitch';
+import { say, useText } from './language';
 import { ReadSpinner } from './ReadSpinner';
 import { SessionActions, SessionPrompt, useAccess } from './SessionGate';
-import { groupedScreens, RegisteredScreens, type Screen } from './screens';
+import { groupedScreens, RegisteredScreens, WORKSPACE, type Screen } from './screens';
 import { closedBy, closeTab, isPinned, noTabs, openTab, pinTab, unpinTab, type CloseCommand } from './tabs';
 import { Rail8Theme } from './theme';
 import { UnsavedDialog } from './UnsavedDialog';
@@ -31,13 +33,13 @@ export interface ShellProps {
   start?: string;
 }
 
-/** The items of a tab's menu that close tabs, with the command each one runs. */
-const closeItems: readonly { key: CloseCommand; label: string }[] = [
-  { key: 'close', label: 'Close' },
-  { key: 'others', label: 'Close other tabs' },
-  { key: 'left', label: 'Close tabs to the left' },
-  { key: 'right', label: 'Close tabs to the right' },
-  { key: 'unpinned', label: 'Close all but pinned' },
+/** The items of a tab's menu that close tabs, with the command each one runs and the id of its text. */
+const closeItems: readonly { key: CloseCommand; text: string }[] = [
+  { key: 'close', text: 'frame.tab.close' },
+  { key: 'others', text: 'frame.tab.closeOthers' },
+  { key: 'left', text: 'frame.tab.closeLeft' },
+  { key: 'right', text: 'frame.tab.closeRight' },
+  { key: 'unpinned', text: 'frame.tab.closeUnpinned' },
 ];
 
 /** Windows narrower than this show the menu collapsed to its icons when they open or shrink below it. */
@@ -50,8 +52,8 @@ interface Opened {
 }
 
 /**
- * The application's frame, in the Ant Design Pro style: a header across the top with the brand, Quick open and the
- * theme switch, a side menu that stays in place and lists `screens` in their groups, and the content beside it. The
+ * The application's frame, in the Ant Design Pro style: a header across the top with the brand, Quick open, the
+ * language switch and the theme switch, a side menu that stays in place and lists `screens` in their groups, and the content beside it. The
  * content starts with a row of tabs, one for each open screen, and shows the screen of the chosen tab under it. Choosing
  * a screen in the menu opens it in a new tab, or shows the tab it already has. A screen may open tabs of its own, such
  * as one for each message it found, through the function its `render` is given. Every open screen stays mounted while
@@ -86,6 +88,9 @@ export function Shell({ screens, start }: ShellProps) {
   const [workingFiles] = useState(() => workingFileRegistry((id) => setTabs((current) => openTab(current, id))));
   const byId = new Map(screens.map((screen) => [screen.id, screen]));
   const access = useAccess();
+  const texts = useText();
+  const { t } = texts;
+  const titleOf = (screen: Screen | undefined, id: string) => (screen === undefined ? id : say(texts, screen.title));
   // why the caller may not open a screen, or undefined when they may
   const refusedOf = (screen: Screen | undefined) => {
     const may = access(screen?.action);
@@ -176,16 +181,16 @@ export function Shell({ screens, start }: ShellProps) {
     const first = Math.max(led.findLastIndex((step) => byId.has(step.id)), 0);
     const trail = led.slice(first);
     return [
-      { title: (trail[0] ?? screen).group ?? 'Workspace' },
+      { title: say(texts, (trail[0] ?? screen).group ?? WORKSPACE) },
       ...trail.map((step, n) => ({
-        title: step.title,
+        title: say(texts, step.title),
         href: '#',
         onClick: (event: MouseEvent) => {
           event.preventDefault();
           openAfter(step, () => led.slice(0, first + n));
         },
       })),
-      { title: screen.title },
+      { title: say(texts, screen.title) },
     ];
   };
 
@@ -193,9 +198,9 @@ export function Shell({ screens, start }: ShellProps) {
     const pinned = isPinned(tabs, id);
     return {
       items: [
-        ...closeItems.map(({ key, label }) => ({ key, label, disabled: closedBy(tabs, key, id).length === 0 })),
+        ...closeItems.map(({ key, text }) => ({ key, label: t(text), disabled: closedBy(tabs, key, id).length === 0 })),
         { type: 'divider' },
-        { key: 'pin', label: pinned ? 'Unpin tab' : 'Pin tab' },
+        { key: 'pin', label: t(pinned ? 'frame.tab.unpin' : 'frame.tab.pin') },
       ],
       onClick: ({ key }) => {
         setMenu(null);
@@ -249,20 +254,21 @@ export function Shell({ screens, start }: ShellProps) {
               <Button
                 key="quick-open"
                 size="small"
-                aria-label="Quick open"
+                aria-label={t('frame.quickOpen')}
                 aria-keyshortcuts="Control+K Meta+K"
-                title="Quick open (Ctrl+K or ⌘K)"
+                title={t('frame.quickOpen.shortcut')}
                 icon={<SearchOutlined />}
                 onClick={() => setQuickOpen(true)}
               >
-                Quick open
+                {t('frame.quickOpen')}
               </Button>,
+              <LanguageSwitch key="language" />,
               <Button
                 key="theme"
                 size="small"
                 type="text"
                 icon={dark ? <SunOutlined /> : <MoonOutlined />}
-                aria-label={dark ? 'Use light theme' : 'Use dark theme'}
+                aria-label={t(dark ? 'frame.theme.light' : 'frame.theme.dark')}
                 onClick={toggle}
               />,
               <SessionActions key="session" />,
@@ -270,13 +276,13 @@ export function Shell({ screens, start }: ShellProps) {
             menu={{ type: 'group' }}
             route={{
               path: '/',
-              routes: Array.from(groupedScreens(screens), ([group, entries]) => ({
-                key: group,
-                name: group,
-                path: `/${group}`,
+              routes: Array.from(groupedScreens(screens), ([key, { group, entries }]) => ({
+                key,
+                name: say(texts, group),
+                path: `/${key}`,
                 routes: entries.map((screen) => ({
                   key: screen.id,
-                  name: screen.title,
+                  name: say(texts, screen.title),
                   path: `/${screen.id}`,
                   disabled: refusedOf(screen) !== undefined,
                   icon: <span aria-hidden>{screen.icon ?? <AppstoreOutlined />}</span>,
@@ -307,16 +313,16 @@ export function Shell({ screens, start }: ShellProps) {
                 </Tooltip>
               </span>
             )}
-            menuContentRender={(_, dom) => <nav aria-label="Screens">{dom}</nav>}
+            menuContentRender={(_, dom) => <nav aria-label={t('frame.screens')}>{dom}</nav>}
             collapsedButtonRender={(folded, dom) => {
-              const label = folded ? 'Expand menu' : 'Collapse menu';
+              const label = t(folded ? 'frame.menu.expand' : 'frame.menu.collapse');
               return cloneElement(dom as ReactElement<HTMLAttributes<HTMLElement>>, {
                 role: 'button',
                 tabIndex: 0,
                 'aria-label': label,
                 'aria-expanded': !folded,
                 'aria-keyshortcuts': 'Control+B Meta+B',
-                title: `${label} (Ctrl+B or ⌘B)`,
+                title: t('frame.menu.shortcut', { action: label }),
                 onKeyDown: (event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
@@ -327,7 +333,7 @@ export function Shell({ screens, start }: ShellProps) {
           >
             {tabs.active === null ? (
               <div className="rail8-empty">
-                <Empty description={<><h1>No screen open</h1>Choose a screen in the menu.</>} />
+                <Empty description={<><h1>{t('frame.noScreen')}</h1>{t('frame.noScreen.hint')}</>} />
               </div>
             ) : (
               <Tabs
@@ -336,7 +342,7 @@ export function Shell({ screens, start }: ShellProps) {
                 classNames={{ header: 'rail8-tab-bar', body: 'rail8-tab-body', content: 'rail8-tab-page' }}
                 type="editable-card"
                 size="small"
-                aria-label="Open workspace tabs"
+                aria-label={t('frame.tabs')}
                 animated={false}
                 activeKey={tabs.active}
                 onChange={(id) => setTabs((current) => openTab(current, id))}
@@ -344,7 +350,7 @@ export function Shell({ screens, start }: ShellProps) {
                   if (action === 'add') setQuickOpen(true);
                   else if (typeof key === 'string') close([key]);
                 }}
-                more={{ icon: <EllipsisOutlined aria-label="Hidden tabs" /> }}
+                more={{ icon: <EllipsisOutlined aria-label={t('frame.tabs.hidden')} /> }}
                 renderTabBar={(props, TabBar) => (
                   <TabBar {...props}>
                     {(node) => {
@@ -369,13 +375,13 @@ export function Shell({ screens, start }: ShellProps) {
                 )}
                 items={tabs.open.map((id) => {
                   const screen = screenOf(id);
-                  const title = screen?.title ?? id;
+                  const title = titleOf(screen, id);
                   const refused = refusedOf(screen);
                   return {
                     key: id,
                     label: isPinned(tabs, id) ? (
                       <>
-                        {title} <PushpinFilled aria-label="pinned" />
+                        {title} <PushpinFilled aria-label={t('frame.tab.pinned')} />
                       </>
                     ) : (
                       title
@@ -384,20 +390,20 @@ export function Shell({ screens, start }: ShellProps) {
                     // Ant supplies one remove label for the bar. Identify each tab for assistive technology.
                     closeIcon: (
                       <CloseOutlined ref={(icon) => {
-                        icon?.closest('button')?.setAttribute('aria-label', `Close ${title}`);
+                        icon?.closest('button')?.setAttribute('aria-label', t('frame.tab.closeNamed', { title }));
                       }} />
                     ),
                     children: (
                       <div className="rail8-panel">
                         {refused !== undefined ? (
                           <div className="rail8-empty">
-                            <Empty description={<><h1>{title} cannot open</h1>{refused}.</>} />
+                            <Empty description={<><h1>{t('frame.tab.refused', { title })}</h1>{refused}.</>} />
                           </div>
                         ) : screen && (
                           <TabRoute breadcrumb={breadcrumbOf(screen)}>
                             <RegisteredWorkingFiles.Provider value={workingFiles}>
                               <WorkingTab.Provider value={id}>
-                                <Suspense fallback={<ReadSpinner label={`Opening ${title}`} />}>{screen.render(openFrom(screen))}</Suspense>
+                                <Suspense fallback={<ReadSpinner label={t('frame.tab.opening', { title })} />}>{screen.render(openFrom(screen))}</Suspense>
                               </WorkingTab.Provider>
                             </RegisteredWorkingFiles.Provider>
                           </TabRoute>
@@ -411,7 +417,7 @@ export function Shell({ screens, start }: ShellProps) {
           </Frame>
           {asking.length > 0 && (
             <UnsavedDialog
-              titles={asking.map((id) => screenOf(id)?.title ?? id)}
+              titles={asking.map((id) => titleOf(screenOf(id), id))}
               saving={saving}
               onSave={() => void saveAndClose()}
               onDiscard={() => {
@@ -466,6 +472,7 @@ function Frame(props: ProLayoutProps) {
 /** Gives the page of one tab its own breadcrumb, which PageContainer shows above the page's title. */
 function TabRoute({ breadcrumb, children }: { breadcrumb: BreadcrumbProps['items']; children: ReactNode }) {
   const route = useContext(RouteContext);
-  const trail: BreadcrumbProps & AriaAttributes = { items: breadcrumb, 'aria-label': 'Breadcrumb' };
+  const { t } = useText();
+  const trail: BreadcrumbProps & AriaAttributes = { items: breadcrumb, 'aria-label': t('frame.breadcrumb') };
   return <RouteContext.Provider value={{ ...route, breadcrumb: trail }}>{children}</RouteContext.Provider>;
 }

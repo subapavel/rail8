@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { msg, say, textsIn } from './language';
 import { HELD_MAX, HELD_MAX_BYTES, PasswordRefused, reasonOf, sessionClient, WAIT_MS, type Me } from './session';
 
 const ME: Me = {
@@ -103,7 +104,9 @@ describe('the start', () => {
     expect(late.ms).toBe(WAIT_MS);
     late.fire();
     await start;
-    expect(w.client.state()).toEqual({ kind: 'failed', error: 'the UI server did not answer within 10 s' });
+    const failed = w.client.state();
+    expect(failed).toEqual({ kind: 'failed', error: msg('frame.session.late', { seconds: 10 }) });
+    expect(failed.kind === 'failed' && say(textsIn('en'), failed.error)).toBe('the UI server did not answer within 10 s');
     expect(w.calls.at(-1)!.init.signal?.aborted).toBe(true);
   });
 });
@@ -476,6 +479,6 @@ describe('may', () => {
     [{ code: 'session-required', needs: ['operator'] }, 'Needs a person logged in'],
     [{ code: 'password-change-required', needs: [] }, 'Change the first password first'],
   ])('words %j as %s', (refusal, words) => {
-    expect(reasonOf(refusal)).toBe(words);
+    expect(say(textsIn('en'), reasonOf(refusal))).toBe(words);
   });
 });

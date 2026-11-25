@@ -25,6 +25,11 @@ const SIZES = [
 ];
 const THEMES = ['light', 'dark'];
 
+/** Chooses the language `name`, as the language lists itself, with the header's language switch. */
+const speak = (name) => async (page) => {
+  await page.getByRole('button', { name: /^Language: / }).click();
+  await page.getByRole('menuitem', { name, exact: true }).click();
+};
 /** Opens the screen `name` from the side menu. */
 const menu = (name) => (page) => page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name, exact: true }).click();
 /** Opens the package `name` from its row on the Packages screen. */
@@ -105,6 +110,12 @@ const SCENES = {
   audit: [visit('admin'), menu('Audit')],
   'audit-filtered': [visit('admin'), menu('Audit'), fill('User', 'anna'), press('Query')],
   'tokens-ceiling': [visit('admin'), menu('Tokens'), press('Change…'), fill('Longest life of a token', '30')],
+  'login-de': [visit('out'), speak('Deutsch')],
+  'login-cs': [visit('out'), speak('Čeština')],
+  'login-ru': [visit('out'), speak('Русский')],
+  'users-de': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Deutsch')],
+  'users-cs': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Čeština')],
+  'users-ru': [visit('admin'), menu('Users'), expand('Users', 'anna'), speak('Русский')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
 };

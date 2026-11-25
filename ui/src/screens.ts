@@ -1,8 +1,11 @@
 import { createContext, type ReactNode } from 'react';
 import type { ArtifactKind } from './artifacts';
+import { labelKey, msg, type Label } from './language';
 
 /**
- * A screen of the application: its id, the title on its tab and in the navigation, and what it shows. `render` is
+ * A screen of the application: its id, the title on its tab and in the navigation, the group of the navigation it is
+ * listed in, what it is for, and what it shows. The title, the group and the description are labels: a name from data,
+ * such as a package's, shown as it is, or a message of the UI's texts, shown in the language the user chose. `render` is
  * given `open`, which opens another screen in a tab of its own, or shows the tab it already has. `unsaved`, when
  * present, is asked when the screen's tab is about to close: null when the screen has no unsaved changes, and the tab
  * closes at once; else what saves them, and the shell asks first whether to save them, close without saving or keep
@@ -13,10 +16,10 @@ import type { ArtifactKind } from './artifacts';
  */
 export interface Screen {
   id: string;
-  title: string;
-  group?: string;
+  title: Label;
+  group?: Label;
   icon?: ReactNode;
-  description?: string;
+  description?: Label;
   /** The action of the admin API the screen needs, such as `message.read`; a caller who may not do it cannot open it. */
   action?: string;
   render: (open: (screen: Screen) => void) => ReactNode;
@@ -45,14 +48,20 @@ export interface UiModule {
 
 export const RegisteredScreens = createContext<readonly Screen[]>([]);
 
-/** Groups retain the order in which modules register their screens. */
-export function groupedScreens(screens: readonly Screen[]): Map<string, Screen[]> {
-  const groups = new Map<string, Screen[]>();
+/** The group of a screen that names none. */
+export const WORKSPACE = msg('frame.group.workspace');
+
+/**
+ * The screens by their groups, keyed by the group's id, each with its label; groups retain the order in which modules
+ * register their screens.
+ */
+export function groupedScreens(screens: readonly Screen[]): Map<string, { group: Label; entries: Screen[] }> {
+  const groups = new Map<string, { group: Label; entries: Screen[] }>();
   for (const screen of screens) {
-    const name = screen.group ?? 'Workspace';
-    const entries = groups.get(name);
-    if (entries) entries.push(screen);
-    else groups.set(name, [screen]);
+    const group = screen.group ?? WORKSPACE;
+    const found = groups.get(labelKey(group));
+    if (found) found.entries.push(screen);
+    else groups.set(labelKey(group), { group, entries: [screen] });
   }
   return groups;
 }
@@ -61,12 +70,14 @@ const PLAIN_NAME = /^[a-z][a-z0-9-]*$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
+const isLabel = (value: unknown): value is Label => typeof value === 'string' || (isRecord(value) && typeof value.id === 'string');
+
 function isScreen(value: unknown): value is Screen {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
     PLAIN_NAME.test(value.id) &&
-    typeof value.title === 'string' &&
+    isLabel(value.title) &&
     typeof value.render === 'function'
   );
 }

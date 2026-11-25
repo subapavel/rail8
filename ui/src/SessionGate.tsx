@@ -13,6 +13,8 @@ import {
   type ReactNode,
 } from 'react';
 import { ReadSpinner } from './ReadSpinner';
+import { LanguageSwitch } from './LanguageSwitch';
+import { say, useText, type Texts } from './language';
 import { pageSession, PasswordRefused, reasonOf, type Me, type Refused, type SessionClient, type SessionState } from './session';
 import { Rail8Theme } from './theme';
 
@@ -34,12 +36,13 @@ function useSessionState(): SessionState | null {
  */
 export function useAccess(): (action?: string) => true | string {
   const client = useContext(SessionContext);
+  const texts = useText();
   // re-render on every change of the session
   useSessionState();
   return (action) => {
     if (client === null || action === undefined) return true;
     const may = client.may(action);
-    return may === true ? true : reasonOf(may);
+    return may === true ? true : say(texts, reasonOf(may));
   };
 }
 
@@ -67,24 +70,27 @@ export function Allowed({ action, children }: { action: string; children: ReactE
   return <Tooltip title={may}>{cloneElement(children, { disabled: true })}</Tooltip>;
 }
 
-const WAIT = (retryAfter?: string) => (retryAfter === undefined ? '' : ` Try again in ${retryAfter} s.`);
+/** `words`, and when to try again when the node said so. */
+const waited = ({ t }: Texts, words: string, retryAfter?: string) =>
+  retryAfter === undefined ? words : `${words} ${t('frame.session.retryAfter', { seconds: retryAfter })}`;
 
 /** The words for a refused login, or a session that ended. */
-function refusedWords({ code, retryAfter }: Refused): string {
+function refusedWords(texts: Texts, { code, retryAfter }: Refused): string {
+  const { t } = texts;
   switch (code) {
     case 'login-refused':
-      return 'The name or the password is wrong, or the account is blocked.';
+      return t('frame.login.refused');
     case 'too-many-attempts':
-      return `Too many attempts.${WAIT(retryAfter)}`;
+      return waited(texts, t('frame.login.tooMany'), retryAfter);
     case 'busy':
-      return `The node is busy.${WAIT(retryAfter)}`;
+      return waited(texts, t('frame.login.busy'), retryAfter);
     case 'session-ended':
     case 'unknown-credential':
-      return 'The session ended. Log in again.';
+      return t('frame.login.ended');
     case 'blocked':
-      return 'The account is blocked.';
+      return t('frame.login.blocked');
     default:
-      return `The login failed (${code}).${WAIT(retryAfter)}`;
+      return waited(texts, t('frame.login.failed', { code }), retryAfter);
   }
 }
 
@@ -92,6 +98,7 @@ function refusedWords({ code, retryAfter }: Refused): string {
 export function SessionActions() {
   const client = useContext(SessionContext);
   const state = useSessionState();
+  const { t } = useText();
   if (client === null || state?.kind !== 'in' || state.me.session === null) return null;
   return (
     <Flex align="center" gap="small">
@@ -99,7 +106,7 @@ export function SessionActions() {
         <UserOutlined aria-hidden /> {state.me.name}
       </Typography.Text>
       <Button size="small" type="text" icon={<LogoutOutlined aria-hidden />} onClick={() => void client.logout()}>
-        Log out
+        {t('frame.logout')}
       </Button>
     </Flex>
   );
@@ -109,16 +116,15 @@ export function SessionActions() {
 export function SessionPrompt() {
   const client = useContext(SessionContext);
   const state = useSessionState();
+  const { t } = useText();
   if (client === null || state?.kind !== 'asking') return null;
   return (
-    <Modal open title={state.me.firstPassword ? 'Change the first password' : 'Log in again'} footer={null} closable={false} destroyOnHidden>
+    <Modal open title={t(state.me.firstPassword ? 'frame.password.first' : 'frame.login.again')} footer={null} closable={false} destroyOnHidden>
       {state.me.firstPassword ? (
         <PasswordChange client={client} />
       ) : (
         <>
-          <Typography.Paragraph type="secondary">
-            The session of {state.me.name} ended. The open tabs and their unsaved changes wait for the login.
-          </Typography.Paragraph>
+          <Typography.Paragraph type="secondary">{t('frame.login.waiting', { name: state.me.name })}</Typography.Paragraph>
           <Login client={client} name={state.me.name} refusal={state.refusal} />
         </>
       )}
@@ -127,6 +133,8 @@ export function SessionPrompt() {
 }
 
 function Login({ client, name, refusal }: { client: SessionClient; name?: string; refusal?: Refused }) {
+  const texts = useText();
+  const { t } = texts;
   return (
     <LoginForm<{ name: string; password: string }>
       title={false}
@@ -134,8 +142,8 @@ function Login({ client, name, refusal }: { client: SessionClient; name?: string
       containerStyle={{ padding: 0 }}
       contentStyle={{ minWidth: 0, width: '100%' }}
       initialValues={{ name }}
-      message={refusal && <Alert type="error" showIcon title={refusedWords(refusal)} />}
-      submitter={{ searchConfig: { submitText: 'Log in' } }}
+      message={refusal && <Alert type="error" showIcon title={refusedWords(texts, refusal)} />}
+      submitter={{ searchConfig: { submitText: t('frame.login') } }}
       onFinish={async ({ name: given, password }) => {
         await client.login(given, password);
         return true;
@@ -143,21 +151,23 @@ function Login({ client, name, refusal }: { client: SessionClient; name?: string
     >
       <ProFormText
         name="name"
-        label="Name"
+        label={t('frame.login.name')}
         fieldProps={{ prefix: <UserOutlined aria-hidden />, autoComplete: 'username' }}
-        rules={[{ required: true, message: 'Enter your name' }]}
+        rules={[{ required: true, message: t('frame.login.name.required') }]}
       />
       <ProFormText.Password
         name="password"
-        label="Password"
+        label={t('frame.login.password')}
         fieldProps={{ prefix: <LockOutlined aria-hidden />, autoComplete: 'current-password' }}
-        rules={[{ required: true, message: 'Enter your password' }]}
+        rules={[{ required: true, message: t('frame.login.password.required') }]}
       />
     </LoginForm>
   );
 }
 
 function PasswordChange({ client }: { client: SessionClient }) {
+  const texts = useText();
+  const { t } = texts;
   const [refused, setRefused] = useState<string | null>(null);
   return (
     <LoginForm<{ current: string; next: string; repeat: string }>
@@ -166,44 +176,41 @@ function PasswordChange({ client }: { client: SessionClient }) {
       containerStyle={{ padding: 0 }}
       contentStyle={{ minWidth: 0, width: '100%' }}
       message={refused !== null && <Alert type="error" showIcon title={refused} />}
-      submitter={{ searchConfig: { submitText: 'Change the password' } }}
+      submitter={{ searchConfig: { submitText: t('frame.password.change') } }}
       onFinish={async ({ current, next }) => {
         setRefused(null);
         try {
           await client.changePassword(current, next);
         } catch (error) {
           if (!(error instanceof PasswordRefused)) throw error;
-          setRefused(error.code === 'wrong-password' ? 'The current password is wrong.' : `${error.message}.${WAIT(error.retryAfter)}`);
+          setRefused(error.code === 'wrong-password' ? t('frame.password.wrong') : waited(texts, `${say(texts, error.reason)}.`, error.retryAfter));
         }
         return true;
       }}
     >
-      <Typography.Paragraph type="secondary">
-        The account still has the password an administrator gave it. Choose your own: 12 to 128 characters, without your
-        name.
-      </Typography.Paragraph>
+      <Typography.Paragraph type="secondary">{t('frame.password.why', { min: 12, max: 128 })}</Typography.Paragraph>
       <ProFormText.Password
         name="current"
-        label="Current password"
+        label={t('frame.password.current')}
         fieldProps={{ autoComplete: 'current-password' }}
-        rules={[{ required: true, message: 'Enter the current password' }]}
+        rules={[{ required: true, message: t('frame.password.current.required') }]}
       />
       <ProFormText.Password
         name="next"
-        label="New password"
+        label={t('frame.password.new')}
         fieldProps={{ autoComplete: 'new-password' }}
-        rules={[{ required: true, message: 'Enter the new password' }, { min: 12, max: 128, message: '12 to 128 characters' }]}
+        rules={[{ required: true, message: t('frame.password.new.required') }, { min: 12, max: 128, message: t('frame.password.length', { min: 12, max: 128 }) }]}
       />
       <ProFormText.Password
         name="repeat"
-        label="Repeat the new password"
+        label={t('frame.password.repeat')}
         fieldProps={{ autoComplete: 'new-password' }}
         dependencies={['next']}
         rules={[
-          { required: true, message: 'Repeat the new password' },
+          { required: true, message: t('frame.password.repeat.required') },
           ({ getFieldValue }) => ({
             validator: (_, value) =>
-              value === getFieldValue('next') ? Promise.resolve() : Promise.reject(new Error('The two new passwords differ')),
+              value === getFieldValue('next') ? Promise.resolve() : Promise.reject(new Error(t('frame.password.differ'))),
           }),
         ]}
       />
@@ -211,12 +218,18 @@ function PasswordChange({ client }: { client: SessionClient }) {
   );
 }
 
-/** A page of the gate before the frame: the mark and the name above `children`, in the middle of the window. */
+/**
+ * A page of the gate before the frame: the mark and the name above `children`, in the middle of the window, with the
+ * language switch in its corner.
+ */
 function GatePage({ children }: { children: ReactNode }) {
   return (
     <Rail8Theme>
       {(dark) => (
         <Flex className="rail8-gate" vertical align="center" justify="center" gap="large">
+          <div className="rail8-gate-language">
+            <LanguageSwitch />
+          </div>
           <Flex align="center" gap="small" className="rail8-brand">
             <img src={`${import.meta.env.BASE_URL}${dark ? 'rail8-mark-dark.svg' : 'rail8.svg'}`} alt="" />
             <Typography.Title level={1}>Rail8</Typography.Title>
@@ -243,15 +256,17 @@ export function SessionGate({ client = pageSession, children }: { client?: Sessi
     void client.start();
   }, [client]);
 
-  return <SessionContext.Provider value={client}>{gated(client, state, children)}</SessionContext.Provider>;
+  const texts = useText();
+  return <SessionContext.Provider value={client}>{gated(texts, client, state, children)}</SessionContext.Provider>;
 }
 
-function gated(client: SessionClient, state: SessionState, children: ReactNode): ReactNode {
+function gated(texts: Texts, client: SessionClient, state: SessionState, children: ReactNode): ReactNode {
+  const { t } = texts;
   switch (state.kind) {
     case 'starting':
       return (
         <GatePage>
-          <ReadSpinner label="Reading the session" />
+          <ReadSpinner label={t('frame.session.reading')} />
         </GatePage>
       );
     case 'failed':
@@ -260,11 +275,11 @@ function gated(client: SessionClient, state: SessionState, children: ReactNode):
           <Alert
             type="error"
             showIcon
-            title="The session could not be read"
-            description={`${state.error}.${WAIT(state.retryAfter)}`}
+            title={t('frame.session.unread')}
+            description={waited(texts, `${say(texts, state.error)}.`, state.retryAfter)}
             action={
               <Button size="small" onClick={() => void client.start()}>
-                Try again
+                {t('frame.tryAgain')}
               </Button>
             }
           />
@@ -274,7 +289,7 @@ function gated(client: SessionClient, state: SessionState, children: ReactNode):
       return (
         <GatePage>
           <Flex vertical gap="middle">
-            <Typography.Title level={2}>Log in</Typography.Title>
+            <Typography.Title level={2}>{t('frame.login')}</Typography.Title>
             <Login client={client} refusal={state.refusal} />
           </Flex>
         </GatePage>
@@ -287,13 +302,14 @@ function gated(client: SessionClient, state: SessionState, children: ReactNode):
 }
 
 function FirstPassword({ client, me }: { client: SessionClient; me: Me }) {
+  const { t } = useText();
   return (
     <GatePage>
       <Flex vertical gap="middle">
-        <Typography.Title level={2}>Change the first password</Typography.Title>
+        <Typography.Title level={2}>{t('frame.password.first')}</Typography.Title>
         <PasswordChange client={client} />
         <Button type="link" icon={<LogoutOutlined aria-hidden />} onClick={() => void client.logout()}>
-          Log out {me.name}
+          {t('frame.logout.named', { name: me.name })}
         </Button>
       </Flex>
     </GatePage>

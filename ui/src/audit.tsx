@@ -1,4 +1,5 @@
 import { Typography } from 'antd';
+import { useText, type Texts } from './language';
 
 /** How a caller proved who it is, as the audit records it; `declared` for rows written before users existed. */
 export type Via = 'session' | 'token' | 'emergency-key' | 'shared-token' | 'local' | 'declared';
@@ -19,51 +20,52 @@ export interface AuditRow {
   detail: Record<string, unknown>;
 }
 
-export const viaLabels: Record<Via, string> = {
-  session: 'Session',
-  token: 'Token',
-  'emergency-key': 'Emergency key',
-  'shared-token': 'Shared token',
-  local: 'Local, no credential',
-  declared: 'Name declared, before users',
-};
+/** The ways a caller proves who it is, each with the id of its words, `audit.via.<way>`. */
+const VIAS: readonly Via[] = ['session', 'token', 'emergency-key', 'shared-token', 'local', 'declared'];
 
-/** The acts the audit records, by id, in words; the order the Audit screen offers them in its filter. */
-export const auditActions: Readonly<Record<string, string>> = {
-  login: 'Logged in',
-  'login.refused': 'Login refused',
-  logout: 'Logged out',
-  'password.change': 'Changed their password',
-  'user.create': 'Created a user',
-  'user.roles': 'Changed roles',
-  'user.block': 'Blocked a user',
-  'user.unblock': 'Unblocked a user',
-  'user.password-reset': 'Reset a password',
-  'session.end': 'Ended sessions',
-  'token.issue': 'Issued a token',
-  'token.revoke': 'Revoked a token',
-  'token.ceiling': "Changed the ceiling of a token's life",
-  'emergency-key.use': 'Used the emergency key',
-  'message.body.view': 'Viewed a payload',
-  'message.retry': 'Retried',
-  'message.cancel': 'Cancelled',
-  'work.release': 'Released held work',
-  'work.discard': 'Discarded lost work',
-  deploy: 'Deployed',
-  undeploy: 'Undeployed',
-};
+/**
+ * The acts the audit records, by id, in the order the Audit screen offers them in its filter; the words of each are the
+ * text of `audit.action.<id>`.
+ */
+export const AUDIT_ACTIONS: readonly string[] = [
+  'login',
+  'login.refused',
+  'logout',
+  'password.change',
+  'user.create',
+  'user.roles',
+  'user.block',
+  'user.unblock',
+  'user.password-reset',
+  'session.end',
+  'token.issue',
+  'token.revoke',
+  'token.ceiling',
+  'emergency-key.use',
+  'message.body.view',
+  'message.retry',
+  'message.cancel',
+  'work.release',
+  'work.discard',
+  'deploy',
+  'undeploy',
+];
 
-/** What a row of the audit did, for people; an act this list does not know shows its id. */
-export function auditAction(row: Pick<AuditRow, 'action' | 'detail'>): string {
-  if (row.action === 'message.body.view' && typeof row.detail.step === 'number') return `Viewed the payload after step ${row.detail.step}`;
-  return (Object.hasOwn(auditActions, row.action) ? auditActions[row.action] : undefined) ?? row.action;
+/** The words of the act `id` in `texts`' language; an act the list does not know shows its id. */
+export const auditActionName = ({ t }: Texts, id: string) => (AUDIT_ACTIONS.includes(id) ? t(`audit.action.${id}`) : id);
+
+/** What a row of the audit did, for people, in `texts`' language; an act the list does not know shows its id. */
+export function auditAction(texts: Texts, row: Pick<AuditRow, 'action' | 'detail'>): string {
+  if (row.action === 'message.body.view' && typeof row.detail.step === 'number') return texts.t('audit.action.message.body.view.step', { step: row.detail.step });
+  return auditActionName(texts, row.action);
 }
 
 /** How the row's caller proved who they are, with the id of their session or token when they had one. */
 export function AuditHow({ row }: { row: Pick<AuditRow, 'via' | 'credential'> }) {
+  const { t } = useText();
   return (
     <>
-      {viaLabels[row.via] ?? row.via}
+      {VIAS.includes(row.via) ? t(`audit.via.${row.via}`) : row.via}
       {row.credential !== null && (
         <>
           {' '}

@@ -1,4 +1,5 @@
-"""Tests for ci/change_guard.py: references in comments and hard-coded colours on the lines a change adds.
+"""Tests for ci/change_guard.py: references in comments, hard-coded colours and texts written in place on the lines a
+change adds, and keys that English does not have.
 
 Run: python3 -m unittest ci.test_change_guard  (from the repository root; also run by the CI build job)
 
@@ -254,7 +255,7 @@ class ChangeGuardTest(unittest.TestCase):
             "const EDGE = '#567187';",
             "const s = { stroke: on ? 'rgba(0,0,0,.5)' : EDGE, color: 'red' };",
             "const t = <svg><path fill=\"white\" /></svg>;",
-            "const l = <Label color=\"grey\">grey</Label>;",
+            "const l = <Label color=\"grey\">grey</Label>; // untranslated: the colour's name as data",
             "const v = { color: 'var(--ant-color-primary)' };",
             "const name = 'red';",
             "const ok = `${'#/definitions'}`;",
@@ -276,6 +277,86 @@ class ChangeGuardTest(unittest.TestCase):
             "ui/e2e/a.ts": "const c = '#000000';\n",
             "ui/src/mapping/generated/api.ts": "const c = '#000';\n",
             "platform/A.java": 'class A { String c = "#ffffff"; }\n',
+        })
+        self.assertClean(repo)
+
+    # texts of the UI ---------------------------------------------------------------------------
+
+    ENGLISH = {"ui/locales/en/a.json": '{\n  "a.ok": "OK",\n  "a.saved": "{name} is saved"\n}\n'}
+
+    def test_a_text_written_in_place_on_a_changed_ui_line_is_a_finding(self):
+        repo = self.repo({**self.ENGLISH, "ui/src/a.tsx": "const old = <p>Written before the change</p>;\n"})
+        repo.change({"ui/src/a.tsx": "\n".join([
+            "const old = <p>Written before the change</p>;",
+            "const a = <Button>Save all</Button>;",
+            "const b = <Alert title=\"The users could not be read\" />;",
+            "notification.success({ title: 'Saved' });",
+            "const c = <Button>{t('a.ok')}</Button>;",
+            "notification.success({ title: t('a.saved', { name }) });",
+            "const id = 'rail8-new-user-name';",
+            "const d = { title: 'Administrator' }; // untranslated: a role's name is a term",
+            "const e = <Typography.Text>{created.name} is a technical account: it has no password.</Typography.Text>;",
+            "const f = <h1>{title} cannot open</h1>;",
+            "const g = <Typography.Text type=\"secondary\">A role holds from the user's next request on.</Typography.Text>;",
+            "const h = { Blocked: { text: 'Blocked' } };",
+            "      Cancel",
+            "    } else {",
+            "  } satisfies Record<string, Tag>;",
+            "<p>The file's settings are shown as they are; Edit needs the description.</p>",
+            "const i = [{ label: `Delete ${target.label}`, danger: true, icon: <DeleteOutlined aria-hidden /> }];",
+            "const j = <p>{count} files are new; the rest stay.</p>;",
+        ]) + "\n"})
+        self.assertEqual([
+            "ui/src/a.tsx:2: a text written in place (\"Save all\"): give it a key in ui/locales/en/<module>.json "
+            "and show it with t('<key>')",
+            "ui/src/a.tsx:3: a text written in place (\"The users could not be read\"): give it a key in "
+            "ui/locales/en/<module>.json and show it with t('<key>')",
+            "ui/src/a.tsx:4: a text written in place (\"Saved\"): give it a key in ui/locales/en/<module>.json "
+            "and show it with t('<key>')",
+            "ui/src/a.tsx:9: a text written in place (\"is a technical account: it has no password.\"): give it a key "
+            "in ui/locales/en/<module>.json and show it with t('<key>')",
+            "ui/src/a.tsx:10: a text written in place (\"cannot open\"): give it a key in ui/locales/en/<module>.json "
+            "and show it with t('<key>')",
+            "ui/src/a.tsx:11: a text written in place (\"A role holds from the user's next request on.\"): give it a "
+            "key in ui/locales/en/<module>.json and show it with t('<key>')",
+            "ui/src/a.tsx:12: a text written in place (\"Blocked\"): give it a key in ui/locales/en/<module>.json "
+            "and show it with t('<key>')",
+            "ui/src/a.tsx:13: a text written in place (\"Cancel\"): give it a key in ui/locales/en/<module>.json "
+            "and show it with t('<key>')",
+            "ui/src/a.tsx:16: a text written in place (\"The file's settings are shown as they are; Edit needs the "
+            "description.\"): give it a key in ui/locales/en/<module>.json and show it with t('<key>')",
+            "ui/src/a.tsx:17: a text written in place (\"Delete ${target.label}\"): give it a key in "
+            "ui/locales/en/<module>.json and show it with t('<key>')",
+            "ui/src/a.tsx:18: a text written in place (\"files are new; the rest stay.\"): give it a key in "
+            "ui/locales/en/<module>.json and show it with t('<key>')",
+        ], self.findings(repo, 11))
+
+    def test_a_key_that_english_does_not_have_is_a_finding(self):
+        repo = self.repo(self.ENGLISH)
+        repo.change({
+            "ui/src/a.tsx": "const a = t('a.ok');\nconst b = msg('a.gone');\n",
+            "ui/locales/de/a.json": '{\n  "a.ok": "OK",\n  "a.extra": "Mehr"\n}\n',
+        })
+        self.assertEqual([
+            "ui/locales/de/a.json:3: the key a.extra is not a key of English: add it to ui/locales/en/",
+            "ui/src/a.tsx:2: the key a.gone is not a key of English: add it to ui/locales/en/",
+        ], sorted(self.findings(repo, 2)))
+
+    def test_a_key_english_gains_in_the_same_change_is_known(self):
+        repo = self.repo(self.ENGLISH)
+        repo.change({
+            "ui/locales/en/a.json": '{\n  "a.ok": "OK",\n  "a.new": "New"\n}\n',
+            "ui/src/a.tsx": "const a = t('a.new');\n",
+        })
+        self.assertClean(repo)
+
+    def test_texts_in_tests_the_development_server_and_outside_the_ui_are_not_findings(self):
+        repo = self.repo(self.ENGLISH)
+        repo.change({
+            "ui/src/a.browser.test.tsx": "await page.getByText('Save all').click();\n",
+            "ui/e2e/a.ts": "await page.getByRole('button', { name: 'Save all' }).click();\n",
+            "ui/src/packages/server/git.ts": "throw new Error('the clone could not be read');\n",
+            "ui/scripts/pictures.mjs": "const title = 'The users could not be read';\n",
         })
         self.assertClean(repo)
 

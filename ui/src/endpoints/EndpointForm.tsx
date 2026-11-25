@@ -392,7 +392,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
           })}
         />
       )}
-      <DiscardDialog isOpen={discarding} name={file.id} then="return to view mode" onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
+      <DiscardDialog isOpen={discarding} name={file.id} onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
       <Modal open={conflict} title="The file changed on disk" okText="Reload" cancelText="Keep editing" onOk={() => void reload()} onCancel={() => setConflict(false)}>
         <p>
           <strong>{file.path}</strong> changed since it was opened, and nothing was saved. Reload shows the file as it is now and discards your changes.

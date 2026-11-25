@@ -1,5 +1,6 @@
 import { Alert } from 'antd';
 import { useEffect, useState } from 'react';
+import { useText } from './language';
 import { uiFetch } from './session';
 
 /** What the node's `GET /admin/git` answers: its last check of the git credentials; every field null before the first. */
@@ -26,6 +27,7 @@ export async function readGitCheck(send: typeof fetch = uiFetch): Promise<GitChe
  * first check, and when the caller may not read the check or the node does not answer.
  */
 export function GitCredentialsAlert({ read = readGitCheck }: { read?: () => Promise<GitCheck | null> }) {
+  const { t } = useText();
   const [check, setCheck] = useState<GitCheck | null>(null);
   useEffect(() => {
     let live = true;
@@ -41,13 +43,11 @@ export function GitCredentialsAlert({ read = readGitCheck }: { read?: () => Prom
     <Alert
       type="warning"
       showIcon
-      title="The node's git credentials are refused, or the repository is no longer visible to the token"
+      title={t('frame.git.refused')}
       description={
-        <>
-          Until RAIL8_GIT_USER and RAIL8_GIT_TOKEN work again, a deploy fails, and a node that restarts with an empty git cache
-          comes up without its packages. Messages keep flowing. The node's last check: {check.reason}
-          {check.checkedAt && ` at ${check.checkedAt}`}.
-        </>
+        check.checkedAt === null
+          ? t('frame.git.refused.description', { reason: check.reason ?? '' })
+          : t('frame.git.refused.descriptionAt', { reason: check.reason ?? '', at: check.checkedAt })
       }
     />
   );

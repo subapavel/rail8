@@ -1,6 +1,7 @@
 import { Alert, Button, Descriptions, Empty, Flex, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { auditAction, AuditHow } from '../audit';
+import { useText } from '../language';
 import { MountedModal } from '../MountedModal';
 import { ReadSpinner } from '../ReadSpinner';
 import { Allowed } from '../SessionGate';
@@ -324,6 +325,7 @@ type AuditLoad =
  * session or token when they had one. Older rows load a page at a time.
  */
 function MessageAudit({ api, id }: { api: AdminApi; id: string }) {
+  const texts = useText();
   const [load, setLoad] = useState<AuditLoad>({ kind: 'loading' });
   const [reads, setReads] = useState(0);
 
@@ -393,7 +395,7 @@ function MessageAudit({ api, id }: { api: AdminApi; id: string }) {
                 {load.rows.map((row) => (
                   <tr key={row.id}>
                     <td>{row.at}</td>
-                    <td>{auditAction(row)}</td>
+                    <td>{auditAction(texts, row)}</td>
                     <td>{row.actor}</td>
                     <td>
                       <AuditHow row={row} />
