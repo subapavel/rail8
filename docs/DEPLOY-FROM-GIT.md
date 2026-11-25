@@ -397,6 +397,12 @@ release branches first. Rail8 checks only that each commit is reachable from the
 What differs between environments is already in the files: an endpoint's `environments.<env>.config`
 overlays and `secret://` names, read from each node's own environment.
 
+Planned (`docs/ENVIRONMENT-CONFIGURATION.md`): a connection's values and a system's instance name are
+entered in each environment, not in files. A deploy checks every connection its flows reach against
+the environment, and its record names the generation of the environment's configuration it was
+checked against. A deploy still states only the commit it expects; it states nothing of the
+configuration, which is activated per object.
+
 ## The local run and the quickstart
 
 - The working folder holds a clone of each package repository, named as the repository. The UI saves
