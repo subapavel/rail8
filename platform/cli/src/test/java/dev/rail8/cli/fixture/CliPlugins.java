@@ -1,11 +1,13 @@
 package dev.rail8.cli.fixture;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepConfig;
@@ -14,10 +16,14 @@ import dev.rail8.api.StepResources;
 import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.plugin.Plugin;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -84,20 +90,23 @@ public final class CliPlugins {
 
         @Override public String scheme() { return "hook"; }
 
-        @Override public Settings settings() { return Settings.of(HttpIngress.ADDRESS); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.of(HttpIngress.ADDRESS), Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)); }
 
         @Override public Optional<String> httpPrefix() { return Optional.of(prefix); }
 
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             throw new UnsupportedOperationException("hook builds no consumer");
         }
 
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("hook only takes requests"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("hook only takes requests"); }
 
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
-    /** The component {@code acme}: endpoints with a {@code url}; its producer answers every send with the envelope sent. */
+    /**
+     * The component {@code acme}: out endpoints whose connection has a {@code url} and nothing else; its producer answers every
+     * send with the envelope sent.
+     */
     public static final class AcmeComponent implements Component {
         private final String scheme;
 
@@ -111,24 +120,23 @@ public final class CliPlugins {
 
         @Override public String scheme() { return scheme; }
 
-        @Override public String configSchema() {
-            return """
-                    {"type": "object", "required": ["url"], "additionalProperties": false,
-                     "properties": {"url": {"type": "string", "pattern": "^acme://"}}}""";
+        @Override public Forms forms() {
+            return new Forms(Settings.of(Field.text("url", "Address", "Where it sends.").out().required()), Settings.NONE,
+                    Map.of(Direction.OUT, Forms.Reach.CONNECTION));
         }
 
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             throw new UnsupportedOperationException("acme only sends");
         }
 
-        @Override public Producer producer(EndpointConfig cfg) { return new Echo(); }
+        @Override public Producer producer(Outbound out) { return new Echo(); }
 
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
     /** A producer that answers every send with the envelope sent. */
     public static final class Echo implements Producer {
-        @Override public Future<Envelope> send(Envelope e) { return Future.succeededFuture(e); }
+        @Override public Future<Envelope> send(Envelope e, Call call) { return Future.succeededFuture(e); }
         @Override public Future<Void> close() { return Future.succeededFuture(); }
     }
 

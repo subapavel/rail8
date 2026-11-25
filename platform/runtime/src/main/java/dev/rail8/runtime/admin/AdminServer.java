@@ -168,7 +168,8 @@ import java.util.stream.Collectors;
  * scheme: 200 {@code {environment, httpOrigin, items:[{scheme, httpPrefix, settings}]}}, {@code environment} the node's
  * {@code RAIL8_ENV}, {@code httpOrigin} the origin senders call its HTTP port at ({@code RAIL8_HTTP_ORIGIN}, null when not set),
  * {@code httpPrefix} the path the component's in endpoints are served under on that port (null when it takes no requests there),
- * and {@code settings} the component's settings description as the UI draws its form from it. {@code GET /admin/steps} lists every step type a module or plugin of the node builds, sorted by type: 200
+ * and {@code settings} the component's two forms, its reach and its text keys ({@code Forms.toJson}, format 2), as the UI draws
+ * its forms from them. {@code GET /admin/steps} lists every step type a module or plugin of the node builds, sorted by type: 200
  * {@code {items:[{type, configSchema}]}}, {@code configSchema} the JSON Schema of the step's options, or null when the factory's
  * is no JSON object; the built-in steps are not listed. Without one these routes do not exist (404).
  *
@@ -1711,12 +1712,12 @@ public final class AdminServer {
 
     /**
      * {@code GET /admin/components}: the node's environment and advertised origin, then every component the node serves, sorted by
-     * scheme, with its HTTP prefix and its settings description.
+     * scheme, with its HTTP prefix and its forms as {@code settings}.
      */
     private static Reply components(Deployments deployments) {
         JsonArray items = new JsonArray();
-        deployments.settings().forEach((scheme, settings) -> items.add(new JsonObject().put("scheme", scheme)
-                .put("httpPrefix", deployments.httpPrefix(scheme).orElse(null)).put("settings", new JsonObject(settings.toJson()))));
+        deployments.forms().forEach((scheme, forms) -> items.add(new JsonObject().put("scheme", scheme)
+                .put("httpPrefix", deployments.httpPrefix(scheme).orElse(null)).put("settings", new JsonObject(forms.toJson(scheme)))));
         return Json.of(200, new JsonObject().put("environment", deployments.environment()).put("httpOrigin", deployments.httpOrigin().orElse(null))
                 .put("items", items));
     }

@@ -1,6 +1,7 @@
 package dev.rail8.core.flow;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
@@ -8,11 +9,16 @@ import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepFactory;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.Targets;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -196,15 +202,15 @@ class FlowBuilderSendFenceTest {
         Throwing(RuntimeException failure) { this.failure = failure; }
 
         @Override public String scheme() { return "partner"; }
-        @Override public String configSchema() { return "{}"; }
-        @Override public Optional<String> target(EndpointConfig cfg) { return Optional.of(DeadlinePartner.TARGET); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION)); }
+        @Override public Optional<String> target(Outbound out) { return Optional.of(DeadlinePartner.TARGET); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
 
-        @Override public Producer producer(EndpointConfig cfg) {
+        @Override public Producer producer(Outbound out) {
             return new Producer() {
-                @Override public Future<Envelope> send(Envelope e, Deadline d) { return send(e); }
-                @Override public Future<Envelope> send(Envelope e) {
+                @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) { return send(e, call); }
+                @Override public Future<Envelope> send(Envelope e, Call call) {
                     if (failure != null) throw failure;
                     return null;
                 }

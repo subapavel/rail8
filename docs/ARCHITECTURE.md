@@ -607,23 +607,41 @@ its drain.
 
 ### The component contract
 
-A component has a scheme, a description of its endpoint settings, a consumer, a producer and a health
-check. It may also declare its prefix on the node's HTTP port, say which host and port its consumer
+A component has a scheme, two forms that describe what its endpoints set, a consumer, a producer and a
+health check. It may also declare its prefix on the node's HTTP port, say which host and port its consumer
 listens on when it takes connections on a port of its own (two endpoints may not share one), whether
 it polls something other nodes could poll too, what identifies a delivery, and which target system a
 producer calls.
 
-- The **settings description** (`Component.settings()`, types in `dev.rail8.api.settings`) lists
-  each option an endpoint may set: its name, type (text, secret, whole number, true or false, one of
-  a list), whether it is required, its default, a help text, its tab, whether it serves in or out
-  endpoints, and the choice or switch it is shown by. A rule may require exactly one of a few
-  options. The platform supplies the tabs general, retry, recording and security; a component adds
-  only its own. One description serves three readers: the deploy and `rail8 validate` check every
-  endpoint file against it (an unknown option, or one of the other direction, is refused), the admin
-  API serves it, and the UI draws the endpoint's form from it. A hidden option is never required, and
-  the empty string is no value. `http`, `sftp` and a plugin's component describe themselves the same
-  way; a description that cannot be built refuses the node's start, naming its owner. A component
-  that describes nothing is checked against its `configSchema()`, a JSON Schema.
+- The **forms** (`Component.forms()`, types in `dev.rail8.api.settings`) are two: the connection
+  form, what is the same for every flow that talks to one system (where it is, how to log in), and
+  the flow form, what one flow sets on its use of it (a path, a directory, a polling interval). Each
+  lists its fields: name, a short English label, a help text, type (text, secret, whole number, true
+  or false, one of a list of labelled choices), whether it is required, its default, its tab,
+  whether it serves in or out endpoints, the choice or switch it is shown by, its bounds or pattern.
+  A rule may require exactly one of a few fields. The reach says, for each direction the component
+  serves, whether a use of it reaches a connection; a direction it does not serve is refused at
+  deploy, naming the endpoint. Only the internal adapters `direct` and `mock` send without a
+  connection: any other component whose out direction reaches none refuses the node's start. The
+  platform supplies the tabs general, retry, recording and security; a component adds only its own.
+  The forms serve three readers: the deploy and `rail8 validate` check every endpoint file against
+  them (an unknown key, or one of the other direction, is refused), the admin API serves them
+  (format 2, with a text key for every label: `<scheme>.field.<name>.label`, `.help`,
+  `.choice.<value>`, `<scheme>.tab.<id>`, and `rail8.tab.<id>` for a common tab), and the UI draws
+  its screens from them. A hidden field is never required, and the empty string is no value.
+  Forms that cannot be built, or are null, refuse the node's start, naming their owner; so does a
+  plugin's component of the scheme `rail8`, the platform's own. A form that describes nothing
+  (`Settings.NONE`) takes every key the other form does not.
+- **An endpoint file of `schemaVersion: 1`** is one use of the forms. The node splits its config, the
+  environment's overlay applied: the connection form's fields become a `Connection` whose key is the
+  endpoint's id (a secret field's value a `Secret` handle, read by the adapter through
+  `Connection.secret`), the flow form's fields the settings of the use, both with their defaults.
+  A consumer is built from an `Inbound` (the flow, the connection when the in direction reaches one,
+  the settings, the body limit), a producer from an `Outbound` (its connection), and each send
+  carries a `Call` (the flow and step, the settings, the reply's limit). On a connecting out endpoint
+  `maxBodyBytes` is that reply's limit; on an in endpoint `flow` and `maxBodyBytes` are the node's. A
+  connection field's pattern is not checked on such a file, so what it may hold today still deploys,
+  an http URL with user info among it; a flow's hash is the same as before.
 
 - **The node's HTTP port** (`RAIL8_HTTP_HOST`, default 127.0.0.1, and `RAIL8_HTTP_PORT`, default
   8080) is one port shared by every component that takes HTTP requests, as in SAP Integration Suite,
@@ -692,7 +710,7 @@ and the shipped modules. The runtime's build brings the modules for its tests on
 them from the node's build. Other plugins are jars, or folders of jars, in the folder that
 `RAIL8_PLUGINS` names. Each implements `dev.rail8.api.plugin.Plugin`, named in the
 `META-INF/services/dev.rail8.api.plugin.Plugin` of its own jar: a name, the api version it was
-built against, and what it adds. The api is 0.3.
+built against, and what it adds. The api is 0.4.
 
 At start the node finds its modules on its class path (Java's `ServiceLoader`), in name order,
 then loads every entry of `RAIL8_PLUGINS`, in name order. Modules and plugins share one space of
@@ -794,9 +812,14 @@ What a component promises the node:
   as the built-in `http` does, lists `HttpIngress.ADDRESS` among its in settings, and mounts each in
   endpoint there; the sample's prefix is `/webhook`, the template's `/<scheme>`. It opens no server of
   its own. An adapter of another protocol that accepts connections says where with `listensOn`.
-- **Settings.** `settings()` describes every option an endpoint may set, the same on every call;
-  the node checks endpoint files against it and the UI draws the form from it. `flow` and
-  `maxBodyBytes` on an in endpoint are the node's and are no field of it.
+- **Forms.** `forms()` describes every field an endpoint may set, the same on every call; the
+  node checks endpoint files against them and the UI draws its screens from them. `flow` and
+  `maxBodyBytes` are the node's and are no field of them. A secret is read through
+  `Connection.secret(..)` when it is used, never kept as text.
+- **Api version.** A node loads only plugins built against its own `rail8-api`; one built on api
+  0.3 is refused with a line that names its version and says to build it again on the node's.
+- **Upgrade.** Every node is upgraded before polling flows run: a node of the release before takes
+  another poller lease key, so it and a node of this release would poll one directory together.
 
 Build, test and install:
 
@@ -818,8 +841,8 @@ to give to `--plugins` or `RAIL8_PLUGINS`.
 Two tools start a new adapter and run it (`docs/ADAPTERS.md`):
 
 - **Template.** `rail8 new-adapter <dir> --scheme <scheme> [--package <package>]` writes the sample
-  under the new scheme, Java package and class names: its build, the component with its settings
-  description, the plugin, the contract tests of the component and of its mock, and a package that
+  under the new scheme, Java package and class names: its build, the component with its forms, the
+  plugin, the contract tests of the component and of its mock, and a package that
   uses it, as a git repository on `main` with a first commit. It builds and passes the contract suite
   as written; the comments marked `HTTP:` are where another protocol goes. The cli jar carries the sample's files, copied at build time. A
   scheme the node already has, `rail8`, a name that is not a valid scheme or Java package, and a
@@ -936,8 +959,11 @@ so it cannot act after others think it dead. A node replaced by a newer start of
   key derived from the master key. A node reads a record from a live node's journal and checks it
   itself. A body on a dead node cannot be read until the node returns. If the node's disk is lost,
   its bodies are lost, and an operator must accept the loss before the work can move on.
-- **Polling.** A polling consumer (SFTP) runs only on the node that holds the endpoint's lease in
-  Valkey, so one file is read by one node.
+- **Polling.** A polling consumer (SFTP) runs only on the node that holds the flow's lease in
+  Valkey, so one file is read by one node. The lease key is `<package>/<flow>/from`: it names the
+  flow alone, so it stays the same when the endpoint's id or URI changes and holds no value of its
+  connection. A node of the release before takes another key, `<package>/<flow>/<endpoint uri>`, so
+  every node is upgraded before polling flows run.
 - **Deploys** (part 4). One deploy or undeploy at a time per pool, under a Postgres advisory lock that
   a dead node frees with its connection. Every node follows the records every 5 s and writes what it
   runs, which any node answers for the pool; a node whose lease ended drops out of that answer. A removed
@@ -1174,7 +1200,7 @@ fails when they differ from it.
 
 The Endpoints screen lists the endpoint files of a working folder (`RAIL8_WORKSPACE`, a folder of packages; files
 are found by their `kind`, hidden folders, `node_modules` and `target` passed over) and opens each one in a tab of its
-own: the endpoint's settings form, drawn from its component's settings description (`GET /admin/components`), the same
+own: the endpoint's settings form, drawn from its component's forms (`GET /admin/components`), the same
 for a shipped component and a plugin's. It shows the platform's tabs around the component's own, the fields that serve
 the endpoint's direction and are visible, with their help texts, defaults and required marks, the environments that
 override settings, under the `address` of an in endpoint of a component with an HTTP prefix a preview of the URL
@@ -1392,7 +1418,7 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `POST /admin/deploy`, `DELETE /admin/packages/{name}`; `GET /admin/packages`, `GET /admin/flows` | deploy a commit over the state it expects (`?check=true`: check it only), undeploy, what runs (a `RESTARTING` flow with its failures, next attempt and cause) |
 | `GET /admin/pool/packages` | the pool's records and what each node of the pool runs |
 | `GET /admin/targets`, `GET /admin/flows/{flow}/cpu` | limits per target system, CPU by step |
-| `GET /admin/components` | the components the node serves and their settings descriptions |
+| `GET /admin/components` | the components the node serves and their forms (format 2) |
 | `GET /admin/steps` | the step types of the node's modules and plugins, each with its `configSchema`, sorted by type |
 | `GET /admin/modules` | the loaded modules and plugins, each with its version, api, SHA-256, where it came from and what it brings (part 5) |
 | `GET`, `POST /admin/modules/{module}/{path}` | the admin services of the node's modules (part 5) |

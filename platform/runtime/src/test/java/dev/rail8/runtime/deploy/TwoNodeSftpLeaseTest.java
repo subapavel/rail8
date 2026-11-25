@@ -1,7 +1,7 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Timer;
 import dev.rail8.components.sftp.EmbeddedSftp;
@@ -117,7 +117,7 @@ class TwoNodeSftpLeaseTest {
         volatile boolean stopped;
 
         Node(String name, Duration interval) {
-            EndpointConfig inbox = sftp.endpoint("in", "/inbox", Map.of("intervalMs", interval.toMillis(), "flow", "shop/feed"));
+            Inbound in = sftp.endpoint("in", "/inbox", Map.of("intervalMs", interval.toMillis(), "flow", "shop/feed", "maxBodyBytes", 1024L * 1024));
             owner = name + "#1";
             timer = new Freezable(new FakeTimer(clock));
             FakeRuntime rt = FakeRuntime.create();
@@ -127,8 +127,8 @@ class TwoNodeSftpLeaseTest {
                 tookAt.add(clock.instant());
                 return Future.succeededFuture(new Ack.Accepted(e.id()));
             };
-            leased = new LeasedConsumer(leases, key(), owner, TTL, RENEW, timer, clock, component.consumer(inbox, handler),
-                    () -> component.consumer(inbox, handler));
+            leased = new LeasedConsumer(leases, key(), owner, TTL, RENEW, timer, clock, component.consumer(in, handler),
+                    () -> component.consumer(in, handler));
             nodes.add(this);
         }
 
@@ -155,7 +155,7 @@ class TwoNodeSftpLeaseTest {
      * {@code shop/feed/sftp://in}, the id of the endpoint {@code in}; the server's host, port and directory are options, never
      * part of the key.
      */
-    String key() { return "shop/feed/sftp://in"; }
+    String key() { return "shop/feed/from"; }
 
     void drop(String name) {
         sftp.drop("/inbox", name, Buffer.buffer("<order id='" + name + "'/>"));

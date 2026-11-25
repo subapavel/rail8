@@ -4,20 +4,26 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Hash;
 import dev.rail8.api.Hasher;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
 import dev.rail8.api.Props;
+import dev.rail8.api.Secret;
 import dev.rail8.api.Views;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -27,15 +33,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
@@ -50,7 +57,15 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
  */
 class ComponentContractSelfTest {
 
-    static final EndpointConfig LOOP = new EndpointConfig("loop", URI.create("loopback://x"), Map.of());
+    static final Inbound LOOP = new Inbound(ComponentContract.FLOW, Optional.empty(), Map.of(), ComponentContract.MAX_BYTES);
+
+    /** The loopback's forms: nothing described, no direction reaching a connection. */
+    static final Forms LOOP_FORMS = forms(Forms.Reach.NO_CONNECTION, Settings.NONE);
+
+    /** Forms over an undescribed connection form and {@code flow}, both directions reaching as {@code reach} says. */
+    static Forms forms(Forms.Reach reach, Settings flow) {
+        return new Forms(Settings.NONE, flow, Map.of(Direction.IN, reach, Direction.OUT, reach));
+    }
 
     /**
      * A loopback component with one thing wrong, chosen by the variant. The correct one's {@code stop()} unregisters the
@@ -60,7 +75,6 @@ class ComponentContractSelfTest {
      */
     static final class Variant implements Component {
         final String scheme;
-        final String schema;
         final boolean handlerSurvivesStop;
         final boolean healthAlwaysUp;
         final boolean ackBeforeHandler;
@@ -90,7 +104,19 @@ class ComponentContractSelfTest {
             void afterTheRun(Envelope e) { if (e.id().equals(second)) secondReturned.countDown(); }
         }
         private record Running(Function<Envelope, Future<Ack>> handler, ConsumerDrain drain) {}
-        private volatile Running handler;
+        /** The running consumers by the {@code address} of their inbound's settings ({@code ""} without one). */
+        private final Map<String, Running> handlers = new ConcurrentHashMap<>();
+        /** The consumer started last and still running. */
+        private volatile Running last;
+        /** Broken: a send reaches the consumer started last, whatever the {@code address} of its call. */
+        boolean ignoresTheCall;
+        /** Broken: building a consumer or a producer reads every secret of its connection. */
+        boolean readsSecretsAtBuild;
+        /** Broken: a producer answers every reply send with the first reply it ever got. */
+        boolean firstReplyForEverySend;
+        /** Broken: closing a producer ends every producer built before the close. */
+        boolean closeEndsEveryProducer;
+        private final java.util.concurrent.atomic.AtomicInteger closes = new java.util.concurrent.atomic.AtomicInteger();
         /** Broken stop: completes at once and fails every send still waiting for its answer (the answer is dropped). */
         boolean stopDropsPendingAnswers;
         /** How a Nack fails the send; the correct variant reports a {@link NackException} with reason and flag. */
@@ -139,23 +165,33 @@ class ComponentContractSelfTest {
         java.util.function.Supplier<Throwable> cutAs = () -> new NackException("deadline passed: the send was cut", true);
 
         /** What {@link #target} answers (D-099); the correct variant names no target. */
-        Function<EndpointConfig, java.util.Optional<String>> targetOf = cfg -> java.util.Optional.empty();
+        Function<Outbound, java.util.Optional<String>> targetOf = out -> java.util.Optional.empty();
 
-        @Override public java.util.Optional<String> target(EndpointConfig cfg) { return targetOf.apply(cfg); }
+        @Override public java.util.Optional<String> target(Outbound out) { return targetOf.apply(out); }
 
-        /** What {@link #settings} answers on each call; the correct variant describes nothing and declares its schema. */
-        java.util.function.Supplier<Settings> settings = () -> Settings.NONE;
+        /** What {@link #forms} answers on each call; the correct variant's are {@link #LOOP_FORMS}. */
+        java.util.function.Supplier<Forms> forms = () -> LOOP_FORMS;
 
-        @Override public Settings settings() { return settings.get(); }
+        @Override public Forms forms() { return forms.get(); }
         /** What {@link #httpPrefix} answers on each call; the correct variant declares none. */
         java.util.function.Supplier<java.util.Optional<String>> prefix = java.util.Optional::empty;
         @Override public java.util.Optional<String> httpPrefix() { return prefix.get(); }
 
-        /** {@link #settings} answers {@code settings} on every call. */
-        static Variant describedAs(Settings settings) { Variant v = correct(); v.settings = () -> settings; return v; }
+        /** {@link #forms} answers {@code forms} on every call. */
+        static Variant formed(Forms forms) { Variant v = correct(); v.forms = () -> forms; return v; }
 
         /** {@link #target} answers {@code targetOf}. */
-        static Variant targeting(Function<EndpointConfig, java.util.Optional<String>> targetOf) { Variant v = correct(); v.targetOf = targetOf; return v; }
+        static Variant targeting(Function<Outbound, java.util.Optional<String>> targetOf) { Variant v = correct(); v.targetOf = targetOf; return v; }
+
+        static Variant ignoresTheCall() { Variant v = correct(); v.ignoresTheCall = true; return v; }
+        static Variant firstReplyForEverySend() { Variant v = correct(); v.firstReplyForEverySend = true; return v; }
+        static Variant closeEndsEveryProducer() { Variant v = correct(); v.closeEndsEveryProducer = true; return v; }
+
+        /** The correct variant whose directions reach a connection, as {@link ConnectedContractTest} hands one over. */
+        static Variant connected() { return formed(ComponentContractSelfTest.forms(Forms.Reach.CONNECTION, Settings.NONE)); }
+
+        /** {@link #connected} that reads the connection's secrets while it builds a consumer or a producer. */
+        static Variant readsSecretsAtBuild() { Variant v = connected(); v.readsSecretsAtBuild = true; return v; }
 
         static Variant stopBreaks() { Variant v = correct(); v.stopBreaks = true; return v; }
         static Variant nackBreaks() { Variant v = correct(); v.nackBreaks = true; return v; }
@@ -178,17 +214,17 @@ class ComponentContractSelfTest {
         /** Broken (D-099): the target depends on whether a consumer runs — not answered from the config alone. */
         static Variant targetWhileRunning() {
             Variant v = correct();
-            v.targetOf = cfg -> java.util.Optional.of(v.handler != null ? "loopback://running:1" : "loopback://x:1");
+            v.targetOf = out -> java.util.Optional.of(v.handlers.isEmpty() ? "loopback://x:1" : "loopback://running:1");
             return v;
         }
 
-        Variant(String scheme, String schema, boolean handlerSurvivesStop, boolean healthAlwaysUp, boolean ackBeforeHandler, boolean nackIsSuccess,
+        Variant(String scheme, boolean handlerSurvivesStop, boolean healthAlwaysUp, boolean ackBeforeHandler, boolean nackIsSuccess,
                 UnaryOperator<Envelope> deliveredAs, UnaryOperator<Envelope> repliedAs) {
-            this.scheme = scheme; this.schema = schema; this.handlerSurvivesStop = handlerSurvivesStop; this.healthAlwaysUp = healthAlwaysUp;
+            this.scheme = scheme; this.handlerSurvivesStop = handlerSurvivesStop; this.healthAlwaysUp = healthAlwaysUp;
             this.ackBeforeHandler = ackBeforeHandler; this.nackIsSuccess = nackIsSuccess; this.deliveredAs = deliveredAs; this.repliedAs = repliedAs;
         }
 
-        static Variant correct() { return new Variant("loopback", "{\"type\":\"object\"}", false, false, false, false, e -> e, e -> e); }
+        static Variant correct() { return new Variant("loopback", false, false, false, false, e -> e, e -> e); }
 
         /** {@code stop()} completes at once and drops the answers still pending: their sends fail. */
         static Variant stopDropsPendingAnswers() { Variant v = correct(); v.stopDropsPendingAnswers = true; return v; }
@@ -205,7 +241,7 @@ class ComponentContractSelfTest {
          * until the bounded send's handler has returned, i.e. has recorded its delivery.
          */
         static Variant ackFirstWithTheHandlersReversed() {
-            Variant v = new Variant("loopback", "{\"type\":\"object\"}", false, false, true, false, e -> e, e -> e);
+            Variant v = new Variant("loopback", false, false, true, false, e -> e, e -> e);
             v.reversal = new Reversal("contract-plain-1", "contract-bounded-2");
             return v;
         }
@@ -230,7 +266,7 @@ class ComponentContractSelfTest {
 
         /** The reply comes back as {@code repliedAs} makes it (FIX-53). */
         static Variant repliedAs(UnaryOperator<Envelope> repliedAs) {
-            return new Variant("loopback", "{\"type\":\"object\"}", false, false, false, false, e -> e, repliedAs);
+            return new Variant("loopback", false, false, false, false, e -> e, repliedAs);
         }
 
         /** Every reply re-stored under the next key of the envelope sent — its attempt's — but carrying none of the sender's props. */
@@ -238,7 +274,7 @@ class ComponentContractSelfTest {
 
         /** The handler sees the envelope without its props — the attempt included — and its reply comes back as it keyed it. */
         static Variant propsLost() {
-            return new Variant("loopback", "{\"type\":\"object\"}", false, false, false, false,
+            return new Variant("loopback", false, false, false, false,
                     e -> new Envelope(e.id(), e.flow(), e.step(), e.headers(), Props.empty(), e.keys(), e.body(), e.attachments(), e.views()), e -> e);
         }
 
@@ -288,8 +324,17 @@ class ComponentContractSelfTest {
         }
 
         @Override public String scheme() { return scheme; }
-        @Override public String configSchema() { return schema; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> h) {
+        private static String addressOf(Map<String, Object> settings) {
+            return String.valueOf(settings.getOrDefault("address", ""));
+        }
+
+        private void readSecrets(Optional<Connection> connection) {
+            if (readsSecretsAtBuild) connection.ifPresent(c -> c.secrets().values().forEach(Secret::value));
+        }
+
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
+            readSecrets(in.connection());
+            String address = addressOf(in.settings());
             Promise<Void> broken = Promise.promise();
             Function<Envelope, Future<Ack>> told = !nackBreaks ? h : e -> {
                 Future<Ack> answer = h.apply(e);
@@ -300,29 +345,37 @@ class ComponentContractSelfTest {
             return new Consumer() {
                 @Override public Future<Void> start() {
                     if (handlerServedOnce && !served.add(h)) return Future.succeededFuture();   // registers nothing
-                    handler = mine;
+                    handlers.put(address, mine);
+                    last = mine;
                     return Future.succeededFuture();
                 }
                 @Override public Future<Void> broken() { return broken.future(); }
                 @Override public Future<Void> stop() {
                     if (stopBreaks) broken.tryFail(new IllegalStateException("stopped"));
-                    if (!handlerSurvivesStop) handler = null;
+                    if (!handlerSurvivesStop) {
+                        handlers.remove(address, mine);
+                        if (last == mine) last = null;
+                    }
                     if (!stopDropsPendingAnswers) return mine.drain().stop();
                     waiting.forEach(p -> p.tryFail(new IllegalStateException("consumer stopped: answer dropped")));
                     return Future.succeededFuture();
                 }
             };
         }
-        @Override public Producer producer(EndpointConfig cfg) {
+        @Override public Producer producer(Outbound out) {
+            readSecrets(out.connection());
+            int built = closes.get();
+            AtomicReference<Envelope> firstReply = new AtomicReference<>();
             return new Producer() {
-                @Override public Future<Envelope> send(Envelope e, Deadline d) {
-                    if (startsWithNoTimeLeft && !d.remaining().isPositive()) return send(e);
-                    if (neverCut) return BoundedSends.within(d, null, () -> send(e));
-                    return BoundedSends.within(d, timer, () -> send(e), !cutWithoutRereading, cutAs);
+                @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
+                    if (startsWithNoTimeLeft && !d.remaining().isPositive()) return send(e, call);
+                    if (neverCut) return BoundedSends.within(d, null, () -> send(e, call));
+                    return BoundedSends.within(d, timer, () -> send(e, call), !cutWithoutRereading, cutAs);
                 }
 
-                @Override public Future<Envelope> send(Envelope e) {
-                    Running at = handler;
+                @Override public Future<Envelope> send(Envelope e, Call call) {
+                    if (closeEndsEveryProducer && closes.get() != built) return Future.failedFuture(new IllegalStateException("closed by another producer's close"));
+                    Running at = ignoresTheCall ? last : handlers.get(addressOf(call.settings()));
                     if (at == null) return Future.failedFuture(new IllegalStateException("no consumer running"));
                     Future<Ack> ack = dispatch(at, deliveredAs.apply(carried(e)));
                     if (ackBeforeHandler) return Future.succeededFuture(e);
@@ -332,6 +385,10 @@ class ComponentContractSelfTest {
                     ack.<Envelope>compose(a -> switch (a) {
                         case Ack.Reply r when replyRefused != null && replyRefused.apply(e, r.reply()) != null ->
                                 Future.failedFuture(replyRefused.apply(e, r.reply()));
+                        case Ack.Reply r when firstReplyForEverySend -> {
+                            firstReply.compareAndSet(null, r.reply());
+                            yield Future.succeededFuture(firstReply.get());
+                        }
                         case Ack.Reply r -> restoredReplies == null ? Future.succeededFuture(repliedAs.apply(r.reply()))
                                 : restored(e, repliedAs.apply(r.reply()));
                         case Ack.Accepted ok -> Future.succeededFuture(e);
@@ -339,33 +396,41 @@ class ComponentContractSelfTest {
                     }).onComplete(done -> { if (done.succeeded()) answer.tryComplete(done.result()); else answer.tryFail(done.cause()); });
                     return answer.future();
                 }
-                @Override public Future<Void> close() { return Future.succeededFuture(); }
+                @Override public Future<Void> close() {
+                    closes.incrementAndGet();
+                    return Future.succeededFuture();
+                }
             };
         }
-        @Override public Future<Health> health() { return Future.succeededFuture(healthAlwaysUp || handler != null ? Health.up() : Health.down("no consumer")); }
+        @Override public Future<Health> health() { return Future.succeededFuture(healthAlwaysUp || !handlers.isEmpty() ? Health.up() : Health.down("no consumer")); }
     }
 
     /** The engine instantiates the suite itself; the variant under test is handed over through this slot. */
     static volatile Component current = Variant.correct();
 
-    /** A correct loopback that describes nothing and takes the default configSchema(): its options would be anything at all. */
-    static final class Undeclared implements Component {
-        final Variant inner = Variant.correct();
-
-        @Override public String scheme() { return inner.scheme(); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> h) { return inner.consumer(cfg, h); }
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
-        @Override public Future<Health> health() { return inner.health(); }
-    }
-
     static class VariantContractTest extends ComponentContract {
         @Override protected Component component() { return current; }
         @Override protected Component component(Timer timer) {
             if (current instanceof Variant v) v.timer = timer;
-            if (current instanceof Undeclared u) u.inner.timer = timer;
             return current;
         }
-        @Override protected EndpointConfig endpoint() { return LOOP; }
+        @Override protected Inbound inbound() { return LOOP; }
+    }
+
+    /** The suite with two receivers, told apart by the {@code address} of the inbound's settings and of the call's. */
+    static class TwoReceiversContractTest extends VariantContractTest {
+        @Override protected Inbound inbound() { return inbound(0); }
+        @Override protected Inbound inbound(int n) { return new Inbound(FLOW, Optional.empty(), Map.of("address", "r" + n), MAX_BYTES); }
+        @Override protected Call call(Consumer started) { return call(0, started); }
+        @Override protected Call call(int n, Consumer started) { return new Call(FLOW, "send", Map.of("address", "r" + n), MAX_BYTES, Optional.empty()); }
+    }
+
+    /** The suite over a connection that holds a secret: for {@link Variant#connected} and its broken kin. */
+    static class ConnectedContractTest extends VariantContractTest {
+        @Override protected Inbound inbound() {
+            Connection loop = new Connection("loop", Map.of(), Map.of("password", Secret.of("secret://loop.password", () -> "pw")));
+            return new Inbound(FLOW, Optional.of(loop), Map.of(), MAX_BYTES);
+        }
     }
 
     /** The same suite with a second of patience: a handler that waits in vain for the other delivery gives up sooner. */
@@ -373,13 +438,13 @@ class ComponentContractSelfTest {
         @Override protected Duration patience() { return Duration.ofSeconds(1); }
     }
 
-    static final EndpointConfig EPHEMERAL = new EndpointConfig("in", URI.create("ephemeral://in"), Map.of());   // no address before start
+    static final Inbound EPHEMERAL = new Inbound(ComponentContract.FLOW, Optional.empty(), Map.of(), ComponentContract.MAX_BYTES);   // no address before start
 
-    /** An address assigned at start, but the suite never asks the started consumer for it: every producer targets {@link #endpoint()}. */
+    /** An address assigned at start, but the suite never asks the started consumer for it: every producer is built for no connection. */
     static class EphemeralWithoutOverrideContractTest extends ComponentContract {
         @Override protected Component component() { return new EphemeralAddressComponent(); }
         @Override protected Component component(Timer timer) { return new EphemeralAddressComponent(timer); }
-        @Override protected EndpointConfig endpoint() { return EPHEMERAL; }
+        @Override protected Inbound inbound() { return EPHEMERAL; }
         @Override protected Duration patience() { return Duration.ofMillis(200); }   // a handler never invoked is waited out
     }
 
@@ -387,10 +452,8 @@ class ComponentContractSelfTest {
     static class EphemeralStopKeepsTheAddressContractTest extends ComponentContract {
         @Override protected Component component() { return new EphemeralAddressComponent(true); }
         @Override protected Component component(Timer timer) { return new EphemeralAddressComponent(true, timer); }
-        @Override protected EndpointConfig endpoint() { return EPHEMERAL; }
-        @Override protected EndpointConfig producerEndpoint(Consumer started) {
-            return new EndpointConfig("in", URI.create("ephemeral://in"), Map.of("address", ((EphemeralAddressComponent.EphemeralConsumer) started).address()));
-        }
+        @Override protected Inbound inbound() { return EPHEMERAL; }
+        @Override protected Outbound outbound(Consumer started) { return EphemeralAddressContractTest.reaching(started); }
     }
 
     static Set<String> failing(Component variant) {
@@ -420,26 +483,71 @@ class ComponentContractSelfTest {
     static Set<String> ackFirstFails() {
         return Set.of("producerDeliversToTheRunningConsumersHandlerWithTheBodyIntact", "theSendCompletesOnlyAfterTheHandlerAcknowledged", "aNackFromTheHandlerFailsTheSendWithItsReason",
                         "stopWaitsForTheDeliveryInFlightAndItsAnswerReachesTheSender", "aDeliveryCancelledWhileTheConsumerStopsFailsTheSendRetryable", THROWS, NULL_ANSWER, ATTEMPT_REPLY, CUT,
-                        FRESH);
+                        FRESH, TWO_CALLS, TWO_PRODUCERS);
+    }
+
+    static final String SAME_FORMS = "theFormsAreTheSameOnEveryCallAndServeBothDirections";
+    static final String USES = "theUsesPassTheForms";
+
+    @Test
+    void formsThatAreWrongFailOnlyTheirCase() {
+        assertEquals(Set.of(), failing(Variant.formed(forms(Forms.Reach.NO_CONNECTION, Settings.of(Field.text("dir", "Directory", "Where files go."))))),
+                "described, and the uses pass");
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        Variant unstable = Variant.correct();
+        unstable.forms = () -> forms(Forms.Reach.NO_CONNECTION, Settings.of(Field.text("f" + calls.incrementAndGet(), "Field", "Another field on every call.")));
+        assertEquals(Set.of(SAME_FORMS), failing(unstable), "other forms on every call");
+        assertEquals(Set.of(SAME_FORMS), failing(Variant.formed(new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)))),
+                "the out direction is not served");
+        assertEquals(Set.of(USES), failing(Variant.formed(forms(Forms.Reach.NO_CONNECTION, Settings.of(Field.text("dir", "Directory", "Where files go.").required().in())))),
+                "the inbound lacks a required setting");
+        assertEquals(Set.of(USES), failing(Variant.formed(forms(Forms.Reach.NO_CONNECTION, Settings.of(Field.text("path", "Path", "Where to send.").required().out())))),
+                "the call lacks a required setting");
+        assertEquals(Set.of(USES), failing(Variant.formed(forms(Forms.Reach.CONNECTION, Settings.NONE))),
+                "both directions reach a connection, but the suite hands none over");
+        current = Variant.correct();
+    }
+
+    static final String SECRET = "noSecretHandleIsReadWhileAConsumerOrAProducerIsBuilt";
+
+    @Test
+    void aComponentThatReadsASecretWhileItBuildsFailsOnlyTheSecretCase() {
+        current = Variant.connected();
+        assertEquals(Set.of(), failing(ConnectedContractTest.class), "over a connection with a secret, the correct variant passes");
+        current = Variant.readsSecretsAtBuild();
+        assertEquals(Set.of(SECRET), failing(ConnectedContractTest.class), "the password is read while the consumer and the producer are built");
+        current = Variant.correct();
+    }
+
+    static final String TWO_CALLS = "twoCallsAtOnceThroughOneProducerEachReachTheirReceiverAndGetTheirOwnAnswer";
+    static final String TWO_PRODUCERS = "twoProducersOfOneConnectionWorkSideBySideAndClosingTheFirstLeavesTheSecond";
+
+    @Test
+    void aProducerThatIgnoresTheCallFailsOnlyTheTwoCallsCaseOfTwoReceivers() {
+        current = Variant.correct();
+        assertEquals(Set.of(), failing(TwoReceiversContractTest.class), "the correct variant reaches each receiver by the call's address");
+        current = Variant.ignoresTheCall();
+        assertEquals(Set.of(), failing(VariantContractTest.class), "with one receiver the call decides nothing");
+        current = Variant.ignoresTheCall();
+        assertEquals(Set.of(TWO_CALLS), failing(TwoReceiversContractTest.class), "both calls reach the receiver started last");
+        current = Variant.correct();
     }
 
     @Test
-    void aSettingsDescriptionThatIsWrongFailsOnlyItsCase() {
-        assertEquals(Set.of("settingsAreDescribedOrTheComponentDeclaresItsOwnSchema"), failing(new Undeclared()), "neither described nor a schema of its own");
-        assertEquals(Set.of(), failing(Variant.describedAs(Settings.of(Field.text("dir", "Where files go.")))), "described, and the endpoints pass");
-        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
-        Variant unstable = Variant.correct();
-        unstable.settings = () -> Settings.of(Field.text("f" + calls.incrementAndGet(), "Another field on every call."));
-        assertEquals(Set.of("settingsAreTheSameOnEveryCall"), failing(unstable), "a new description on every call");
-        assertEquals(Set.of("theEndpointsPassTheDescription"), failing(Variant.describedAs(Settings.of(Field.text("dir", "Where files go.").required().in()))),
-                "the consumer's endpoint lacks a required setting");
-        assertEquals(Set.of("theEndpointsPassTheDescription"), failing(Variant.describedAs(Settings.of(Field.text("url", "Where to send.").required().out()))),
-                "the producer's endpoint lacks a required setting");
+    void aProducerThatAnswersEverySendWithItsFirstReplyFailsTheTwoCallsCase() {
+        assertTrue(failing(Variant.firstReplyForEverySend()).contains(TWO_CALLS), "the second call gets the first call's answer");
+        current = Variant.correct();
+    }
+
+    @Test
+    void aCloseThatEndsTheOtherProducersFailsOnlyTheTwoProducersCase() {
+        assertEquals(Set.of(TWO_PRODUCERS), failing(Variant.closeEndsEveryProducer()), "closing the first producer ends the second");
+        current = Variant.correct();
     }
 
     @Test
     void aPrefixOfTheWrongFormUnstableOrWithoutTheAddressFailsOnlyItsCase() {
-        String prefixCase = "anHttpPrefixIsOfItsFormTheSameOnEveryCallAndItsSettingsListTheAddress";
+        String prefixCase = "anHttpPrefixIsOfItsFormTheSameOnEveryCallAndItsFlowFormListsTheAddress";
         for (String bad : java.util.List.of("loop", "/Loop", "/a/b", "/rail8")) {
             Variant v = Variant.correct();
             v.prefix = () -> java.util.Optional.of(bad);
@@ -452,36 +560,38 @@ class ComponentContractSelfTest {
         Variant answersNull = Variant.correct();
         answersNull.prefix = () -> null;
         assertEquals(Set.of(prefixCase), failing(answersNull), "null instead of an Optional");
-        Variant noAddress = Variant.describedAs(Settings.of(Field.text("dir", "Where files go.")));
+        Variant noAddress = Variant.formed(forms(Forms.Reach.NO_CONNECTION, Settings.of(Field.text("dir", "Directory", "Where files go."))));
         noAddress.prefix = () -> java.util.Optional.of("/loop");
-        assertEquals(Set.of(prefixCase), failing(noAddress), "a prefix, and no address among the settings");
+        assertEquals(Set.of(prefixCase), failing(noAddress), "a prefix, and no address in the flow form");
+        Variant withAddress = Variant.formed(forms(Forms.Reach.NO_CONNECTION, Settings.of(dev.rail8.api.plugin.HttpIngress.ADDRESS)));
+        withAddress.prefix = () -> java.util.Optional.of("/loop");
+        assertEquals(Set.of(USES), failing(withAddress), "a prefix and the address: only the inbound lacks the address it requires");
     }
 
     @Test
     void eachBrokenPropertyFailsExactlyItsCases() {
         Variant ok = Variant.correct();
-        assertEquals(Set.of("schemeMatchesTheEndpointUri"), failing(new Variant("other", ok.schema, false, false, false, false, e -> e, e -> e)), "wrong scheme");
-        assertEquals(Set.of("schemeMatchesTheEndpointUri"), failing(new Variant(" ", ok.schema, false, false, false, false, e -> e, e -> e)), "blank scheme");
-        assertEquals(Set.of("configSchemaIsAJsonObjectSchema"), failing(new Variant("loopback", "{\"type\":\"string\"}", false, false, false, false, e -> e, e -> e)), "schema not an object schema");
-        assertEquals(Set.of("configSchemaIsAJsonObjectSchema"), failing(new Variant("loopback", "not json", false, false, false, false, e -> e, e -> e)), "schema not JSON");
+        assertEquals(Set.of(), failing(new Variant("other", false, false, false, false, e -> e, e -> e)), "another scheme");
+        assertEquals(Set.of(SCHEME), failing(new Variant(" ", false, false, false, false, e -> e, e -> e)), "blank scheme");
+        assertEquals(Set.of(SCHEME), failing(new Variant(Forms.PLATFORM, false, false, false, false, e -> e, e -> e)), "the platform's scheme");
         assertEquals(Set.of("aStoppedConsumerReceivesNothing", "healthIsUpWhileAConsumerRunsAndDownAfterItStopped", "stopWaitsForTheDeliveryInFlightAndItsAnswerReachesTheSender",
                         "aDeliveryCancelledWhileTheConsumerStopsFailsTheSendRetryable"),
-                failing(new Variant("loopback", ok.schema, true, false, false, false, e -> e, e -> e)), "the handler survives stop: delivers after stop and reports up");
-        assertEquals(Set.of("healthIsUpWhileAConsumerRunsAndDownAfterItStopped"), failing(new Variant("loopback", ok.schema, false, true, false, false, e -> e, e -> e)), "health always up");
+                failing(new Variant("loopback", true, false, false, false, e -> e, e -> e)), "the handler survives stop: delivers after stop and reports up");
+        assertEquals(Set.of("healthIsUpWhileAConsumerRunsAndDownAfterItStopped"), failing(new Variant("loopback", false, true, false, false, e -> e, e -> e)), "health always up");
         assertEquals(Set.of("producerDeliversToTheRunningConsumersHandlerWithTheBodyIntact", "theSendCompletesOnlyAfterTheHandlerAcknowledged",
                         "stopWaitsForTheDeliveryInFlightAndItsAnswerReachesTheSender", FRESH),
-                failing(new Variant("loopback", ok.schema, false, false, false, false, e -> e,
+                failing(new Variant("loopback", false, false, false, false, e -> e,
                         e -> e.withHeader("x-seen", "dropped").withHeader("x-acked", "dropped").withHeader("x-answer", "dropped"))), "reply dropped (headers replaced)");
         assertEquals(ackFirstFails(),
-                failing(new Variant("loopback", ok.schema, false, false, true, false, e -> e, e -> e)), "acknowledged before the handler answered (the envelope sent comes back)");
-        assertEquals(Set.of(), failing(new Variant("loopback", ok.schema, false, false, false, false, e -> e.withId("receiver-minted"), e -> e)),
+                failing(new Variant("loopback", false, false, true, false, e -> e, e -> e)), "acknowledged before the handler answered (the envelope sent comes back)");
+        assertEquals(Set.of(), failing(new Variant("loopback", false, false, false, false, e -> e.withId("receiver-minted"), e -> e)),
                 "a receiver that mints its own id (every real transport does) passes: the id is not what crosses");
         assertEquals(Set.of("aNackFromTheHandlerFailsTheSendWithItsReason", "aDeliveryCancelledWhileTheConsumerStopsFailsTheSendRetryable"),
-                failing(new Variant("loopback", ok.schema, false, false, false, true, e -> e, e -> e)), "a NACK treated as success");
+                failing(new Variant("loopback", false, false, false, true, e -> e, e -> e)), "a NACK treated as success");
         Body truncated = Body.of(FakeRuntime.create().blobs(), dev.rail8.api.BlobKey.body("t", 0), new Hash("sha256-64", 0), 0);
         assertEquals(Set.of("producerDeliversToTheRunningConsumersHandlerWithTheBodyIntact", "aBodyAboveTheTreeLimitStreamsThroughIntact", "aSecondSendOfTheSameEnvelopeDeliversTheSameBodyAgain",
-                        FRESH),
-                failing(new Variant("loopback", ok.schema, false, false, false, false, e -> e.next(truncated), e -> e)), "the body does not arrive intact");
+                        FRESH, TWO_CALLS, TWO_PRODUCERS),
+                failing(new Variant("loopback", false, false, false, false, e -> e.next(truncated), e -> e)), "the body does not arrive intact");
         current = Variant.correct();
     }
 
@@ -505,6 +615,7 @@ class ComponentContractSelfTest {
     }
 
     static final String FRESH = "aFreshConsumerOfTheSameEndpointServesOnceTheLastStopped";
+    static final String SCHEME = "theSchemeIsNamedAndNotThePlatforms";
     static final String BROKEN = "brokenStaysPendingWhileTheConsumerWorksAndThroughItsStop";
 
     @Test
@@ -577,13 +688,13 @@ class ComponentContractSelfTest {
     }
 
     @Test
-    void anAddressAssignedAtStartIsReachedOnlyThroughTheStartedConsumersProducerEndpoint() {
+    void anAddressAssignedAtStartIsReachedOnlyThroughTheStartedConsumersOutbound() {
         assertEquals(Set.of("producerDeliversToTheRunningConsumersHandlerWithTheBodyIntact", "theSendCompletesOnlyAfterTheHandlerAcknowledged",
                         "aNackFromTheHandlerFailsTheSendWithItsReason", "aBodyAboveTheTreeLimitStreamsThroughIntact", "aSecondSendOfTheSameEnvelopeDeliversTheSameBodyAgain",
                         "stopWaitsForTheDeliveryInFlightAndItsAnswerReachesTheSender", "aDeliveryCancelledWhileTheConsumerStopsFailsTheSendRetryable", OWN_THREAD,
-                        THROWS, NULL_ANSWER, ATTEMPT_REPLY, MESSAGE_ID, NO_TIME_LEFT, CUT, FRESH, BROKEN),
+                        THROWS, NULL_ANSWER, ATTEMPT_REPLY, MESSAGE_ID, NO_TIME_LEFT, CUT, FRESH, BROKEN, USES, TWO_CALLS, TWO_PRODUCERS),
                 failing(EphemeralWithoutOverrideContractTest.class),
-                "without producerEndpoint the producer has no address: every case that needs a delivery fails, the component delivers only to the address named");
+                "without outbound(started) the producer has no connection and so no address: the uses fail the forms, and every case that needs a delivery fails");
     }
 
     @Test
@@ -750,24 +861,28 @@ class ComponentContractSelfTest {
         ContractRun.caughtBy(g, CUT, "retryable: the message may be tried again");
     }
 
-    static final String TARGET = "targetIsAnsweredFromConfigAloneAndStable";
+    static final String TARGET = "targetIsAnsweredFromTheOutboundAloneAndStable";
 
-    /** A well-formed target answered from the config alone passes the target case; each malformed or unstable answer fails exactly it. */
+    /** A well-formed target answered from the outbound alone passes the target case; each malformed or unstable answer fails exactly it. */
     @Test
     void theTargetCaseFailsAMalformedOrUnstableTarget() {
-        assertEquals(Set.of(), failing(Variant.targeting(cfg -> java.util.Optional.of("loopback://x:1"))), "scheme://host:port passes");
-        assertEquals(Set.of(), failing(Variant.targeting(cfg -> java.util.Optional.of("loopback://[::1]:7"))), "a bracketed IPv6 literal passes");
-        assertEquals(Set.of(), failing(Variant.targeting(cfg -> java.util.Optional.of(cfg.scheme() + "://" + cfg.uri().getHost() + ":0"))), "derived from the config passes");
+        assertEquals(Set.of(), failing(Variant.targeting(out -> java.util.Optional.of("loopback://x:1"))), "scheme://host:port passes");
+        assertEquals(Set.of(), failing(Variant.targeting(out -> java.util.Optional.of("loopback://[::1]:7"))), "a bracketed IPv6 literal passes");
+        Variant derived = Variant.connected();
+        derived.targetOf = out -> out.connection().map(c -> "loopback://" + c.key() + ":0");
+        current = derived;
+        assertEquals(Set.of(), failing(ConnectedContractTest.class), "derived from the connection passes");
 
         java.util.concurrent.atomic.AtomicInteger asked = new java.util.concurrent.atomic.AtomicInteger();
-        assertEquals(Set.of(TARGET), failing(Variant.targeting(cfg -> java.util.Optional.of("loopback://x:" + asked.incrementAndGet()))), "another answer each time");
-        assertEquals(Set.of(TARGET), failing(Variant.targeting(cfg -> java.util.Optional.of(cfg == LOOP ? "loopback://x:1" : "loopback://copy:1"))),
-                "answered by the config object's identity, not its value");
+        assertEquals(Set.of(TARGET), failing(Variant.targeting(out -> java.util.Optional.of("loopback://x:" + asked.incrementAndGet()))), "another answer each time");
+        AtomicReference<Outbound> first = new AtomicReference<>();
+        assertEquals(Set.of(TARGET), failing(Variant.targeting(out -> java.util.Optional.of(first.compareAndSet(null, out) || first.get() == out ? "loopback://x:1" : "loopback://copy:1"))),
+                "answered by the outbound object's identity, not its value");
         assertEquals(Set.of(TARGET), failing(Variant.targetWhileRunning()), "depends on a running consumer");
-        assertEquals(Set.of(TARGET), failing(Variant.targeting(cfg -> null)), "null instead of an Optional");
+        assertEquals(Set.of(TARGET), failing(Variant.targeting(out -> null)), "null instead of an Optional");
         for (String malformed : java.util.List.of("loopback://x:1/in", "loopback://x:1?q=1", "loopback://x:1#f", "loopback://u@x:1", "loopback://u:pw@x:1",
                 "loopback://X:1", "LOOPBACK://x:1", "loopback://x", "loopback://x:", "x:1", "loopback://:1", " loopback://x:1")) {
-            assertEquals(Set.of(TARGET), failing(Variant.targeting(cfg -> java.util.Optional.of(malformed))), "malformed: '" + malformed + "'");
+            assertEquals(Set.of(TARGET), failing(Variant.targeting(out -> java.util.Optional.of(malformed))), "malformed: '" + malformed + "'");
         }
     }
 }

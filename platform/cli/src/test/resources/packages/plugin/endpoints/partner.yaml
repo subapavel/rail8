@@ -5,3 +5,4 @@ scheme: acme
 direction: out
 config:
   url: acme://partner
+  maxBodyBytes: 1048576

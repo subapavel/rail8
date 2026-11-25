@@ -1,21 +1,20 @@
 package dev.rail8.testkit;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Producer;
 import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -35,8 +34,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RecordingComponentTest extends ComponentContract {
 
     final RecordingComponent http = new RecordingComponent("http");
-    final EndpointConfig partner = new EndpointConfig("partner", URI.create("http://partner/in"), Map.of());
-    final EndpointConfig other = new EndpointConfig("other", URI.create("http://other/in"), Map.of());
+    final Outbound partner = RecordingComponent.outbound("partner");
+    final Outbound other = RecordingComponent.outbound("other");
     final FakeRuntime rt = FakeRuntime.create();
 
     @Override protected Component component() { return new RecordingComponent("http"); }
@@ -44,7 +43,17 @@ class RecordingComponentTest extends ComponentContract {
     /** P2-15b (assumed API): a recording component whose sends are cut on {@code timer} when their deadline runs out. */
     @Override protected Component component(dev.rail8.api.Timer timer) { return new RecordingComponent("http", timer); }
 
-    @Override protected EndpointConfig endpoint() { return partner; }
+    @Override protected Inbound inbound() { return RecordingComponent.inbound("partner"); }
+
+    @Test
+    void aConsumerOrAProducerWithoutAConnectionIsRefusedNamingTheDirection() {
+        IllegalArgumentException in = assertThrows(IllegalArgumentException.class,
+                () -> http.consumer(new Inbound("f", java.util.Optional.empty(), java.util.Map.of(), 1), e -> null));
+        assertTrue(in.getMessage().contains("the in direction"), in.getMessage());
+        IllegalArgumentException out = assertThrows(IllegalArgumentException.class, () -> http.producer(new Outbound(java.util.Optional.empty())));
+        assertTrue(out.getMessage().contains("the out direction"), out.getMessage());
+        assertEquals(0, http.producersBuilt(), "a refused producer is not built");
+    }
 
     @Test
     void recordsPerEndpointAndRepliesWithTheConfiguredFunctionWhenNoConsumerRuns() {
@@ -53,8 +62,8 @@ class RecordingComponentTest extends ComponentContract {
         Producer p2 = http.producer(other);
         Envelope a = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
         Envelope b = rt.ingress("f", Headers.empty(), Buffer.buffer("b"));
-        assertEquals("ok", p1.send(a).await().header("ack").orElseThrow());
-        p2.send(b).await();
+        assertEquals("ok", p1.send(a, RecordingComponent.CALL).await().header("ack").orElseThrow());
+        p2.send(b, RecordingComponent.CALL).await();
         assertEquals(List.of(a, b), http.sent());
         assertEquals(List.of(a), http.sentTo("partner"));
         assertEquals(List.of(b), http.sentTo("other"));
@@ -70,11 +79,11 @@ class RecordingComponentTest extends ComponentContract {
         assertEquals(2, http.failuresLeft());
         Producer p = http.producer(partner);
         Envelope e = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
-        Throwable first = p.send(e).cause();
-        Throwable second = p.send(e).cause();
+        Throwable first = p.send(e, RecordingComponent.CALL).cause();
+        Throwable second = p.send(e, RecordingComponent.CALL).cause();
         assertTrue(first instanceof IllegalStateException && second instanceof IllegalStateException);
         assertTrue(first != second, "a fresh exception per failure: suppressed lists do not tangle");
-        assertSame(e, p.send(e).await(), "then the identity reply");
+        assertSame(e, p.send(e, RecordingComponent.CALL).await(), "then the identity reply");
         assertEquals(3, http.sentTo("partner").size(), "failed sends are recorded too: the retries are visible");
         assertEquals(0, http.failuresLeft());
         assertThrows(IllegalArgumentException.class, () -> http.failNext(-1, () -> new RuntimeException()));
@@ -84,16 +93,16 @@ class RecordingComponentTest extends ComponentContract {
 
     @Test
     void aRunningConsumersHandlerAnswersAndANonReplyAckEchoesTheEnvelope() throws ExecutionException, InterruptedException {
-        var consumer = http.consumer(partner, e -> io.vertx.core.Future.succeededFuture(new dev.rail8.api.Ack.Accepted(e.id())));
+        var consumer = http.consumer(RecordingComponent.inbound("partner"), e -> io.vertx.core.Future.succeededFuture(new dev.rail8.api.Ack.Accepted(e.id())));
         consumer.start().await();
         Envelope e = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
-        assertSame(e, http.producer(partner).send(e).await(), "Accepted is not a reply: the envelope itself comes back");
-        assertEquals("ok", http.replyWith(x -> x.withHeader("ack", "ok")).producer(other).send(e).await().header("ack").orElseThrow(), "another endpoint keeps the configured reply: the consumer answers its own endpoint only");
+        assertSame(e, http.producer(partner).send(e, RecordingComponent.CALL).await(), "Accepted is not a reply: the envelope itself comes back");
+        assertEquals("ok", http.replyWith(x -> x.withHeader("ack", "ok")).producer(other).send(e, RecordingComponent.CALL).await().header("ack").orElseThrow(), "another endpoint keeps the configured reply: the consumer answers its own endpoint only");
         assertEquals(Health.Status.UP, http.health().await().status());
         consumer.stop().await();
-        var nacking = http.consumer(partner, x -> io.vertx.core.Future.succeededFuture(new dev.rail8.api.Ack.Nack("no room", true)));
+        var nacking = http.consumer(RecordingComponent.inbound("partner"), x -> io.vertx.core.Future.succeededFuture(new dev.rail8.api.Ack.Nack("no room", true)));
         nacking.start().await();
-        io.vertx.core.Future<Envelope> refused = http.producer(partner).send(e);
+        io.vertx.core.Future<Envelope> refused = http.producer(partner).send(e, RecordingComponent.CALL);
         refused.otherwiseEmpty().await();
         assertTrue(refused.cause() instanceof dev.rail8.api.NackException n && n.retryable() && n.reason().equals("no room"), String.valueOf(refused.cause()));
         nacking.stop().await();
@@ -121,7 +130,7 @@ class RecordingComponentTest extends ComponentContract {
         CountDownLatch release = hold(1);
         Producer p = http.producer(partner);
         Envelope a = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
-        Future<Envelope> held = p.send(a);
+        Future<Envelope> held = p.send(a, RecordingComponent.CALL);
         assertFalse(held.isComplete(), "held at the partner: no answer before the release");
         assertEquals(List.of(a), http.sent(), "recorded at once, before the release");
         http.awaitSent(1);
@@ -129,7 +138,7 @@ class RecordingComponentTest extends ComponentContract {
         release.countDown();
         assertEquals("ok", held.await(10, TimeUnit.SECONDS).header("ack").orElseThrow(), "the configured reply, after the release");
         Envelope b = rt.ingress("f", Headers.empty(), Buffer.buffer("b"));
-        Future<Envelope> next = p.send(b);
+        Future<Envelope> next = p.send(b, RecordingComponent.CALL);
         assertTrue(next.isComplete(), "holdNext(1) holds one send only");
         assertEquals("ok", next.result().header("ack").orElseThrow());
     }
@@ -138,7 +147,7 @@ class RecordingComponentTest extends ComponentContract {
     void aQueuedFailureAppliesAfterTheRelease() throws TimeoutException {
         http.failNext(1, () -> new IllegalStateException("partner down"));
         CountDownLatch release = hold(1);
-        Future<Envelope> held = http.producer(partner).send(rt.ingress("f", Headers.empty(), Buffer.buffer("a")));
+        Future<Envelope> held = http.producer(partner).send(rt.ingress("f", Headers.empty(), Buffer.buffer("a")), RecordingComponent.CALL);
         assertFalse(held.isComplete(), "the failure waits for the release like a reply would");
         assertEquals(1, http.failuresLeft(), "not used before the release");
         release.countDown();
@@ -174,7 +183,7 @@ class RecordingComponentTest extends ComponentContract {
         assertThrows(IllegalArgumentException.class, () -> http.holdNext(-1));
         hold(0);
         Envelope a = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
-        Future<Envelope> sent = http.producer(partner).send(a);
+        Future<Envelope> sent = http.producer(partner).send(a, RecordingComponent.CALL);
         assertTrue(sent.isComplete(), "holdNext(0) holds nothing");
         assertSame(a, sent.result());
     }
@@ -183,10 +192,10 @@ class RecordingComponentTest extends ComponentContract {
     void aSecondStopWithAnAnswerOutstandingDoesNotCompleteEarly() throws Exception {
         io.vertx.core.Promise<dev.rail8.api.Ack> answer = io.vertx.core.Promise.promise();
         List<Envelope> handled = new CopyOnWriteArrayList<>();
-        var consumer = http.consumer(partner, e -> { handled.add(e); return answer.future(); });
+        var consumer = http.consumer(RecordingComponent.inbound("partner"), e -> { handled.add(e); return answer.future(); });
         consumer.start().await();
         Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
-        Future<Envelope> sent = http.producer(partner).send(in);
+        Future<Envelope> sent = http.producer(partner).send(in, RecordingComponent.CALL);
         assertTrue(soon(() -> !handled.isEmpty()), "the send reached the running consumer's handler");   // on a thread of its own (D-057)
         assertEquals(List.of(in.withOutboundId()), handled, "the send reached the running consumer's handler, its message id carried (P2-15b)");
 
@@ -208,13 +217,13 @@ class RecordingComponentTest extends ComponentContract {
     void aStopBeforeTheHandlerWasEnteredStillWaitsForItsAnswer() throws Exception {
         io.vertx.core.Promise<dev.rail8.api.Ack> answer = io.vertx.core.Promise.promise();
         List<Envelope> handled = new CopyOnWriteArrayList<>();
-        var consumer = http.consumer(partner, e -> { handled.add(e); return answer.future(); });
+        var consumer = http.consumer(RecordingComponent.inbound("partner"), e -> { handled.add(e); return answer.future(); });
         consumer.start().await();
         Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("a"));
         Future<Envelope> sent;
         Future<Void> stopped;
         try (HeldCarriers held = HeldCarriers.hold()) {   // the handler's virtual thread is started by the send but cannot run
-            sent = http.producer(partner).send(in);
+            sent = http.producer(partner).send(in, RecordingComponent.CALL);
             stopped = consumer.stop();
             assertEquals(List.of(), handled, "the window is real: the handler has not been entered when stop is called");
             assertFalse(stopped.isComplete(), "the answer the send handed out is outstanding before its handler runs: stop waits for it");
@@ -253,7 +262,7 @@ class RecordingComponentTest extends ComponentContract {
         Thread.State state;
         while ((state = waiter.getState()) != Thread.State.TIMED_WAITING && state != Thread.State.TERMINATED) Thread.onSpinWait();
         assertEquals(Thread.State.TIMED_WAITING, state, "nothing was sent: awaitSent(1) waits");
-        p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("a"))).await();
+        p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("a")), RecordingComponent.CALL).await();
         assertTrue(waiter.join(Duration.ofSeconds(5)), "the send released the waiter; it sits at " + Arrays.toString(waiter.getStackTrace()));
         assertNull(failed.get(), "awaitSent returned normally");
     }

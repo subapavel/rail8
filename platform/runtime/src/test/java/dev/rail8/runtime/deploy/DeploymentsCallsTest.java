@@ -257,9 +257,9 @@ class DeploymentsCallsTest {
         assertEquals(List.of(), problems.stream().filter(l -> !l.startsWith("endpoint 'bad' config") && !l.contains("node-local address")).toList(),
                 "besides the bad endpoint's config, one line for each answer that failed: " + problems);
         List<String> asked = doors.internalAddressAsked();
-        assertEquals(1, asked.stream().filter("shared"::equals).count(), "an endpoint two flows call is asked once: " + asked);
-        assertFalse(asked.contains("unused"), "an out endpoint no step sends to is never asked: " + asked);
-        assertFalse(asked.contains("bad"), "an endpoint whose config is refused is never asked: " + asked);
+        assertEquals(1, asked.stream().filter("/x"::equals).count(), "shared, the endpoint two flows call, is asked once: " + asked);
+        assertFalse(asked.contains("/y"), "unused, an out endpoint no step sends to, is never asked: " + asked);
+        assertFalse(asked.contains("/z"), "bad, an endpoint whose config is refused, is never asked: " + asked);
     }
 
     // --- the WARNING

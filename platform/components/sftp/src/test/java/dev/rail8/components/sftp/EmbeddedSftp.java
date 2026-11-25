@@ -1,6 +1,8 @@
 package dev.rail8.components.sftp;
 
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Connection;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Secret;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.buffer.Buffer;
 import org.apache.sshd.common.config.keys.KeyUtils;
@@ -33,6 +35,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -249,13 +252,32 @@ public final class EmbeddedSftp implements AutoCloseable {
     }
 
     /**
-     * An endpoint polling the remote directory {@code dir} of this server: URI {@code sftp://127.0.0.1:<port><dir>}, the
-     * required options (this server's user, password and host key, a body limit) plus {@code extra}, which may override them.
+     * A sender of the flow {@code contract} polling the remote directory {@code dir} of this server through the connection
+     * {@code key}: its host and port, this server's user, password and host key, a body limit of 1 000 000 bytes, plus
+     * {@code extra}, which may override them — {@code flow} and {@code maxBodyBytes} the sender's own, a field of the
+     * connection form on the connection (a secret field as a secret), any other in the sender's settings; a {@code null}
+     * value leaves the field out.
      */
-    public EndpointConfig endpoint(String name, String dir, Map<String, Object> extra) {
-        Map<String, Object> options = new HashMap<>(Map.of("user", USER, "password", PASSWORD, "hostKey", fingerprint(HOST_KEY),
-                "maxBodyBytes", 1_000_000, "flow", "contract"));
-        options.putAll(extra);
-        return new EndpointConfig(name, URI.create("sftp://127.0.0.1:" + port() + dir), options);
+    public Inbound endpoint(String key, String dir, Map<String, Object> extra) {
+        Map<String, Object> all = new HashMap<>(Map.of("host", "127.0.0.1", "port", port(), "user", USER, "password", PASSWORD,
+                "hostKey", fingerprint(HOST_KEY), "maxBodyBytes", 1_000_000L, "flow", "contract", "dir", dir));
+        all.putAll(extra);
+        return inbound(key, all);
+    }
+
+    /** {@code all} split as {@link #endpoint} splits it, for the connection {@code key}. */
+    static Inbound inbound(String key, Map<String, Object> all) {
+        Map<String, Object> values = new HashMap<>();
+        Map<String, Secret> secrets = new HashMap<>();
+        Map<String, Object> settings = new HashMap<>();
+        List<String> secretFields = SftpComponent.FORMS.connection().secrets();
+        all.forEach((name, value) -> {
+            if (value == null || name.equals("flow") || name.equals("maxBodyBytes")) return;
+            if (secretFields.contains(name)) secrets.put(name, Secret.of("secret://" + key + "." + name.toLowerCase(java.util.Locale.ROOT), () -> String.valueOf(value)));
+            else if (SftpComponent.FORMS.connection().has(name)) values.put(name, value);
+            else settings.put(name, value);
+        });
+        return new Inbound(String.valueOf(all.get("flow")), Optional.of(new Connection(key, values, secrets)), settings,
+                ((Number) all.get("maxBodyBytes")).longValue());
     }
 }

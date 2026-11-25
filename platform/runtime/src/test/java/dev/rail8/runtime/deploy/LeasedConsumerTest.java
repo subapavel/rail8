@@ -3,10 +3,14 @@ package dev.rail8.runtime.deploy;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.api.Timer;
 import dev.rail8.runtime.deploy.LeaseLog.Answer;
 import dev.rail8.runtime.deploy.LeaseLog.Hold;
@@ -21,12 +25,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -76,7 +80,7 @@ class LeasedConsumerTest {
     static final String OWNER = "node-1#1";
     static final Duration TTL = Duration.ofSeconds(25);
     static final Duration RENEW = Duration.ofSeconds(10);
-    static final EndpointConfig CFG = new EndpointConfig("drop", URI.create("poll://drop"), Map.of("flow", "shop/feed", "maxBodyBytes", 1024));
+    static final Inbound CFG = new Inbound("shop/feed", Optional.empty(), Map.of(), 1024);
     static final Function<Envelope, Future<Ack>> HANDLER = e -> Future.succeededFuture(new Ack.Accepted(e.id()));
 
     final FakeClock clock = FakeClock.at(T0);
@@ -146,17 +150,18 @@ class LeasedConsumerTest {
 
         @Override public String scheme() { return "poll"; }
 
-        @Override public String configSchema() { return "{}"; }
+        @Override
+        public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)); }
 
         @Override
-        public synchronized Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+        public synchronized Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             Poller p = new Poller(built.size() + 1);
             built.add(p);
             log.add("build c" + p.n);
             return p;
         }
 
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("fixture: pollers only consume"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("fixture: pollers only consume"); }
 
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
 

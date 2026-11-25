@@ -1,5 +1,8 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -47,17 +50,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * P2-02L (D-083): the deploy asks each in endpoint's component {@code polls(cfg)} — in the same try as the consumer's build, so
- * a throw is a problem line — and wraps the consumer of a polling one in a {@code LeasedConsumer} under the lease
- * {@code <package>/<flow>/<endpoint uri as the component gets it>}, owned by {@code <nodeId>#<n>} (n counted per Deployments: every
+ * The deploy asks each in endpoint's component {@code polledPlace(in)} — in the same try as the consumer's build, so a throw is
+ * a problem line — and wraps the consumer of a polling one in a {@code LeasedConsumer} under the lease
+ * {@code <package>/<flow>/from}, which names the flow alone, owned by {@code <nodeId>#<n>} (n counted per Deployments: every
  * leased consumer its own owner), ttl and renew period from the node's config. A consumer that does not poll starts as before
  * and is never leased. A redeploy's phase A releases the old lease (its consumer stopped first), so the new consumer takes it at
- * its first tick, without waiting for the ttl; a closing node releases every lease; a rolled back flow is leased again.
- *
- * <p>The shape these cases assume (P2-02L test-author): {@code Component.polls(EndpointConfig)}; the longest {@link Deployments}
- * constructor takes a {@code PollerLeases} after the intake; {@link NodeConfig} reads {@code RAIL8_POLLER_LEASE_TTL} and
- * {@code RAIL8_POLLER_LEASE_RENEW}; {@code InMemoryPollerLeases(Clock)}. The key handed to the store carries no
- * {@code rail8:poller:} prefix (the Valkey store's namespace, {@code ValkeyPollerLeasesIT}).
+ * its first tick, without waiting for the ttl; a closing node releases every lease; a rolled back flow is leased again. Two
+ * nodes that deploy the same polling flow poll one at a time. The keys handed to the store carry no {@code rail8:poller:} prefix
+ * (the Valkey store's namespace).
  */
 @Timeout(60)
 class DeploymentsPollerLeaseTest {
@@ -65,8 +65,8 @@ class DeploymentsPollerLeaseTest {
     static final String NODE = "node-1";
     static final Duration TTL = Duration.ofSeconds(40);
     static final Duration RENEW = Duration.ofSeconds(8);
-    static final String FEED_KEY = "shop/feed/poll://drop";
-    static final String SORT_KEY = "shop/sort/poll://slot";
+    static final String FEED_KEY = "shop/feed/from";
+    static final String SORT_KEY = "shop/sort/from";
 
     @TempDir Path tmp;
 
@@ -85,21 +85,25 @@ class DeploymentsPollerLeaseTest {
 
     @BeforeEach
     void wire() {
+        store = new InMemoryPollerLeases(rt.clock());
+        leases = new LeaseLog(rt.clock(), store, trace::add);
+        polledDoors.trace(trace::add);
+        deployments = node(NODE, Map.of(Doors.SCHEME, doors, "poll", polled), leases);
+    }
+
+    /** A node {@code nodeId} on the shared fake runtime, with the components given and its leases asked through {@code leases}. */
+    Deployments node(String nodeId, Map<String, Component> components, LeaseLog leases) {
         Map<String, String> env = new HashMap<>();
         env.put("RAIL8_ENV", "dev");
-        env.put("RAIL8_NODE_ID", NODE);
-        env.put("RAIL8_DATA_DIR", tmp.resolve("data").toString());
+        env.put("RAIL8_NODE_ID", nodeId);
+        env.put("RAIL8_DATA_DIR", tmp.resolve("data-" + nodeId).toString());
         env.put("RAIL8_BLOB_DURABLE_MAX", "4096");
         env.put("RAIL8_POLLER_LEASE_TTL", TTL.toString());
         env.put("RAIL8_POLLER_LEASE_RENEW", RENEW.toString());
         NodeConfig config = NodeConfig.from(env);
-        store = new InMemoryPollerLeases(rt.clock());
-        leases = new LeaseLog(rt.clock(), store, trace::add);
-        polledDoors.trace(trace::add);
-        Map<String, Component> components = Map.of(Doors.SCHEME, doors, "poll", polled);
         Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components);
         CountingQueue queue = new CountingQueue(rt.clock());
-        deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq, queue, () -> 0L,
+        return new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq, queue, () -> 0L,
                 new InMemoryDeploymentStore(), new SequentialIntake(messages, queue), leases);
     }
 
@@ -123,35 +127,46 @@ class DeploymentsPollerLeaseTest {
 
         @Override public String scheme() { return inner.scheme(); }
 
-        @Override public String configSchema() { return inner.configSchema(); }
+        @Override public Forms forms() { return inner.forms(); }
 
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
 
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
+        @Override public Producer producer(Outbound out) { return inner.producer(out); }
 
         @Override public Future<Health> health() { return inner.health(); }
 
-        @Override public Optional<InetSocketAddress> listensOn(EndpointConfig cfg) { return inner.listensOn(cfg); }
+        @Override public Optional<InetSocketAddress> listensOn(Inbound in) { return inner.listensOn(in); }
 
+        /** The endpoint's name when {@link #answer} says it polls, every ask recorded. */
         @Override
-        public boolean polls(EndpointConfig cfg) {
+        public Optional<String> polledPlace(Inbound in) {
+            EndpointConfig cfg = inner.endpoint(in);
             asked.add(cfg.name());
-            return answer.apply(cfg);
+            return answer.apply(cfg) ? Optional.of(cfg.name()) : Optional.empty();
         }
     }
 
     /** {@code shop} at {@code version}: flow {@code feed} from the poll endpoint {@code drop}, flow {@code orders} from a rec one. */
     static PackageDraft shop(String version, String feedVersion, String ordersVersion) {
+        return shop(version, feedVersion, ordersVersion, "drop");
+    }
+
+    /** {@link #shop(String, String, String)} with the poll endpoint named {@code polled}, its path {@code /<polled>}. */
+    static PackageDraft shop(String version, String feedVersion, String ordersVersion, String polled) {
         return PackageDraft.of("shop", version)
-                .endpoint("drop", "poll", "in", new JsonObject().put("path", "/drop"))
+                .endpoint(polled, "poll", "in", new JsonObject().put("path", "/" + polled))
                 .endpoint("orders-in", "in", new JsonObject().put("path", "/orders"))
                 .endpoint("partner", "out", new JsonObject().put("url", "rec://partner"))
-                .flow("feed", feedVersion, "sync", "drop", 4096, PackageDraft.toPartner())
+                .flow("feed", feedVersion, "sync", polled, 4096, PackageDraft.toPartner())
                 .flow("orders", ordersVersion, "sync", "orders-in", 4096, PackageDraft.toPartner());
     }
 
     DeployedPackage deploy(PackageDraft p) throws Exception {
-        return OnVirtualThread.call(() -> deployments.deploy(p.manifest().getString("name"), p.folderIn(tmp.resolve("uploads")))).pkg();
+        return deploy(deployments, p);
+    }
+
+    DeployedPackage deploy(Deployments on, PackageDraft p) throws Exception {
+        return OnVirtualThread.call(() -> on.deploy(p.manifest().getString("name"), p.folderIn(tmp.resolve("uploads")))).pkg();
     }
 
     DeployRefusedException refused(PackageDraft p) {
@@ -199,9 +214,9 @@ class DeploymentsPollerLeaseTest {
         assertEquals(List.of(), leases.releases(), "nothing released");
     }
 
-    /** A polling flow's consumer runs only under the lease {@code <package>/<flow>/<endpoint uri>}, renewed at the node's period. */
+    /** A polling flow's consumer runs only under its lease {@code <package>/<flow>/from}, renewed at the node's period. */
     @Test
-    void thePollingFlowIsLeasedUnderItsQualifiedIdAndUri() throws Exception {
+    void thePollingFlowIsLeasedUnderItsQualifiedIdAndFrom() throws Exception {
         deploy(shop("1.0.0", "1.0.0", "1.0.0"));
 
         Doors.Door feed = polledDoorsOf("shop/feed").getFirst();
@@ -209,15 +224,89 @@ class DeploymentsPollerLeaseTest {
         assertTrue(doors.door("shop/orders").started(), "the flow that does not poll started with the deploy");
         Hold first = firstTick(1);
 
-        assertEquals(FEED_KEY, first.key(), "the key: the flow's qualified id and its endpoint's uri");
+        assertEquals(FEED_KEY, first.key(), "the key: the flow's qualified id and from");
         assertTrue(first.owner().matches(NODE + "#[0-9]+"), "the owner: <nodeId>#<n>, was " + first.owner());
         assertEquals(TTL, first.ttl(), "the node's RAIL8_POLLER_LEASE_TTL");
-        until(feed::started, "the consumer starts once its lease is held");
+        until(feed::started, "the consumer starts once the lease is held");
         rt.clock().advance(RENEW);
         Hold renewal = leases.hold(2);
         assertEquals(List.of(FEED_KEY, first.owner(), rt.clock().instant()), List.of(renewal.key(), renewal.owner(), renewal.at()),
                 "renewed by the same owner after the node's RAIL8_POLLER_LEASE_RENEW");
         assertEquals(Set.of(FEED_KEY), Set.copyOf(leases.holds().stream().map(Hold::key).toList()), "only the polling flow is leased");
+    }
+
+    /**
+     * The key names the flow alone: a redeploy that renames the polled endpoint, and so changes its uri and its path, leases the
+     * flow under the same key, which holds neither the endpoint's id, its scheme nor a value of its config.
+     */
+    @Test
+    void theLeaseKeyStaysWhenTheEndpointsIdAndUriChange() throws Exception {
+        deploy(shop("1.0.0", "1.0.0", "1.0.0", "drop"));
+        Hold before = firstTick(1);
+        until(polledDoorsOf("shop/feed").getFirst()::started, "fixture: the consumer of drop polls");
+
+        deploy(shop("2.0.0", "1.0.1", "1.0.0", "inbox"));
+
+        Hold after = firstTick(2);
+        Doors.Door inbox = polledDoorsOf("shop/feed").get(1);
+        until(inbox::started, "the consumer of inbox polls");
+        assertNotEquals(polledDoorsOf("shop/feed").getFirst().cfg(), inbox.cfg(), "fixture: the endpoint the component gets changed");
+        assertEquals(List.of(FEED_KEY, FEED_KEY), List.of(before.key(), after.key()), "one key before and after");
+        for (String part : List.of("drop", "inbox", "poll", "://")) {
+            assertFalse(after.key().contains(part), "the key holds no " + part + ": " + after.key());
+        }
+    }
+
+    /**
+     * Two nodes of this release deploy the same flow polling one directory: only the node that holds the lease polls, the other
+     * asks at each tick and waits; once the first closes, the other holds the lease at its next tick and polls.
+     */
+    @Test
+    void twoNodesPollingOneDirectoryPollOneAtATime() throws Exception {
+        Doors otherDoors = new Doors("poll");
+        Polled otherPolled = new Polled(otherDoors);
+        LeaseLog otherLeases = new LeaseLog(rt.clock(), store, trace::add);
+        Deployments other = node("node-2", Map.of(Doors.SCHEME, new Doors(), "poll", otherPolled), otherLeases);
+        try {
+            deploy(shop("1.0.0", "1.0.0", "1.0.0"));
+            Hold mine = firstTick(1);
+            Doors.Door polling = polledDoorsOf("shop/feed").getFirst();
+            until(polling::started, "fixture: the first node polls");
+
+            deploy(other, shop("1.0.0", "1.0.0", "1.0.0"));
+            rt.clock().advance(Duration.ZERO);
+            Hold refused = otherLeases.hold(1);
+            quiet(refused.thread(), "the other node's tick 0");
+            for (int tick = 1; tick <= 3; tick++) {
+                rt.clock().advance(RENEW);
+                quiet(leases.hold(1 + tick).thread(), "the first node renews, tick " + tick);
+                quiet(otherLeases.hold(1 + tick).thread(), "the other node asks, tick " + tick);
+            }
+
+            Doors.Door waiting = otherDoors.doors().stream().filter(d -> d.flow().equals("shop/feed")).findFirst().orElseThrow();
+            assertEquals(FEED_KEY, refused.key(), "both nodes ask for one key");
+            assertTrue(otherLeases.holds().stream().allMatch(h -> Boolean.FALSE.equals(h.result())), "the other node is refused every time");
+            assertTrue(leases.holds().stream().allMatch(h -> Boolean.TRUE.equals(h.result()) && h.owner().equals(mine.owner())),
+                    "the first node holds it every time");
+            assertFalse(waiting.started(), "the other node never polled beside the first");
+            assertTrue(polling.started() && !polling.stopped(), "the first still polls");
+
+            close();
+            rt.clock().advance(RENEW);
+            Hold taken = otherLeases.hold(5);
+            quiet(taken.thread(), "the other node's tick after the close");
+
+            assertEquals(Boolean.TRUE, taken.result(), "the other node holds the lease the first released");
+            until(waiting::started, "the other node polls");
+            assertTrue(polling.stopped(), "the first stopped before");
+        } finally {
+            otherLeases.answerEveryOpenHold();
+            otherDoors.releaseAll();
+            OnVirtualThread.call(() -> {
+                other.close();
+                return null;
+            });
+        }
     }
 
     /** A {@code polls} that throws is one problem line of the deploy, worded like a consumer the component refuses to build. */
@@ -249,8 +338,8 @@ class DeploymentsPollerLeaseTest {
 
         deploy(shop("2.0.0", "1.0.1", "1.0.0"));
 
-        assertEquals(List.of(FEED_KEY + " " + old.owner()), leases.releases().stream().map(r -> r.key() + " " + r.owner()).toList(),
-                "phase A released v1's lease");
+        assertEquals(List.of(FEED_KEY + " " + old.owner()),
+                leases.releases().stream().map(r -> r.key() + " " + r.owner()).toList(), "phase A released v1's lease");
         assertTrue(trace.indexOf("stopped shop/feed") >= 0 && trace.indexOf("stopped shop/feed") < trace.indexOf("release " + FEED_KEY + " " + old.owner()),
                 "after v1's consumer stopped: " + trace);
         Hold taken = firstTick(2);
@@ -271,8 +360,7 @@ class DeploymentsPollerLeaseTest {
                 .flow("feed", "1.0.0", "sync", "drop", 4096, PackageDraft.toPartner())
                 .flow("sort", "1.0.0", "sync", "slot", 4096, PackageDraft.toPartner()));
         rt.clock().advance(Duration.ZERO);
-        quiet(leases.hold(1).thread(), "a tick 0");
-        quiet(leases.hold(2).thread(), "the other tick 0");
+        for (int n = 1; n <= 2; n++) quiet(leases.hold(n).thread(), "hold #" + n + " of the two ticks 0");
         until(() -> polledDoors.doors().stream().allMatch(Doors.Door::started), "both consumers poll");
         Map<String, String> owners = new HashMap<>();
         for (Hold h : leases.holds()) owners.put(h.key(), h.owner());
@@ -302,8 +390,8 @@ class DeploymentsPollerLeaseTest {
         DeployRefusedException refused = refused(shop("2.0.0", "1.0.1", "1.0.1"));
 
         assertEquals(Kind.FAILED, refused.kind(), refused.error() + " " + refused.problems());
-        assertEquals(List.of(FEED_KEY + " " + v1.owner()), leases.releases().stream().map(r -> r.key() + " " + r.owner()).toList(),
-                "only v1's lease was released (v2's consumer never held it)");
+        assertEquals(List.of(FEED_KEY + " " + v1.owner()),
+                leases.releases().stream().map(r -> r.key() + " " + r.owner()).toList(), "only v1's lease was released (v2's consumer never held it)");
         Hold again = firstTick(2);
         assertEquals(FEED_KEY, again.key());
         assertNotEquals(v1.owner(), again.owner(), "the rebuilt consumer is an owner of its own");
@@ -328,7 +416,7 @@ class DeploymentsPollerLeaseTest {
         until(first::started, "fixture: the first consumer polls");
 
         rt.clock().advance(RENEW);
-        quiet(leases.hold(2).thread(), "tick 1: lost");
+        quiet(leases.hold(2).thread(), "tick 1: the lease lost");
         until(first::stopped, "fixture: the loss stopped it");
         rt.clock().advance(RENEW);
         quiet(leases.hold(3).thread(), "tick 2: held again");

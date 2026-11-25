@@ -33,7 +33,7 @@ import javax.lang.model.SourceVersion;
 /**
  * {@code rail8 new-adapter <dir> --scheme <scheme> [--package <java package>]}: writes the skeleton of a new adapter into
  * {@code <dir>}, which must not exist or be empty. The skeleton is the sample adapter, the webhook plugin, under the new names:
- * its Maven build, the component with its settings description, the plugin and its service file, the contract tests of the
+ * its Maven build, the component with its forms, the plugin and its service file, the contract tests of the
  * component and of its mock, the component's own tests, and a package that uses it ({@code package/}). It builds and passes
  * the contract suite as written; its HTTP code is what the developer replaces with their protocol. {@code <dir>} is made a git
  * repository on {@code main} whose first commit holds every file written, with a {@code .gitattributes} of {@code * -text}, so git

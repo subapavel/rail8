@@ -1,15 +1,21 @@
 package dev.rail8.testkit;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 
@@ -18,6 +24,7 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -30,14 +37,16 @@ import java.util.function.Supplier;
 
 /**
  * The mock binding of a scheme for flow tests (a flow file is byte-identical everywhere, the
- * mocks live next to it). A producer records every envelope it is sent, per endpoint, and answers: with the
- * reply of the consumer running on that same endpoint (the loopback of the contract suite), else
+ * mocks live next to it). Its forms describe nothing and both directions reach a connection, so the node hands every
+ * consumer and producer a {@link Connection} whose key is the endpoint's id; everything here is keyed by that key. A
+ * producer records every envelope it is sent, per connection, and answers: with the reply of the consumer running on that
+ * same connection (the loopback of the contract suite), else
  * with {@link #replyWith(Function)} (identity by default), or with the next failure queued by
  * {@link #failNext(int, Supplier)} — the way a test plays "partner down" for a retry. Each delivery calls a consumer's handler
  * on a virtual thread of its own; a consumer's {@code stop()} completes once the answers its handler handed out have
  * completed. Health is up while a consumer runs. The consumer's handler receives the envelope with its
  * {@link Envelope#H_MESSAGE_ID} ({@link Envelope#withOutboundId()}); {@link #sent()} records it as it was given. A bounded send
- * ({@code send(e, d)}) with no time left is refused with a retryable {@link NackException}, not recorded; one built with a
+ * ({@code send(e, call, d)}) with no time left is refused with a retryable {@link NackException}, not recorded; one built with a
  * {@link Timer} is cut there — the same failure — when its deadline, re-read at each firing, has run out. Passes
  * {@link ComponentContract}.
  *
@@ -52,7 +61,7 @@ public final class RecordingComponent implements Component {
     private final ConcurrentLinkedDeque<Supplier<? extends Throwable>> failures = new ConcurrentLinkedDeque<>();
     private final AtomicInteger producersBuilt = new AtomicInteger();
     private volatile Function<Envelope, Envelope> reply = e -> e;
-    private final Map<String, Function<Envelope, Future<Ack>>> handlers = new ConcurrentHashMap<>();   // by endpoint name
+    private final Map<String, Function<Envelope, Future<Ack>>> handlers = new ConcurrentHashMap<>();   // by connection key
     // record and take are one step: a send takes its hold and is recorded under this lock, so a visible send has
     // taken its hold and holds are taken in the order sends are recorded; no caller code runs under it
     private final Object recordAndTake = new Object();
@@ -65,7 +74,7 @@ public final class RecordingComponent implements Component {
         this.timer = null;
     }
 
-    /** One whose bounded sends ({@code send(e, d)}) are cut on {@code timer} once their deadline, re-read there, has run out. */
+    /** One whose bounded sends ({@code send(e, call, d)}) are cut on {@code timer} once their deadline, re-read there, has run out. */
     public RecordingComponent(String scheme, Timer timer) {
         this.scheme = Objects.requireNonNull(scheme, "scheme");
         this.timer = Objects.requireNonNull(timer, "timer");
@@ -74,10 +83,10 @@ public final class RecordingComponent implements Component {
     /** What the producers were sent, in order. */
     public List<Envelope> sent() { return List.copyOf(sent); }
 
-    /** What the producer of the endpoint {@code name} was sent, in order. */
-    public List<Envelope> sentTo(String name) { return List.copyOf(sentTo.getOrDefault(name, List.of())); }
+    /** What the producers of the connection {@code key} were sent, in order. */
+    public List<Envelope> sentTo(String key) { return List.copyOf(sentTo.getOrDefault(key, List.of())); }
 
-    /** Producers built so far, across endpoints. */
+    /** Producers built so far, across connections. */
     public int producersBuilt() { return producersBuilt.get(); }
 
     /** The reply a send gets while no consumer runs; the function sees the envelope as sent. */
@@ -103,7 +112,7 @@ public final class RecordingComponent implements Component {
      * meanwhile; no thread of the caller waits. A queued {@link #failNext} failure applies after the release. Holds are
      * taken in the order the sends are recorded; a send that is visible (to {@link #awaitSent(int)}, {@link #sent()},
      * {@link #sentTo(String)}) has already taken its hold, so a hold armed after a send was seen waits for the next send.
-     * Holds are one FIFO across every producer and endpoint of this component, not keyed by endpoint.
+     * Holds are one FIFO across every producer and connection of this component, not keyed by connection.
      */
     public CountDownLatch holdNext(int times) {
         if (times < 0) throw new IllegalArgumentException("times must not be negative, was " + times);
@@ -123,7 +132,7 @@ public final class RecordingComponent implements Component {
     void afterSendVisible(Runnable hook) { this.afterSendVisible = hook; }
 
     /**
-     * Waits until at least {@code n} envelopes have been sent, across endpoints, on a latch counted down by the sends
+     * Waits until at least {@code n} envelopes have been sent, across connections, on a latch counted down by the sends
      * (never a sleep). Bounded by {@link #AWAIT_BOUND}: an {@link IllegalStateException} names how many arrived.
      */
     public void awaitSent(int n) {
@@ -155,19 +164,43 @@ public final class RecordingComponent implements Component {
 
     @Override public String scheme() { return scheme; }
 
-    @Override public String configSchema() { return "{\"type\":\"object\",\"properties\":{}}"; }
+    /** No form describes a field; both directions reach a connection. */
+    public static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
 
+    /** The body limit of {@link #inbound(String)} and the reply limit of {@link #CALL}. */
+    public static final long MAX_BYTES = 64L * 1024 * 1024;
+
+    /** A call of the flow {@code test}, step {@code send}, with no settings and a reply limit of {@link #MAX_BYTES}. */
+    public static final Call CALL = new Call("test", "send", Map.of(), MAX_BYTES, Optional.empty());
+
+    /** What a consumer of the connection {@code key} is built for: the flow {@code test}, no settings, {@link #MAX_BYTES}. */
+    public static Inbound inbound(String key) {
+        return new Inbound("test", Optional.of(new Connection(key, Map.of(), Map.of())), Map.of(), MAX_BYTES);
+    }
+
+    /** What a producer of the connection {@code key} is built for. */
+    public static Outbound outbound(String key) {
+        return new Outbound(Optional.of(new Connection(key, Map.of(), Map.of())));
+    }
+
+    @Override public Forms forms() { return FORMS; }
+
+    /** @throws IllegalArgumentException when {@code in} holds no connection: both directions reach one */
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> h) {
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         Objects.requireNonNull(h, "handler");
-        Objects.requireNonNull(cfg, "cfg");
+        String key = keyOf(in.connection(), "in");
         Drain drain = new Drain();
         Function<Envelope, Future<Ack>> tracked = e -> drain.deliver(h, e);
         return new Consumer() {
-            @Override public Future<Void> start() { handlers.put(cfg.name(), tracked); return Future.succeededFuture(); }
+            @Override public Future<Void> start() { handlers.put(key, tracked); return Future.succeededFuture(); }
             /** Unregisters the handler at once; completes once every answer it handed out has completed. */
-            @Override public Future<Void> stop() { handlers.remove(cfg.name(), tracked); return drain.stop(); }
+            @Override public Future<Void> stop() { handlers.remove(key, tracked); return drain.stop(); }
         };
+    }
+
+    private static String keyOf(Optional<Connection> connection, String direction) {
+        return connection.orElseThrow(() -> new IllegalArgumentException("the " + direction + " direction of the mock reaches a connection: none was handed over")).key();
     }
 
     /**
@@ -209,19 +242,21 @@ public final class RecordingComponent implements Component {
         }
     }
 
+    /** @throws IllegalArgumentException when {@code out} holds no connection: both directions reach one */
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        Objects.requireNonNull(cfg, "cfg");
+    public Producer producer(Outbound out) {
+        String key = keyOf(out.connection(), "out");
         producersBuilt.incrementAndGet();
-        List<Envelope> mine = sentTo.computeIfAbsent(cfg.name(), k -> new CopyOnWriteArrayList<>());
+        List<Envelope> mine = sentTo.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>());
         return new Producer() {
-            @Override public Future<Envelope> send(Envelope e, Deadline d) {
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
                 Duration left = d.remaining();
                 if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: message " + e.id() + " not sent", true));
-                return timer == null ? send(e) : cutAt(d, left, () -> send(e));
+                return timer == null ? send(e, call) : cutAt(d, left, () -> send(e, call));
             }
 
-            @Override public Future<Envelope> send(Envelope e) {
+            @Override public Future<Envelope> send(Envelope e, Call call) {
+                Objects.requireNonNull(call, "call");
                 CountDownLatch hold;
                 synchronized (recordAndTake) {   // the hold is taken before the send is visible, in record order
                     hold = holds.pollFirst();
@@ -249,7 +284,7 @@ public final class RecordingComponent implements Component {
             private Future<Envelope> answer(Envelope e) {
                 Supplier<? extends Throwable> failure = failures.pollFirst();
                 if (failure != null) return Future.failedFuture(failure.get());
-                Function<Envelope, Future<Ack>> running = handlers.get(cfg.name());
+                Function<Envelope, Future<Ack>> running = handlers.get(key);
                 if (running != null) {
                     return running.apply(e.withOutboundId()).compose(ack -> switch (ack) {
                         case Ack.Reply r -> Future.succeededFuture(r.reply());

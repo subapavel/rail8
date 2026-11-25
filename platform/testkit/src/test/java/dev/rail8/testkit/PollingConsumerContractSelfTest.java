@@ -4,15 +4,20 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.Body;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Hasher;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Secret;
 import dev.rail8.api.Timer;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -21,11 +26,11 @@ import io.vertx.core.streams.ReadStream;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.net.URI;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,13 +50,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class PollingConsumerContractSelfTest {
 
-    static final Set<String> CASES = Set.of("schemeMatchesTheEndpointUri", "configSchemaIsAJsonObjectSchema",
+    static final Set<String> CASES = Set.of("theSchemeIsNamedAndNotThePlatforms", "theFormsAreTheSameOnEveryCallAndServeTheInDirection",
+            "everyFieldChoiceAndTabHasALabelAndItsTextKeys", "theInboundPassesTheForms", "noSecretHandleIsReadWhileAConsumerIsBuilt",
+            "aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged",
             "aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted", "theFileStaysWhileTheAnswerIsPending",
             "aRetryableNackKeepsTheFileAndTheNextRoundDeliversItAgain", "aRetryableNackEndsTheRound", "aHandlerThatThrowsOrAnswersNullKeepsTheFile",
             "aFinalNackIsNotDeliveredAgain", "filesAreDeliveredOldestFirst", "aReplyFinishesTheFileAsAcceptedDoes",
             "aBodyAboveTheTreeLimitStreamsThroughIntact", "eachDeliveryRunsOnAVirtualThreadOfItsOwn",
             "stopWaitsForTheDeliveryInFlightAndCompletesItsRemoval", "aStoppedConsumerDeliversNothing", "healthIsUpWhileRunningAndDownAfterStop",
-            "settingsAreTheSameOnEveryCall", "settingsAreDescribedOrTheComponentDeclaresItsOwnSchema", "theEndpointPassesTheDescription",
             "aPartnerOutOfReachBreaksTheConsumerAndAFreshOneDeliversTheFile");
 
     static final String DROPPED = "aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted";
@@ -68,6 +74,18 @@ class PollingConsumerContractSelfTest {
     static final String STOPPED = "aStoppedConsumerDeliversNothing";
     static final String HEALTH = "healthIsUpWhileRunningAndDownAfterStop";
     static final String PARTNER_DOWN = "aPartnerOutOfReachBreaksTheConsumerAndAFreshOneDeliversTheFile";
+    static final String SUCCESSOR = "aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged";
+    static final String SCHEME = "theSchemeIsNamedAndNotThePlatforms";
+    static final String SAME_FORMS = "theFormsAreTheSameOnEveryCallAndServeTheInDirection";
+    static final String INBOUND = "theInboundPassesTheForms";
+    static final String SECRET = "noSecretHandleIsReadWhileAConsumerIsBuilt";
+
+    /** The forms of the correct variant: nothing described, the in direction reaching a connection. */
+    static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION));
+
+    /** The inbound every case's consumer is built for: a connection holding a password. */
+    static final Inbound INBOX = new Inbound("contract",
+            Optional.of(new Connection("partner", Map.of(), Map.of("password", Secret.of("secret://partner.password", () -> "pw")))), Map.of(), 1L << 26);
 
     /**
      * A polling component over an in-memory directory, its own fake clock and timer and a BlobStore with a 4 KiB tree limit.
@@ -92,11 +110,10 @@ class PollingConsumerContractSelfTest {
         private final Set<Poller> running = ConcurrentHashMap.newKeySet();
 
         String scheme = "polling";
-        String schema = "{\"type\":\"object\"}";
-        /** What {@link #settings} answers on each call; the correct variant describes nothing and declares its schema. */
-        Supplier<Settings> settings = () -> Settings.NONE;
-        /** Broken: the suite gets the variant behind a component that takes the default configSchema(). */
-        boolean undeclared;
+        /** What {@link #forms} answers on each call; the correct variant's are {@link #FORMS}. */
+        Supplier<Forms> forms = () -> FORMS;
+        /** Broken: building a consumer reads every secret of its connection. */
+        boolean readsSecretsAtBuild;
         /** Broken: health reports UP whether or not a consumer runs. */
         boolean healthAlwaysUp;
         /** Broken: files taken in name order, not oldest first. */
@@ -161,13 +178,14 @@ class PollingConsumerContractSelfTest {
 
         @Override public String scheme() { return scheme; }
 
-        @Override public String configSchema() { return schema; }
+        @Override public Forms forms() { return forms.get(); }
 
-        @Override public Settings settings() { return settings.get(); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+            if (readsSecretsAtBuild) in.connection().ifPresent(c -> c.secrets().values().forEach(Secret::value));
+            return new Poller(handler);
+        }
 
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return new Poller(handler); }
-
-        @Override public Producer producer(EndpointConfig cfg) { throw new IllegalArgumentException("a poller has no producer"); }
+        @Override public Producer producer(Outbound out) { throw new IllegalArgumentException("a poller has no producer"); }
 
         @Override public Future<Health> health() {
             return Future.succeededFuture(healthAlwaysUp || !running.isEmpty() ? Health.up() : Health.down("no consumer polls"));
@@ -313,14 +331,6 @@ class PollingConsumerContractSelfTest {
         }
     }
 
-    /** {@code inner} behind a component that describes nothing and takes the default configSchema(). */
-    record Undeclared(Variant inner) implements Component {
-        @Override public String scheme() { return inner.scheme(); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return inner.consumer(cfg, handler); }
-        @Override public Producer producer(EndpointConfig cfg) { return inner.producer(cfg); }
-        @Override public Future<Health> health() { return inner.health(); }
-    }
-
     /** The engine instantiates the suite itself; the variant under test is handed over through this slot. */
     static volatile Supplier<Variant> current = Variant::new;
 
@@ -332,8 +342,8 @@ class PollingConsumerContractSelfTest {
             return variant;
         }
 
-        @Override protected Component component() { return variant().undeclared ? new Undeclared(variant()) : variant(); }
-        @Override protected EndpointConfig endpoint() { return new EndpointConfig("in", URI.create("polling://partner/inbox"), Map.of()); }
+        @Override protected Component component() { return variant(); }
+        @Override protected Inbound inbound() { return INBOX; }
         @Override protected void drop(String name, ReadStream<Buffer> bytes) { variant().drop(name, bytesOf(bytes)); }
         @Override protected Set<String> remaining() { return variant().remaining(); }
         @Override protected void tick() { advanceToNextRound(variant().clock, variant().timer); }
@@ -367,22 +377,34 @@ class PollingConsumerContractSelfTest {
     }
 
     @Test
-    void aWrongSchemeOrSchemaFailsOnlyItsCase() {
-        assertEquals(Set.of("schemeMatchesTheEndpointUri"), failing(v -> v.scheme = "other"));
-        assertEquals(Set.of("configSchemaIsAJsonObjectSchema"), failing(v -> v.schema = "{\"type\":\"string\"}"));
+    void aBlankOrThePlatformsSchemeFailsOnlyItsCase() {
+        assertEquals(Set.of(), failing(v -> v.scheme = "other"), "another scheme");
+        assertEquals(Set.of(SCHEME), failing(v -> v.scheme = " "));
+        assertEquals(Set.of(SCHEME), failing(v -> v.scheme = Forms.PLATFORM));
     }
 
     @Test
-    void aSettingsDescriptionThatIsWrongFailsOnlyItsCase() {
-        assertEquals(Set.of("settingsAreDescribedOrTheComponentDeclaresItsOwnSchema"), failing(v -> v.undeclared = true));
-        assertEquals(Set.of(), failing(v -> v.settings = () -> Settings.of(Field.text("glob", "Which files.").in())), "described, and the endpoint passes");
+    void formsThatAreWrongFailOnlyTheirCase() {
+        assertEquals(Set.of(), failing(v -> v.forms = () -> new Forms(Settings.NONE, Settings.of(Field.text("glob", "Glob", "Which files.").in()), FORMS.reach())),
+                "described, and the inbound passes");
         AtomicLong calls = new AtomicLong();
-        assertEquals(Set.of("settingsAreTheSameOnEveryCall"),
-                failing(v -> v.settings = () -> Settings.of(Field.text("f" + calls.incrementAndGet(), "Another field on every call."))));
-        assertEquals(Set.of("theEndpointPassesTheDescription"), failing(v -> v.settings = () -> Settings.of(Field.text("dir", "Where files are.").required().in())),
-                "the endpoint lacks a required in setting");
-        assertEquals(Set.of(), failing(v -> v.settings = () -> Settings.of(Field.text("glob", "Which files.").in(), Field.text("url", "Where to send.").required().out())),
-                "the endpoint is an in one: a required out setting is not its business");
+        assertEquals(Set.of(SAME_FORMS),
+                failing(v -> v.forms = () -> new Forms(Settings.NONE, Settings.of(Field.text("f" + calls.incrementAndGet(), "Field", "Another field on every call.").in()), FORMS.reach())));
+        assertEquals(Set.of(SAME_FORMS, INBOUND), failing(v -> v.forms = () -> new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION))),
+                "the in direction is not served, so it reaches no connection either");
+        assertEquals(Set.of(INBOUND), failing(v -> v.forms = () -> new Forms(Settings.NONE, Settings.of(Field.text("dir", "Directory", "Where files are.").required().in()), FORMS.reach())),
+                "the inbound lacks a required in setting");
+        assertEquals(Set.of(INBOUND), failing(v -> v.forms = () -> new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.NO_CONNECTION))),
+                "the in direction reaches no connection, but the inbound holds one");
+        assertEquals(Set.of(), failing(v -> v.forms = () -> new Forms(Settings.NONE,
+                        Settings.of(Field.text("glob", "Glob", "Which files.").in(), Field.text("url", "Address", "Where to send.").required().out()),
+                        Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION))),
+                "the inbound is an in one: a required out setting is not its business");
+    }
+
+    @Test
+    void aConsumerThatReadsASecretWhileItIsBuiltFailsOnlyTheSecretCase() {
+        assertEquals(Set.of(SECRET), failing(v -> v.readsSecretsAtBuild = true));
     }
 
     @Test
@@ -439,7 +461,7 @@ class PollingConsumerContractSelfTest {
     @Test
     void aRoundOnTheTimersThreadFailsTheCasesThatHoldAnAnswer() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.roundOnTheTimersThread = true));
-        assertEquals(Set.of(PENDING, STOP_WAITS), f.keySet());
+        assertEquals(Set.of(PENDING, STOP_WAITS, SUCCESSOR), f.keySet());
         ContractRun.caughtBy(f, PENDING, "the timer's thread runs the round instead of firing it");
         ContractRun.caughtBy(f, STOP_WAITS, "the timer's thread runs the round instead of firing it");
     }
@@ -452,23 +474,23 @@ class PollingConsumerContractSelfTest {
     }
 
     @Test
-    void aStopThatCompletesBeforeTheRemovalFailsOnlyTheStopCase() {
+    void aStopThatCompletesBeforeTheRemovalFailsTheStopAndTheSuccessorCases() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.stopBeforeTheRemoval = true));
-        assertEquals(Set.of(STOP_WAITS), f.keySet());
+        assertEquals(Set.of(STOP_WAITS, SUCCESSOR), f.keySet());
         ContractRun.caughtBy(f, STOP_WAITS, "stop completed only after the accepted file was removed");
     }
 
     @Test
-    void aStopThatTakesTheNextFileFailsOnlyTheStopCase() {
+    void aStopThatTakesTheNextFileFailsTheStopAndTheSuccessorCases() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.stopTakesTheNextFile = true));
-        assertEquals(Set.of(STOP_WAITS), f.keySet());
+        assertEquals(Set.of(STOP_WAITS, SUCCESSOR), f.keySet());
         ContractRun.caughtBy(f, STOP_WAITS, "took no new file once stop began");
     }
 
     @Test
-    void aStopThatLeavesTheRoundsRunningFailsTheStoppedAndTheStopCases() {
+    void aStopThatLeavesTheRoundsRunningFailsTheStoppedTheStopAndTheSuccessorCases() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.stopLeavesTheRounds = true));
-        assertEquals(Set.of(STOPPED, STOP_WAITS), f.keySet());
+        assertEquals(Set.of(STOPPED, STOP_WAITS, SUCCESSOR), f.keySet());
         ContractRun.caughtBy(f, STOP_WAITS, "stop waits for the delivery in flight");
     }
 
@@ -515,7 +537,7 @@ class PollingConsumerContractSelfTest {
     @Test
     void aSmallBodyThatLosesItsLastByteFailsTheIntactCaseAtItsBodyCheck() {
         Map<String, Throwable> f = failures(Variant.broken(v -> v.delivered = b -> b.length() > 4096 ? b : b.slice(0, Math.max(0, b.length() - 1)).copy()));
-        assertEquals(Set.of(DROPPED, PENDING, NACK_KEEPS, NACK_ENDS, BROKEN_HANDLER, FINAL_NACK, OLDEST, STOP_WAITS), f.keySet(),
+        assertEquals(Set.of(DROPPED, PENDING, NACK_KEEPS, NACK_ENDS, BROKEN_HANDLER, FINAL_NACK, OLDEST, STOP_WAITS, SUCCESSOR), f.keySet(),
                 "every case that tells the files apart by their text");
         ContractRun.caughtBy(f, DROPPED, "the body arrives intact");
     }

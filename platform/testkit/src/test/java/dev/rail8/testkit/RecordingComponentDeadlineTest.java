@@ -1,6 +1,6 @@
 package dev.rail8.testkit;
 
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.NackException;
@@ -10,11 +10,9 @@ import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -31,19 +29,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RecordingComponentDeadlineTest {
 
     final FakeRuntime rt = FakeRuntime.create();
-    final EndpointConfig partner = new EndpointConfig("partner", URI.create("http://localhost:8081/in"), Map.of());
+    final Outbound partner = RecordingComponent.outbound("partner");
 
     Envelope message() { return rt.ingress("f", Headers.empty(), Buffer.buffer("<a/>")); }
 
     @Test
     void noTimeLeftIsNotRecordedAndAHeldSendIsCutOnlyWithATimer() throws Exception {
         RecordingComponent untimed = new RecordingComponent("http");
-        Future<Envelope> late = untimed.producer(partner).send(message(), () -> Duration.ofNanos(-1));
+        Future<Envelope> late = untimed.producer(partner).send(message(), RecordingComponent.CALL, () -> Duration.ofNanos(-1));
         assertTrue(late.failed() && late.cause() instanceof NackException n && n.retryable(), "no time left: a retryable Nack: " + late.cause());
         assertEquals(List.of(), untimed.sent(), "not recorded");
         CountDownLatch untimedHold = untimed.holdNext(1);
         AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(3));
-        Future<Envelope> neverCut = untimed.producer(partner).send(message(), () -> Duration.between(rt.clock().instant(), until.get()));
+        Future<Envelope> neverCut = untimed.producer(partner).send(message(), RecordingComponent.CALL, () -> Duration.between(rt.clock().instant(), until.get()));
         rt.clock().advance(Duration.ofSeconds(4));
         assertTrue(!neverCut.isComplete(), "no timer: a held send waits past its deadline: " + neverCut);
         untimedHold.countDown();
@@ -52,7 +50,7 @@ class RecordingComponentDeadlineTest {
         RecordingComponent timed = new RecordingComponent("http", rt.timer());
         CountDownLatch hold = timed.holdNext(1);
         until.set(rt.clock().instant().plusSeconds(3));
-        Future<Envelope> held = timed.producer(partner).send(message(), () -> Duration.between(rt.clock().instant(), until.get()));
+        Future<Envelope> held = timed.producer(partner).send(message(), RecordingComponent.CALL, () -> Duration.between(rt.clock().instant(), until.get()));
         rt.clock().advance(Duration.ofSeconds(3));
         NackException cut = assertInstanceOf(NackException.class, held.cause(), "cut at its deadline: " + held);
         assertTrue(cut.retryable(), cut.toString());
@@ -69,7 +67,7 @@ class RecordingComponentDeadlineTest {
         };
         Producer p = new RecordingComponent("http", lateCancels).producer(partner);
         AtomicReference<Instant> until = new AtomicReference<>(rt.clock().instant().plusSeconds(5));
-        Future<Envelope> answered = p.send(message(), () -> Duration.between(rt.clock().instant(), until.get()));
+        Future<Envelope> answered = p.send(message(), RecordingComponent.CALL, () -> Duration.between(rt.clock().instant(), until.get()));
         assertTrue(answered.succeeded(), "answered at once: " + answered);
         assertEquals(1, schedules.get(), "fixture: one cut armed");
         until.set(rt.clock().instant().plusSeconds(10));

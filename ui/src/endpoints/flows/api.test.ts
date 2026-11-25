@@ -83,7 +83,7 @@ describe('httpFlowsApi', () => {
   });
 
   it("gives where the node takes requests, the prefix of each scheme that has one, or nothing when it cannot be asked", async () => {
-    const settings = { format: 1, described: false, tabs: [], fields: [], rules: [] };
+    const settings = { format: 2, reach: { in: 'connection', out: 'connection' }, described: { connection: false, flow: false }, tabs: [], connection: [], flow: [], rules: [] };
     const components = { environment: 'dev', httpOrigin: 'http://localhost:8080', items: [{ scheme: 'http', httpPrefix: '/http', settings }, { scheme: 'sftp', httpPrefix: null, settings }] };
     const send = vi.fn(async () => answer(200, components));
     expect(await httpFlowsApi(send).ingress()).toEqual({ environment: 'dev', httpOrigin: 'http://localhost:8080', prefixes: { http: '/http' } });

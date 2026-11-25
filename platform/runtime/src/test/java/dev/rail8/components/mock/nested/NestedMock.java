@@ -3,12 +3,17 @@ package dev.rail8.components.mock.nested;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 
+import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -19,13 +24,15 @@ public final class NestedMock implements Component {
 
     @Override public String scheme() { return "sftp"; }
 
-    @Override public String configSchema() { return "{\"type\":\"object\"}"; }
+    @Override public Forms forms() {
+        return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
+    }
 
-    @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+    @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
         throw new UnsupportedOperationException("a stand-in: no endpoint is built before deploy");
     }
 
-    @Override public Producer producer(EndpointConfig cfg) {
+    @Override public Producer producer(Outbound out) {
         throw new UnsupportedOperationException("a stand-in: no endpoint is built before deploy");
     }
 

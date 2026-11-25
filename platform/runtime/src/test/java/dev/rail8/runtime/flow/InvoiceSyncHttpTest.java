@@ -1,5 +1,6 @@
 package dev.rail8.runtime.flow;
 
+import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -55,6 +56,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -71,6 +73,10 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 @Timeout(60)
 class InvoiceSyncHttpTest {
+
+    /** The foreign partner's password, in its url's user info: recognizable wherever it would leak. */
+    static final String PASSWORD = "leaky-pw-4711";
+    static final String USER_INFO = "rail8:" + PASSWORD;
 
     static final Path DEMO = Path.of("../../examples/demo");
     /** Every wait in this test: well under the class timeout, so a stuck wait fails with what it waited for. */
@@ -125,15 +131,15 @@ class InvoiceSyncHttpTest {
     Component recordingSendFailures(HttpComponent real) {
         return new Component() {
             @Override public String scheme() { return real.scheme(); }
-            @Override public String configSchema() { return real.configSchema(); }
-            @Override public dev.rail8.api.settings.Settings settings() { return real.settings(); }
-            @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { return real.consumer(cfg, handler); }
+            @Override public dev.rail8.api.settings.Forms forms() { return real.forms(); }
+            @Override public Consumer consumer(dev.rail8.api.Inbound in, Function<Envelope, Future<Ack>> handler) { return real.consumer(in, handler); }
             @Override public Future<Health> health() { return real.health(); }
-            @Override public Producer producer(EndpointConfig cfg) {
-                Producer p = real.producer(cfg);
+            @Override public Optional<String> target(dev.rail8.api.Outbound out) { return real.target(out); }
+            @Override public Producer producer(dev.rail8.api.Outbound out) {
+                Producer p = real.producer(out);
                 return new Producer() {
-                    @Override public Future<Envelope> send(Envelope e) {
-                        return p.send(e).onFailure(failure -> {
+                    @Override public Future<Envelope> send(Envelope e, dev.rail8.api.Call call) {
+                        return p.send(e, call).onFailure(failure -> {
                             sendFailures.add(failure);
                             firstSendFailure.complete(failure);
                         });
@@ -164,13 +170,14 @@ class InvoiceSyncHttpTest {
         String base = "http://127.0.0.1:" + partner.actualPort();
         Map<String, EndpointConfig> endpoints = Map.of(
                 "partner-domestic", new EndpointConfig("partner-domestic", URI.create(base + "/echo"), Map.of("url", base + "/echo", "maxBodyBytes", 1_048_576)),
-                "partner-foreign", new EndpointConfig("partner-foreign", URI.create(base + "/echo-foreign"), Map.of("url", base + "/echo-foreign", "maxBodyBytes", 1_048_576)));
+                "partner-foreign", new EndpointConfig("partner-foreign", URI.create(base + "/echo-foreign"),
+                        Map.of("url", base.replace("://", "://" + USER_INFO + "@") + "/echo-foreign", "maxBodyBytes", 1_048_576)));
         FlowDefinition def = FlowDefinition.from(flowDoc.getMap());
         SaxonXml xml = new SaxonXml();
         Pipeline pipeline = new FlowBuilder(rt.runtime(), Stream.concat(new XsdValidate().steps().stream(), xml.steps().stream()).toList(), xml.languages(), endpoints).recording(store, Meter.system()).build(def, DEMO);
         // the consumer's handler: the sync flow's reply is the ACK (ARCHITECTURE §4); the delivery-mode wrapper proper is P1-08
-        EndpointConfig httpIn = new EndpointConfig("http-in", URI.create("http://127.0.0.1:0/in"), Map.of("address", "/in", "flow", def.id(), "maxBodyBytes", def.maxBodyBytes()));
-        HttpComponent.HttpConsumer consumer = (HttpComponent.HttpConsumer) http.consumer(httpIn, e -> {
+        EndpointConfig httpIn = new EndpointConfig("http-in", URI.create("http://127.0.0.1:0/in"), Map.of("address", "/in"));
+        HttpComponent.HttpConsumer consumer = (HttpComponent.HttpConsumer) http.consumer(EndpointUse.inbound(http.forms(), httpIn, def.id(), def.maxBodyBytes()), e -> {
             running.add(Thread.currentThread());
             try {
                 return Future.succeededFuture(new Ack.Reply(pipeline.apply(e)));
@@ -256,10 +263,18 @@ class InvoiceSyncHttpTest {
         assertEquals(List.of(), partnerSaw);
     }
 
+    /**
+     * The foreign partner's url carries user info, as an endpoint of {@code schemaVersion: 1} may: the flow still builds and
+     * sends to it, and the history keeps no trace of the password.
+     */
     @Test
-    void aForeignInvoiceGoesToTheForeignPartnersUrl() {
+    void aForeignInvoiceGoesToTheForeignPartnersUrlWhoseUserInfoStillWorks() {
         Answer a = post(Buffer.buffer(invoice.toString().replace("<Currency>CZK</Currency>", "<Currency>EUR</Currency>")));
         assertEquals(200, a.status());
         assertTrue(partnerSaw.get(0).startsWith("/echo-foreign "), partnerSaw.get(0));
+        List<String> ids = within(store.findByKey("invoiceId", "4711", Optional.empty(), Page.MAX_LIMIT), "the key search").items().stream()
+                .map(MessageStore.Found::id).toList();
+        String history = within(store.timeline(ids.getFirst()), "the timeline read").toString();
+        assertFalse(history.contains(PASSWORD), "the history never shows the url's password: " + history);
     }
 }

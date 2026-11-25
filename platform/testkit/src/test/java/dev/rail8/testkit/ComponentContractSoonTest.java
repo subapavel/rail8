@@ -1,7 +1,7 @@
 package dev.rail8.testkit;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -19,7 +19,7 @@ class ComponentContractSoonTest {
     /** A suite instance for the helper alone; its cases are not what this test runs. */
     static final class Impatient extends ComponentContract {
         @Override protected Component component() { throw new UnsupportedOperationException(); }
-        @Override protected EndpointConfig endpoint() { throw new UnsupportedOperationException(); }
+        @Override protected Inbound inbound() { throw new UnsupportedOperationException(); }
         @Override protected Duration patience() { return Duration.ofMillis(20); }
     }
 
@@ -29,7 +29,7 @@ class ComponentContractSoonTest {
      */
     static final class Patient extends ComponentContract {
         @Override protected Component component() { throw new UnsupportedOperationException(); }
-        @Override protected EndpointConfig endpoint() { throw new UnsupportedOperationException(); }
+        @Override protected Inbound inbound() { throw new UnsupportedOperationException(); }
     }
 
     @Test
@@ -41,7 +41,7 @@ class ComponentContractSoonTest {
         assertFalse(suite.soon(() -> false), "20 ms of patience spent without the condition");
         ComponentContract defaults = new ComponentContract() {
             @Override protected Component component() { throw new UnsupportedOperationException(); }
-            @Override protected EndpointConfig endpoint() { throw new UnsupportedOperationException(); }
+            @Override protected Inbound inbound() { throw new UnsupportedOperationException(); }
         };
         assertEquals(Duration.ofSeconds(10), defaults.patience(), "a real transport gets ten seconds by default");
     }

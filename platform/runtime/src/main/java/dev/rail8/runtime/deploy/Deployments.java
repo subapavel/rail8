@@ -8,11 +8,13 @@ import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Expressions;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.StepConfig;
 import dev.rail8.api.StepFactory;
 import dev.rail8.api.Timer;
 import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.TargetLimit;
 import dev.rail8.core.admission.Targets;
@@ -21,6 +23,7 @@ import dev.rail8.core.cache.Caches;
 import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.dlq.Dlq;
 import dev.rail8.core.flow.Delivery;
+import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.core.flow.FlowBuilder;
 import dev.rail8.core.flow.FlowDefinition;
 import dev.rail8.core.flow.FlowWorker;
@@ -133,9 +136,9 @@ import java.util.stream.Stream;
  * files recorded when it was written, path and SHA-256 alike: then it is used as it is and the folder is deleted. A kept
  * directory whose files differ (one written into it, changed, deleted, or one the node cannot read) is not trusted: the folder
  * replaces it, and it stays kept whatever happens next. Then the package is checked whole — {@code Package.problems()}, the
- * manifest's name, its dependencies ({@link #dependencies}), a component for every scheme, every endpoint's config (its environment's keys laid over it) against
- * its component's settings description ({@code Component.settings()}, or its {@code configSchema()} when it describes
- * nothing), no in endpoint setting {@code flow} or {@code maxBodyBytes}, one flow per in endpoint,
+ * manifest's name, its dependencies ({@link #dependencies}), a component for every scheme that serves the endpoint's direction,
+ * every endpoint's config (its environment's keys laid over it) against its component's forms ({@code Component.forms()},
+ * split as {@link EndpointUse#check} splits it), no in endpoint setting {@code flow} or {@code maxBodyBytes}, one flow per in endpoint,
  * no flow from an out endpoint, every flow definition, no {@code delivery.queue} on a flow that is not at-least-once and none of
  * {@code kafka}, the optional add-on not in this build, no at-least-once flow above {@code RAIL8_BLOB_DURABLE_MAX}, no
  * in endpoint feeding a flow whose consumer would listen where another of the package, the node's admin API, its peer link or a running flow of
@@ -254,13 +257,14 @@ import java.util.stream.Stream;
  * pins it, and a restore reads it from the pin's own commit. Deploying a commit of it again is the rollback. The other nodes
  * undeploy it at their next tick, and a restore after it does not install it: its record is gone.
  *
- * <p>A flow runs as {@code <package>/<flow>}: its snapshots, DLQ rows and queue items carry that id, and so does
- * the consumer option {@code flow}; the deploy also sets {@code maxBodyBytes}, the flow's limit. Every message carries the
+ * <p>A flow runs as {@code <package>/<flow>}: its snapshots, DLQ rows and queue items carry that id, and so does the
+ * {@code Inbound} its consumer is built for ({@link EndpointUse#inbound}), with the flow's {@code maxBodyBytes} as its limit. Every message carries the
  * versions {@code package=<name>@<version>} and, for a deploy from git, {@code commit}: the commit its flow was built from.
  *
- * <p>A consumer whose component says it polls ({@code Component.polls}, asked in the same try as the consumer's build: a throw
- * is that flow's problem line) runs under the endpoint's poller lease ({@link LeasedConsumer}): the key
- * {@code <package>/<flow>/<endpoint uri as the component gets it>}, the owner {@code <nodeId>#<n>} (n counted here: every leased
+ * <p>A consumer whose component names a place it polls ({@code Component.polledPlace}, asked in the same try as the consumer's
+ * build: a throw is that flow's problem line) runs under the flow's poller lease ({@link LeasedConsumer}): the key
+ * {@code <package>/<flow>/from}, which names the flow alone, so it stays the same when the endpoint's id or uri changes and
+ * holds no value of its connection, the owner {@code <nodeId>#<n>} (n counted here: every leased
  * consumer its own owner), the ttl and renew period of {@code RAIL8_POLLER_LEASE_*}. Its start completes at once and its
  * consumer polls only once the lease is held, so a consumer whose start fails after the deploy is never the deploy's
  * {@link Kind#FAILED}: the leased consumer breaks, and a fresh one, with an owner of its own, is tried again as above. Its stop
@@ -703,10 +707,10 @@ public final class Deployments {
         return Optional.ofNullable(prefixes.get(scheme));
     }
 
-    /** The settings description of every component the node serves, by scheme in name order. */
-    public SortedMap<String, Settings> settings() {
-        SortedMap<String, Settings> all = new TreeMap<>();
-        components.forEach((scheme, component) -> all.put(scheme, component.settings()));
+    /** The forms of every component the node serves, by scheme in name order. */
+    public SortedMap<String, Forms> forms() {
+        SortedMap<String, Forms> all = new TreeMap<>();
+        components.forEach((scheme, component) -> all.put(scheme, component.forms()));
         return Collections.unmodifiableSortedMap(all);
     }
 
@@ -2067,20 +2071,21 @@ public final class Deployments {
 
     /**
      * What is wrong with {@code cfg}, an endpoint's config as written, for an endpoint of {@code direction} ({@code in} or
-     * {@code out}) served by {@code component}: each {@code '<pointer>': <message>}. A component that describes its settings
-     * is judged by that description only; one that describes nothing by its {@code configSchema()}.
+     * {@code out}) served by {@code component}: each {@code '<pointer>': <message>}, as {@link EndpointUse#check} judges it
+     * against the component's forms. A direction the component does not serve is one line saying so.
      */
     private static List<String> refusedBy(Component component, JsonObject cfg, String direction) {
-        Settings settings = component.settings();
+        Forms forms = component.forms();
+        Direction d = direction(direction);
+        if (!forms.serves(d)) return List.of("the adapter of scheme '" + component.scheme() + "' does not serve the " + direction + " direction");
         List<String> refused = new ArrayList<>();
-        if (settings.described()) {
-            for (Settings.Problem p : settings.check(cfg.getMap(), "in".equals(direction) ? Direction.IN : Direction.OUT)) {
-                refused.add("'" + p.path() + "': " + p.message());
-            }
-        } else {
-            for (Schemas.Problem p : Schemas.check(component.configSchema(), cfg).problems()) refused.add("'" + p.path() + "': " + p.message());
-        }
+        for (Settings.Problem p : EndpointUse.check(forms, d, cfg.getMap())) refused.add("'" + p.path() + "': " + p.message());
         return refused;
+    }
+
+    /** The direction an endpoint file names, {@code in} or {@code out}. */
+    private static Direction direction(String direction) {
+        return "in".equals(direction) ? Direction.IN : Direction.OUT;
     }
 
     /**
@@ -2114,6 +2119,8 @@ public final class Deployments {
             boolean valid = false;
             if (component == null) {
                 problems.add("endpoint '" + id + "': no component on this node serves the scheme '" + scheme + "'");
+            } else if (!component.forms().serves(direction(endpoint.getString("direction")))) {
+                problems.add("endpoint '" + id + "' is " + endpoint.getString("direction") + ": " + refusedBy(component, cfg, endpoint.getString("direction")).getFirst());
             } else {
                 List<String> refused = refusedBy(component, cfg, endpoint.getString("direction"));
                 for (String p : refused) problems.add("endpoint '" + id + "' config (environment " + config.env() + ") at " + p);
@@ -2164,7 +2171,7 @@ public final class Deployments {
             if (fed.size() > 1) problems.add("endpoint '" + endpoint + "' is the from endpoint of the flows " + fed + ": an in endpoint feeds one flow");
             if (ins.contains(endpoint)) asked.put(fed.getFirst(), endpoint(endpoint, schemes.get(endpoint), resolved.get(endpoint)));
         });
-        Map<String, InetSocketAddress> listening = listeners(name, asked, problems);
+        Map<String, InetSocketAddress> listening = listeners(name, asked, flows, problems);
         Map<String, String> paths = paths(name, asked, configs, problems);
         Map<String, Calls.Links> calls = links(flows, asked, callable, problems);
         List<Calls.Node> fresh = new ArrayList<>();
@@ -2404,7 +2411,8 @@ public final class Deployments {
      *
      * @return the address each flow's consumer listens on, by its local id
      */
-    private Map<String, InetSocketAddress> listeners(String name, Map<String, EndpointConfig> asked, List<String> problems) {
+    private Map<String, InetSocketAddress> listeners(String name, Map<String, EndpointConfig> asked, Map<String, FlowDefinition> flows,
+                                                     List<String> problems) {
         List<Listener> taken = new ArrayList<>();   // the new version's flows asked so far
         List<Listener> held = new ArrayList<>();    // the admin API, the HTTP port, the peer link, then every other package's running flows
         held.add(new Listener("the node's admin API (RAIL8_ADMIN_HOST/PORT)", InetSocketAddress.createUnresolved(config.admin().host(), config.admin().port())));
@@ -2421,7 +2429,10 @@ public final class Deployments {
             EndpointConfig endpoint = each.getValue();
             Optional<InetSocketAddress> answer;
             try {
-                answer = Objects.requireNonNull(components.get(endpoint.scheme()).listensOn(endpoint), "listensOn answered null");
+                Component component = components.get(endpoint.scheme());
+                FlowDefinition def = flows.get(each.getKey());
+                Inbound in = EndpointUse.inbound(component.forms(), endpoint, def.id(), def.maxBodyBytes());
+                answer = Objects.requireNonNull(component.listensOn(in), "listensOn answered null");
             } catch (RuntimeException thrown) {
                 problems.add("endpoint '" + endpoint.name() + "' (scheme '" + endpoint.scheme() + "'): its component cannot say where its consumer listens: "
                         + reason(thrown));
@@ -2516,20 +2527,26 @@ public final class Deployments {
     private Map<String, Calls.Links> links(Map<String, FlowDefinition> flows, Map<String, EndpointConfig> asked, Map<String, EndpointConfig> callable,
                                            List<String> problems) {
         Map<String, Optional<Calls.Address>> answers = new HashMap<>();   // by endpoint name
-        Function<EndpointConfig, Optional<Calls.Address>> ask = e -> answers.computeIfAbsent(e.name(), n -> address(e, problems));
+        Function<EndpointConfig, Optional<Calls.Address>> serving = e -> answers.computeIfAbsent(e.name(), n -> address(e, Direction.IN, problems));
+        Function<EndpointConfig, Optional<Calls.Address>> calling = e -> answers.computeIfAbsent(e.name(), n -> address(e, Direction.OUT, problems));
         Map<String, Calls.Links> links = new TreeMap<>();
         flows.forEach((id, def) -> {
-            Optional<Calls.Address> serves = Optional.ofNullable(asked.get(id)).flatMap(ask);
-            List<Calls.Address> calls = def.referencedEndpoints().stream().map(callable::get).filter(Objects::nonNull).map(ask).flatMap(Optional::stream).toList();
+            Optional<Calls.Address> serves = Optional.ofNullable(asked.get(id)).flatMap(serving);
+            List<Calls.Address> calls = def.referencedEndpoints().stream().map(callable::get).filter(Objects::nonNull).map(calling).flatMap(Optional::stream).toList();
             links.put(id, new Calls.Links(serves, calls));
         });
         return links;
     }
 
-    /** The node-local address {@code endpoint} names as its component answers, or none; a throw or a null is a line in {@code problems}. */
-    private Optional<Calls.Address> address(EndpointConfig endpoint, List<String> problems) {
+    /**
+     * The node-local address {@code endpoint}, of {@code direction}, names as its component answers from the settings in the flow
+     * ({@link EndpointUse#settings}), or none; a throw or a null is a line in {@code problems}.
+     */
+    private Optional<Calls.Address> address(EndpointConfig endpoint, Direction direction, List<String> problems) {
         try {
-            Optional<String> answer = Objects.requireNonNull(components.get(endpoint.scheme()).internalAddress(endpoint), "internalAddress answered null");
+            Component component = components.get(endpoint.scheme());
+            Map<String, Object> settings = EndpointUse.settings(component.forms(), direction, endpoint);
+            Optional<String> answer = Objects.requireNonNull(component.internalAddress(direction, settings), "internalAddress answered null");
             return answer.map(value -> new Calls.Address(endpoint.scheme(), value));
         } catch (RuntimeException thrown) {
             problems.add("endpoint '" + endpoint.name() + "' (scheme '" + endpoint.scheme() + "'): its component cannot say which node-local address it serves "
@@ -2781,7 +2798,10 @@ public final class Deployments {
         }
     }
 
-    /** The in endpoint {@code from} as the consumer of {@code def} gets it: with the flow's qualified id and its maxBodyBytes. */
+    /**
+     * The in endpoint {@code from} with the flow's qualified id and its maxBodyBytes, as the flow's hash covers it and as
+     * consumers of the release before got it.
+     */
     private static EndpointConfig consumed(EndpointConfig from, FlowDefinition def) {
         Map<String, Object> options = new HashMap<>(from.options());
         options.put("flow", def.id());
@@ -2791,7 +2811,7 @@ public final class Deployments {
 
     /**
      * Builds the consumer of each of {@code flows} (the added and changed ones) and returns their copies with it, in order; one the
-     * component refuses, or whose {@code polls} throws, is one line added to {@code problems}. Each consumer runs in its
+     * component refuses, or whose {@code polledPlace} throws, is one line added to {@code problems}. Each consumer runs in its
      * {@link RestartingConsumer}, which builds every later one from the same endpoint and handler, its start and its wait for the
      * stop of the one before bounded by the node's stop deadline; the consumer of a polling endpoint, each later one included, is
      * wrapped in a {@link LeasedConsumer} of its own first. Nothing is started: a consumer never started is never stopped.
@@ -2801,12 +2821,14 @@ public final class Deployments {
         for (Flow f : flows) {
             Function<Envelope, Future<Ack>> handler = f.delivery();   // an at-least-once save hands its item off to the flow's worker
             EndpointConfig from = f.from();
+            FlowDefinition def = f.recipe().def();
             Component component = components.get(from.scheme());
             try {
-                boolean polls = component.polls(from);
-                Consumer consumer = component.consumer(from, handler);
-                Supplier<Consumer> build = () -> component.consumer(from, handler);
-                String key = f.id() + "/" + from.uri();
+                Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes());
+                boolean polls = Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null").isPresent();
+                Consumer consumer = component.consumer(in, handler);
+                Supplier<Consumer> build = () -> component.consumer(in, handler);
+                String key = f.id() + "/from";
                 Consumer first = polls ? leased(key, consumer, build) : consumer;
                 Supplier<Consumer> fresh = polls ? () -> leased(key, build.get(), build) : build;
                 with.add(f.with(new RestartingConsumer(f.id(), first, fresh, polls, config.stopDeadline(), timer, clock)));
@@ -2818,8 +2840,8 @@ public final class Deployments {
     }
 
     /**
-     * {@code first} under the lease {@code key} ({@code <package>/<flow>/<endpoint uri>}), owned by {@code <nodeId>#<n>}, on the
-     * node's timer and clock with the ttl and renew period of its config; {@code fresh} builds each consumer after the first.
+     * {@code first} under the lease {@code key} ({@code <package>/<flow>/from}), owned by {@code <nodeId>#<n>}, on the node's
+     * timer and clock with the ttl and renew period of its config; {@code fresh} builds each consumer after the first.
      */
     private LeasedConsumer leased(String key, Consumer first, Supplier<Consumer> fresh) {
         NodeConfig.Leases lease = config.leases();

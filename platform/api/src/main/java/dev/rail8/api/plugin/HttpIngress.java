@@ -1,7 +1,7 @@
 package dev.rail8.api.plugin;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.settings.Field;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -41,19 +41,19 @@ public interface HttpIngress {
     String ADDRESS_PATTERN = "^(?=.{2,256}$)(/(?!\\.\\.?(/|$))[A-Za-z0-9._~-]+)+$";
 
     /**
-     * The option {@code address} of an in endpoint: the path under the adapter's prefix that senders call, such as
-     * {@code /orders}, matched exactly. A component with a prefix lists this field in its settings.
+     * The setting {@code address} of a sender: the path under the adapter's prefix that senders call, such as
+     * {@code /orders}, matched exactly. A component with a prefix lists this field in its flow form.
      */
-    Field ADDRESS = Field.text("address", "The path under the adapter's prefix on the node's HTTP port that senders call, "
+    Field ADDRESS = Field.text("address", "Address", "The path under the adapter's prefix on the node's HTTP port that senders call, "
             + "such as /orders; matched exactly.").required().pattern(ADDRESS_PATTERN).in();
 
     /** The port where none is open ({@code rail8 validate}, {@code rail8 test}): every mount fails. */
-    HttpIngress NONE = (cfg, requests) -> Future.failedFuture(new IllegalStateException(
-            "endpoint '" + cfg.name() + "': no HTTP port is open here"));
+    HttpIngress NONE = (scheme, in, requests) -> Future.failedFuture(new IllegalStateException(
+            "flow '" + in.flow() + "': no HTTP port is open here"));
 
     /**
-     * Mounts the in endpoint {@code cfg} on the port: the path is the prefix of the component of {@code cfg}'s scheme followed
-     * by {@code cfg}'s {@code address} option, matched exactly against a request's path (the query aside, case-sensitive).
+     * Mounts the sender {@code in} on the port: the path is the prefix of the component of {@code scheme} followed by
+     * {@code in}'s {@code address} setting, matched exactly against a request's path (the query aside, case-sensitive).
      *
      * <p>{@code requests} is called on the connection's event loop, once for every request at the path, before any of its body
      * is read. It must not block: every mount of every component shares the node's event loops, and a handler that blocks one
@@ -65,8 +65,10 @@ public interface HttpIngress {
      * mount that is not closed holds the path or the port takes no mounts (none is open, or the node is closing). The consumer's
      * start fails with it, and the node does what it does with any failed start: it refuses a first deploy, rolls a redeploy
      * back, and starts the consumer again with back-off after a restore or a break. It may be called on any thread.
+     *
+     * @since 0.4
      */
-    Future<Mount> mount(EndpointConfig cfg, Handler<HttpServerRequest> requests);
+    Future<Mount> mount(String scheme, Inbound in, Handler<HttpServerRequest> requests);
 
     /**
      * One endpoint mounted on the port.

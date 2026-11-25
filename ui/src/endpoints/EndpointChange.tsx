@@ -5,7 +5,7 @@ import { say, useText, type Texts } from '../language';
 import { ReadSpinner } from '../ReadSpinner';
 import type { EndpointsApi } from './api';
 import { endpointChanges, type EndpointChanges } from './endpointChanges';
-import type { SettingsDescription } from './settings';
+import type { ComponentForms } from './settings';
 
 export interface EndpointChangeProps {
   /** The node's components, whose settings descriptions title the options. */
@@ -53,7 +53,7 @@ function linesOf({ t }: Texts, changes: EndpointChanges): Line[] {
 export function EndpointChange({ api, path, before, after }: EndpointChangeProps) {
   const texts = useText();
   const { t } = texts;
-  const [descriptions, setDescriptions] = useState<ReadonlyMap<string, SettingsDescription> | { failed: string } | null>(null);
+  const [descriptions, setDescriptions] = useState<ReadonlyMap<string, ComponentForms> | { failed: string } | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -66,7 +66,7 @@ export function EndpointChange({ api, path, before, after }: EndpointChangeProps
     };
   }, [api]);
 
-  const described = useMemo(() => (descriptions === null || 'failed' in descriptions ? new Map<string, SettingsDescription>() : descriptions), [descriptions]);
+  const described = useMemo(() => (descriptions === null || 'failed' in descriptions ? new Map<string, ComponentForms>() : descriptions), [descriptions]);
   const changes = useMemo(() => endpointChanges(before?.text ?? null, after?.text ?? null, described), [before, after, described]);
 
   if (changes.status === 'same') return <Typography.Text type="secondary">{t('endpoints.change.none')}</Typography.Text>;

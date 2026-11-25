@@ -1,5 +1,6 @@
 package dev.rail8.core.flow;
 
+import dev.rail8.api.Call;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Producer;
 import io.vertx.core.Future;
@@ -78,7 +79,7 @@ class ProducersCloseTest {
         static Counting throwing(String name, Throwable thrown) { return new Counting(name, thrown, null); }
 
         @Override
-        public Future<Envelope> send(Envelope e) {
+        public Future<Envelope> send(Envelope e, Call call) {
             throw new AssertionError(name + ": a send is not part of a close");
         }
 

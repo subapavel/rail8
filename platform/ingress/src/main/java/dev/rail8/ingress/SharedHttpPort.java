@@ -1,7 +1,7 @@
 package dev.rail8.ingress;
 
 import dev.rail8.api.Component;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Settings;
@@ -136,8 +136,8 @@ public final class SharedHttpPort implements HttpIngress {
                 throw new IllegalStateException(owner(other) + " and " + owner(c) + " both declare the HTTP prefix " + prefix
                         + "; a prefix has one component");
             }
-            if (!((List<?>) c.settings().toJson().get("fields")).contains(ADDRESS_FIELD)) {
-                throw new IllegalStateException(owner(c) + " declares the HTTP prefix " + prefix + " but its settings do not list the in field"
+            if (!((List<?>) c.forms().flow().toJson().get("fields")).contains(ADDRESS_FIELD)) {
+                throw new IllegalStateException(owner(c) + " declares the HTTP prefix " + prefix + " but its flow form does not list the in field"
                         + " 'address' (HttpIngress.ADDRESS)");
             }
             byScheme.put(c.scheme(), prefix);
@@ -150,7 +150,7 @@ public final class SharedHttpPort implements HttpIngress {
     }
 
     /**
-     * The path an in endpoint with the option {@code address} is served at under {@code prefix}: the prefix, then the address.
+     * The path a sender with the setting {@code address} is served at under {@code prefix}: the prefix, then the address.
      *
      * @throws IllegalArgumentException the address is missing, is no text or is not of {@link #ADDRESS_PATTERN}
      */
@@ -201,30 +201,32 @@ public final class SharedHttpPort implements HttpIngress {
     }
 
     @Override
-    public Future<Mount> mount(EndpointConfig cfg, Handler<HttpServerRequest> requests) {
+    public Future<Mount> mount(String scheme, Inbound in, Handler<HttpServerRequest> requests) {
         try {
-            Objects.requireNonNull(cfg, "cfg");
+            Objects.requireNonNull(scheme, "scheme");
+            Objects.requireNonNull(in, "in");
             Objects.requireNonNull(requests, "requests");
-            String prefix = prefixes.get(cfg.scheme());
+            String who = "flow '" + in.flow() + "'";
+            String prefix = prefixes.get(scheme);
             if (state.get() != State.OPEN) {
-                throw new IllegalStateException("endpoint '" + cfg.name() + "': the HTTP port takes no mounts " + (state.get() == State.CLOSED
+                throw new IllegalStateException(who + ": the HTTP port takes no mounts " + (state.get() == State.CLOSED
                         ? "any more: it is closed" : "yet: it is not listening"));
             }
-            if (prefix == null) throw new IllegalArgumentException("endpoint '" + cfg.name() + "': the scheme " + cfg.scheme() + " declares no HTTP prefix");
+            if (prefix == null) throw new IllegalArgumentException(who + ": the scheme " + scheme + " declares no HTTP prefix");
             String path;
             try {
-                path = path(prefix, cfg.options().get(ADDRESS.name()));
+                path = path(prefix, in.settings().get(ADDRESS.name()));
             } catch (IllegalArgumentException bad) {
-                throw new IllegalArgumentException("endpoint '" + cfg.name() + "': " + bad.getMessage(), bad);
+                throw new IllegalArgumentException(who + ": " + bad.getMessage(), bad);
             }
-            Mounted mounted = new Mounted(cfg.name(), path, requests, url(path));
+            Mounted mounted = new Mounted(who, path, requests, url(path));
             Mounted other = mounts.putIfAbsent(path, mounted);
             if (other != null) {
-                throw new IllegalStateException("endpoint '" + cfg.name() + "': the path " + path + " is mounted by endpoint '" + other.endpoint + "'");
+                throw new IllegalStateException(who + ": the path " + path + " is mounted by " + other.owner);
             }
             if (state.get() != State.OPEN) {   // closed while it mounted: never routed to
                 mounts.remove(path, mounted);
-                throw new IllegalStateException("endpoint '" + cfg.name() + "': the HTTP port takes no mounts any more: it is closed");
+                throw new IllegalStateException(who + ": the HTTP port takes no mounts any more: it is closed");
             }
             return Future.succeededFuture(mounted);
         } catch (RuntimeException refused) {
@@ -260,7 +262,7 @@ public final class SharedHttpPort implements HttpIngress {
             try {
                 mounted.requests.handle(req);
             } catch (RuntimeException thrown) {
-                LOG.log(System.Logger.Level.WARNING, "the handler of endpoint '" + mounted.endpoint + "' threw on a request at " + path, thrown);
+                LOG.log(System.Logger.Level.WARNING, "the handler of " + mounted.owner + " threw on a request at " + path, thrown);
                 HttpServerResponse res = req.response();
                 if (!res.headWritten()) res.setStatusCode(500).putHeader("content-type", "text/plain").end("the endpoint failed to take the request");
                 else if (!res.ended()) res.reset();
@@ -278,9 +280,9 @@ public final class SharedHttpPort implements HttpIngress {
         return res.ended() || res.closed();
     }
 
-    /** An endpoint mounted on the port, and the requests it took that may not have answered yet. */
+    /** A sender mounted on the port, named by its flow, and the requests it took that may not have answered yet. */
     private final class Mounted implements Mount {
-        final String endpoint;
+        final String owner;
         final String path;
         final Handler<HttpServerRequest> requests;
         final URI url;
@@ -290,8 +292,8 @@ public final class SharedHttpPort implements HttpIngress {
         final Promise<Void> drained = Promise.promise();
         volatile boolean closed;
 
-        Mounted(String endpoint, String path, Handler<HttpServerRequest> requests, URI url) {
-            this.endpoint = endpoint;
+        Mounted(String owner, String path, Handler<HttpServerRequest> requests, URI url) {
+            this.owner = owner;
             this.path = path;
             this.requests = requests;
             this.url = url;
@@ -345,7 +347,7 @@ public final class SharedHttpPort implements HttpIngress {
         private void cut() {
             for (HttpServerRequest req : taken) {
                 if (answered(req)) continue;
-                LOG.log(System.Logger.Level.WARNING, "endpoint '" + endpoint + "' closed with a request at " + path + " still open after " + drain
+                LOG.log(System.Logger.Level.WARNING, owner + " closed with a request at " + path + " still open after " + drain
                         + ": it is reset");
                 req.response().reset();
             }

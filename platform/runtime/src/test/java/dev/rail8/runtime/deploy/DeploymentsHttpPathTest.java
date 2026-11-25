@@ -1,5 +1,9 @@
 package dev.rail8.runtime.deploy;
 
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.Outbound;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
@@ -187,12 +191,12 @@ class DeploymentsHttpPathTest {
 
         @Override public String scheme() { return SCHEME; }
 
-        @Override public Settings settings() { return Settings.of(HttpIngress.ADDRESS); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.of(HttpIngress.ADDRESS), Map.of(Direction.IN, Forms.Reach.NO_CONNECTION)); }
 
         @Override public Optional<String> httpPrefix() { return Optional.of(PREFIX); }
 
         @Override
-        public synchronized Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
+        public synchronized Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             consumers++;
             return new Consumer() {
                 @Override public Future<Void> start() { return Future.succeededFuture(); }
@@ -200,7 +204,7 @@ class DeploymentsHttpPathTest {
             };
         }
 
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException("an in-only scheme"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("an in-only scheme"); }
 
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }

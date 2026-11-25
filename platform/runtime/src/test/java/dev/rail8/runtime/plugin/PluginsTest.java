@@ -129,7 +129,7 @@ class PluginsTest {
         try (Plugins plugins = load()) {
             assertEquals(List.of("acme"), schemes(plugins.components("acme", context())), "the badly described component is not built");
             String refused = assertThrows(IllegalStateException.class, () -> plugins.components("badly-described", context())).getMessage();
-            assertTrue(refused.startsWith("plugin badly-described: settings() of " + PluginFixtures.BadlyDescribed.class.getName() + " failed: "), refused);
+            assertTrue(refused.startsWith("plugin badly-described: forms() of " + PluginFixtures.BadlyDescribed.class.getName() + " failed: "), refused);
             assertEquals(List.of(), plugins.components("none", context()));
         }
     }
@@ -344,7 +344,7 @@ class PluginsTest {
                     () -> Plugins.load(rail8, Optional.empty(), Map.of()));
         }
         try (URLClassLoader next = classPath(moduleJar("next.jar", PluginFixtures.NextMinor.class))) {
-            assertRefused("module " + PluginFixtures.NextMinor.class.getName() + ": built against api 0.4, which a node of api " + Plugin.API + " does not load",
+            assertRefused("module " + PluginFixtures.NextMinor.class.getName() + ": built against api 0.5, which a node of api " + Plugin.API + " does not load",
                     () -> Plugins.load(next, Optional.empty(), Map.of()));
         }
         try (URLClassLoader failing = classPath(moduleJar("failing.jar", PluginFixtures.FailingSteps.class))) {
@@ -590,8 +590,12 @@ class PluginsTest {
     @Test
     void aPluginBuiltAgainstAnotherApiIsRefused() throws IOException {
         Path next = jar("next.jar", PluginFixtures.NextMinor.class);
-        assertRefused("plugin next.jar: built against api 0.4, which a node of api " + Plugin.API + " does not load", this::load);
+        assertRefused("plugin next.jar: built against api 0.5, which a node of api " + Plugin.API + " does not load", this::load);
         Files.delete(next);
+        jar("old.jar", PluginFixtures.OnApi03.class);
+        assertEquals("plugin old.jar: built against api 0.3, which a node of api " + Plugin.API + " does not load; build it again on the contract of api "
+                + Plugin.API, assertRefused("plugin old.jar: ", this::load));
+        Files.delete(dir.resolve("old.jar"));
         jar("latest.jar", PluginFixtures.NoVersion.class);
         assertRefused("plugin latest.jar: built against api latest, which a node of api " + Plugin.API + " does not load", this::load);
     }
@@ -653,6 +657,23 @@ class PluginsTest {
             String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
             assertEquals("plugin mock-scheme: the scheme mock is the platform's mock", refused);
         }
+        Files.delete(dir.resolve("mock.jar"));
+        jar("rail8.jar", PluginFixtures.PlatformScheme.class);
+        try (Plugins plugins = load()) {
+            String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
+            assertEquals("plugin platform-scheme: the scheme rail8 is the platform's own", refused);
+        }
+    }
+
+    /** Only the platform's internal adapters send without a connection: a plugin's out direction that reaches none is refused. */
+    @Test
+    void aComponentThatSendsWithoutAConnectionRefusesTheStartNamingThePlugin() throws IOException {
+        jar("loner.jar", PluginFixtures.SendsWithoutConnection.class);
+        try (Plugins plugins = load()) {
+            String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
+            assertEquals("plugin loner: the out direction of scheme loner reaches no connection: only the platform's internal adapters [direct, mock] send"
+                    + " without one", refused);
+        }
     }
 
     @Test
@@ -672,7 +693,7 @@ class PluginsTest {
         jar("badly.jar", PluginFixtures.BadSettings.class);
         try (Plugins plugins = load()) {
             String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
-            assertEquals("plugin badly-described: settings() of " + PluginFixtures.BadlyDescribed.class.getName()
+            assertEquals("plugin badly-described: forms() of " + PluginFixtures.BadlyDescribed.class.getName()
                     + " failed: java.lang.IllegalArgumentException: field 'Max': a name is a lower-case letter, then at most 63 letters or digits", refused);
         }
     }
@@ -682,7 +703,7 @@ class PluginsTest {
         jar("unsaid.jar", PluginFixtures.NullSettings.class);
         try (Plugins plugins = load()) {
             String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
-            assertEquals("plugin null-settings: settings() of " + PluginFixtures.NullDescribed.class.getName() + " is null", refused);
+            assertEquals("plugin null-settings: forms() of " + PluginFixtures.NullDescribed.class.getName() + " is null", refused);
         }
     }
 

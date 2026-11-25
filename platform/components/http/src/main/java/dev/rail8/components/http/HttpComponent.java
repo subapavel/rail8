@@ -5,21 +5,27 @@ import dev.rail8.api.BlobKey;
 import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
 import dev.rail8.api.BodyTooLargeException;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Deadline;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.IdGenerator;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Escape;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import io.vertx.core.Context;
 import io.vertx.core.Future;
@@ -36,6 +42,7 @@ import io.vertx.core.http.PoolOptions;
 import io.vertx.core.http.RequestOptions;
 
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Locale;
@@ -51,10 +58,11 @@ import java.util.function.Function;
 /**
  * The {@code http} component: its consumers take requests on the node's HTTP port, its producers send over the Vert.x client.
  *
- * <p><b>Consumer</b> (endpoint options {@code address}, {@code flow}, {@code maxBodyBytes}): it takes requests on the node's HTTP
+ * <p><b>Consumer</b> (the flow form's {@code address}; no connection): it takes requests on the node's HTTP
  * port ({@link HttpIngress}) under the prefix {@value #PREFIX}, at {@code /http} followed by its {@code address}, such as
  * {@code /http/orders} ({@link HttpConsumer#url()}); the port's verticle owns the socket and the consumer never runs a pipeline
- * on its event loop. A request at the path is streamed into the {@link BlobStore} under {@code maxBodyBytes} (413 above it),
+ * on its event loop. A request at the path is streamed into the {@link BlobStore} under the {@link Inbound#maxBodyBytes} of its
+ * flow (413 above it),
  * becomes the ingress envelope (new id, the request headers, {@link #METHOD} / {@link #PATH} props) and is handed to the handler
  * on its own virtual thread;
  * the answer follows the {@link Ack}: {@code Reply} → 200 with the reply's headers and its body streamed, {@code Accepted} →
@@ -65,15 +73,22 @@ import java.util.function.Function;
  * failure's message as {@code text/plain}. Other methods are 405. Its stop closes its mount: no request reaches it from then
  * on, and the stop completes once the requests it took have answered their senders, or at the node's stop deadline.
  *
- * <p><b>Producer</b> (options {@code url}, {@code maxBodyBytes} for the reply, optional {@code timeoutMs}, {@code poolSize}):
- * one client per endpoint with its connection pool; POSTs the envelope's body — streamed from {@link Body#open()}, so a retry
+ * <p><b>Producer</b> (the connection's {@code url}, {@code timeoutMs} and {@code poolSize}; each call's {@code path} and
+ * {@link Call#maxReplyBytes} for the reply): one client per connection with its connection pool, shared by every flow that
+ * sends through it. A call without {@code path} goes to {@code url} as it is. A call with one goes to {@code url} with the
+ * path joined to the url's own path, the url's query kept: {@code https://h/api?k=1} and {@code /orders} give
+ * {@code https://h/api/orders?k=1}. The joined URI is parsed once and the request is built from its parts (host, port, path
+ * and query, TLS for https); a path that is not a path from {@code /}, holds a query or a fragment, does not parse, or once
+ * its dot segments are resolved ({@code %2e} read as {@code .}) leaves the url's path, host, port or scheme fails the send
+ * with a {@link Fault} of kind {@link Fault.Kind#INVALID}, nothing sent; its message never quotes the url. The url's user
+ * info is never sent, with a path or without, as Vert.x never sends it. A send POSTs the envelope's body — streamed from {@link Body#open()}, so a retry
  * re-opens it — with the envelope's headers (hop-by-hop ones aside) and its message id as {@code x-message-id}, a forwarded one
- * replaced ({@link Envelope#withOutboundId()}); a bounded send ({@code send(e, d)}) is cut at its deadline on the
+ * replaced ({@link Envelope#withOutboundId()}); a bounded send ({@code send(e, call, d)}) is cut at its deadline on the
  * component's {@link Timer} — the request reset — and a {@code timeoutMs} expiry fails as a cut does, a retryable
  * {@link NackException}; a 2xx response is the reply envelope (its body the next
  * step's, stored under {@link Envelope#nextKey()} of the envelope sent — the run's own key from its second attempt on —
  * {@link #STATUS} prop, the response headers), 503 and 429 fail with a retryable {@link NackException}, any other
- * non-2xx with {@link HttpStatusException} carrying the first {@value #ERROR_BODY_BYTES} bytes of the response (the rest drained). Limits are never defaulted: both {@code maxBodyBytes} are required.
+ * non-2xx with {@link HttpStatusException} carrying the first {@value #ERROR_BODY_BYTES} bytes of the response (the rest drained).
  *
  * @since 0.1
  */
@@ -91,13 +106,25 @@ public final class HttpComponent implements Component {
     public static final String H_MESSAGE_ID = Envelope.H_MESSAGE_ID;
 
     private static final Set<String> HOP_BY_HOP = Set.of("content-length", "transfer-encoding", "connection", "host", "keep-alive", "upgrade", "expect", "te", "trailer", "proxy-authorization", "proxy-authenticate");
-    /** What an http endpoint may set: the consumer's address, the producer's target, reply limit, timeout and pool. */
-    static final Settings SETTINGS = Settings.of(
-            HttpIngress.ADDRESS,
-            Field.text("url", "The http or https URL requests are posted to; none: the endpoint's URI.").out(),
-            Field.integer("maxBodyBytes", "The largest reply body taken, in bytes.").required().min(1).out(),
-            Field.integer("timeoutMs", "How long a request may take, in milliseconds.").range(1, Integer.MAX_VALUE).byDefault(30_000).out(),
-            Field.integer("poolSize", "How many connections the endpoint keeps open at most.").range(1, Integer.MAX_VALUE).byDefault(8).out());
+    /** A URL without user info: no {@code @} between {@code //} and the path, query or fragment. */
+    static final String NO_USER_INFO = "[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]+([/?#].*)?";
+    /**
+     * The forms: the connection says where the partner is (url, timeout, pool), the flow says the consumer's address and the
+     * path of a send. A sender reaches no connection; a send always does.
+     */
+    static final Forms FORMS = new Forms(
+            Settings.of(
+                    Field.text("url", "URL", "The http or https URL requests are posted to: scheme, host, port and a path prefix, "
+                            + "such as https://partner.example/api. No user name or password in it.").required().pattern(NO_USER_INFO).out(),
+                    Field.integer("timeoutMs", "Timeout (ms)", "How long a request may take, in milliseconds.")
+                            .range(1, Integer.MAX_VALUE).byDefault(30_000).out(),
+                    Field.integer("poolSize", "Pool size", "How many connections to the partner are kept open at most.")
+                            .range(1, Integer.MAX_VALUE).byDefault(8).out()),
+            Settings.of(
+                    HttpIngress.ADDRESS,
+                    Field.text("path", "Path", "The path a send goes to, joined to the path of the connection's url, such as /orders. "
+                            + "None: the url as it is.").pattern("/.*").expression(Escape.PATH).out()),
+            Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));
     /** How much of a non-2xx response body travels in the failure's message; the rest is read and dropped. */
     static final int ERROR_BODY_BYTES = 512;
 
@@ -142,16 +169,17 @@ public final class HttpComponent implements Component {
 
     @Override public String scheme() { return "http"; }
 
-    @Override public Settings settings() { return SETTINGS; }
+    @Override public Forms forms() { return FORMS; }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        return new HttpConsumer(cfg, handler);
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        return new HttpConsumer(in, handler);
     }
 
+    /** The producer of the connection {@code out} names; an {@link IllegalArgumentException} when it names none or no url. */
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        return new HttpProducer(cfg);
+    public Producer producer(Outbound out) {
+        return new HttpProducer(connection(out));
     }
 
     @Override
@@ -166,47 +194,43 @@ public final class HttpComponent implements Component {
     }
 
     /**
-     * The partner a producer of {@code cfg} calls: {@code scheme://host:port} of its {@code url} option, else of the
-     * endpoint URI, read as the producer reads it — Vert.x {@link RequestOptions#setAbsoluteURI(String)}, i.e. {@code java.net.URL},
-     * which takes a host {@code java.net.URI} reads none from (an underscore) and an unencoded space or {@code |} — lower-cased,
-     * the scheme's default port filled in (443 for https, else 80), no userinfo, path, query or fragment. A url the producer
-     * cannot send to (a scheme other than http/https, none, a port that is no number) refuses the build with an
-     * {@link IllegalArgumentException} naming the endpoint and what was read — {@code option 'url'}, or {@code the endpoint URI}
-     * when the endpoint sets no url — never the url or the URI, either may carry a password, and with no cause; one with an empty
-     * host names no target.
+     * The partner a producer of {@code out} calls: {@code scheme://host:port} of its connection's {@code url}, read as the
+     * producer reads it — Vert.x {@link RequestOptions#setAbsoluteURI(String)}, i.e. {@code java.net.URL}, which takes a host
+     * {@code java.net.URI} reads none from (an underscore) and an unencoded space or {@code |} — lower-cased, the scheme's
+     * default port filled in (443 for https, else 80), no userinfo, path, query or fragment. A url the producer cannot send to
+     * (a scheme other than http/https, none, a port that is no number) refuses the build with an
+     * {@link IllegalArgumentException} naming the connection and its setting {@code url}, never the url, which may carry a
+     * password, and with no cause; one with an empty host names no target.
      */
     @Override
-    public Optional<String> target(EndpointConfig cfg) {
-        Object url = cfg.options().get("url");
-        RequestOptions parsed;
-        try {
-            parsed = new RequestOptions().setAbsoluteURI(url == null ? cfg.uri().toString() : String.valueOf(url));
-        } catch (RuntimeException unparsable) {   // VertxException "Invalid url: <url>" or a bare IAE: both would leak or say nothing
-            throw new IllegalArgumentException("endpoint '" + cfg.name() + "': " + (url == null ? "the endpoint URI" : "option 'url'")
-                    + " is no http(s) URL the producer can send to");
-        }
+    public Optional<String> target(Outbound out) {
+        Connection c = connection(out);
+        RequestOptions parsed = absolute(c);
         return Optional.of(parsed.getHost()).filter(host -> !host.isEmpty())
                 .map(host -> (parsed.isSsl() ? "https" : "http") + "://" + host.toLowerCase(Locale.ROOT) + ":" + parsed.getPort());
     }
 
-    // --- options
+    // --- settings
 
-    static long requiredLong(EndpointConfig cfg, String key) {
-        Object v = cfg.options().get(key);
-        if (!(v instanceof Number n) || n.longValue() <= 0) {
-            throw new IllegalArgumentException("endpoint '" + cfg.name() + "': option '" + key + "' must be a positive integer (never unlimited), was " + v);
+    /** The connection {@code out} names, with a url; an {@link IllegalArgumentException} otherwise. */
+    private static Connection connection(Outbound out) {
+        Connection c = Objects.requireNonNull(out, "out").connection()
+                .orElseThrow(() -> new IllegalArgumentException("an http producer sends through a connection, and none is named"));
+        if (!(c.values().get("url") instanceof String)) throw new IllegalArgumentException("connection '" + c.key() + "': the setting 'url' is required");
+        return c;
+    }
+
+    /** The request options of {@code c}'s url as it is; an {@link IllegalArgumentException} that never quotes it. */
+    private static RequestOptions absolute(Connection c) {
+        try {
+            return new RequestOptions().setAbsoluteURI((String) c.values().get("url"));
+        } catch (RuntimeException unparsable) {   // VertxException "Invalid url: <url>" or a bare IAE: both would leak or say nothing
+            throw new IllegalArgumentException("connection '" + c.key() + "': the setting 'url' is no http(s) URL the producer can send to");
         }
-        return n.longValue();
     }
 
-    static String string(EndpointConfig cfg, String key, String fallback) {
-        Object v = cfg.options().get(key);
-        return v == null ? fallback : String.valueOf(v);
-    }
-
-    static int intOption(EndpointConfig cfg, String key, int fallback) {
-        Object v = cfg.options().get(key);
-        return v instanceof Number n ? n.intValue() : fallback;
+    static int intValue(Map<String, Object> values, String key, int fallback) {
+        return values.get(key) instanceof Number n ? n.intValue() : fallback;
     }
 
     /** The request's headers as the envelope's, names lower-cased; hop-by-hop ones left out. */
@@ -248,17 +272,17 @@ public final class HttpComponent implements Component {
 
     /** @since 0.1 */
     public final class HttpConsumer implements Consumer {
-        private final EndpointConfig cfg;
+        private final Inbound in;
         private final Function<Envelope, Future<Ack>> handler;
         private final String flow;
         private final long maxBodyBytes;
         private volatile HttpIngress.Mount mount;
 
-        HttpConsumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-            this.cfg = Objects.requireNonNull(cfg, "cfg");
+        HttpConsumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+            this.in = Objects.requireNonNull(in, "in");
             this.handler = Objects.requireNonNull(handler, "handler");
-            this.flow = string(cfg, "flow", cfg.name());
-            this.maxBodyBytes = requiredLong(cfg, "maxBodyBytes");
+            this.flow = in.flow();
+            this.maxBodyBytes = in.maxBodyBytes();
         }
 
         /** The URL of its mount on the node's own socket ({@link HttpIngress.Mount#url()}); empty before {@link #start()} succeeded and after {@link #stop()}. */
@@ -266,10 +290,10 @@ public final class HttpComponent implements Component {
             return Optional.ofNullable(mount).map(HttpIngress.Mount::url);
         }
 
-        /** Mounts the endpoint on the node's HTTP port; fails as the mount fails (the path is held, no port is open). */
+        /** Mounts the sender on the node's HTTP port; fails as the mount fails (the path is held, no port is open). */
         @Override
         public Future<Void> start() {
-            return http.mount(cfg, this::handle).map(mounted -> { mount = mounted; running.put(this, Boolean.TRUE); return null; });
+            return http.mount(scheme(), in, this::handle).map(mounted -> { mount = mounted; running.put(this, Boolean.TRUE); return null; });
         }
 
         /**
@@ -343,46 +367,68 @@ public final class HttpComponent implements Component {
 
     /** @since 0.1 */
     public final class HttpProducer implements Producer {
-        private final EndpointConfig cfg;
+        private final String name;
         private final String url;
-        private final long maxReplyBytes;
+        private final URI base;   // the url parsed once; null when java.net.URI reads no host from it: a call with a path fails
         private final long timeoutMs;
         private final HttpClientAgent client;
         private final AtomicInteger sends = new AtomicInteger();
 
-        HttpProducer(EndpointConfig cfg) {
-            this.cfg = Objects.requireNonNull(cfg, "cfg");
-            this.url = string(cfg, "url", cfg.uri().toString());
-            this.maxReplyBytes = requiredLong(cfg, "maxBodyBytes");
-            this.timeoutMs = intOption(cfg, "timeoutMs", 30_000);
-            this.client = vertx.createHttpClient(new HttpClientOptions(), new PoolOptions().setHttp1MaxSize(intOption(cfg, "poolSize", 8)));
+        HttpProducer(Connection c) {
+            this.name = c.key();
+            this.url = (String) c.values().get("url");
+            absolute(c);   // a url the client cannot send to refuses the build, as target() does
+            this.base = parsed(url);
+            this.timeoutMs = intValue(c.values(), "timeoutMs", 30_000);
+            this.client = vertx.createHttpClient(new HttpClientOptions(), new PoolOptions().setHttp1MaxSize(intValue(c.values(), "poolSize", 8)));
+        }
+
+        private static URI parsed(String url) {
+            try {
+                URI u = new URI(url);
+                return u.getHost() == null ? null : u;
+            } catch (URISyntaxException unparsable) {
+                return null;
+            }
         }
 
         /** Sends so far, each one a fresh request with the body re-opened. */
         public int sends() { return sends.get(); }
 
         @Override
-        public Future<Envelope> send(Envelope e) {
+        public Future<Envelope> send(Envelope e, Call call) {
             Objects.requireNonNull(e, "envelope");
+            RequestOptions options;
+            try {
+                options = target(call).setTimeout(timeoutMs);
+            } catch (PathRefused refused) {
+                return Future.failedFuture(refused);
+            }
             sends.incrementAndGet();
-            return request(e, new RequestOptions().setMethod(HttpMethod.POST).setAbsoluteURI(url).setTimeout(timeoutMs), null)
+            return request(e, options, call.maxReplyBytes(), null)
                     .recover(failure -> Future.failedFuture(retryableIfTimedOut(failure)));
         }
 
         /**
-         * {@link #send(Envelope)} bounded by {@code d}: no time left — no request, not counted, a retryable Nack;
+         * {@link #send(Envelope, Call)} bounded by {@code d}: no time left — no request, not counted, a retryable Nack;
          * else the request's connect timeout is the earlier of what is left and {@code timeoutMs}, and a timer at what is left
          * re-reads {@code d}: time left again (renewed), it is re-armed; none, the send is cut — the request reset (one not yet
          * obtained is reset unsent), no reply stored once the cut fires while the reply is still streaming (a reply already
          * received whole may still be stored: a race), the send failed with the same retryable Nack as a {@code timeoutMs} one.
          * A timer that refuses the cut fails the send with its own exception, nothing sent, not counted. The timer is cancelled
-         * once the send settles.
+         * once the send settles. A path refused fails the send before the deadline is read.
          */
         @Override
-        public Future<Envelope> send(Envelope e, Deadline d) {
+        public Future<Envelope> send(Envelope e, Call call, Deadline d) {
             Objects.requireNonNull(e, "envelope");
+            RequestOptions options;
+            try {
+                options = target(call);
+            } catch (PathRefused refused) {
+                return Future.failedFuture(refused);
+            }
             Duration left = d.remaining();
-            if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: message " + e.id() + " not sent to " + cfg.name(), true));
+            if (!left.isPositive()) return Future.failedFuture(new NackException("deadline passed: message " + e.id() + " not sent to " + name, true));
             Cut cut = new Cut(d);
             try {
                 cut.arm(left);   // before the request exists: a cut that comes first resets it unsent
@@ -391,14 +437,60 @@ public final class HttpComponent implements Component {
             }
             sends.incrementAndGet();
             long leftMs = Math.max(1, (left.toNanos() + 999_999) / 1_000_000);   // rounded up: Vert.x reads 0 as no connect timeout
-            RequestOptions options = new RequestOptions().setMethod(HttpMethod.POST).setAbsoluteURI(url)
-                    .setConnectTimeout(Math.min(leftMs, timeoutMs)).setIdleTimeout(timeoutMs);
-            Future<Envelope> sent = request(e, options, cut).recover(failure -> Future.failedFuture(retryableIfTimedOut(failure)));
+            options.setConnectTimeout(Math.min(leftMs, timeoutMs)).setIdleTimeout(timeoutMs);
+            Future<Envelope> sent = request(e, options, call.maxReplyBytes(), cut).recover(failure -> Future.failedFuture(retryableIfTimedOut(failure)));
             return cut.watch(sent);
         }
 
-        /** POSTs {@code e} under {@code options}; with a {@code cut}, a request obtained after the cut is reset unsent. */
-        private Future<Envelope> request(Envelope e, RequestOptions options, Cut cut) {
+        /**
+         * The POST of {@code call}: to {@code url} as it is without a {@code path}; with one, to the url with the path joined to
+         * the url's path and its query kept, built from the parts of the one joined URI.
+         *
+         * @throws PathRefused when the path is not a path from {@code /}, holds a query or fragment, does not parse, or the
+         *                     joined URI leaves the url's scheme, host, port or path
+         */
+        private RequestOptions target(Call call) {
+            Object path = Objects.requireNonNull(call, "call").settings().get("path");
+            RequestOptions options = new RequestOptions().setMethod(HttpMethod.POST);
+            if (path == null) return options.setAbsoluteURI(url);
+            String who = "connection '" + name + "', flow '" + call.flow() + "', step '" + call.step() + "': ";
+            if (!(path instanceof String p) || !p.startsWith("/") || p.indexOf('?') >= 0 || p.indexOf('#') >= 0) {
+                throw new PathRefused(who + "the setting 'path' must be a path from /, without a query or fragment, was " + path);
+            }
+            if (base == null) throw new PathRefused(who + "the setting 'url' takes no path: it does not parse as a URI with a host");
+            String scheme = base.getScheme().toLowerCase(Locale.ROOT);
+            if (!scheme.equals("http") && !scheme.equals("https")) throw new PathRefused(who + "the setting 'url' is no http(s) URL");
+            String prefix = Optional.ofNullable(base.getRawPath()).orElse("");
+            if (prefix.endsWith("/")) prefix = prefix.substring(0, prefix.length() - 1);
+            URI joined;
+            try {
+                // %2e is an encoded dot: read as one, so a dot segment cannot pass encoded
+                String dotted = p.replace("%2e", ".").replace("%2E", ".");
+                joined = new URI(base.getScheme() + "://" + base.getRawAuthority() + prefix + dotted
+                        + (base.getRawQuery() == null ? "" : "?" + base.getRawQuery())).normalize();
+            } catch (URISyntaxException unparsable) {
+                throw new PathRefused(who + "the setting 'path' does not parse joined to the url: " + path);
+            }
+            int port = port(base);
+            if (!scheme.equalsIgnoreCase(joined.getScheme()) || !base.getHost().equalsIgnoreCase(String.valueOf(joined.getHost()))
+                    || port != port(joined) || !joined.getRawPath().startsWith(prefix + "/")
+                    || joined.getRawPath().equals("/..") || joined.getRawPath().startsWith("/../")) {   // a dot segment normalize() keeps above the root
+                throw new PathRefused(who + "the setting 'path' leaves the url's path: " + path);
+            }
+            return options.setSsl(scheme.equals("https")).setHost(joined.getHost()).setPort(port)
+                    .setURI(joined.getRawPath() + (joined.getRawQuery() == null ? "" : "?" + joined.getRawQuery()));
+        }
+
+        /** The port of {@code u}, its scheme's default (443 for https, else 80) when it names none. */
+        private static int port(URI u) {
+            return u.getPort() != -1 ? u.getPort() : "https".equalsIgnoreCase(u.getScheme()) ? 443 : 80;
+        }
+
+        /**
+         * POSTs {@code e} under {@code options}, a reply body taken up to {@code maxReplyBytes}; with a {@code cut}, a request
+         * obtained after the cut is reset unsent.
+         */
+        private Future<Envelope> request(Envelope e, RequestOptions options, long maxReplyBytes, Cut cut) {
             Envelope out = e.withOutboundId();   // the partner dedupes on it: exactly one x-message-id, the forwarded ones dropped
             return client.request(options).compose(req -> {
                 if (cut != null && !cut.obtained(req)) return Future.failedFuture(cut.failure());   // cut before it was obtained: reset unsent
@@ -409,13 +501,13 @@ public final class HttpComponent implements Component {
                 // task later; otherwise a small reply could end unheard in between ("Response already ended") and be sent again by a retry.
                 req.response().onSuccess(HttpClientResponse::pause);
                 return req.send(e.body().open());
-            }).compose(res -> reply(e, res));   // a cut resets the request: a reply still streaming fails its store write
+            }).compose(res -> reply(e, res, maxReplyBytes));   // a cut resets the request: a reply still streaming fails its store write
         }
 
         /** A {@code timeoutMs} (or connect timeout) expiry is the same retryable Nack as a cut send; any other failure as it is. */
         private Throwable retryableIfTimedOut(Throwable failure) {
             return failure instanceof TimeoutException
-                    ? new NackException("HTTP request to " + cfg.name() + " timed out: " + failure.getMessage(), true)
+                    ? new NackException("HTTP request to " + name + " timed out: " + failure.getMessage(), true)
                     : failure;
         }
 
@@ -466,7 +558,7 @@ public final class HttpComponent implements Component {
             }
 
             NackException failure() {
-                return new NackException("deadline passed: the HTTP request to " + cfg.name() + " was cut", true);
+                return new NackException("deadline passed: the HTTP request to " + name + " was cut", true);
             }
 
             Future<Envelope> watch(Future<Envelope> sent) {
@@ -481,7 +573,7 @@ public final class HttpComponent implements Component {
             }
         }
 
-        private Future<Envelope> reply(Envelope e, HttpClientResponse res) {
+        private Future<Envelope> reply(Envelope e, HttpClientResponse res, long maxReplyBytes) {
             int status = res.statusCode();
             if (status / 100 == 2) {
                 Headers headers = headers(res.headers());
@@ -489,7 +581,7 @@ public final class HttpComponent implements Component {
                         .map(body -> new Envelope(e.id(), e.flow(), e.step() + 1, headers, e.props().with(STATUS, status), e.keys(), body, e.attachments(), new dev.rail8.api.Views()));
             }
             return head(res).compose(reason -> {
-                if (status == 503 || status == 429) return Future.failedFuture(new NackException("HTTP " + status + " from " + cfg.name() + ": " + reason, true));
+                if (status == 503 || status == 429) return Future.failedFuture(new NackException("HTTP " + status + " from " + name + ": " + reason, true));
                 return Future.failedFuture(new HttpStatusException(status, reason));
             });
         }
@@ -510,5 +602,14 @@ public final class HttpComponent implements Component {
 
         @Override
         public Future<Void> close() { return client.close(); }
+    }
+
+    /** A send whose path the producer refuses: the flow's settings broke a rule, and the same send fails again. */
+    static final class PathRefused extends IllegalArgumentException implements Fault {
+        PathRefused(String message) {
+            super(message);
+        }
+
+        @Override public Kind kind() { return Kind.INVALID; }
     }
 }

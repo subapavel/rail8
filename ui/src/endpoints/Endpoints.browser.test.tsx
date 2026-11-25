@@ -8,11 +8,13 @@ import { Shell } from '../Shell';
 import { useWorkingFiles, type WorkingFiles } from '../workingFiles';
 import { EndpointsError, type EndpointFile, type EndpointsApi, type NodeComponents } from './api';
 import { endpointsScreen } from './screen';
-import type { SettingsDescription } from './settings';
+import { HTTP_FORMS, SFTP_FORMS } from './fake/forms';
+import type { ComponentForms } from './settings';
 
-const drop: SettingsDescription = {
-  format: 1,
-  described: true,
+const drop: ComponentForms = {
+  format: 2,
+  reach: { in: 'connection', out: 'connection' },
+  described: { connection: true, flow: true },
   tabs: [
     { id: 'general', label: 'General', common: true },
     { id: 'polling', label: 'Polling', common: false },
@@ -20,13 +22,28 @@ const drop: SettingsDescription = {
     { id: 'recording', label: 'Recording', common: true },
     { id: 'security', label: 'Security', common: true },
   ],
-  fields: [
-    { name: 'host', type: 'text', help: 'The server.', tab: 'general', required: true, directions: ['in', 'out'] },
-    { name: 'port', type: 'integer', help: "The server's port.", tab: 'general', required: false, directions: ['in', 'out'], default: 22, min: 1, max: 65535 },
-    { name: 'password', type: 'secret', help: 'The password.', tab: 'security', required: false, directions: ['in', 'out'] },
-    { name: 'afterSuccess', type: 'choice', help: 'What happens to a delivered file.', tab: 'polling', required: false, directions: ['in'], default: 'delete', choices: ['delete', 'move'] },
-    { name: 'moveTo', type: 'text', help: 'Where a delivered file goes.', tab: 'polling', required: true, directions: ['in'], visibleWhen: { field: 'afterSuccess', values: ['move'] } },
-    { name: 'url', type: 'text', help: 'Where a producer sends.', tab: 'general', required: false, directions: ['out'] },
+  connection: [
+    { name: 'host', type: 'text', label: 'Host', help: 'The server.', tab: 'general', required: true, directions: ['in', 'out'] },
+    { name: 'port', type: 'integer', label: 'Port', help: "The server's port.", tab: 'general', required: false, directions: ['in', 'out'], default: 22, min: 1, max: 65535 },
+    { name: 'password', type: 'secret', label: 'Password', help: 'The password.', tab: 'security', required: false, directions: ['in', 'out'] },
+    { name: 'url', type: 'text', label: 'URL', help: 'Where a producer sends.', tab: 'general', required: false, directions: ['out'] },
+  ],
+  flow: [
+    {
+      name: 'afterSuccess',
+      type: 'choice',
+      label: 'After success',
+      help: 'What happens to a delivered file.',
+      tab: 'polling',
+      required: false,
+      directions: ['in'],
+      default: 'delete',
+      choices: [
+        { value: 'delete', label: 'Delete' },
+        { value: 'move', label: 'Move' },
+      ],
+    },
+    { name: 'moveTo', type: 'text', label: 'Move to', help: 'Where a delivered file goes.', tab: 'polling', required: true, directions: ['in'], visibleWhen: { field: 'afterSuccess', values: ['move'] } },
   ],
   rules: [],
 };
@@ -43,11 +60,13 @@ const inbox: EndpointFile = {
 };
 
 /** A component that takes requests on the node's HTTP port under `/http`, at the address its in endpoints set. */
-const web: SettingsDescription = {
-  format: 1,
-  described: true,
+const web: ComponentForms = {
+  format: 2,
+  reach: { in: 'none', out: 'connection' },
+  described: { connection: true, flow: true },
   tabs: [{ id: 'general', label: 'General', common: true }],
-  fields: [{ name: 'address', type: 'text', help: 'The path requests arrive at.', tab: 'general', required: false, directions: ['in'] }],
+  connection: [{ name: 'url', type: 'text', label: 'URL', help: 'Where a producer sends.', tab: 'general', required: true, directions: ['out'] }],
+  flow: [{ name: 'address', type: 'text', label: 'Address', help: 'The path requests arrive at.', tab: 'general', required: false, directions: ['in'] }],
   rules: [],
 };
 
@@ -67,8 +86,10 @@ const components: NodeComponents = {
   httpOrigin: 'http://localhost:8080',
   items: [
     { scheme: 'drop', httpPrefix: null, settings: drop },
-    { scheme: 'raw', httpPrefix: null, settings: { format: 1, described: false, tabs: drop.tabs.filter((t) => t.common), fields: [], rules: [] } },
+    { scheme: 'raw', httpPrefix: null, settings: { format: 2, reach: { in: 'connection', out: 'connection' }, described: { connection: false, flow: false }, tabs: drop.tabs.filter((t) => t.common), connection: [], flow: [], rules: [] } },
     { scheme: 'web', httpPrefix: '/http', settings: web },
+    { scheme: 'http', httpPrefix: '/http', settings: HTTP_FORMS },
+    { scheme: 'sftp', httpPrefix: null, settings: SFTP_FORMS },
   ],
 };
 
@@ -161,15 +182,15 @@ describe('Endpoints', () => {
   test("opens read-only, with the platform's tabs around the adapter's own and the fields of the endpoint's direction", async () => {
     await open(fakeApi());
     for (const name of ['General', 'Polling', 'Retry', 'Recording', 'Security']) await expect.element(settingsTab(name)).toBeVisible();
-    await expect.element(field('host')).toHaveValue('sftp');
-    await expect.element(field('host')).toHaveAttribute('readonly');
-    await expect.element(field('port')).toHaveAttribute('placeholder', 'Default: 22');
+    await expect.element(field('Host')).toHaveValue('sftp');
+    await expect.element(field('Host')).toHaveAttribute('readonly');
+    await expect.element(field('Port')).toHaveAttribute('placeholder', 'Default: 22');
     await expect.element(text('Where a producer sends.')).not.toBeInTheDocument();
     await expect.element(field('colour')).toHaveValue('"red"');
     await expect.element(page.getByText(/^no such setting/)).toBeVisible();
     await expect.element(text('Environments override some of these settings')).toBeVisible();
     await settingsTab('Security').click();
-    await expect.element(field('password')).toHaveAttribute('type', 'password');
+    await expect.element(field('Password')).toHaveAttribute('type', 'password');
     await settingsTab('Retry').click();
     await expect.element(page.getByRole('tabpanel', { name: 'Retry' }).getByText('No settings on this tab for an in endpoint.')).toBeVisible();
     await expect.element(button('Edit')).toBeVisible();
@@ -181,14 +202,14 @@ describe('Endpoints', () => {
     await page.getByRole('tab', { name: 'Endpoints', exact: true }).click();
     await button('outbox').click();
     const panel = page.getByRole('tabpanel', { name: 'outbox' });
-    await expect.element(panel.getByLabelText('host', { exact: false })).toHaveValue('partner');
-    await expect.element(panel.getByLabelText('url', { exact: false })).toBeVisible();
+    await expect.element(panel.getByLabelText('Host', { exact: false })).toHaveValue('partner');
+    await expect.element(panel.getByLabelText('URL', { exact: false })).toBeVisible();
   });
 
   test('offers no Edit when the working folder is read-only', async () => {
     await open(fakeApi([{ ...inbox, editable: false }]));
     await expect.element(page.getByRole('tabpanel', { name: 'inbox' }).getByText('Read-only')).toBeVisible();
-    await expect.element(field('host')).toHaveValue('sftp');
+    await expect.element(field('Host')).toHaveValue('sftp');
     expect(button('Edit').elements()).toHaveLength(0);
   });
 
@@ -197,13 +218,13 @@ describe('Endpoints', () => {
     await button('Edit').click();
     await settingsTab('Polling').click();
     await expect.element(text('Where a delivered file goes.')).not.toBeInTheDocument();
-    await field('afterSuccess').click();
-    await page.getByRole('option', { name: 'move', exact: true }).click();
-    await expect.element(field('moveTo')).toBeVisible();
+    await field('After success').click();
+    await page.getByRole('option', { name: 'Move', exact: true }).click();
+    await expect.element(field('Move to')).toBeVisible();
     await button('Check').click();
     await expect.element(text('Check found issues')).toBeVisible();
     await expect.element(text('moveTo is required when afterSuccess is move').first()).toBeVisible();
-    await field('moveTo').fill('/done');
+    await field('Move to').fill('/done');
     await button('Check').click();
     await expect.element(page.getByRole('listitem').filter({ hasText: 'colour no such setting' })).toBeVisible();
   });
@@ -212,8 +233,8 @@ describe('Endpoints', () => {
     const api = fakeApi();
     await open(api);
     await button('Edit').click();
-    await field('port').fill('2222');
-    await field('host').fill('');
+    await field('Port').fill('2222');
+    await field('Host').fill('');
     await button('Save').click();
     expect(api.save).toHaveBeenCalledWith('demo/endpoints/inbox.yaml', { password: 'secret://sftp-password', colour: 'red', port: 2222 }, '"v1"');
     await expect.element(text('Endpoint inbox saved')).toBeVisible();
@@ -228,11 +249,11 @@ describe('Endpoints', () => {
     });
     await open(api);
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     await button('Save').click();
     await expect.element(text('The file changed on disk')).toBeVisible();
     await button('Reload').click();
-    await expect.element(field('host')).toHaveValue('elsewhere');
+    await expect.element(field('Host')).toHaveValue('elsewhere');
     await expect.element(button('Edit')).toBeVisible();
   });
 
@@ -243,16 +264,16 @@ describe('Endpoints', () => {
     await expect.poll(() => working?.files().get('demo/endpoints/inbox.yaml')?.dirty).toBe(false);
 
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     expect(working!.files().get('demo/endpoints/inbox.yaml')?.dirty).toBe(true);
     working!.reload(['demo/endpoints/inbox.yaml']);
-    await expect.element(field('host')).toHaveValue('other');
+    await expect.element(field('Host')).toHaveValue('other');
     expect(api.read).toHaveBeenCalledTimes(1);
 
     await button('Cancel').click();
     await button('Discard changes').click();
     working!.reload(['demo/endpoints/inbox.yaml']);
-    await expect.element(field('host')).toHaveValue('elsewhere');
+    await expect.element(field('Host')).toHaveValue('elsewhere');
   });
 
   test('text that is not a value yet counts as unsaved: the shell hears of it, and a reload leaves it', async () => {
@@ -283,7 +304,7 @@ describe('Endpoints', () => {
     answer!({ file: { ...inbox, config: { ...inbox.config, host: 'elsewhere' } }, etag: '"v2"' });
     await expect.element(button('Edit')).toBeEnabled();
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     await button('Save').click();
 
     expect(api.save).toHaveBeenCalledWith('demo/endpoints/inbox.yaml', expect.objectContaining({ host: 'other' }), '"v2"');
@@ -293,10 +314,10 @@ describe('Endpoints', () => {
     const api = fakeApi();
     await open(api);
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     await button('Cancel').click();
     await button('Keep editing').click();
-    await expect.element(field('host')).toHaveValue('other');
+    await expect.element(field('Host')).toHaveValue('other');
     await button('Close inbox').click();
     await expect.element(page.getByRole('dialog', { name: 'Save changes to inbox?' })).toBeVisible();
     await button('Close without saving').click();
@@ -308,7 +329,7 @@ describe('Endpoints', () => {
     const api = fakeApi();
     await open(api);
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     await button('Close inbox').click();
     await button('Save and close').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).not.toBeInTheDocument();
@@ -318,12 +339,55 @@ describe('Endpoints', () => {
   test('a save that fails when the tab closes keeps it open and says why', async () => {
     await open(fakeApi([inbox], { save: vi.fn(async () => Promise.reject(new EndpointsError(500, 'the disk is full'))) }));
     await button('Edit').click();
-    await field('host').fill('other');
+    await field('Host').fill('other');
     await button('Close inbox').click();
     await button('Save and close').click();
     await expect.element(text('The file was not saved')).toBeVisible();
     await expect.element(text('the disk is full')).toBeVisible();
-    await expect.element(field('host')).toHaveValue('other');
+    await expect.element(field('Host')).toHaveValue('other');
+  });
+
+  test("shows the connection's fields and the flow's in two titled groups, each field with its label, its name and its help", async () => {
+    const erp: EndpointFile = { ...inbox, id: 'erp-out', path: 'demo/endpoints/erp-out.yaml', scheme: 'http', direction: 'out', config: { url: 'https://erp.example/idoc', path: '/orders' }, environments: [] };
+    await open(fakeApi([erp]), 'erp-out');
+    const connection = page.getByRole('form', { name: 'Connection' });
+    const flow = page.getByRole('form', { name: 'In the flow' });
+    await expect.element(page.getByRole('heading', { name: 'Connection', level: 2 })).toBeVisible();
+    await expect.element(connection.getByRole('textbox', { name: 'URL' })).toHaveValue('https://erp.example/idoc');
+    await expect.element(connection.getByText('timeoutMs', { exact: true })).toBeVisible();
+    await expect.element(connection.getByRole('textbox', { name: 'Largest reply' })).toBeVisible();
+    await expect.element(connection.getByText('The largest reply body taken, in bytes.')).toBeVisible();
+    await expect.element(flow.getByRole('textbox', { name: 'Path' })).toHaveValue('/orders');
+    await expect.element(flow.getByRole('textbox', { name: 'Address' })).not.toBeInTheDocument();
+    await expect.element(flow.getByRole('textbox', { name: 'URL' })).not.toBeInTheDocument();
+    await expect.element(connection.getByRole('textbox', { name: 'Path' })).not.toBeInTheDocument();
+    await settingsTab('Retry').click();
+    await expect.element(page.getByRole('tabpanel', { name: 'Retry' }).getByText('No settings on this tab for an out endpoint.')).toBeVisible();
+  });
+
+  test('shows no group that has no field for the endpoint', async () => {
+    const orders: EndpointFile = { ...inbox, id: 'orders-in', path: 'demo/endpoints/orders-in.yaml', scheme: 'http', direction: 'in', config: { address: '/orders' }, environments: [] };
+    await open(fakeApi([orders]), 'orders-in');
+    await expect.element(page.getByRole('form', { name: 'In the flow' }).getByRole('textbox', { name: 'Address' })).toHaveValue('/orders');
+    await expect.element(page.getByRole('heading', { name: 'Connection', level: 2 })).not.toBeInTheDocument();
+  });
+
+  test("Check takes a user name in the connection's URL, and holds the flow's fields and the reply's limit to their rules", async () => {
+    const erp: EndpointFile = { ...inbox, id: 'erp-out', path: 'demo/endpoints/erp-out.yaml', scheme: 'http', direction: 'out', config: { url: 'https://anna:pw@erp.example/idoc', path: 'orders' }, environments: [] };
+    await open(fakeApi([erp]), 'erp-out');
+    await button('Edit').click();
+    await button('Check').click();
+    const issues = page.getByRole('list', { name: 'Issues' });
+    await expect.element(issues.getByText('path must match /.*')).toBeVisible();
+    await expect.element(issues.getByText('maxBodyBytes is required')).toBeVisible();
+    expect(issues.getByText(/^url/).elements()).toHaveLength(0);
+  });
+
+  test('an endpoint of a direction its component does not serve shows its settings as written, with a warning', async () => {
+    const files: EndpointFile = { ...inbox, id: 'files-out', path: 'demo/endpoints/files-out.yaml', scheme: 'sftp', direction: 'out', config: { host: 'sftp' }, environments: [] };
+    await open(fakeApi([files]), 'files-out');
+    await expect.element(text('The sftp adapter does not serve out endpoints.')).toBeVisible();
+    await expect.element(field('Settings')).toHaveValue('{\n  "host": "sftp"\n}');
   });
 
   test("without the component's description the options are shown as JSON, read-only, with the reason", async () => {
@@ -362,7 +426,7 @@ describe('Endpoints', () => {
 
   test("shows under an in endpoint's address a preview of the URL senders call, which follows the draft", async () => {
     await open(fakeApi([httpIn]), 'http-in');
-    const address = page.getByRole('textbox', { name: 'address' });
+    const address = page.getByRole('textbox', { name: 'Address' });
     await expect.element(text('Senders call http://localhost:8080/http/in.')).toBeVisible();
     await expect.element(text('Preview')).toBeVisible();
     await expect.element(text('in environment dev, not from what is deployed')).toBeVisible();
@@ -390,7 +454,7 @@ describe('Endpoints', () => {
     root?.unmount();
     host?.remove();
     await open(fakeApi([httpIn], { components: vi.fn(async () => ({ ...components, items: [{ scheme: 'web', httpPrefix: null, settings: web }] })) }), 'http-in');
-    await expect.element(field('address')).toHaveValue('/in');
+    await expect.element(field('Address')).toHaveValue('/in');
     await expect.element(text('Senders call')).not.toBeInTheDocument();
   });
 });
@@ -416,7 +480,7 @@ describe('the Endpoints screen in another language', () => {
 
     await button('inbox').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).toBeVisible();
-    await expect.element(field('port')).toHaveAttribute('placeholder', 'Výchozí: 22');
+    await expect.element(field('Port')).toHaveAttribute('placeholder', 'Výchozí: 22');
     await expect.element(text('Prostředí přepisují některá z těchto nastavení')).toBeVisible();
     await button('Upravit').click();
     await button('Zkontrolovat').click();

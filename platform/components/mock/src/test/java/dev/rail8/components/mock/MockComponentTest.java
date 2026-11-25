@@ -2,19 +2,21 @@ package dev.rail8.components.mock;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.BodyTooLargeException;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.testkit.FakeRuntime;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -23,8 +25,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dev.rail8.components.mock.Uses.CALL;
+import static dev.rail8.components.mock.Uses.in;
+import static dev.rail8.components.mock.Uses.out;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -35,8 +41,8 @@ class MockComponentTest {
     static final Path DEMO = Path.of("../../../examples/demo");
     final FakeRuntime rt = FakeRuntime.create();
     final MockComponent http = new MockComponent("http", rt.blobs(), rt.timer());
-    final EndpointConfig domestic = new EndpointConfig("partner-domestic", URI.create("http://localhost:8081/echo"), Map.of());
-    final EndpointConfig foreign = new EndpointConfig("partner-foreign", URI.create("http://localhost:8081/echo-foreign"), Map.of());
+    final String domestic = "partner-domestic";
+    final String foreign = "partner-foreign";
 
     Envelope invoice() { return rt.ingress("invoice-sync", Headers.empty().with("x-request-id", "r1"), Buffer.buffer("<Invoice/>")); }
 
@@ -44,9 +50,9 @@ class MockComponentTest {
     void repliesFromTheFixtureAfterTheDelayAndRecordsPerEndpoint() throws Exception {
         http.bindAll(Map.of("partner-domestic", Map.of("reply", "fixtures/partner-ack.xml", "delay", "20ms"),
                 "partner-foreign", Map.of("reply", "fixtures/partner-ack.xml")), DEMO);
-        Producer p = http.producer(domestic);
+        Producer p = http.producer(out(domestic));
         Envelope in = invoice();
-        Future<Envelope> f = p.send(in);
+        Future<Envelope> f = p.send(in, CALL);
         assertFalse(f.isComplete(), "20 ms on the fake timer have not passed");
         assertEquals(1, rt.timer().pending());
         rt.clock().advance(Duration.ofMillis(20));
@@ -57,24 +63,25 @@ class MockComponentTest {
         assertEquals("r1", out.header("x-request-id").orElseThrow(), "headers carried over");
         assertEquals(List.of(in), http.sentTo("partner-domestic"));
         assertEquals(List.of(), http.sentTo("partner-foreign"));
-        Envelope now = http.producer(foreign).send(invoice()).await();
+        Envelope now = http.producer(out(foreign)).send(invoice(), CALL).await();
         assertTrue(now.body().whole().toString().contains("Ack"), "no delay: answered at once");
         assertEquals(2, http.sent().size());
         assertEquals("http", http.scheme());
-        assertEquals("object", new io.vertx.core.json.JsonObject(http.configSchema()).getString("type"));
+        assertFalse(http.forms().connection().described() || http.forms().flow().described(), "the real endpoint's settings are not the mock's business");
+        assertTrue(http.forms().connects(Direction.IN) && http.forms().connects(Direction.OUT), "every use names a connection, by which the mock keys it");
     }
 
     @Test
     void aConsumerAnswersItsOwnEndpointOnlyTheOthersKeepTheirBehaviour() {
         http.bind("partner-domestic", Behaviour.from(Map.of("reply", "fixtures/partner-ack.xml"), DEMO));
-        EndpointConfig in = new EndpointConfig("http-in", URI.create("http://0.0.0.0:8080/in"), Map.of());
+        String in = "http-in";
         List<Envelope> ingress = new java.util.ArrayList<>();
-        var consumer = http.consumer(in, e -> { ingress.add(e); return Future.succeededFuture(new dev.rail8.api.Ack.Reply(e.withHeader("x-from", "ingress"))); });
+        var consumer = http.consumer(in(in), e -> { ingress.add(e); return Future.succeededFuture(new dev.rail8.api.Ack.Reply(e.withHeader("x-from", "ingress"))); });
         consumer.start().await();
-        Envelope toPartner = http.producer(domestic).send(invoice()).await();
+        Envelope toPartner = http.producer(out(domestic)).send(invoice(), CALL).await();
         assertTrue(toPartner.body().whole().toString().contains("Ack"), "the partner send answers from the fixture, not from the flow's own ingress handler");
         assertEquals(List.of(), ingress, "the ingress consumer never saw the partner send");
-        assertEquals("ingress", http.producer(in).send(invoice()).await().header("x-from").orElseThrow(), "a send to the consumer's own endpoint reaches it");
+        assertEquals("ingress", http.producer(out(in)).send(invoice(), CALL).await().header("x-from").orElseThrow(), "a send to the consumer's own endpoint reaches it");
         consumer.stop().await();
         assertEquals(dev.rail8.api.Health.Status.DOWN, http.health().await().status());
     }
@@ -82,22 +89,22 @@ class MockComponentTest {
     @Test
     void anUnboundEndpointEchoesAndAFailureIsANackRetryableAsHttpWouldBe() {
         Envelope in = invoice();
-        assertEquals(in, http.producer(domestic).send(in).await(), "no binding: the request comes back");
+        assertEquals(in, http.producer(out(domestic)).send(in, CALL).await(), "no binding: the request comes back");
         http.bind("partner-domestic", Behaviour.from(Map.of("fail", 503), DEMO));
-        Future<Envelope> f = http.producer(domestic).send(in);
+        Future<Envelope> f = http.producer(out(domestic)).send(in, CALL);
         f.otherwiseEmpty().await();
         assertTrue(f.cause() instanceof NackException n && n.retryable() && n.reason().contains("503"), String.valueOf(f.cause()));
         http.bind("partner-domestic", Behaviour.from(Map.of("fail", 400), DEMO));
-        Future<Envelope> bad = http.producer(domestic).send(in);
+        Future<Envelope> bad = http.producer(out(domestic)).send(in, CALL);
         bad.otherwiseEmpty().await();
         assertTrue(bad.cause() instanceof NackException n && !n.retryable(), "4xx is final");
         http.bind("partner-domestic", Behaviour.from(Map.of("fail", 429), DEMO));
-        Future<Envelope> throttled = http.producer(domestic).send(in);
+        Future<Envelope> throttled = http.producer(out(domestic)).send(in, CALL);
         throttled.otherwiseEmpty().await();
         assertTrue(((NackException) throttled.cause()).retryable(), "429 is retryable");
         for (String fault : List.of("timeout", "reset", "malformed")) {
             http.bind("partner-domestic", Behaviour.from(Map.of("fail", fault), DEMO));
-            Future<Envelope> x = http.producer(domestic).send(in);
+            Future<Envelope> x = http.producer(out(domestic)).send(in, CALL);
             x.otherwiseEmpty().await();
             NackException n = (NackException) x.cause();
             assertEquals(!fault.equals("malformed"), n.retryable(), fault);
@@ -108,26 +115,26 @@ class MockComponentTest {
     @Test
     void afterAndEveryCountTheSendsOfOneEndpoint() {
         http.bind("partner-domestic", Behaviour.from(Map.of("fail", 503, "after", 3), DEMO));
-        Producer p = http.producer(domestic);
+        Producer p = http.producer(out(domestic));
         Envelope in = invoice();
-        assertTrue(p.send(in).succeeded(), "send 1 goes through");
-        assertTrue(p.send(in).succeeded(), "send 2 goes through");
-        assertTrue(p.send(in).failed(), "from the 3rd on, every send fails: the 3rd");
-        assertTrue(p.send(in).failed(), "from the 3rd on, every send fails: the 4th");
+        assertTrue(p.send(in, CALL).succeeded(), "send 1 goes through");
+        assertTrue(p.send(in, CALL).succeeded(), "send 2 goes through");
+        assertTrue(p.send(in, CALL).failed(), "from the 3rd on, every send fails: the 3rd");
+        assertTrue(p.send(in, CALL).failed(), "from the 3rd on, every send fails: the 4th");
         http.bind("partner-foreign", Behaviour.from(Map.of("fail", "reset", "every", 2), DEMO));
-        Producer q = http.producer(foreign);
-        assertEquals(List.of(true, false, true, false, true), List.of(q.send(in).succeeded(), q.send(in).succeeded(), q.send(in).succeeded(), q.send(in).succeeded(), q.send(in).succeeded()),
+        Producer q = http.producer(out(foreign));
+        assertEquals(List.of(true, false, true, false, true), List.of(q.send(in, CALL).succeeded(), q.send(in, CALL).succeeded(), q.send(in, CALL).succeeded(), q.send(in, CALL).succeeded(), q.send(in, CALL).succeeded()),
                 "every 2nd: 1 ok, 2 fails, 3 ok …");
         assertEquals(5, http.sentTo("partner-foreign").size(), "failed sends are recorded too");
-        EndpointConfig third = new EndpointConfig("partner-third", URI.create("http://localhost:8081/third"), Map.of());
+        String third = "partner-third";
         http.bind("partner-third", Behaviour.from(Map.of("fail", 500, "after", 2, "every", 3), DEMO));
-        Producer r = http.producer(third);
-        assertEquals(List.of(true, true, true, false, true), List.of(r.send(in).succeeded(), r.send(in).succeeded(), r.send(in).succeeded(), r.send(in).succeeded(), r.send(in).succeeded()),
+        Producer r = http.producer(out(third));
+        assertEquals(List.of(true, true, true, false, true), List.of(r.send(in, CALL).succeeded(), r.send(in, CALL).succeeded(), r.send(in, CALL).succeeded(), r.send(in, CALL).succeeded(), r.send(in, CALL).succeeded()),
                 "after 2 every 3: of the sends from the 2nd on, every 3rd fails — the 4th");
-        assertTrue(r.send(in).succeeded() && r.send(in).failed(), "… and the 7th");
-        assertTrue(http.producer(third).send(in).succeeded(), "the count is the endpoint's, across producers: the 8th");
-        assertTrue(http.producer(third).send(in).succeeded(), "the count is the endpoint's, across producers: the 9th");
-        assertTrue(http.producer(third).send(in).failed(),
+        assertTrue(r.send(in, CALL).succeeded() && r.send(in, CALL).failed(), "… and the 7th");
+        assertTrue(http.producer(out(third)).send(in, CALL).succeeded(), "the count is the endpoint's, across producers: the 8th");
+        assertTrue(http.producer(out(third)).send(in, CALL).succeeded(), "the count is the endpoint's, across producers: the 9th");
+        assertTrue(http.producer(out(third)).send(in, CALL).failed(),
                 "the count is the endpoint's, across producers (a replay builds a new one): the 10th fails");
     }
 
@@ -153,7 +160,7 @@ class MockComponentTest {
         assertEquals("text/plain", MockComponent.contentType(Path.of("a.txt")));
         assertEquals("application/octet-stream", MockComponent.contentType(Path.of("a.bin")));
         http.bind("partner-domestic", Behaviour.from(Map.of("reply", "nowhere.xml"), DEMO));
-        Future<Envelope> missing = http.producer(domestic).send(invoice());
+        Future<Envelope> missing = http.producer(out(domestic)).send(invoice(), CALL);
         missing.otherwiseEmpty().await();
         assertTrue(missing.cause().getMessage().contains("nowhere.xml"), "a missing fixture fails the send, named");
     }
@@ -165,10 +172,10 @@ class MockComponentTest {
     @Test
     void aFixtureReplyOfASecondAttemptIsKeyedByItsAttempt() {
         http.bind("partner-domestic", Behaviour.from(Map.of("reply", "fixtures/partner-ack.xml"), DEMO));
-        Producer p = http.producer(domestic);
+        Producer p = http.producer(out(domestic));
         Envelope first = invoice().advance();
-        Envelope one = p.send(first).await();
-        Envelope two = p.send(first.with(Envelope.ATTEMPT, 2)).await();
+        Envelope one = p.send(first, CALL).await();
+        Envelope two = p.send(first.with(Envelope.ATTEMPT, 2), CALL).await();
         assertEquals(BlobKey.body(first.id(), 2), one.body().key(), "a first attempt: the next step's plain body key, as before");
         assertEquals(new BlobKey(first.id(), 2, "body~2"), two.body().key(), "the second attempt: its own key");
         assertTrue(rt.blobs().contains(one.body().key()) && rt.blobs().contains(two.body().key()), "both replies stored");
@@ -180,19 +187,19 @@ class MockComponentTest {
     @Test
     void stopCompletesOnlyOnceEveryOutstandingAnswerHasCompletedAFailedOneIncluded() throws Exception {
         List<Promise<Ack>> answers = new CopyOnWriteArrayList<>();
-        var consumer = http.consumer(domestic, e -> { Promise<Ack> p = Promise.promise(); answers.add(p); return p.future(); });
+        var consumer = http.consumer(in(domestic), e -> { Promise<Ack> p = Promise.promise(); answers.add(p); return p.future(); });
         consumer.start().await();
-        Producer p = http.producer(domestic);
-        Future<Envelope> first = p.send(invoice());
+        Producer p = http.producer(out(domestic));
+        Future<Envelope> first = p.send(invoice(), CALL);
         assertTrue(soon(() -> answers.size() == 1), "the first send reached the running consumer's handler");   // in order: answers.get(0) is first's
-        Future<Envelope> second = p.send(invoice());
+        Future<Envelope> second = p.send(invoice(), CALL);
         assertTrue(soon(() -> answers.size() == 2), "both sends reached the running consumer's handler");
 
         Future<Void> stopped = consumer.stop();
         assertEquals(Health.Status.DOWN, http.health().await().status(), "no consumer runs once its stop began");
         assertFalse(stopped.isComplete(), "two answers are outstanding");
         Envelope late = invoice();
-        assertEquals(late, p.send(late).await(), "a send after stop began gets the endpoint's behaviour (echo), not the handler");
+        assertEquals(late, p.send(late, CALL).await(), "a send after stop began gets the endpoint's behaviour (echo), not the handler");
         assertEquals(2, answers.size(), "the stopping consumer's handler saw nothing new");
 
         answers.get(0).fail(new IllegalStateException("the flow failed"));
@@ -209,10 +216,10 @@ class MockComponentTest {
     void aSecondStopWithAnAnswerOutstandingDoesNotCompleteEarly() throws Exception {
         Promise<Ack> answer = Promise.promise();
         List<Envelope> handled = new CopyOnWriteArrayList<>();
-        var consumer = http.consumer(domestic, e -> { handled.add(e); return answer.future(); });
+        var consumer = http.consumer(in(domestic), e -> { handled.add(e); return answer.future(); });
         consumer.start().await();
         Envelope in = invoice();
-        Future<Envelope> sent = http.producer(domestic).send(in);
+        Future<Envelope> sent = http.producer(out(domestic)).send(in, CALL);
         assertTrue(soon(() -> !handled.isEmpty()), "the send reached the running consumer's handler");
         assertEquals(List.of(in.withOutboundId()), handled, "the send reached the running consumer's handler, its message id carried (P2-15b)");
 
@@ -234,13 +241,13 @@ class MockComponentTest {
     void aStopBeforeTheHandlerWasEnteredStillWaitsForItsAnswer() throws Exception {
         Promise<Ack> answer = Promise.promise();
         List<Envelope> handled = new CopyOnWriteArrayList<>();
-        var consumer = http.consumer(domestic, e -> { handled.add(e); return answer.future(); });
+        var consumer = http.consumer(in(domestic), e -> { handled.add(e); return answer.future(); });
         consumer.start().await();
         Envelope in = invoice();
         Future<Envelope> sent;
         Future<Void> stopped;
         try (HeldCarriers held = HeldCarriers.hold()) {   // the handler's virtual thread is started by the send but cannot run
-            sent = http.producer(domestic).send(in);
+            sent = http.producer(out(domestic)).send(in, CALL);
             stopped = consumer.stop();
             assertEquals(List.of(), handled, "the window is real: the handler has not been entered when stop is called");
             assertFalse(stopped.isComplete(), "the answer the send handed out is outstanding before its handler runs: stop waits for it");
@@ -263,5 +270,43 @@ class MockComponentTest {
             Thread.yield();
         }
         return true;
+    }
+
+    @Test
+    void everyUseIsKeyedByItsConnectionsKeyWhateverItsFlow() {
+        List<Envelope> got = new CopyOnWriteArrayList<>();
+        var consumer = http.consumer(Uses.in("partner", "shop/orders", Uses.LIMIT, Map.of()), e -> {
+            got.add(e);
+            return Future.succeededFuture(new Ack.Accepted(e.id()));
+        });
+        consumer.start().await();
+        try {
+            http.producer(out("partner")).send(invoice(), CALL).await();
+            http.producer(out("partner-domestic")).send(invoice(), CALL).await();
+
+            assertEquals(1, got.size(), "the send through the connection partner reached the consumer of that connection only");
+            assertEquals(1, http.delivered("partner").size(), "recorded under the connection's key, not the flow's name");
+            assertEquals(List.of(), http.delivered("shop/orders"));
+            assertEquals(1, http.sentTo("partner").size());
+            assertEquals(1, http.sentTo("partner-domestic").size());
+        } finally {
+            consumer.stop().await();
+        }
+        Inbound none = new Inbound("shop/orders", Optional.empty(), Map.of(), Uses.LIMIT);
+        assertThrows(IllegalArgumentException.class, () -> http.consumer(none, e -> Future.succeededFuture(new Ack.Accepted(e.id()))));
+        assertThrows(IllegalArgumentException.class, () -> http.producer(new Outbound(Optional.empty())), "a use without a connection has no key");
+    }
+
+    @Test
+    void aFixtureReplyAboveTheCallsReplyLimitFailsTheSend() throws Exception {
+        http.bind("partner-domestic", Behaviour.from(Map.of("reply", "fixtures/partner-ack.xml"), DEMO));
+        long size = Files.size(DEMO.resolve("fixtures/partner-ack.xml"));
+
+        Future<Envelope> tooLarge = http.producer(out(domestic)).send(invoice(), Uses.call(size - 1));
+        tooLarge.otherwiseEmpty().await();
+        assertInstanceOf(BodyTooLargeException.class, tooLarge.cause(), "one byte above the call's maxReplyBytes: " + tooLarge);
+
+        assertTrue(http.producer(out(domestic)).send(invoice(), Uses.call(size)).await().body().whole().toString().contains("Ack"),
+                "the limit itself goes through");
     }
 }

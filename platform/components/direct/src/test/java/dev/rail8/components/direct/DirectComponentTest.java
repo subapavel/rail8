@@ -4,17 +4,20 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.BlobNotFoundException;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.Body;
+import dev.rail8.api.Call;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Part;
 import dev.rail8.api.Producer;
 import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.testkit.FakeClock;
 import dev.rail8.testkit.FakeIds;
 import dev.rail8.testkit.FakeRuntime;
@@ -26,7 +29,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +62,11 @@ class DirectComponentTest {
     private final FakeRuntime rt = FakeRuntime.create();
     private final FakeIds calleeIds = new FakeIds("callee");
     private final DirectComponent direct = new DirectComponent(rt.blobs(), calleeIds, rt.timer());
-    private final Producer call = direct.producer(out("/orders"));
+    /** What every producer of direct is built for: no connection. */
+    private static final Outbound OUT = new Outbound(Optional.empty());
+    private final Producer producer = direct.producer(OUT);
+    /** Sends to {@code /orders} through {@link #producer}. */
+    private final Sender call = e -> producer.send(e, call("/orders"));
     private final List<Consumer> running = new ArrayList<>();
 
     @AfterEach
@@ -68,13 +74,18 @@ class DirectComponentTest {
         for (Consumer c : running) c.stop().await();
     }
 
-    static EndpointConfig in(String flow, String address, long maxBodyBytes) {
-        return new EndpointConfig(flow + "-in", URI.create("direct:" + address),
-                Map.of("address", address, "flow", flow, "maxBodyBytes", maxBodyBytes));
+    /** One send: what a send to {@code address} yields. */
+    interface Sender {
+        Future<Envelope> send(Envelope e);
     }
 
-    static EndpointConfig out(String address) {
-        return new EndpointConfig("call", URI.create("direct:" + address), Map.of("address", address));
+    static Inbound in(String flow, String address, long maxBodyBytes) {
+        return new Inbound(flow, Optional.empty(), Map.of("address", address), maxBodyBytes);
+    }
+
+    /** A call of the step {@code send} of the flow {@code shop} to {@code address}. */
+    static Call call(String address) {
+        return new Call("shop", "send", Map.of("address", address), 1024, Optional.empty());
     }
 
     /** A started consumer of {@code /orders} for the flow {@code flow}, taking bodies of up to 1 KiB; stopped after the case. */
@@ -82,8 +93,8 @@ class DirectComponentTest {
         return serve(direct, in(flow, "/orders", 1024), handler);
     }
 
-    private Consumer serve(DirectComponent component, EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        Consumer c = component.consumer(cfg, handler);
+    private Consumer serve(DirectComponent component, Inbound in, Function<Envelope, Future<Ack>> handler) {
+        Consumer c = component.consumer(in, handler);
         c.start().await();
         running.add(c);
         return c;
@@ -108,47 +119,57 @@ class DirectComponentTest {
     // --- the address
 
     @Test
-    void theAddressIsTheSameAnswerForTheInAndTheOutEndpoint() {
-        assertEquals(Optional.of("/orders"), direct.internalAddress(in("fulfil", "/orders", 1024)));
-        assertEquals(Optional.of("/orders"), direct.internalAddress(out("/orders")));
-        assertEquals(Optional.of("/orders/eu-1"), direct.internalAddress(out("/orders/eu-1")));
+    void theAddressIsTheSameAnswerForTheInAndTheOutDirection() {
+        assertEquals(Optional.of("/orders"), direct.internalAddress(Direction.IN, Map.of("address", "/orders")));
+        assertEquals(Optional.of("/orders"), direct.internalAddress(Direction.OUT, Map.of("address", "/orders")));
+        assertEquals(Optional.of("/orders/eu-1"), direct.internalAddress(Direction.OUT, Map.of("address", "/orders/eu-1")));
     }
 
     @Test
-    void anEndpointWithoutAWellFormedAddressIsRefusedWhereverItIsUsed() {
-        EndpointConfig none = new EndpointConfig("call", URI.create("direct:/orders"), Map.of());
-        EndpointConfig trailing = out("/orders/");
-        for (EndpointConfig bad : List.of(none, trailing)) {
-            assertThrows(IllegalArgumentException.class, () -> direct.internalAddress(bad), "internalAddress of " + bad.options());
-            assertThrows(IllegalArgumentException.class, () -> direct.producer(bad), "producer of " + bad.options());
-            Map<String, Object> options = new java.util.HashMap<>(bad.options());
-            options.put("maxBodyBytes", 1024L);
-            EndpointConfig asIn = new EndpointConfig("in", bad.uri(), options);
-            assertThrows(IllegalArgumentException.class, () -> direct.consumer(asIn, a -> Future.succeededFuture(new Ack.Accepted(a.id()))),
-                    "consumer of " + options);
+    void neitherDirectionReachesAConnectionAndTheFlowFormHoldsTheAddressForBoth() {
+        Forms forms = direct.forms();
+        assertEquals(Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.NO_CONNECTION), forms.reach());
+        assertEquals(List.of(), forms.connection().toJson().get("fields"), "no connection field");
+        assertTrue(forms.flow().has("address"));
+        assertSame(forms, direct.forms(), "the same forms on every call");
+    }
+
+    @Test
+    void aUseWithoutAWellFormedAddressIsRefusedWhereverItIsUsed() throws Exception {
+        serve("fulfil", a -> Future.succeededFuture(new Ack.Accepted(a.id())));
+        for (Map<String, Object> bad : List.<Map<String, Object>>of(Map.of(), Map.of("address", "/orders/"))) {
+            assertThrows(IllegalArgumentException.class, () -> direct.internalAddress(Direction.OUT, bad), "internalAddress of " + bad);
+            assertThrows(IllegalArgumentException.class, () -> direct.consumer(new Inbound("fulfil", Optional.empty(), bad, 1024),
+                    a -> Future.succeededFuture(new Ack.Accepted(a.id()))), "consumer of " + bad);
+            Throwable refused = failure(producer.send(caller("x"), new Call("shop", "send", bad, 1024, Optional.empty())));
+            assertEquals(Fault.Kind.INVALID, assertInstanceOf(Fault.class, refused).kind(), "a send of " + bad + ": the flow's settings are wrong");
+            assertTrue(refused.getMessage().contains("flow 'shop', step 'send'"), refused.getMessage());
         }
     }
 
     @Test
-    void anInEndpointNeedsAPositiveBodyLimit() {
-        for (Map<String, Object> options : List.<Map<String, Object>>of(Map.of("address", "/orders"), Map.of("address", "/orders", "maxBodyBytes", 0L))) {
-            EndpointConfig cfg = new EndpointConfig("in", URI.create("direct:/orders"), options);
-            assertThrows(IllegalArgumentException.class, () -> direct.consumer(cfg, a -> Future.succeededFuture(new Ack.Accepted(a.id()))),
-                    "consumer of " + options);
-        }
+    void oneProducerCallsTheFlowServingTheAddressOfEachCall() {
+        serve("fulfil", a -> Future.succeededFuture(new Ack.Reply(a.withHeader("x-by", "fulfil"))));
+        serve(direct, in("billing", "/billing", 1024), a -> Future.succeededFuture(new Ack.Reply(a.withHeader("x-by", "billing"))));
+
+        Future<Envelope> toOrders = producer.send(caller("a"), call("/orders"));
+        Future<Envelope> toBilling = producer.send(caller("b"), call("/billing"));
+
+        assertEquals("fulfil", toOrders.await().header("x-by").orElseThrow());
+        assertEquals("billing", toBilling.await().header("x-by").orElseThrow(), "the same producer, the callee picked by each call");
     }
 
     @Test
-    void theSettingsTakeAPathOfAtMost256CharactersAndNothingElse() {
+    void theFlowFormTakesAPathOfAtMost256CharactersAndNothingElse() {
         for (String good : List.of("/orders", "/orders/eu-1", "/a.b_c~d", "/" + "a".repeat(255))) {
-            assertEquals(List.of(), direct.settings().check(Map.of("address", good), Direction.OUT), good);
-            assertEquals(List.of(), direct.settings().check(Map.of("address", good, "flow", "fulfil", "maxBodyBytes", 1024L), Direction.IN), good);
+            assertEquals(List.of(), direct.forms().flow().check(Map.of("address", good), Direction.OUT), good);
+            assertEquals(List.of(), direct.forms().flow().check(Map.of("address", good, "flow", "fulfil", "maxBodyBytes", 1024L), Direction.IN), good);
         }
         for (String bad : List.of("/", "orders", "//orders", "/orders/", "/orders//eu", "/or ders", "/" + "a".repeat(256))) {
-            assertNotEquals(List.of(), direct.settings().check(Map.of("address", bad), Direction.OUT), bad);
+            assertNotEquals(List.of(), direct.forms().flow().check(Map.of("address", bad), Direction.OUT), bad);
         }
-        assertNotEquals(List.of(), direct.settings().check(Map.of(), Direction.OUT), "an out endpoint names its address");
-        assertNotEquals(List.of(), direct.settings().check(Map.of("flow", "fulfil", "maxBodyBytes", 1024L), Direction.IN), "an in endpoint names its address");
+        assertNotEquals(List.of(), direct.forms().flow().check(Map.of(), Direction.OUT), "a send names its address");
+        assertNotEquals(List.of(), direct.forms().flow().check(Map.of("flow", "fulfil", "maxBodyBytes", 1024L), Direction.IN), "a sender names its address");
     }
 
     // --- the callee's three ways of answering
@@ -285,7 +306,7 @@ class DirectComponentTest {
             id.set(a.id());
             return Future.failedFuture(thrown);
         });
-        Throwable failure = failure(fresh.producer(out("/orders")).send(caller("fails")));
+        Throwable failure = failure(fresh.producer(OUT).send(caller("fails"), call("/orders")));
         return new Failed(failure, id.get());
     }
 
@@ -511,7 +532,7 @@ class DirectComponentTest {
         callee.start().await();
         Envelope sent = caller("late");
 
-        Future<Envelope> cut = timed.producer(out("/orders")).send(sent, () -> Duration.between(clock.instant(), FakeRuntime.T0.plusSeconds(5)));
+        Future<Envelope> cut = timed.producer(OUT).send(sent, call("/orders"), () -> Duration.between(clock.instant(), FakeRuntime.T0.plusSeconds(5)));
         await(entered);
         clock.advance(Duration.ofSeconds(5));
 

@@ -194,6 +194,18 @@ class DeploymentsHashTest {
 
     // --- cases
 
+    /**
+     * The hash of a flow of {@code schemaVersion: 1} is the one the release before gave it: these values were computed by that
+     * release for the same package, so a redeploy after an upgrade finds every flow unchanged.
+     */
+    @Test
+    void aFlowOfSchemaVersion1KeepsItsHashFromTheReleaseBefore() throws Exception {
+        assertEquals(Map.of(
+                AUDIT, "sha256:f6cdf45ed2a8797e95f1f57ee12403c9aa90f540219eba56d63952c3e0e62a2b",
+                ORDERS, "sha256:ab588b1e93a9525e5a2c9f85b9de9070fdf5411a68c60adca8ea7ca8797900de",
+                PING, "sha256:ea6ac9164bcc30d4bcb837bd07a649a180f692d7b25ecb41361573adfbab964a"), hashes(shop()));
+    }
+
     @Test
     void sameContentSameHash() throws Exception {
         Deployments one = node();

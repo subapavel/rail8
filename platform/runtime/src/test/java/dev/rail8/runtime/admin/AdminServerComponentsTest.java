@@ -3,13 +3,17 @@ package dev.rail8.runtime.admin;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Runtime;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Choice;
+import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
 import dev.rail8.api.settings.Tab;
 import dev.rail8.core.admission.Targets;
@@ -57,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * {@code GET /admin/components} lists every component the node serves, sorted by scheme, each with its HTTP prefix and its
- * settings description, after the node's environment and the origin senders call its HTTP port at: 200
+ * forms as {@code settings} (format 2: the reach of each direction, both forms, their text keys), after the node's environment and the origin senders call its HTTP port at: 200
  * {@code {environment, httpOrigin, items:[{scheme, httpPrefix, settings}]}}. It needs the token like every {@code /admin/*} route.
  */
 class AdminServerComponentsTest {
@@ -74,33 +78,41 @@ class AdminServerComponentsTest {
     Deployments deployments;
     AdminServer server;
 
-    /** A component of the scheme {@code drop} that describes a host, a polling tab and two alternatives; it is never started. */
+    /**
+     * A component of the scheme {@code drop} whose in direction reaches a connection: the connection form a host, a port and
+     * two alternatives, the flow form a polling tab; it is never started.
+     */
     static final class Drop implements Component {
         static final Tab POLLING = Tab.of("polling", "Polling");
 
         @Override public String scheme() { return "drop"; }
-        @Override public Settings settings() {
-            return Settings.of(
-                            Field.text("host", "The server."),
-                            Field.integer("port", "The port.").range(1, 65535).byDefault(22).in(),
-                            Field.secret("password", "The password.").tab(Tab.SECURITY),
-                            Field.secret("privateKey", "The key.").tab(Tab.SECURITY),
-                            Field.choice("afterSuccess", "What then.", "delete", "move").byDefault("delete").tab(POLLING).in(),
-                            Field.text("moveTo", "Where to.").required().visibleWhen("afterSuccess", "move").tab(POLLING).in())
-                    .exactlyOne("password", "privateKey");
+        @Override public Forms forms() {
+            return new Forms(Settings.of(
+                            Field.text("host", "Host", "The server.").in(),
+                            Field.integer("port", "Port", "The port.").range(1, 65535).byDefault(22).in(),
+                            Field.secret("password", "Password", "The password.").tab(Tab.SECURITY).in(),
+                            Field.secret("privateKey", "Private key", "The key.").tab(Tab.SECURITY).in())
+                    .exactlyOne("password", "privateKey"),
+                    Settings.of(
+                            Field.choice("afterSuccess", "After success", "What then.", Choice.of("delete", "Delete"), Choice.of("move", "Move"))
+                                    .byDefault("delete").tab(POLLING).in(),
+                            Field.text("moveTo", "Move to", "Where to.").required().visibleWhen("afterSuccess", "move").tab(POLLING).in()),
+                    Map.of(Direction.IN, Forms.Reach.CONNECTION));
         }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException(); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException(); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
     /** A component of the scheme {@code web} that takes requests on the node's HTTP port under {@code /web}; it is never started. */
     static final class Web implements Component {
+        static final Forms FORMS = new Forms(Settings.NONE, Settings.of(HttpIngress.ADDRESS), Map.of(Direction.IN, Forms.Reach.NO_CONNECTION));
+
         @Override public String scheme() { return "web"; }
         @Override public Optional<String> httpPrefix() { return Optional.of("/web"); }
-        @Override public Settings settings() { return Settings.of(HttpIngress.ADDRESS); }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
-        @Override public Producer producer(EndpointConfig cfg) { throw new UnsupportedOperationException(); }
+        @Override public Forms forms() { return FORMS; }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException(); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
 
@@ -165,39 +177,59 @@ class AdminServerComponentsTest {
     }
 
     /**
-     * {@code drop} before {@code rec} before {@code web}: sorted by scheme, only {@code web} with an HTTP prefix. The described one lists its own tab between general and retry, every
-     * field with its tab, its directions and only what it sets, and its rule; the undescribed one the common tabs and nothing else.
+     * {@code drop} before {@code rec} before {@code web}: sorted by scheme, only {@code web} with an HTTP prefix. Each lists its
+     * forms in format 2: the reach of each direction it serves, whether each form describes its fields, the tabs (its own
+     * between general and retry), the fields of each form with their text keys, and the rules; the undescribed {@code rec}
+     * the common tabs and no field.
      */
     @Test
-    void theComponentsAreListedBySchemeWithTheirSettings() throws Exception {
+    void theComponentsAreListedBySchemeWithTheirForms() throws Exception {
         int port = server.start(vertx).await(10, TimeUnit.SECONDS);
         Answer listed = get(port, "Bearer " + TOKEN);
         assertJson(200, listed, "GET /admin/components");
         JsonObject expected = new JsonObject("""
                 {"environment": "dev", "httpOrigin": null, "items": [
-                  {"scheme": "drop", "httpPrefix": null, "settings": {"format": 1, "described": true,
-                    "tabs": [{"id": "general", "label": "General", "common": true}, {"id": "polling", "label": "Polling", "common": false},
-                             {"id": "retry", "label": "Retry", "common": true}, {"id": "recording", "label": "Recording", "common": true},
-                             {"id": "security", "label": "Security", "common": true}],
-                    "fields": [
-                      {"name": "host", "type": "text", "help": "The server.", "tab": "general", "required": false, "directions": ["in", "out"]},
-                      {"name": "port", "type": "integer", "help": "The port.", "tab": "general", "required": false, "directions": ["in"],
-                       "default": 22, "min": 1, "max": 65535},
-                      {"name": "password", "type": "secret", "help": "The password.", "tab": "security", "required": false, "directions": ["in", "out"]},
-                      {"name": "privateKey", "type": "secret", "help": "The key.", "tab": "security", "required": false, "directions": ["in", "out"]},
-                      {"name": "afterSuccess", "type": "choice", "help": "What then.", "tab": "polling", "required": false, "directions": ["in"],
-                       "default": "delete", "choices": ["delete", "move"]},
-                      {"name": "moveTo", "type": "text", "help": "Where to.", "tab": "polling", "required": true, "directions": ["in"],
+                  {"scheme": "drop", "httpPrefix": null, "settings": {"format": 2, "reach": {"in": "connection"},
+                    "described": {"connection": true, "flow": true},
+                    "tabs": [{"id": "general", "label": "General", "labelKey": "rail8.tab.general", "common": true},
+                             {"id": "polling", "label": "Polling", "labelKey": "drop.tab.polling", "common": false},
+                             {"id": "retry", "label": "Retry", "labelKey": "rail8.tab.retry", "common": true},
+                             {"id": "recording", "label": "Recording", "labelKey": "rail8.tab.recording", "common": true},
+                             {"id": "security", "label": "Security", "labelKey": "rail8.tab.security", "common": true}],
+                    "connection": [
+                      {"name": "host", "type": "text", "label": "Host", "labelKey": "drop.field.host.label", "help": "The server.",
+                       "helpKey": "drop.field.host.help", "tab": "general", "required": false, "directions": ["in"]},
+                      {"name": "port", "type": "integer", "label": "Port", "labelKey": "drop.field.port.label", "help": "The port.",
+                       "helpKey": "drop.field.port.help", "tab": "general", "required": false, "directions": ["in"], "default": 22, "min": 1, "max": 65535},
+                      {"name": "password", "type": "secret", "label": "Password", "labelKey": "drop.field.password.label", "help": "The password.",
+                       "helpKey": "drop.field.password.help", "tab": "security", "required": false, "directions": ["in"]},
+                      {"name": "privateKey", "type": "secret", "label": "Private key", "labelKey": "drop.field.privateKey.label", "help": "The key.",
+                       "helpKey": "drop.field.privateKey.help", "tab": "security", "required": false, "directions": ["in"]}],
+                    "flow": [
+                      {"name": "afterSuccess", "type": "choice", "label": "After success", "labelKey": "drop.field.afterSuccess.label",
+                       "help": "What then.", "helpKey": "drop.field.afterSuccess.help", "tab": "polling", "required": false, "directions": ["in"],
+                       "default": "delete", "choices": [{"value": "delete", "label": "Delete", "labelKey": "drop.field.afterSuccess.choice.delete"},
+                                                        {"value": "move", "label": "Move", "labelKey": "drop.field.afterSuccess.choice.move"}]},
+                      {"name": "moveTo", "type": "text", "label": "Move to", "labelKey": "drop.field.moveTo.label", "help": "Where to.",
+                       "helpKey": "drop.field.moveTo.help", "tab": "polling", "required": true, "directions": ["in"],
                        "visibleWhen": {"field": "afterSuccess", "values": ["move"]}}],
                     "rules": [{"kind": "exactlyOne", "fields": ["password", "privateKey"]}]}},
-                  {"scheme": "rec", "httpPrefix": null, "settings": {"format": 1, "described": false,
-                    "tabs": [{"id": "general", "label": "General", "common": true}, {"id": "retry", "label": "Retry", "common": true},
-                             {"id": "recording", "label": "Recording", "common": true}, {"id": "security", "label": "Security", "common": true}],
-                    "fields": [], "rules": []}}]}
+                  {"scheme": "rec", "httpPrefix": null, "settings": {"format": 2, "reach": {"in": "connection", "out": "connection"},
+                    "described": {"connection": false, "flow": true},
+                    "tabs": [{"id": "general", "label": "General", "labelKey": "rail8.tab.general", "common": true},
+                             {"id": "retry", "label": "Retry", "labelKey": "rail8.tab.retry", "common": true},
+                             {"id": "recording", "label": "Recording", "labelKey": "rail8.tab.recording", "common": true},
+                             {"id": "security", "label": "Security", "labelKey": "rail8.tab.security", "common": true}],
+                    "connection": []}}]}
                 """);
+        JsonObject rec = expected.getJsonArray("items").getJsonObject(1).getJsonObject("settings");
+        JsonObject recForms = new JsonObject(Doors.FORMS.toJson(Doors.SCHEME));
+        rec.put("flow", recForms.getJsonArray("flow")).put("rules", recForms.getJsonArray("rules"));
         expected.getJsonArray("items").add(new JsonObject().put("scheme", "web").put("httpPrefix", "/web")
-                .put("settings", new JsonObject(Settings.of(HttpIngress.ADDRESS).toJson())));
-        assertEquals(expected, listed.json(), "sorted by scheme, each with its prefix and its description");
+                .put("settings", new JsonObject(Web.FORMS.toJson("web"))));
+        assertEquals(expected, listed.json(), "sorted by scheme, each with its prefix and its forms");
+        assertEquals("web.field.address.label", listed.json().getJsonArray("items").getJsonObject(2).getJsonObject("settings")
+                .getJsonArray("flow").getJsonObject(0).getString("labelKey"), "a text key names the adapter's scheme");
     }
 
     /** An advertised origin, {@code RAIL8_HTTP_ORIGIN}, is told as set; a component's prefix does not depend on it. */

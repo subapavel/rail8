@@ -9,6 +9,8 @@ import dev.rail8.api.plugin.CommandContext;
 import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.api.plugin.Plugin;
 import dev.rail8.api.plugin.PluginSettings;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.core.flow.FlowBuilder;
 
 import java.io.IOException;
@@ -75,9 +77,11 @@ import java.util.stream.Stream;
  * {@link #CLI_COMMANDS} that brings one, and a usage outside the rule of {@link Command}.
  *
  * <p>A module or plugin adds and never replaces: a scheme, step type or expression language that is already another's is
- * refused, naming both owners, and so are a built-in step type ({@link FlowBuilder#BUILT_INS}) and the scheme {@code mock}. So
- * are a call that throws — a component's {@code settings()} is called once as it is built, so a description that cannot be built
- * is one —, a null scheme, step type, language or {@code settings()}, and more than {@link Plugin#MAX_CONTRIBUTIONS} of one kind.
+ * refused, naming both owners, and so are a built-in step type ({@link FlowBuilder#BUILT_INS}) and the schemes {@code mock} and
+ * {@code rail8}, whose text keys are the platform's own. So are a call that throws — a component's {@code forms()} is called once
+ * as it is built, so forms that cannot be built are one —, a null scheme, step type, language or {@code forms()}, a component
+ * whose out direction reaches no connection unless it is one of the platform's internal adapters ({@link #INTERNAL}), so a flow
+ * sends only through a connection, and more than {@link Plugin#MAX_CONTRIBUTIONS} of one kind.
  * Each call into a module or plugin runs with the thread's context class loader set to its own for that call.
  *
  * <p>{@link #describe} gives each module and plugin as a line of the node's log, and {@link #list} gives each one with what it
@@ -92,6 +96,8 @@ public final class Plugins implements AutoCloseable {
 
     /** The environment variable naming the plugin directory; unset or blank, a node loads no plugin of a directory. */
     public static final String ENV = "RAIL8_PLUGINS";
+    /** The platform's internal adapters, the only ones whose out direction may reach no connection. */
+    static final Set<String> INTERNAL = Set.of("direct", "mock");
     /** The most modules the class path may name. */
     public static final int MAX_MODULES = 64;
     /** The most entries, so plugins, the plugin directory may hold. */
@@ -335,7 +341,8 @@ public final class Plugins implements AutoCloseable {
         if (PLATFORM.equals(name)) throw new IllegalArgumentException(where + ": the name " + PLATFORM + " stands for the platform itself");
         String api = String.valueOf(call(where, loader, "api()", plugin::api, IllegalArgumentException::new));
         if (!loads(Plugin.API, api)) {
-            throw new IllegalArgumentException(where + ": built against api " + api + ", which a node of api " + Plugin.API + " does not load");
+            throw new IllegalArgumentException(where + ": built against api " + api + ", which a node of api " + Plugin.API
+                    + " does not load; build it again on the contract of api " + Plugin.API);
         }
         return new Checked(name, api);
     }
@@ -387,7 +394,24 @@ public final class Plugins implements AutoCloseable {
 
     private static List<Component> components(List<Loaded> loaded, ComponentContext context, Map<String, List<String>> owned) {
         return merge(loaded, "components()", l -> l.plugin().components(context), Component::scheme, "scheme",
-                Map.of("mock", "is the platform's mock"), "settings()", Component::settings, IllegalStateException::new, owned);
+                Map.of("mock", "is the platform's mock", Forms.PLATFORM, "is the platform's own"), "forms()", Plugins::forms, IllegalStateException::new, owned);
+    }
+
+    /** The forms of {@code c}, once they keep the rule of the internal adapters; null when it has none. */
+    private static Forms forms(Component c) {
+        Forms forms = c.forms();
+        if (forms != null && forms.serves(Direction.OUT) && !forms.connects(Direction.OUT) && !INTERNAL.contains(c.scheme())) {
+            throw new Broken("the out direction of scheme " + c.scheme() + " reaches no connection: only the platform's internal adapters "
+                    + INTERNAL.stream().sorted().toList() + " send without one");
+        }
+        return forms;
+    }
+
+    /** A rule a contribution breaks, found by a check of the node's own: refused naming its owner, never as a failed call. */
+    private static final class Broken extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        Broken(String rule) { super(rule, null, false, false); }
     }
 
     /**
@@ -602,6 +626,8 @@ public final class Plugins implements AutoCloseable {
     private static <T> T call(String who, ClassLoader loader, String method, Supplier<T> body, BiFunction<String, Throwable, RuntimeException> refusal) {
         try {
             return withContext(loader, body);
+        } catch (Broken broken) {
+            throw refusal.apply(who + ": " + broken.getMessage(), null);
         } catch (RuntimeException | ServiceConfigurationError | LinkageError failed) {
             throw refusal.apply(who + ": " + method + " failed: " + failed + (failed instanceof LinkageError ? SEES : ""), failed);
         }

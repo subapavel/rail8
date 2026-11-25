@@ -1,18 +1,26 @@
 package dev.rail8.core.flow;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.Headers;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Pipeline;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Stage;
 import dev.rail8.api.StepConfig;
 import dev.rail8.api.StepFactory;
 import dev.rail8.api.StepResources;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Field;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
 import dev.rail8.core.dlq.ParkedException;
@@ -48,19 +56,33 @@ class FlowBuilderTest {
 
     final FakeRuntime rt = FakeRuntime.create();
 
-    /** A producer component that records what it is sent and echoes a reply. */
+    /**
+     * A producer component that records what it is sent, with the call of each send, and echoes a reply naming the connection.
+     * Its flow form has {@code path} (out); every other key of an endpoint is its connection's.
+     */
     static final class EchoComponent implements Component {
+        static final Forms FORMS = new Forms(Settings.NONE, Settings.of(Field.text("path", "Path", "Where to send.").byDefault("/").out()),
+                Map.of(Direction.OUT, Forms.Reach.CONNECTION));
         final List<Envelope> sent = new ArrayList<>();
+        final List<Call> calls = new ArrayList<>();
         final List<String> producersBuilt = new ArrayList<>();
+        final List<Producer> producers = new ArrayList<>();
         @Override public String scheme() { return "echo"; }
-        @Override public String configSchema() { return "{}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
-        @Override public Producer producer(EndpointConfig cfg) {
-            producersBuilt.add(cfg.name());
-            return new Producer() {
-                @Override public Future<Envelope> send(Envelope e) { sent.add(e); return Future.succeededFuture(e.withHeader("replied-by", cfg.name())); }
+        @Override public Forms forms() { return FORMS; }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Producer producer(Outbound out) {
+            String connection = out.connection().map(Connection::key).orElseThrow();
+            producersBuilt.add(connection);
+            Producer producer = new Producer() {
+                @Override public Future<Envelope> send(Envelope e, Call call) {
+                    sent.add(e);
+                    calls.add(call);
+                    return Future.succeededFuture(e.withHeader("replied-by", connection));
+                }
                 @Override public Future<Void> close() { return Future.succeededFuture(); }
             };
+            producers.add(producer);
+            return producer;
         }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
     }
@@ -181,6 +203,32 @@ class FlowBuilderTest {
         // Map.of has no fixed iteration order: the first build resolved both endpoints (in either order), the second only 'dom'
         assertEquals(java.util.Set.of("dom", "for"), new java.util.HashSet<>(echo.producersBuilt.subList(0, 2)), "producers are resolved per build, for the endpoints the flow names");
         assertEquals(List.of("dom"), echo.producersBuilt.subList(2, 3));
+    }
+
+    /**
+     * Each send carries the call of its step: the flow's id, the step's name, the endpoint's settings in the flow (the flow
+     * form's defaults filled in) and as the reply's limit the endpoint's {@code maxBodyBytes}, else the flow's. Each choice
+     * of a byProp step is a use of its own: its own producer, built for its own connection.
+     */
+    @Test
+    void eachSendCarriesTheCallOfItsStepAndEachByPropChoiceHasItsOwnProducer() {
+        EchoComponent echo = new EchoComponent();
+        rt.withComponent(echo);
+        StepFactory toProp = factory("to-prop", s -> Stage.of(e -> e.with(new dev.rail8.api.Key<String>("PARTNER"), e.headers().get("choice"))));
+        FlowBuilder builder = new FlowBuilder(rt.runtime(), List.of(factory("choose", s -> Stage.of(e -> e.withHeader("choice", e.headers().get("want")))), toProp), List.of(),
+                Map.of("dom", new EndpointConfig("dom", URI.create("echo://dom"), Map.of("path", "/orders", "maxBodyBytes", 100, "host", "a")),
+                        "for", new EndpointConfig("for", URI.create("echo://for"), Map.of("host", "b"))));
+        Pipeline p = builder.build(FlowDefinition.from(flow(List.of(
+                Map.of("type", "choose", "name", "c"), Map.of("type", "to-prop", "name", "p"),
+                Map.of("type", "to", "name", "send", "byProp", "PARTNER", "endpoints", Map.of("domestic", "dom", "foreign", "for"))))), NO_FILES);
+        assertEquals(2, echo.producers.size(), "one producer per choice, built at build time");
+        assertEquals(java.util.Set.of("dom", "for"), java.util.Set.copyOf(echo.producersBuilt), "each built for the connection of its own endpoint");
+
+        assertEquals("dom", p.apply(rt.ingress("f", Headers.empty().with("want", "domestic"), Buffer.buffer("<x/>"))).header("replied-by").orElseThrow());
+        assertEquals("for", p.apply(rt.ingress("f", Headers.empty().with("want", "foreign"), Buffer.buffer("<x/>"))).header("replied-by").orElseThrow());
+        assertEquals(List.of(new Call("f", "send", Map.of("path", "/orders"), 100, java.util.Optional.empty()),
+                new Call("f", "send", Map.of("path", "/"), 4096, java.util.Optional.empty())), echo.calls,
+                "the flow, the step, the settings in the flow and the reply's limit: the endpoint's maxBodyBytes, else the flow's");
     }
 
     // --- versions (P1-09d1a, D-059): the deploy adds package=<name>@<version> and revision to the flow's own versions

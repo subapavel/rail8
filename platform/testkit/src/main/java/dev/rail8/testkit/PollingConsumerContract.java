@@ -4,14 +4,14 @@ import dev.rail8.api.Ack;
 import dev.rail8.api.Body;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.json.JsonObject;
 import io.vertx.core.streams.ReadStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -30,6 +30,7 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,19 +39,20 @@ import static org.junit.jupiter.api.Assertions.fail;
 /**
  * The cases every polling consumer passes, real or mock: a component that fetches files from a place the partner
  * drops them — sftp, and the mock standing in for it — rather than being sent to. A component's test extends this class and
- * supplies the component, an endpoint that selects it, a way to drop a file where the consumer polls, the names still there,
+ * supplies the component, the inbound its consumer is built for, a way to drop a file where the consumer polls, the names still there,
  * and a way to fire the consumer's next round through the fake timer.
  *
  * <p>The rules every case pins: a round takes the files oldest first, one at a time; each delivery calls the handler on a
  * virtual thread of its own and the round waits for the answer. An {@link Ack.Accepted} or an {@link Ack.Reply}
  * removes the file — only then, the durable save being the handler's. A retryable {@link Ack.Nack}, a
  * failed answer, a handler that throws or answers null keep the file and end the round: the next round delivers it again.
- * A final Nack keeps the file (this endpoint names no error directory) but never delivers it again to the same consumer.
+ * A final Nack keeps the file (the inbound names no error directory) but never delivers it again to the same consumer.
  * {@link Consumer#stop()} takes no new file, waits for the answer in flight and for its removal; a stopped consumer
  * delivers nothing. A round that cannot reach the partner breaks the consumer ({@link Consumer#broken()}) and keeps the
- * files for a fresh consumer of the endpoint, which delivers them once the partner is back; a stop is not a break.
- * Health is up only while a consumer runs. The settings description is the same on every call; it is
- * given, unless the component declares a configSchema() of its own; and {@link #endpoint()} passes it as an in endpoint.
+ * files for a fresh consumer of the inbound, which delivers them once the partner is back; a stop is not a break.
+ * A consumer's successor, started once it stopped, delivers what it left and never a file it acknowledged. Health is up
+ * only while a consumer runs. The forms are the same on every call, serve the in direction and are labelled, with their
+ * text keys; {@link #inbound()} passes them; building a consumer reads no secret.
  *
  * @since 0.1
  */
@@ -61,13 +63,14 @@ public abstract class PollingConsumerContract {
     protected abstract Component component();
 
     /**
-     * An endpoint whose URI scheme selects {@link #component()} and whose options bind a polling consumer to the place
-     * {@link #drop} writes to, with every option at its default but the required ones, and no error directory.
+     * What a polling consumer of {@link #component()} is built for, as the node hands it over: its connection and settings
+     * bind it to the place {@link #drop} writes to, with every setting at its default but the required ones, and no error
+     * directory.
      */
-    protected abstract EndpointConfig endpoint();
+    protected abstract Inbound inbound();
 
     /**
-     * Places a file named {@code name} holding {@code bytes} where the consumer of {@link #endpoint()} polls, whole (never
+     * Places a file named {@code name} holding {@code bytes} where the consumer of {@link #inbound()} polls, whole (never
      * seen half-written), younger than every file dropped before it and old enough for any minimum age. Returns once it is
      * there. {@link #bytesOf} reads the stream for a fixture that needs the bytes at once.
      */
@@ -85,7 +88,7 @@ public abstract class PollingConsumerContract {
     protected abstract void tick();
 
     /**
-     * Takes the place the consumer of {@link #endpoint()} polls out of reach ({@code true}) or brings it back ({@code false}):
+     * Takes the place the consumer of {@link #inbound()} polls out of reach ({@code true}) or brings it back ({@code false}):
      * while it is out of reach, a round cannot connect or list it. The files dropped there stay.
      */
     protected abstract void partnerDown(boolean down);
@@ -211,42 +214,92 @@ public abstract class PollingConsumerContract {
     // ---- the cases ---------------------------------------------------------------------------------------------------
 
     @Test
-    public void schemeMatchesTheEndpointUri() {
+    public void theSchemeIsNamedAndNotThePlatforms() {
         String scheme = component().scheme();
         assertNotNull(scheme, "scheme");
         assertFalse(scheme.isBlank(), "scheme is blank");
-        assertEquals(endpoint().scheme(), scheme, "the endpoint's URI scheme selects this component");
+        assertNotEquals(Forms.PLATFORM, scheme, "the platform's own texts use the scheme " + Forms.PLATFORM + " in their keys");
     }
 
     @Test
-    public void configSchemaIsAJsonObjectSchema() {
-        JsonObject schema = new JsonObject(component().configSchema());
-        assertEquals("object", schema.getString("type"), "the endpoint options are validated against an object schema: " + schema);
-    }
-
-    @Test
-    public void settingsAreTheSameOnEveryCall() {
+    public void theFormsAreTheSameOnEveryCallAndServeTheInDirection() {
         Component component = component();
-        assertEquals(component.settings().toJson(), component.settings().toJson(), "the node asks for the description whenever it checks an endpoint or serves it, and gets the same one every time");
+        Forms forms = component.forms();
+        assertNotNull(forms, "forms() answers forms, never null");
+        assertEquals(forms.toJson(component.scheme()), component.forms().toJson(component.scheme()),
+                "the node asks for the forms whenever it checks a use or serves them, and gets the same ones every time");
+        assertTrue(forms.serves(Direction.IN), "a polling consumer receives: " + forms.reach());
     }
 
     @Test
-    public void settingsAreDescribedOrTheComponentDeclaresItsOwnSchema() {
+    public void everyFieldChoiceAndTabHasALabelAndItsTextKeys() {
         Component component = component();
-        assertTrue(component.settings().described() || ComponentContract.declaresItsOwnSchema(component),
-                "a component describes its settings, or says what its options are with a configSchema() of its own: the default takes any object");
+        ComponentContract.assertLabelled(component.scheme(), component.forms());
     }
 
     @Test
-    public void theEndpointPassesTheDescription() {
-        assertEquals(List.of(), component().settings().check(endpoint().options(), Direction.IN), "the consumer's endpoint is one the node deploys");
+    public void theInboundPassesTheForms() {
+        Inbound in = inbound();
+        ComponentContract.assertPasses(component().forms(), Direction.IN, in.connection(), in.settings());
+    }
+
+    /**
+     * Building a consumer opens nothing, so it reads no secret: it is built with a connection whose secret handles count
+     * their reads, and no handle has been read once it is built.
+     */
+    @Test
+    public void noSecretHandleIsReadWhileAConsumerIsBuilt() {
+        AtomicInteger reads = new AtomicInteger();
+        Inbound in = inbound();
+        Consumer built = component().consumer(
+                new Inbound(in.flow(), in.connection().map(c -> ComponentContract.counted(c, reads)), in.settings(), in.maxBodyBytes()), ACCEPT);
+        assertNotNull(built, "consumer() answers a consumer");
+        assertEquals(0, reads.get(), "a consumer that was only built read a secret");
+    }
+
+    /**
+     * The node starts a consumer's successor only after the consumer stopped, and a stop waits for the answer in flight and
+     * for its file's removal: the successor delivers the files the stopped consumer left, never the one it acknowledged.
+     */
+    @Test
+    public void aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged() {
+        Component component = component();
+        Seen seen = new Seen();
+        Promise<Ack> answer = Promise.promise();
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> "first".equals(e.body().whole().toString()) ? answer.future() : ACCEPT.apply(e)));
+        drop("first.txt", text("first"));
+        drop("second.txt", text("second"));
+        consumer.start().await();
+        Future<Void> stopped = null;
+        try {
+            fire();
+            assertTrue(soon(() -> seen.count() == 1), "the oldest file was delivered: " + seen.files);
+            stopped = consumer.stop();
+            answer.complete(new Ack.Accepted(seen.envelopes.get(0).id()));
+            assertTrue(settled(stopped).succeeded(), "stop completes once the delivery in flight was answered: " + stopped.cause());
+        } finally {
+            answer.tryComplete(new Ack.Nack("contract cleanup", true));
+            if (stopped == null) consumer.stop();
+        }
+        Seen next = new Seen();
+        Consumer successor = component.consumer(inbound(), next.answering(ACCEPT));
+        successor.start().await();
+        try {
+            fire();
+            assertTrue(soon(() -> next.count() == 1), "the successor delivers the file the stopped consumer left: " + next.files);
+            assertTrue(soon(() -> remaining().isEmpty()), "accepted: removed: " + remaining());
+            assertEquals(List.of("second"), next.files, "never the file the stopped consumer acknowledged");
+        } finally {
+            successor.stop().await();
+        }
+        assertEquals(List.of("first"), seen.files, "the stopped consumer delivered nothing more");
     }
 
     @Test
     public void aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         String content = "<invoice number=\"4711\"/>";
         drop("invoice-4711.xml", text(content));
         consumer.start().await();
@@ -270,7 +323,7 @@ public abstract class PollingConsumerContract {
         Seen seen = new Seen();
         Promise<Ack> pending = Promise.promise();
         AtomicInteger calls = new AtomicInteger();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> calls.incrementAndGet() == 1 ? pending.future() : ACCEPT.apply(e)));
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> calls.incrementAndGet() == 1 ? pending.future() : ACCEPT.apply(e)));
         drop("held.txt", text("held"));
         consumer.start().await();
         try {
@@ -294,7 +347,7 @@ public abstract class PollingConsumerContract {
         Component component = component();
         Seen seen = new Seen();
         AtomicInteger calls = new AtomicInteger();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> calls.incrementAndGet() == 1
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> calls.incrementAndGet() == 1
                 ? Future.succeededFuture(new Ack.Nack("busy-right-now", true)) : ACCEPT.apply(e)));
         drop("retry.txt", text("retry-me"));
         consumer.start().await();
@@ -315,7 +368,7 @@ public abstract class PollingConsumerContract {
         Component component = component();
         Seen seen = new Seen();
         AtomicInteger calls = new AtomicInteger();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> calls.incrementAndGet() == 1
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> calls.incrementAndGet() == 1
                 ? Future.succeededFuture(new Ack.Nack("flow full", true)) : ACCEPT.apply(e)));
         drop("a.txt", text("a"));
         drop("b.txt", text("b"));
@@ -338,7 +391,7 @@ public abstract class PollingConsumerContract {
         Component component = component();
         Seen seen = new Seen();
         AtomicInteger callsForA = new AtomicInteger();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> {
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> {
             if (!"a".equals(e.body().whole().toString())) return ACCEPT.apply(e);
             return switch (callsForA.incrementAndGet()) {
                 case 1 -> throw new IllegalStateException("handler-threw");
@@ -371,7 +424,7 @@ public abstract class PollingConsumerContract {
     public void aFinalNackIsNotDeliveredAgain() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> "refused".equals(e.body().whole().toString())
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> "refused".equals(e.body().whole().toString())
                 ? Future.succeededFuture(new Ack.Nack("malformed", false)) : ACCEPT.apply(e)));
         drop("refused.txt", text("refused"));
         consumer.start().await();
@@ -395,7 +448,7 @@ public abstract class PollingConsumerContract {
     public void filesAreDeliveredOldestFirst() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         List<String> dropped = List.of("f5", "f3", "f1", "f6", "f4", "f2");   // neither name order nor its reverse
         for (String name : dropped) drop(name + ".txt", text(name));
         consumer.start().await();
@@ -413,7 +466,7 @@ public abstract class PollingConsumerContract {
     public void aReplyFinishesTheFileAsAcceptedDoes() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> Future.succeededFuture(new Ack.Reply(e.withHeader("x-replied", "yes")))));
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> Future.succeededFuture(new Ack.Reply(e.withHeader("x-replied", "yes")))));
         drop("sync.txt", text("sync"));
         consumer.start().await();
         try {
@@ -429,7 +482,7 @@ public abstract class PollingConsumerContract {
     public void aBodyAboveTheTreeLimitStreamsThroughIntact() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         long size = 300_000;
         drop("big.bin", new GeneratedReadStream(size, 8192));
         consumer.start().await();
@@ -455,7 +508,7 @@ public abstract class PollingConsumerContract {
     public void eachDeliveryRunsOnAVirtualThreadOfItsOwn() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         drop("one.txt", text("one"));
         drop("two.txt", text("two"));
         consumer.start().await();
@@ -479,7 +532,7 @@ public abstract class PollingConsumerContract {
         Component component = component();
         Seen seen = new Seen();
         Promise<Ack> answer = Promise.promise();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(e -> "first".equals(e.body().whole().toString()) ? answer.future() : ACCEPT.apply(e)));
+        Consumer consumer = component.consumer(inbound(), seen.answering(e -> "first".equals(e.body().whole().toString()) ? answer.future() : ACCEPT.apply(e)));
         drop("first.txt", text("first"));
         drop("second.txt", text("second"));
         consumer.start().await();
@@ -505,12 +558,12 @@ public abstract class PollingConsumerContract {
     public void aStoppedConsumerDeliversNothing() {
         Component component = component();
         Seen stoppedOne = new Seen();
-        Consumer stopped = component.consumer(endpoint(), stoppedOne.answering(ACCEPT));
+        Consumer stopped = component.consumer(inbound(), stoppedOne.answering(ACCEPT));
         stopped.start().await();
         stopped.stop().await();   // before its first round
         drop("late.txt", text("late"));
         Seen running = new Seen();
-        Consumer consumer = component.consumer(endpoint(), running.answering(e -> Future.succeededFuture(new Ack.Nack("keep it there", true))));
+        Consumer consumer = component.consumer(inbound(), running.answering(e -> Future.succeededFuture(new Ack.Nack("keep it there", true))));
         consumer.start().await();
         try {
             fire();
@@ -528,7 +581,7 @@ public abstract class PollingConsumerContract {
     public void aPartnerOutOfReachBreaksTheConsumerAndAFreshOneDeliversTheFile() {
         Component component = component();
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         drop("kept.txt", text("kept"));
         consumer.start().await();
         try {
@@ -545,7 +598,7 @@ public abstract class PollingConsumerContract {
         assertEquals(0, seen.count(), "nothing was delivered while the partner was out of reach: " + seen.files);
         assertEquals(Set.of("kept.txt"), remaining(), "the file stays where it was");
         Seen again = new Seen();
-        Consumer fresh = component.consumer(endpoint(), again.answering(ACCEPT));   // what the node starts after its delay
+        Consumer fresh = component.consumer(inbound(), again.answering(ACCEPT));   // what the node starts after its delay
         fresh.start().await();
         try {
             fire();
@@ -562,7 +615,7 @@ public abstract class PollingConsumerContract {
         Component component = component();
         assertEquals(Health.Status.DOWN, health(component), "no consumer polls yet");
         Seen seen = new Seen();
-        Consumer consumer = component.consumer(endpoint(), seen.answering(ACCEPT));
+        Consumer consumer = component.consumer(inbound(), seen.answering(ACCEPT));
         consumer.start().await();
         try {
             assertEquals(Health.Status.UP, health(component), "a consumer runs and none of its rounds failed");

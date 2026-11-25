@@ -47,7 +47,7 @@ describe('httpEndpointsApi', () => {
   });
 
   test("lists the node's components, and where it takes requests, from the admin API", async () => {
-    const components = { environment: 'dev', httpOrigin: null, items: [{ scheme: 'http', httpPrefix: '/http', settings: { format: 1, described: false, tabs: [], fields: [], rules: [] } }] };
+    const components = { environment: 'dev', httpOrigin: null, items: [{ scheme: 'http', httpPrefix: '/http', settings: { format: 2, reach: { in: 'connection', out: 'connection' }, described: { connection: false, flow: false }, tabs: [], connection: [], flow: [], rules: [] } }] };
     const send = vi.fn(async () => json(200, components));
     expect(await httpEndpointsApi(send).components()).toEqual(components);
     expect(send).toHaveBeenCalledWith('/admin/components', { headers: { accept: 'application/json' } });

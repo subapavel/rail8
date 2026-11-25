@@ -1,6 +1,7 @@
 package dev.rail8.core.flow;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
@@ -8,11 +9,16 @@ import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Pipeline;
 import dev.rail8.api.Producer;
 import dev.rail8.api.Stage;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.Targets;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.dlq.Parked;
@@ -72,7 +78,7 @@ class FlowBuilderTargetTest {
     }
 
     /**
-     * A partner component: {@link #target} is {@code scheme://authority} of the endpoint URI (or none when built without), every
+     * A partner component: {@link #target} is {@code scheme://authority} of its connection's {@code url} (or none when built without), every
      * send recorded; the next {@link #holdNext} sends stay unanswered until the test releases them, the next {@link #failNext}
      * fail at once, the rest are answered at once. In flight = sent and not yet answered, with its peak.
      */
@@ -98,24 +104,26 @@ class FlowBuilderTargetTest {
         List<String> sentIds() { return sent.stream().map(Envelope::id).toList(); }
 
         @Override public String scheme() { return scheme; }
-        @Override public String configSchema() { return "{}"; }
-        @Override public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION)); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException(); }
         @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
 
-        @Override public Optional<String> target(EndpointConfig cfg) {
-            return answersTarget ? Optional.of(cfg.uri().getScheme() + "://" + cfg.uri().getAuthority()) : Optional.empty();
+        @Override public Optional<String> target(Outbound out) {
+            URI url = URI.create((String) out.connection().orElseThrow().values().get("url"));
+            return answersTarget ? Optional.of(url.getScheme() + "://" + url.getAuthority()) : Optional.empty();
         }
 
-        @Override public Producer producer(EndpointConfig cfg) {
+        @Override public Producer producer(Outbound out) {
+            String connection = out.connection().orElseThrow().key();
             return new Producer() {
                 // what a test waits on (sent, inFlight) is published last: a held send is in `held` before it is seen (FIX-115:
                 // `until(sent.size() == n)` then `releaseAll()` missed a send whose promise was not yet added, under load)
-                @Override public Future<Envelope> send(Envelope e) {
+                @Override public Future<Envelope> send(Envelope e, Call call) {
                     if (failures.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
                         sent.add(e);
                         return Future.failedFuture(new IllegalStateException("partner refused " + e.id()));
                     }
-                    Envelope reply = e.withHeader("replied-by", cfg.name());
+                    Envelope reply = e.withHeader("replied-by", connection);
                     if (holds.getAndUpdate(n -> n > 0 ? n - 1 : 0) == 0) {
                         peak.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
                         inFlight.decrementAndGet();
@@ -136,7 +144,7 @@ class FlowBuilderTargetTest {
     }
 
     static EndpointConfig endpoint(String name, String uri) {
-        return new EndpointConfig(name, URI.create(uri), Map.of());
+        return new EndpointConfig(name, URI.create(uri), Map.of("url", uri));
     }
 
     /** Endpoints a, b on the shared target (two paths of one partner), fast on another target, p on a component without one. */

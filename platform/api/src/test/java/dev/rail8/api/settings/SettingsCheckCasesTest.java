@@ -43,7 +43,7 @@ class SettingsCheckCasesTest {
             List<Problem> expected = new ArrayList<>();
             for (Object p : c.getJsonArray("problems")) {
                 JsonObject problem = (JsonObject) p;
-                expected.add(new Problem(problem.getString("path"), problem.getString("message")));
+                expected.add(new Problem(problem.getString("path"), problem.getString("code"), problem.getString("message")));
             }
             Direction direction = Direction.valueOf(c.getString("direction").toUpperCase(Locale.ROOT));
             assertEquals(expected, SettingsCheckTest.DROP.check(c.getJsonObject("options").getMap(), direction));

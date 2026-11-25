@@ -1,8 +1,10 @@
 package dev.rail8.runtime.flow;
 
+import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Fault;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.NackException;
 import dev.rail8.components.http.HttpComponent;
@@ -198,7 +200,7 @@ class DeliveryModesTest {
     void listen(FlowDefinition def, Function<Envelope, Future<Ack>> handler) {
         EndpointConfig in = new EndpointConfig("http-in", URI.create("http://127.0.0.1:0/in"),
                 Map.of("address", "/in", "flow", def.id(), "maxBodyBytes", def.maxBodyBytes()));
-        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) http.consumer(in, handler);
+        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) http.consumer(EndpointUse.inbound(http.forms(), in, def.id(), def.maxBodyBytes()), handler);
         c.start().await();
         started.add(c);
         port = httpPort.port();
@@ -367,6 +369,49 @@ class DeliveryModesTest {
         assertEquals(ORDER.toString(), got.get(0).body().whole().toString(), "the body rebuilt from the store by its key");
         assertEquals(0, queue.size(), "the item is completed");
         assertEquals(List.of("ingress", "partner"), stepNames(id));
+    }
+
+    /** A send the partner refuses as invalid: a {@link Fault} of kind {@code INVALID}, the same message refused again however often. */
+    static final class RefusedAsInvalid extends RuntimeException implements Fault {
+        private static final long serialVersionUID = 1L;
+
+        RefusedAsInvalid() { super("the partner refused the order as invalid"); }
+
+        @Override public Kind kind() { return Kind.INVALID; }
+    }
+
+    /**
+     * On a {@code retryable: true} step, a send refused as invalid is tried once by the step's retry and once by the queue's:
+     * the step's retry throws it at once, with no pause and no second send, and the worker parks the message at once rather than
+     * deferring it, so the partner sees one send in all, however the clock moves.
+     */
+    @Test
+    void aRetryableSendRefusedAsInvalidIsTriedOnceByTheStepsRetryAndOnceByTheQueues() {
+        Map<String, Object> doc = flow("at-least-once", List.of(Map.of("type", "to", "name", "partner", "endpoint", "partner", "retryable", true)));
+        doc.put("retry", Map.of("attempts", 3, "initial", "100ms", "max", "100ms"));
+        FlowDefinition def = FlowDefinition.from(doc);
+        FlowBuilder b = builder();
+        listen(def, b.delivery(def, DEMO));
+        FlowWorker worker = b.worker(def, DEMO, "w1");
+        partner.failNext(10, RefusedAsInvalid::new);
+        assertEquals(202, post(ORDER).status());
+
+        Future<Integer> round = worker.poll();
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!round.isComplete() && System.nanoTime() < deadline) {
+            // a pause of the step's retry (at most 100 ms) is driven, so a second send would come; the run's time limit is not
+            if (rt.timer().pending() > 0 && rt.timer().nextDelay().compareTo(Duration.ofMillis(100)) <= 0) rt.clock().advance(rt.timer().nextDelay());
+            Thread.onSpinWait();
+        }
+        assertEquals(1, round.await(), "one claim ran it");
+        for (int later = 0; later < 3; later++) {
+            rt.clock().advance(Duration.ofMinutes(10));
+            assertEquals(0, worker.poll().await(), "nothing is left for the queue to try again");
+        }
+
+        assertEquals(1, partner.sent().size(), "the partner saw one send: " + partner.sent());
+        assertEquals(9, partner.failuresLeft(), "and refused it");
+        assertEquals(0, queue.size(), "the item is not deferred: " + queue.snapshot());
     }
 
     // --- at-most-once

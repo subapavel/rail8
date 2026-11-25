@@ -57,7 +57,7 @@ class MockFeedTest {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), rt.ids());
         sftp.bindAll(Map.of("sftp-in", Map.of("messages", "fixtures/*.xml")), base);
         List<String> seen = new CopyOnWriteArrayList<>();
-        Consumer consumer = sftp.consumer(in(Map.of()), e -> {
+        Consumer consumer = sftp.consumer(in(Uses.LIMIT), e -> {
             seen.add(e.body().whole().toString());
             return Future.succeededFuture(new Ack.Accepted(e.id()));
         });
@@ -93,7 +93,7 @@ class MockFeedTest {
     void undeliveredExcludesFinallyRefused() {
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), rt.ids());
         AtomicBoolean partnerBack = new AtomicBoolean();
-        Consumer consumer = sftp.consumer(in(Map.of("maxBodyBytes", 6)), e -> Future.succeededFuture(switch (e.body().whole().toString()) {
+        Consumer consumer = sftp.consumer(in(6), e -> Future.succeededFuture(switch (e.body().whole().toString()) {
             case "final" -> new Ack.Nack("malformed", false);
             case "retry" -> partnerBack.get() ? new Ack.Accepted(e.id()) : new Ack.Nack("partner down", true);
             default -> new Ack.Accepted(e.id());

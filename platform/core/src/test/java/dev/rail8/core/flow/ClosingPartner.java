@@ -1,12 +1,16 @@
 package dev.rail8.core.flow;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.settings.Forms;
 import dev.rail8.testkit.RecordingComponent;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -71,23 +75,23 @@ final class ClosingPartner implements Component {
 
     @Override public String scheme() { return "mock"; }
 
-    @Override public String configSchema() { return partner.configSchema(); }
+    @Override public Forms forms() { return partner.forms(); }
 
     @Override
-    public Consumer consumer(EndpointConfig cfg, Function<Envelope, Future<Ack>> handler) {
-        return partner.consumer(cfg, handler);
+    public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        return partner.consumer(in, handler);
     }
 
     @Override
-    public Producer producer(EndpointConfig cfg) {
-        Out out = new Out(built.size() + 1, cfg.name(), partner.producer(cfg));
+    public Producer producer(Outbound use) {
+        Out out = new Out(built.size() + 1, use.connection().map(Connection::key).orElseThrow(), partner.producer(use));
         built.add(out);
         return out;
     }
 
     @Override public Future<Health> health() { return partner.health(); }
 
-    /** One producer as built: its ordinal (1 = the first built), its endpoint, its close calls. */
+    /** One producer as built: its ordinal (1 = the first built), its endpoint (its connection's key), its close calls. */
     final class Out implements Producer {
         final int ordinal;
         final String endpoint;
@@ -103,9 +107,9 @@ final class ClosingPartner implements Component {
         int closes() { return closes.get(); }
 
         @Override
-        public Future<Envelope> send(Envelope e) {
+        public Future<Envelope> send(Envelope e, Call call) {
             if (closes.get() > 0) return Future.failedFuture(new IllegalStateException(this + ": a send after the close"));
-            return inner.send(e);
+            return inner.send(e, call);
         }
 
         @Override

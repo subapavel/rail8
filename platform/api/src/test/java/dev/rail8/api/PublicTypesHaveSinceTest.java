@@ -102,9 +102,10 @@ class PublicTypesHaveSinceTest {
             }
         }
         assertEquals(List.of(), missing, "public types without @since");
-        assertEquals(63, publicTypes, "52 top-level + 11 nested public types, the API for custom code's Secret, Services, Cache and its Loader and Entry, "
+        assertEquals(71, publicTypes, "59 top-level + 12 nested public types, the API for custom code's Secret, Services, Cache and its Loader and Entry, "
                 + "then the settings description's Direction, Tab, Field, Settings and its Problem, then the plugin's settings, then the node's HTTP port "
                 + "(HttpIngress) and its Mount, then the admin service with its request and its reply, then the command of the command line and its "
-                + "context; update this number with every api change");
+                + "context, then an adapter's Connection, Inbound, Outbound and Call, and its Forms with their Reach, Choice and Escape; "
+                + "update this number with every api change");
     }
 }

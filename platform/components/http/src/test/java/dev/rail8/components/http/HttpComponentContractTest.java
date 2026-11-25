@@ -2,7 +2,8 @@ package dev.rail8.components.http;
 
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Inbound;
+import dev.rail8.api.Outbound;
 import dev.rail8.ingress.SharedHttpPort;
 import dev.rail8.testkit.ComponentContract;
 import dev.rail8.testkit.FakeRuntime;
@@ -10,7 +11,6 @@ import io.vertx.core.Vertx;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 
-import java.net.URI;
 import java.util.Map;
 
 /** The real component over real sockets on the loopback interface, its consumers on a shared port, passes the same suite as the mock. */
@@ -46,14 +46,13 @@ class HttpComponentContractTest extends ComponentContract {
         return new HttpComponent(vertx, rt.blobs(), rt.ids(), timer, port);
     }
 
-    /** {@code flow} and {@code maxBodyBytes} are what the node sets on every in endpoint. */
-    @Override protected EndpointConfig endpoint() {
-        return new EndpointConfig("in", URI.create("http://in"), Map.of("address", "/in", "maxBodyBytes", 1_000_000, "flow", "contract"));
+    /** A sender at {@code /in}: the in direction reaches no connection. */
+    @Override protected Inbound inbound() {
+        return Uses.in(FLOW, "/in", 1_000_000);
     }
 
-    /** The producer targets the URL of the started consumer's mount on the shared port. */
-    @Override protected EndpointConfig producerEndpoint(Consumer started) {
-        String url = ((HttpComponent.HttpConsumer) started).url().orElseThrow().toString();
-        return new EndpointConfig("out", URI.create(url), Map.of("url", url, "maxBodyBytes", 1_000_000));
+    /** The producer's connection targets the URL of the started consumer's mount on the shared port. */
+    @Override protected Outbound outbound(Consumer started) {
+        return Uses.out(((HttpComponent.HttpConsumer) started).url().orElseThrow().toString());
     }
 }

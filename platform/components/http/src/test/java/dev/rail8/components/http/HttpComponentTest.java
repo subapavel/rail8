@@ -2,11 +2,13 @@ package dev.rail8.components.http;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.Consumer;
-import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Call;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
 import dev.rail8.api.NackException;
+import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
 import dev.rail8.ingress.SharedHttpPort;
 import dev.rail8.testkit.FakeRuntime;
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,6 +58,9 @@ class HttpComponentTest {
     final HttpComponent http = new HttpComponent(vertx, rt.blobs(), rt.ids(), onVertx(), port);
     final List<Consumer> started = new CopyOnWriteArrayList<>();
     final List<HttpServer> servers = new CopyOnWriteArrayList<>();
+
+    /** A call without a path, replies up to 4096 bytes. */
+    static final Call CALL = Uses.call(4096);
 
     /** A timer on Vert.x timers: the producers' bounded sends are cut in real time, as with the three-argument constructor. */
     static dev.rail8.api.Timer onVertx() {
@@ -86,8 +92,7 @@ class HttpComponentTest {
     }
 
     HttpComponent.HttpConsumer listen(Function<Envelope, Future<Ack>> handler, long maxBodyBytes) {
-        EndpointConfig in = new EndpointConfig("http-in", URI.create("http://http-in"), Map.of("address", "/in", "flow", "invoice-sync", "maxBodyBytes", maxBodyBytes));
-        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) http.consumer(in, handler);
+        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) http.consumer(Uses.in("invoice-sync", "/in", maxBodyBytes), handler);
         c.start().await();
         started.add(c);
         return c;
@@ -193,8 +198,7 @@ class HttpComponentTest {
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         CountingStore store = new CountingStore(rt.blobs());
         HttpComponent counted = new HttpComponent(vertx, store, rt.ids(), onVertx(), port);
-        EndpointConfig in = new EndpointConfig("http-in", URI.create("http://http-in"), Map.of("address", "/in", "flow", "invoice-sync", "maxBodyBytes", 16L));
-        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) counted.consumer(in, e -> { seen.add(e); return Future.succeededFuture(new Ack.Accepted(e.id())); });
+        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) counted.consumer(Uses.in("invoice-sync", "/in", 16), e -> { seen.add(e); return Future.succeededFuture(new Ack.Accepted(e.id())); });
         c.start().await();
         started.add(c);
         Answer declared = post(portOf(c), "/http/in", Buffer.buffer("x".repeat(17)), Map.of());
@@ -214,11 +218,10 @@ class HttpComponentTest {
     }
 
     @Test
-    void limitsAreNeverDefaultedAndAStoppedConsumerFreesItsPath() {
-        EndpointConfig noLimit = new EndpointConfig("in", URI.create("http://in"), Map.of("address", "/in"));
-        assertTrue(assertThrows(IllegalArgumentException.class, () -> http.consumer(noLimit, e -> Future.succeededFuture(new Ack.Accepted(e.id())))).getMessage().contains("maxBodyBytes"));
-        EndpointConfig noReplyLimit = new EndpointConfig("out", URI.create("http://127.0.0.1:1/x"), Map.of("url", "http://127.0.0.1:1/x"));
-        assertTrue(assertThrows(IllegalArgumentException.class, () -> http.producer(noReplyLimit)).getMessage().contains("maxBodyBytes"));
+    void aProducerNeedsAConnectionWithAUrlAndAStoppedConsumerFreesItsPath() {
+        assertTrue(assertThrows(IllegalArgumentException.class, () -> http.producer(new dev.rail8.api.Outbound(Optional.empty()))).getMessage().contains("connection"));
+        assertEquals("connection 'partner': the setting 'url' is required",
+                assertThrows(IllegalArgumentException.class, () -> http.producer(Uses.out(Map.of("timeoutMs", 100)))).getMessage());
         HttpComponent.HttpConsumer c = listen(e -> Future.succeededFuture(new Ack.Accepted(e.id())), 4096);
         c.stop().await();
         started.remove(c);
@@ -232,30 +235,29 @@ class HttpComponentTest {
     @Test
     void itsPrefixIsHttpItListensOnNoPortOfItsOwnAndItsAddressIsAnInOption() {
         assertEquals(Optional.of("/http"), http.httpPrefix());
-        assertEquals(Optional.empty(), http.listensOn(new EndpointConfig("http-in", URI.create("http://http-in"), Map.of("address", "/in"))));
+        assertEquals(Optional.empty(), http.listensOn(Uses.in("invoice-sync", "/in", 1)));
         assertEquals(Map.of("http", "/http"), SharedHttpPort.prefixes(List.of(http)), "the node takes its prefix as it is");
     }
 
     @Test
     void aSecondConsumerOfOnePathDoesNotStartUntilTheFirstStopped() {
         HttpComponent.HttpConsumer first = listen(e -> Future.succeededFuture(new Ack.Accepted(e.id())), 4096);
-        EndpointConfig same = new EndpointConfig("other", URI.create("http://other"), Map.of("address", "/in", "flow", "other", "maxBodyBytes", 4096L));
-        Consumer second = http.consumer(same, e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        Consumer second = http.consumer(Uses.in("other", "/in", 4096), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
         Future<Void> refused = second.start();
         refused.otherwiseEmpty().await();
         assertTrue(refused.failed(), "the path is held");
-        assertTrue(refused.cause().getMessage().contains("is mounted by endpoint 'http-in'"), refused.cause().getMessage());
+        assertTrue(refused.cause().getMessage().contains("flow 'other': the path /http/in is mounted by flow 'invoice-sync'"), refused.cause().getMessage());
         assertEquals(Optional.of(URI.create("http://127.0.0.1:" + port.port() + "/http/in")), first.url());
     }
 
     @Test
     void withoutAnHttpPortNoConsumerStarts() {
         HttpComponent alone = new HttpComponent(vertx, rt.blobs(), rt.ids());
-        Future<Void> start = alone.consumer(new EndpointConfig("in", URI.create("http://in"), Map.of("address", "/in", "maxBodyBytes", 1L)),
+        Future<Void> start = alone.consumer(Uses.in("orders", "/in", 1),
                 e -> Future.succeededFuture(new Ack.Accepted(e.id()))).start();
         start.otherwiseEmpty().await();
         assertTrue(start.failed());
-        assertEquals("endpoint 'in': no HTTP port is open here", start.cause().getMessage());
+        assertEquals("flow 'orders': no HTTP port is open here", start.cause().getMessage());
     }
 
     HttpServer partner(Function<io.vertx.core.http.HttpServerRequest, Void> handler) {
@@ -265,9 +267,9 @@ class HttpComponentTest {
     }
 
     Producer producerTo(HttpServer partner, String path, Map<String, Object> extra) {
-        Map<String, Object> options = new java.util.HashMap<>(Map.of("url", "http://127.0.0.1:" + partner.actualPort() + path, "maxBodyBytes", 4096));
-        options.putAll(extra);
-        return http.producer(new EndpointConfig("partner", URI.create("http://127.0.0.1:" + partner.actualPort() + path), options));
+        Map<String, Object> values = new java.util.HashMap<>(Map.of("url", "http://127.0.0.1:" + partner.actualPort() + path));
+        values.putAll(extra);
+        return http.producer(Uses.out(values));
     }
 
     @Test
@@ -279,7 +281,7 @@ class HttpComponentTest {
         }); return null; });
         Producer p = producerTo(partner, "/invoices", Map.of());
         Envelope in = rt.ingress("invoice-sync", Headers.empty().with("x-request-id", "r-9").with("content-type", "application/xml"), Buffer.buffer("<Invoice/>")).advance();
-        Envelope reply = p.send(in).await();
+        Envelope reply = p.send(in, CALL).await();
         assertEquals(List.of("POST /invoices r-9 10 <Invoice/>"), seen);
         assertEquals(2, reply.step(), "the reply is the next step's envelope");
         assertEquals(in.id(), reply.id());
@@ -288,7 +290,7 @@ class HttpComponentTest {
         assertEquals("p1", reply.headers().get("x-partner"));
         assertEquals(Optional.of(201), reply.get(HttpComponent.STATUS));
         assertEquals(2, reply.body().key().step());
-        p.send(in).await();
+        p.send(in, CALL).await();
         assertEquals(2, seen.size(), "a second send re-opens the body and posts it again");
         assertEquals(2, ((HttpComponent.HttpProducer) p).sends());
         p.close().await();
@@ -303,20 +305,20 @@ class HttpComponentTest {
         Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
         for (int status : List.of(503, 429)) {
             Producer p = producerTo(partner, "/" + status, Map.of());
-            Future<Envelope> f = p.send(in);
+            Future<Envelope> f = p.send(in, CALL);
             f.otherwiseEmpty().await();
             assertTrue(f.cause() instanceof NackException n && n.retryable() && n.reason().contains("status " + status), String.valueOf(f.cause()));
             p.close().await();
         }
         for (int status : List.of(400, 404, 500)) {
             Producer p = producerTo(partner, "/" + status, Map.of());
-            Future<Envelope> f = p.send(in);
+            Future<Envelope> f = p.send(in, CALL);
             f.otherwiseEmpty().await();
             assertTrue(f.cause() instanceof HttpStatusException x && x.status() == status && x.retryable() == (status >= 500) && x.getMessage().contains("status " + status + " body"), String.valueOf(f.cause()));
             p.close().await();
         }
         Producer p = producerTo(partner, "/502", Map.of());
-        Future<Envelope> big = p.send(in.withHeader("x-long", "1"));
+        Future<Envelope> big = p.send(in.withHeader("x-long", "1"), CALL);
         big.otherwiseEmpty().await();
         assertTrue(big.cause() instanceof HttpStatusException x && x.status() == 502 && x.getMessage().startsWith("HTTP 502: status 502 eee"), String.valueOf(big.cause()));
         assertTrue(big.cause().getMessage().length() < HttpComponent.ERROR_BODY_BYTES + 32, "a 100 kB error page is cut at " + HttpComponent.ERROR_BODY_BYTES + " bytes, never buffered whole: " + big.cause().getMessage().length());
@@ -334,12 +336,12 @@ class HttpComponentTest {
         }); return null; });
         Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
         Producer toBig = producerTo(partner, "/big", Map.of());
-        Future<Envelope> big = toBig.send(in);
+        Future<Envelope> big = toBig.send(in, CALL);
         big.otherwiseEmpty().await();
         assertTrue(big.cause() instanceof dev.rail8.api.BodyTooLargeException, "the reply is written under the endpoint's limit like any body: " + big.cause());
         toBig.close().await();
         Producer toNever = producerTo(partner, "/never", Map.of("timeoutMs", 200));
-        Future<Envelope> slow = toNever.send(in);
+        Future<Envelope> slow = toNever.send(in, CALL);
         slow.otherwiseEmpty().await();
         assertTrue(slow.failed(), "timeoutMs bounds the wait: " + slow.cause());
         toNever.close().await();
@@ -359,9 +361,9 @@ class HttpComponentTest {
         Producer p = producerTo(partner, "/in", Map.of());
         Envelope in = rt.ingress("f", Headers.empty().with("X-Message-ID", "upstream-1").with("x-message-id", "upstream-2").with("x-request-id", "r-1"),
                 Buffer.buffer("x"));
-        p.send(in).await();
+        p.send(in, CALL).await();
         Envelope bounded = in.withId("m-bounded");
-        p.send(bounded, () -> java.time.Duration.ofSeconds(30)).await();
+        p.send(bounded, CALL, () -> java.time.Duration.ofSeconds(30)).await();
         assertEquals(List.of("[" + in.id() + "] r-1", "[m-bounded] r-1"), seen,
                 "one x-message-id per request, the envelope's own; every forwarded value dropped whatever its case, the other headers kept");
         p.close().await();
@@ -390,13 +392,13 @@ class HttpComponentTest {
             return null;
         });
         String base = "http://127.0.0.1:" + partner.actualPort();
-        Producer p = timed.producer(new EndpointConfig("partner", URI.create(base + "/r"), Map.of("url", base + "/r", "maxBodyBytes", 4096)));
-        Producer q = timed.producer(new EndpointConfig("partner", URI.create(base + "/c"), Map.of("url", base + "/c", "maxBodyBytes", 4096)));
+        Producer p = timed.producer(Uses.out(base + "/r"));
+        Producer q = timed.producer(Uses.out(base + "/c"));
         java.util.concurrent.atomic.AtomicReference<java.time.Instant> until = new java.util.concurrent.atomic.AtomicReference<>(rt.clock().instant().plusSeconds(5));
         dev.rail8.api.Deadline d = () -> java.time.Duration.between(rt.clock().instant(), until.get());
         try {
             Envelope kept = rt.ingress("f", Headers.empty(), Buffer.buffer("kept")).advance();
-            Future<Envelope> renewed = p.send(kept, d);
+            Future<Envelope> renewed = p.send(kept, CALL, d);
             assertTrue(soon(() -> events.contains("streaming /r")), "fixture: the reply streams: " + events);
             rt.clock().advance(java.time.Duration.ofSeconds(4));
             until.set(rt.clock().instant().plusSeconds(6));   // renewed: 5 s past the deadline it was sent with
@@ -410,7 +412,7 @@ class HttpComponentTest {
 
             Envelope cut = rt.ingress("f", Headers.empty(), Buffer.buffer("cut")).advance();
             until.set(rt.clock().instant().plusSeconds(3));
-            Future<Envelope> outcome = q.send(cut, d);
+            Future<Envelope> outcome = q.send(cut, CALL, d);
             assertTrue(soon(() -> events.contains("streaming /c")), "fixture: the reply streams: " + events);
             rt.clock().advance(java.time.Duration.ofSeconds(3));
             outcome.otherwiseEmpty().await(10, TimeUnit.SECONDS);
@@ -495,11 +497,11 @@ class HttpComponentTest {
         LateListeningStore store = new LateListeningStore(rt.blobs());
         HttpComponent late = new HttpComponent(vertx, store, rt.ids());
         String url = "http://127.0.0.1:" + partner.actualPort() + "/tiny";
-        Producer p = late.producer(new EndpointConfig("partner", URI.create(url), Map.of("url", url, "maxBodyBytes", 16)));
+        Producer p = late.producer(Uses.out(url));
         Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
         java.util.concurrent.CompletableFuture<Future<Envelope>> sent = new java.util.concurrent.CompletableFuture<>();
         Thread.ofVirtual().name("message").start(() -> {   // as in a flow: the send starts on the message's virtual thread
-            Future<Envelope> f = p.send(in);
+            Future<Envelope> f = p.send(in, CALL);
             try {
                 f.otherwiseEmpty().await(10, TimeUnit.SECONDS);
                 sent.complete(f);
@@ -516,71 +518,65 @@ class HttpComponentTest {
         p.close().await(10, TimeUnit.SECONDS);
     }
 
-    // ---- P2-09a (D-099): the target a producer calls ------------------------------------------------------------------
+    // ---- the target a producer calls -----------------------------------------------------------------------------------
 
-    static EndpointConfig out(String uri, Map<String, Object> options) {
-        return new EndpointConfig("partner", URI.create(uri), options);
+    Optional<String> target(String url) {
+        return http.target(Uses.out(url));
+    }
+
+    static Outbound out(String key, String url) {
+        return new Outbound(Optional.of(new Connection(key, Map.of("url", url), Map.of())));
     }
 
     /**
-     * The target of an http producer is {@code scheme://host:port} of its {@code url} (else of the endpoint URI): lower-cased,
-     * the scheme's default port filled in (https keeps 443), never userinfo, path, query or fragment — two endpoints on one
-     * partner's paths name one target. Answered from the config alone: a host nobody resolves is answered as written.
+     * The target of an http producer is {@code scheme://host:port} of its connection's {@code url}: lower-cased, the scheme's
+     * default port filled in (https keeps 443), never userinfo, path, query or fragment — two connections on one partner's paths
+     * name one target. Answered from the connection alone: a host nobody resolves is answered as written.
      */
     @Test
     void targetIsSchemeHostPortFromUrlWithoutUserinfoPathQuery() {
-        assertEquals(Optional.of("https://partner.example.com:443"),
-                http.target(out("http://partner/x", Map.of("url", "https://User:Secret@Partner.Example.COM/orders/v1?draft=true#top"))),
+        assertEquals(Optional.of("https://partner.example.com:443"), target("https://User:Secret@Partner.Example.COM/orders/v1?draft=true#top"),
                 "userinfo, path, query and fragment dropped, lower-cased, https default port");
-        assertEquals(Optional.of("http://partner.example:80"), http.target(out("http://partner/x", Map.of("url", "http://partner.example/in"))), "http default port");
-        assertEquals(Optional.of("http://partner.example:8080"), http.target(out("http://partner/x", Map.of("url", "http://partner.example:8080/in"))), "an explicit port");
-        assertEquals(Optional.of("https://partner.example:8443"), http.target(out("http://partner/x", Map.of("url", "HTTPS://PARTNER.example:8443"))), "an upper-case scheme, no path");
-        assertEquals(Optional.of("http://[::1]:9000"), http.target(out("http://partner/x", Map.of("url", "http://[::1]:9000/x"))), "an IPv6 literal keeps its brackets");
-        assertEquals(Optional.of("http://orders.example:7000"), http.target(out("http://Orders.Example:7000/in?a=b", Map.of())), "no url option: the endpoint URI");
-        assertEquals(Optional.of("https://orders.example:443"), http.target(out("https://orders.example/in", Map.of())), "no url option, https URI: 443");
-        assertEquals(http.target(out("http://partner/x", Map.of("url", "http://partner.example:8080/a"))),
-                http.target(out("http://partner/y", Map.of("url", "http://partner.example:8080/b/c?d=e"))), "two paths of one partner: one target");
-        assertEquals(Optional.of("https://partner.invalid:443"), http.target(out("http://partner/x", Map.of("url", "https://partner.invalid/never"))),
-                "a host that never resolves is answered as configured: no DNS");
+        assertEquals(Optional.of("http://partner.example:80"), target("http://partner.example/in"), "http default port");
+        assertEquals(Optional.of("http://partner.example:8080"), target("http://partner.example:8080/in"), "an explicit port");
+        assertEquals(Optional.of("https://partner.example:8443"), target("HTTPS://PARTNER.example:8443"), "an upper-case scheme, no path");
+        assertEquals(Optional.of("http://[::1]:9000"), target("http://[::1]:9000/x"), "an IPv6 literal keeps its brackets");
+        assertEquals(target("http://partner.example:8080/a"), target("http://partner.example:8080/b/c?d=e"), "two paths of one partner: one target");
+        assertEquals(Optional.of("https://partner.invalid:443"), target("https://partner.invalid/never"), "a host that never resolves is answered as configured: no DNS");
     }
 
     /**
      * A host java.net.URI cannot read as a server name (an underscore: its authority is registry-based, getHost() is null) still
-     * gets a key shared by every endpoint on that partner: from the raw authority, userinfo stripped, lower-cased, the scheme's
-     * default port filled in (D-099, architect 2026-11-03).
+     * gets a key shared by every connection to that partner: from the raw authority, userinfo stripped, lower-cased, the scheme's
+     * default port filled in.
      */
     @Test
     void aHostWithAnUnderscoreStillGetsASharedTarget() {
-        assertEquals(Optional.of("https://my_host.example:443"), http.target(out("http://partner/x", Map.of("url", "https://User@My_Host.example:443/x"))),
-                "userinfo stripped, lower-cased, the port as written");
-        assertEquals(Optional.of("https://my_host.example:443"), http.target(out("http://partner/x", Map.of("url", "https://u:pw@MY_HOST.example/y?q=1"))),
-                "the https default port filled in, path and query dropped");
-        assertEquals(Optional.of("http://my_host.example:80"), http.target(out("http://partner/x", Map.of("url", "HTTP://My_Host.example/z"))),
-                "the http default port, the scheme lower-cased");
-        assertEquals(Optional.of("http://my_host.example:8080"), http.target(out("http://My_Host.example:8080/in", Map.of())), "no url option: the endpoint URI");
-        assertEquals(http.target(out("http://partner/x", Map.of("url", "https://my_host.example/a"))),
-                http.target(out("http://partner/y", Map.of("url", "https://My_Host.example:443/b#c"))), "two paths of one partner: one target");
+        assertEquals(Optional.of("https://my_host.example:443"), target("https://User@My_Host.example:443/x"), "userinfo stripped, lower-cased, the port as written");
+        assertEquals(Optional.of("https://my_host.example:443"), target("https://u:pw@MY_HOST.example/y?q=1"), "the https default port filled in, path and query dropped");
+        assertEquals(Optional.of("http://my_host.example:80"), target("HTTP://My_Host.example/z"), "the http default port, the scheme lower-cased");
+        assertEquals(target("https://my_host.example/a"), target("https://My_Host.example:443/b#c"), "two paths of one partner: one target");
     }
 
     /** An IPv6 literal without a port: the colons inside its brackets are not a port; the scheme's default port is filled in. */
     @Test
     void anIpv6LiteralWithoutAPortGetsTheDefaultPort() {
-        assertEquals(Optional.of("http://[::1]:80"), http.target(out("http://partner/x", Map.of("url", "http://[::1]/x"))), "http, no port");
-        assertEquals(Optional.of("https://[::1]:443"), http.target(out("http://partner/x", Map.of("url", "https://[::1]"))), "https, no port, no path");
-        assertEquals(Optional.of("http://[fe80::1]:80"), http.target(out("http://[FE80::1]/in", Map.of())), "no url option: the endpoint URI, lower-cased");
+        assertEquals(Optional.of("http://[::1]:80"), target("http://[::1]/x"), "http, no port");
+        assertEquals(Optional.of("https://[::1]:443"), target("https://[::1]"), "https, no port, no path");
+        assertEquals(Optional.of("http://[fe80::1]:80"), target("http://[FE80::1]/in"), "lower-cased");
     }
 
     /**
-     * Vert.x 5.1.10 parses the producer's url with {@code java.net.URL} (RequestOptions.setAbsoluteURI, agent/work/P2-09a-vertx-absuri.txt),
-     * which takes a query character {@code java.net.URI} refuses (an unencoded {@code |}) and a space: the producer sends to such a
-     * url, so the endpoint still deploys — its target is still {@code scheme://host:port}, answered without a throw.
+     * Vert.x parses the producer's url with {@code java.net.URL} (RequestOptions.setAbsoluteURI), which takes a query character
+     * {@code java.net.URI} refuses (an unencoded {@code |}) and a space: without a path the producer sends to such a url as it
+     * is, and its target is still {@code scheme://host:port}, answered without a throw.
      */
     @Test
-    void aUrlTheProducerAcceptsButURIRejectsStillDeploys() throws Exception {
+    void aUrlTheProducerAcceptsButURIRejectsStillSends() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> URI.create("http://127.0.0.1:1/in?x=a|b"), "fixture: java.net.URI refuses the url");
-        assertEquals(Optional.of("http://partner.example:8080"), http.target(out("http://partner/x", Map.of("url", "http://User@Partner.Example:8080/a b?q=1 2|3"))),
+        assertEquals(Optional.of("http://partner.example:8080"), target("http://User@Partner.Example:8080/a b?q=1 2|3"),
                 "a space and a | in path and query: userinfo stripped, lower-cased, the port as written");
-        assertEquals(Optional.of("https://partner.example:443"), http.target(out("http://partner/x", Map.of("url", "https://partner.example/in?x=a|b"))), "the https default port");
+        assertEquals(Optional.of("https://partner.example:443"), target("https://partner.example/in?x=a|b"), "the https default port");
 
         List<String> seen = new CopyOnWriteArrayList<>();
         HttpServer partner = partner(req -> {
@@ -588,22 +584,11 @@ class HttpComponentTest {
             req.response().end("ok");
             return null;
         });
-        String url = "http://127.0.0.1:" + partner.actualPort() + "/in?x=a|b";
-        EndpointConfig cfg = new EndpointConfig("partner", URI.create("http://127.0.0.1:" + partner.actualPort() + "/in"), Map.of("url", url, "maxBodyBytes", 4096));
-        assertEquals(Optional.of("http://127.0.0.1:" + partner.actualPort()), http.target(cfg), "the target of the url the producer sends to");
-        Producer p = http.producer(cfg);
+        Outbound out = Uses.out("http://127.0.0.1:" + partner.actualPort() + "/in?x=a|b");
+        assertEquals(Optional.of("http://127.0.0.1:" + partner.actualPort()), http.target(out), "the target of the url the producer sends to");
+        Producer p = http.producer(out);
         try {
-            java.util.concurrent.CompletableFuture<Future<Envelope>> sent = new java.util.concurrent.CompletableFuture<>();
-            Thread.ofVirtual().name("message").start(() -> {
-                Future<Envelope> f = p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("x")));
-                try {
-                    f.otherwiseEmpty().await(10, TimeUnit.SECONDS);
-                    sent.complete(f);
-                } catch (TimeoutException stuck) {
-                    sent.completeExceptionally(stuck);
-                }
-            });
-            Future<Envelope> f = sent.get(15, TimeUnit.SECONDS);
+            Future<Envelope> f = onAVirtualThread(() -> p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("x")), CALL));
             assertTrue(f.succeeded(), "the producer sends to the url java.net.URI refuses: " + f.cause());
             assertEquals(List.of("/in?x=a|b"), seen, "the partner saw the request as the url names it");
         } finally {
@@ -611,51 +596,171 @@ class HttpComponentTest {
         }
     }
 
+    /** Runs {@code send} on a virtual thread, as a flow does, and gives the send once it settled. */
+    static Future<Envelope> onAVirtualThread(java.util.function.Supplier<Future<Envelope>> send) throws Exception {
+        java.util.concurrent.CompletableFuture<Future<Envelope>> sent = new java.util.concurrent.CompletableFuture<>();
+        Thread.ofVirtual().name("message").start(() -> {
+            Future<Envelope> f = send.get();
+            try {
+                f.otherwiseEmpty().await(10, TimeUnit.SECONDS);
+                sent.complete(f);
+            } catch (TimeoutException stuck) {
+                sent.completeExceptionally(stuck);
+            }
+        });
+        return sent.get(15, TimeUnit.SECONDS);
+    }
+
     /** A url with an empty host (as the producer parses it) names no target: its sends get a limit of their own, never a key {@code http://:80}. */
     @Test
     void aUrlWithNoHostHasNoTarget() {
-        assertEquals(Optional.empty(), http.target(out("http://partner/x", Map.of("url", "http:///x"))), "http:///x has no host");
+        assertEquals(Optional.empty(), target("http:///x"), "http:///x has no host");
     }
 
     /**
      * A url the producer cannot send to (a scheme other than http/https, no scheme, a port that is no number) refuses the build:
-     * an IllegalArgumentException naming the endpoint and its {@code url} option — never the url itself, which may carry a
+     * an IllegalArgumentException naming the connection and its setting {@code url} — never the url itself, which may carry a
      * password, neither in its message nor anywhere down its cause chain.
      */
     @Test
-    void aUrlTheProducerCannotSendToRefusesTheBuildNamingTheEndpointNotTheUrl() {
+    void aUrlTheProducerCannotSendToRefusesTheBuildNamingTheConnectionNotTheUrl() {
         for (String url : List.of("foo://x", "x:abc", "ftp://h/x", "https://u:Secret@h:abc/x")) {
-            EndpointConfig cfg = new EndpointConfig("partner-orders", URI.create("http://partner/x"), Map.of("url", url));
-            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> http.target(cfg), url + ": refused");
-            String message = String.valueOf(refused.getMessage());
-            assertTrue(message.contains("partner-orders"), url + ": names the endpoint: " + message);
-            assertTrue(message.contains("url"), url + ": names the option: " + message);
-            assertFalse(message.contains(url), url + ": the url itself is not in the message: " + message);
-            assertFalse(message.contains("Secret") || message.contains("u:"), url + ": no userinfo in the message: " + message);
-            for (Throwable c = refused.getCause(); c != null; c = c.getCause()) {
-                assertFalse(String.valueOf(c.getMessage()).contains("Secret"), url + ": no password down the cause chain: " + c);
+            for (java.util.function.Function<Outbound, Object> use : List.<java.util.function.Function<Outbound, Object>>of(http::target, http::producer)) {
+                IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> use.apply(out("partner-orders", url)), url + ": refused");
+                String message = String.valueOf(refused.getMessage());
+                assertEquals("connection 'partner-orders': the setting 'url' is no http(s) URL the producer can send to", message, url);
+                for (Throwable c = refused.getCause(); c != null; c = c.getCause()) {
+                    assertFalse(String.valueOf(c.getMessage()).contains("Secret"), url + ": no password down the cause chain: " + c);
+                }
             }
+        }
+        assertEquals("connection 'partner-orders': the setting 'url' is required",
+                assertThrows(IllegalArgumentException.class, () -> http.target(new Outbound(Optional.of(new Connection("partner-orders", Map.of(), Map.of()))))).getMessage(),
+                "a connection without a url names the setting");
+    }
+
+    // ---- the path of a call ---------------------------------------------------------------------------------------------
+
+    /** A partner that answers each request with its URI, the requests it saw in {@code seen}. */
+    HttpServer echo(List<String> seen) {
+        return partner(req -> { req.body().onSuccess(b -> {
+            seen.add(req.uri() + (req.getHeader("authorization") == null ? "" : " authorization"));
+            req.response().end(req.uri());
+        }); return null; });
+    }
+
+    /**
+     * A call's {@code path} is joined to the url's path and the url's query kept; the request is built from the parts of that
+     * one joined URI. A path that stays inside the url's path after its dot segments are resolved is sent there.
+     */
+    @Test
+    void aCallsPathIsJoinedToTheUrlsPathAndTheUrlsQueryKept() {
+        List<String> seen = new CopyOnWriteArrayList<>();
+        String base = "http://127.0.0.1:" + echo(seen).actualPort();
+        Producer withQuery = http.producer(Uses.out(base + "/api?k=1"));
+        Producer withSlash = http.producer(Uses.out(base + "/api/"));
+        Producer atRoot = http.producer(Uses.out(base));
+        Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
+        try {
+            assertEquals("/api/orders?k=1", withQuery.send(in, Uses.call("/orders", 4096)).await().body().whole().toString());
+            assertEquals("/api/orders/7", withSlash.send(in, Uses.call("/orders/7", 4096)).await().body().whole().toString(), "the url's trailing / is not doubled");
+            assertEquals("/api/a/b", withSlash.send(in, Uses.call("/a/./x/../b", 4096)).await().body().whole().toString(), "dot segments inside the url's path resolved");
+            assertEquals("/orders%20x", atRoot.send(in, Uses.call("/orders%20x", 4096)).await().body().whole().toString(), "an escape kept as it is");
+            assertEquals("/api?k=1", withQuery.send(in, CALL).await().body().whole().toString(), "without a path: the url as it is");
+            assertEquals(List.of("/api/orders?k=1", "/api/orders/7", "/api/a/b", "/orders%20x", "/api?k=1"), seen);
+        } finally {
+            withQuery.close().await();
+            withSlash.close().await();
+            atRoot.close().await();
         }
     }
 
     /**
-     * P2-09b (P2-09a r3 note): the refusal names what was read. Without a {@code url} option the target is read from the endpoint
-     * URI, and a URI the producer cannot send to is refused as "the endpoint URI" — not as option 'url', which the endpoint does
-     * not set; with a {@code url} option it is "option 'url'" and no endpoint URI. Neither message carries what was read.
+     * A path that would leave the url's path or change its host — dot segments, encoded or not, a path not from {@code /}, a
+     * query or fragment in it — fails the send with a {@link dev.rail8.api.Fault} of kind {@code INVALID}, through both sends,
+     * before a request: the partner sees nothing, the send is not counted, and the message never carries the url's user info.
      */
     @Test
-    void aBadEndpointUriWithoutAUrlOptionIsNamedAsTheEndpointUri() {
-        for (String uri : List.of("ftp://h/x", "https://u:Secret@h:abc/x")) {
-            EndpointConfig cfg = new EndpointConfig("partner-orders", URI.create(uri), Map.of());
-            String message = String.valueOf(assertThrows(IllegalArgumentException.class, () -> http.target(cfg), uri + ": refused").getMessage());
-            assertTrue(message.contains("partner-orders"), uri + ": names the endpoint: " + message);
-            assertTrue(message.contains("the endpoint URI"), uri + ": names the endpoint URI as what was read: " + message);
-            assertFalse(message.contains("option 'url'"), uri + ": not the url option, which is not set: " + message);
-            assertFalse(message.contains(uri) || message.contains("Secret"), uri + ": the URI itself is not in the message: " + message);
+    void aPathThatLeavesTheUrlsPathIsRefusedAsInvalidBeforeARequest() {
+        List<String> seen = new CopyOnWriteArrayList<>();
+        int port = echo(seen).actualPort();
+        Producer api = http.producer(Uses.out("http://user:Secret@127.0.0.1:" + port + "/api"));
+        Producer root = http.producer(Uses.out("http://127.0.0.1:" + port));
+        Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
+        List<String> leaving = List.of("/../admin", "/%2e%2e/admin", "/%2E%2E/admin", "/x/../../admin", "/..", "orders", "@evil.example/x",
+                "/a?b=1", "/a#top", "/a b");
+        try {
+            for (String path : leaving) {
+                for (Future<Envelope> f : List.of(api.send(in, Uses.call(path, 4096)), api.send(in, Uses.call(path, 4096), () -> Duration.ofSeconds(30)))) {
+                    f.otherwiseEmpty().await();
+                    assertTrue(f.cause() instanceof dev.rail8.api.Fault fault && fault.kind() == dev.rail8.api.Fault.Kind.INVALID, path + ": " + f.cause());
+                    assertTrue(f.cause().getMessage().startsWith("connection 'partner', flow '" + Uses.FLOW + "', step 'send': "), f.cause().getMessage());
+                    assertFalse(f.cause().getMessage().contains("Secret") || f.cause().getMessage().contains("user:"), f.cause().getMessage());
+                }
+            }
+            for (String path : List.of("/../admin", "/%2e%2e", "/x/../../y")) {
+                Future<Envelope> f = root.send(in, Uses.call(path, 4096));
+                f.otherwiseEmpty().await();
+                assertTrue(f.cause() instanceof dev.rail8.api.Fault fault && fault.kind() == dev.rail8.api.Fault.Kind.INVALID, "at the url's root too: " + path + ": " + f.cause());
+            }
+            assertEquals(List.of(), seen, "no request reached the partner");
+            assertEquals(0, ((HttpComponent.HttpProducer) api).sends(), "no refused send was counted");
+        } finally {
+            api.close().await();
+            root.close().await();
         }
-        EndpointConfig withUrl = new EndpointConfig("partner-orders", URI.create("http://partner/x"), Map.of("url", "ftp://h/x"));
-        String message = String.valueOf(assertThrows(IllegalArgumentException.class, () -> http.target(withUrl), "a bad url: refused").getMessage());
-        assertTrue(message.contains("option 'url'"), "with a url option: names option 'url': " + message);
-        assertFalse(message.contains("endpoint URI"), "with a url option: not the endpoint URI, which was not read: " + message);
+    }
+
+    /** Without a path the url is sent to as it is: a url with user info still sends, and Vert.x sends no user info. */
+    @Test
+    void withoutAPathAUrlWithUserInfoStillSendsAsItIs() {
+        List<String> seen = new CopyOnWriteArrayList<>();
+        Producer p = http.producer(Uses.out("http://user:Secret@127.0.0.1:" + echo(seen).actualPort() + "/in?x=1"));
+        try {
+            assertEquals("/in?x=1", p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("x")), CALL).await().body().whole().toString());
+            assertEquals(List.of("/in?x=1"), seen, "sent to the url's path and query, no authorization header");
+        } finally {
+            p.close().await();
+        }
+    }
+
+    /** The reply limit is the call's {@code maxReplyBytes}: one producer takes a reply at a call's limit and refuses it above another's. */
+    @Test
+    void theReplyLimitIsTheCallsMaxReplyBytes() {
+        HttpServer partner = partner(req -> { req.body().onSuccess(b -> req.response().end("r".repeat(100))); return null; });
+        Producer p = http.producer(Uses.out("http://127.0.0.1:" + partner.actualPort() + "/in"));
+        Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
+        try {
+            assertEquals(100, p.send(in, Uses.call(100)).await().body().size(), "at the call's limit");
+            Future<Envelope> above = p.send(in, Uses.call(99));
+            above.otherwiseEmpty().await();
+            assertTrue(above.cause() instanceof dev.rail8.api.BodyTooLargeException, "above it: " + above.cause());
+            Future<Envelope> bounded = p.send(in, Uses.call(99), () -> Duration.ofSeconds(30));
+            bounded.otherwiseEmpty().await();
+            assertTrue(bounded.cause() instanceof dev.rail8.api.BodyTooLargeException, "a bounded send too: " + bounded.cause());
+        } finally {
+            p.close().await();
+        }
+    }
+
+    /** One producer serves calls with different paths at once: the partner holds both requests before it answers either. */
+    @Test
+    void oneProducerServesTwoCallsWithDifferentPathsAtOnce() {
+        Map<String, io.vertx.core.http.HttpServerResponse> held = new java.util.concurrent.ConcurrentHashMap<>();
+        HttpServer partner = partner(req -> { req.body().onSuccess(b -> {
+            held.put(req.path(), req.response());
+            if (held.size() == 2) held.forEach((path, res) -> res.end(path));
+        }); return null; });
+        Producer p = http.producer(Uses.out("http://127.0.0.1:" + partner.actualPort() + "/api"));
+        Envelope in = rt.ingress("f", Headers.empty(), Buffer.buffer("x"));
+        try {
+            Future<Envelope> a = p.send(in, Uses.call("/a", 4096));
+            Future<Envelope> b = p.send(rt.ingress("f", Headers.empty(), Buffer.buffer("y")), Uses.call("/b", 4096));
+            assertEquals("/api/a", a.await().body().whole().toString());
+            assertEquals("/api/b", b.await().body().whole().toString());
+            assertEquals(java.util.Set.of("/api/a", "/api/b"), held.keySet());
+        } finally {
+            p.close().await();
+        }
     }
 }

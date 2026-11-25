@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -219,5 +220,71 @@ class RetryTest {
                 "the earlier attempts' failures, suppressed on the InterruptedException, in attempt order");
         assertTrue(flagAfter.get(), "the interrupt flag is set again for the caller");
         assertEquals(0, timer.pending(), "nothing scheduled after the interrupt");
+    }
+
+    /** A failure that says whose fault it is. */
+    static final class Faulty extends RuntimeException implements dev.rail8.api.Fault {
+        private final Kind kind;
+
+        Faulty(Kind kind, String message) {
+            super(message);
+            this.kind = kind;
+        }
+
+        @Override public Kind kind() { return kind; }
+    }
+
+    /**
+     * A failure with an INVALID fault in its cause chain fails again however often it runs: it is thrown at once, no wait,
+     * with the earlier attempts' failures suppressed.
+     */
+    @Test
+    void aFailureWithAnInvalidFaultInItsCauseChainIsThrownAtOnce() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        Step refused = e -> {
+            if (calls.incrementAndGet() == 1) throw new IllegalStateException("try 1");
+            throw new IllegalStateException("send failed", new Faulty(dev.rail8.api.Fault.Kind.INVALID, "the partner refused it as invalid"));
+        };
+        List<Duration> waits = new ArrayList<>();
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> runWithClockAdvancing(Retry.step(refused, policy, timer), waits));
+        assertEquals("send failed", e.getMessage());
+        assertEquals(2, calls.get(), "a retryable failure, retried once; then the invalid one, not retried");
+        assertEquals(List.of(Duration.ofMillis(100)), waits, "only the wait after the retryable failure");
+        assertEquals(List.of("try 1"), java.util.Arrays.stream(e.getSuppressed()).map(Throwable::getMessage).toList());
+        assertEquals(0, timer.pending());
+    }
+
+    /** Only INVALID ends the retries: a malformed fault and a downstream refusal that says not to retry are retried as before, and a cause loop holds no fault. */
+    @Test
+    void otherFaultsAndACauseLoopAreStillRetried() throws Exception {
+        for (dev.rail8.api.Fault.Kind kind : List.of(dev.rail8.api.Fault.Kind.MALFORMED, dev.rail8.api.Fault.Kind.DOWNSTREAM, dev.rail8.api.Fault.Kind.INTERNAL)) {
+            AtomicInteger calls = new AtomicInteger();
+            Step failing = e -> { calls.incrementAndGet(); throw new IllegalStateException("send failed", new Faulty(kind, kind.name())); };
+            assertThrows(IllegalStateException.class, () -> runWithClockAdvancing(Retry.step(failing, policy, timer), new ArrayList<>()));
+            assertEquals(4, calls.get(), kind + ": every attempt");
+        }
+        AtomicInteger refusals = new AtomicInteger();
+        Step notRetryable = e -> { refusals.incrementAndGet(); throw new dev.rail8.api.NackException("no", false); };
+        assertThrows(dev.rail8.api.NackException.class, () -> runWithClockAdvancing(Retry.step(notRetryable, policy, timer), new ArrayList<>()));
+        assertEquals(4, refusals.get(), "a downstream refusal that says not to retry: every attempt, as before");
+
+        IllegalStateException a = new IllegalStateException("a");
+        a.initCause(new IllegalStateException("b", a));
+        assertFalse(org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(Duration.ofSeconds(10), () -> Retry.invalid(a)),
+                "a cause loop ends the walk: no fault found, so the failure is retried");
+    }
+
+    /** The first fault in the chain decides: an INVALID fault under a downstream one is the downstream one's to answer. */
+    @Test
+    void theFirstFaultInTheCauseChainDecides() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        Step failing = e -> {
+            calls.incrementAndGet();
+            Faulty downstream = new Faulty(dev.rail8.api.Fault.Kind.DOWNSTREAM, "partner down");
+            downstream.initCause(new Faulty(dev.rail8.api.Fault.Kind.INVALID, "an older refusal"));
+            throw downstream;
+        };
+        assertThrows(Faulty.class, () -> runWithClockAdvancing(Retry.step(failing, policy, timer), new ArrayList<>()));
+        assertEquals(4, calls.get());
     }
 }
