@@ -69,7 +69,7 @@ function olderCopy() {
   expect(commands, 'the commands for an older copy in docs/QUICKSTART.md').toBeDefined();
   execFileSync('bash', ['-ec', commands!.replaceAll('~/rail8-workspace/demo', repository)], { cwd: checkout, stdio: 'pipe' });
   commitAll('The greeting in its folder');
-  expect(git('status', '--porcelain', '--', 'flows/greet.yaml', 'mappings', 'structures', 'greeting').toString()).toBe('');
+  expect(git('ls-files', 'greeting').toString().split('\n')).toEqual(expect.arrayContaining(['greeting/folder.yaml', 'greeting/greet.yaml', 'greeting/mappings/greeting.mapping.json']));
   expect(git('ls-files', 'flows/greet.yaml', 'flows/greet.test.yaml', 'mappings', 'structures').toString()).toBe('');
 }
 

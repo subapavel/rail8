@@ -40,10 +40,10 @@ const ICON: Record<Kind, ReactNode> = {
 /** The kind filters in their order, each with the text of its choice. */
 const FILTERS: { value: KindFilter; label: string }[] = [
   { value: 'all', label: 'packages.tree.all' },
-  { value: 'flow', label: 'packages.group.flows' },
-  { value: 'endpoint', label: 'packages.group.endpoints' },
-  { value: 'mapping', label: 'packages.group.mappings' },
-  { value: 'test', label: 'packages.group.tests' },
+  { value: 'flow', label: 'packages.tree.flows' },
+  { value: 'endpoint', label: 'packages.tree.endpoints' },
+  { value: 'mapping', label: 'packages.tree.mappings' },
+  { value: 'test', label: 'packages.tree.tests' },
   { value: 'file', label: 'packages.tree.files' },
 ];
 
@@ -194,7 +194,7 @@ export function ArtifactTree({ artifacts, folder, writable, open, onCreated, cre
             onChange={setKind}
             options={FILTERS.filter((f) => f.value === 'all' || counts.has(f.value)).map((f) => ({
               value: f.value,
-              label: f.value === 'all' ? t(f.label) : `${t(f.label)} ${counts.get(f.value)}`,
+              label: t(f.label, { count: counts.get(f.value) ?? 0 }),
             }))}
           />
           <Input.Search allowClear aria-label={t('packages.tree.filter')} placeholder={t('packages.tree.filter')} value={text} onChange={(e) => setText(e.target.value)} style={{ width: token.controlHeight * 12 }} />
