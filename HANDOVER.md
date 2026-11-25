@@ -62,7 +62,7 @@ docker compose start echo; curl -X POST -H "$A" localhost:8081/admin/dlq/<dlq-id
 
 ```sh
 bin/rail8 validate examples/demo        # exit 0
-bin/rail8 test examples/demo            # 8 cases: 8 passed, in-process, also run by CI
+bin/rail8 test examples/demo            # 10 cases: 10 passed, in-process, also run by CI
 ./mvnw -B -ntp verify -Pit -Drail8.engines.skipTests   # unit + Testcontainers ITs, ArchUnit, JaCoCo floors (Docker needed), with the engines built but not tested
 python3 ci/coverage_check.py               # the no-decrease check against ci/coverage-baseline.json
 bench/run.sh                               # the bench harness (native Postgres); numbers go to bench/RESULTS.md
