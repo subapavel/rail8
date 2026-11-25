@@ -210,7 +210,7 @@ class PgTlsIT {
         assertEquals("t", psql(pg, db, "select bool_and(s.ssl) and count(*) >= 3 from pg_stat_activity a join pg_stat_ssl s using (pid)"
                 + " where a.datname = '" + db + "' and a.backend_type = 'client backend' and a.pid <> pg_backend_pid()"), "the pool, the membership and the LISTEN sessions are TLS");
         assertEquals("1", psql(pg, db, "select count(*) from pg_stat_activity a join pg_stat_ssl s using (pid) where a.datname = '" + db
-                + "' and s.ssl and a.query = 'LISTEN " + dev.rail8.runtime.queue.PgWorkSignals.CHANNEL + "'"), "the node listens on a TLS session of its own");
+                + "' and s.ssl and a.query = '" + dev.rail8.runtime.queue.PgWorkSignals.LISTEN + "'"), "the node listens on a TLS session of its own");
 
         String joined = psql(pg, db, "select lease_until::text from nodes where node = '" + NODE + "'");
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);

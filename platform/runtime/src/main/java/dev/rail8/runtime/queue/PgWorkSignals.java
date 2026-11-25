@@ -42,6 +42,8 @@ public final class PgWorkSignals implements WorkSignals {
     public static final String CHANNEL = "rail8_work";
     /** The channel the secret store's writes notify on; this listens on it too and hands each notice on. */
     public static final String STORE_CHANNEL = "rail8_secrets";
+    /** The one query the listening connection sends: a LISTEN on each channel. */
+    public static final String LISTEN = "LISTEN " + CHANNEL + "; LISTEN " + STORE_CHANNEL;
     /** The first reconnect's delay. */
     static final long FIRST_BACKOFF_MILLIS = 100;
     /** The longest delay between two reconnect tries. */
@@ -122,7 +124,7 @@ public final class PgWorkSignals implements WorkSignals {
                 if (STORE_CHANNEL.equals(n.getChannel())) storeNotice.run();
                 else received(n.getPayload());
             });
-            return conn.query("LISTEN " + CHANNEL + "; LISTEN " + STORE_CHANNEL).execute().transform(ack -> ack.succeeded() ? Future.succeededFuture(conn)
+            return conn.query(LISTEN).execute().transform(ack -> ack.succeeded() ? Future.succeededFuture(conn)
                     : conn.close().transform(gone -> Future.failedFuture(ack.cause())));
         });
     }

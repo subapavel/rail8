@@ -80,7 +80,12 @@ class SchemaIT {
                 "dlq.body_hash",           // 8 bytes of hash (V1)
                 "sessions.fingerprint",    // 32 bytes of SHA-256 of a session's credential (V29), never a body
                 "tokens.fingerprint",      // 32 bytes of SHA-256 of a named token (V30), never a body
-                "devices.fingerprint")),   // 32 bytes of SHA-256 of a device credential (V32), never a body
+                "devices.fingerprint",     // 32 bytes of SHA-256 of a device credential (V32), never a body
+                "secrets.key_id",          // 8 bytes naming the store key a secret is sealed under (V33), never a body
+                "secrets.nonce",           // 12 bytes of AES-GCM nonce (V33), never a body
+                "secrets.sealed",          // a secret sealed under the store key (V33), never a body
+                "nodes.secret_key",        // 8 bytes naming the store key a node holds (V33), never a body
+                "nodes.secret_key_previous")), // 8 bytes naming the node's previous store key (V33), never a body
                 bytea, "no bytea column may hold a body");
         assertEquals(1, db.count("select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'body_refs' and column_name = 'length'"),
                 "fixture: the query sees V12's tables");
