@@ -376,6 +376,26 @@ describe('Shell', () => {
       await expect.poll(() => page.getByRole('dialog', { name: 'Quick open' }).getByRole('button', { name: /invoice/ }).elements()).toHaveLength(1);
     });
 
+    test('lists each of two tests of one package, which open the same tab, as a row of its own, with no warning of a repeated key', async () => {
+      const error = vi.spyOn(console, 'error');
+      try {
+        render([...plain('Home'), packages], 'home', async () => [
+          artifact('order-test', 'demo/tests/order-test.yaml', 'Test', demo),
+          artifact('refund-test', 'demo/tests/refund-test.yaml', 'Test', demo),
+        ]);
+        await quickOpen();
+        await search().fill('-test');
+        await expect.element(choice('order-test')).toBeVisible();
+        await expect.element(choice('refund-test')).toBeVisible();
+        await search().fill('demo/tests');
+        await expect.element(choice('refund-test')).toBeVisible();
+        expect(page.getByRole('dialog', { name: 'Quick open' }).getByRole('button', { name: /-test/ }).elements()).toHaveLength(2);
+        expect(error.mock.calls.filter(([message]) => String(message).includes('same key'))).toEqual([]);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
     test('says while it reads the artifacts, and why it could not, still finding screens', async () => {
       let fail!: (why: Error) => void;
       render([...plain('Home', 'Audit'), packages], 'home', () => new Promise((_, reject) => { fail = reject; }));
