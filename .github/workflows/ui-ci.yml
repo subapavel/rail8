@@ -2,8 +2,8 @@ name: ui-ci
 
 # The Rail8 web application (ui/): licences of every npm package, the generated types, type check, lint, unit tests,
 # component tests in Chromium and the production build, and the end-to-end scenarios against the quickstart's node.
-# It runs once a day on main, before the owner's morning overview, and on demand; it has no pull request trigger, and
-# the session that wrote a change builds locally before it merges.
+# Each job runs an area of ci/check. It runs once a day on main, before the owner's morning overview, and on demand; it
+# has no pull request trigger, and the session that wrote a change runs the same areas before it merges.
 on:
   schedule:
     - cron: '42 4 * * *'
@@ -24,38 +24,15 @@ jobs:
   ui:
     name: ui
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: ui
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - run: npm ci
-      # Every npm package carries an allowed licence (Apache 2.0, MIT, BSD, ISC, MPL 2.0, EPL); a few dev-only build
-      # tools are listed as exceptions.
-      - name: Licences
-        run: npm run licences
-      # The pinned playwright devDependency decides the Chromium build.
-      - run: npx playwright install --with-deps chromium
-      # The mapping studio's types are generated from the mapping contract and committed; they must match it.
-      - name: Generated types are up to date
-        run: |
-          npm run gen:types
-          git diff --exit-code src/mapping/generated
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run test:browser
-      - run: npm run build
-      # The page under e2e/fake/ serves the end-to-end scenarios on the development server only.
-      - name: The production build leaves out the development-only page
-        run: |
-          test ! -e dist/e2e
-          ! grep -rqF 'fake mapping service' dist
+      - name: Licences, generated types, typecheck, lint, unit and browser tests, the production build (ci/check ui)
+        run: ci/check ui
 
   # The quickstart's node started by docker compose, and the @stack scenarios of the UI against it: the development
   # server answers the studio's /api over a copy of the corpus and calls the node.
@@ -67,11 +44,11 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '25'
+          java-version-file: .java-version
           cache: maven
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - name: Maven mirror
@@ -88,40 +65,5 @@ jobs:
             </mirrors>
           </settings>
           EOF
-      - name: The node's jar
-        run: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
-      # A key of this run's own is the node's emergency key, which the users scenario makes its administrator with. The deploy
-      # account's token is what the development servers send and the deploy scenario undeploys with.
-      - name: Start the node with an emergency key of this run and wait for /health
-        run: |
-          set -euo pipefail
-          key=$(bin/rail8 key new)
-          echo "::add-mask::$key"
-          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
-          export RAIL8_ADMIN_TOKEN=$key
-          # the working folder the node deploys from, made by the runner's user before Docker makes it root's
-          mkdir -p ~/rail8-workspace
-          docker compose up -d --build
-          start=$(date +%s)
-          until curl -sf localhost:8081/health > /dev/null; do
-            if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; exit 1; fi
-            sleep 2
-          done
-          bin/rail8 bootstrap --admin ui-admin --deploy-account ui-deploy --token-file "$RUNNER_TEMP/deploy-token" > /dev/null
-          token=$(cat "$RUNNER_TEMP/deploy-token")
-          echo "::add-mask::$token"
-          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
-      - name: Playwright
-        working-directory: ui
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: '@stack scenarios against the node'
-        working-directory: ui
-        run: npm run e2e:stack
-      - name: Node logs on failure
-        if: failure()
-        run: docker compose logs --no-color | tail -200
-      - name: Tear down
-        if: always()
-        run: docker compose down -v
+      - name: The node started afresh, the @stack scenarios against it (ci/check ui-stack)
+        run: ci/check ui-stack

@@ -1,6 +1,6 @@
 # The platform's checks on GitHub.
-# On every pull request: the sign-off check of every commit. It blocks a merge. The session that wrote the change
-# runs the build with its tests itself before it merges.
+# On every pull request: the sign-off check of every commit. It blocks a merge. Each other job runs an area of ci/check,
+# which the session that wrote a change runs itself before it merges.
 # Once a day and on demand, before the owner's morning overview: the build of main with unit and integration
 # tests on the pinned Postgres, Error Prone, the name guard, the change guard and the demo package, and then the
 # whole stack started in Docker with the demo deployed, and the quickstart's first-run and start commands run as
@@ -18,7 +18,6 @@ on:
     - cron: '23 2 * * *'
 
 env:
-  JAVA_VERSION: '25'
   MAVEN_OPTS: -Xmx3g
   # Central rate-limits shared IPs; the Google mirror of Central serves the same artefacts.
   MVNW_REPOURL: https://maven-central.storage-download.googleapis.com/maven2
@@ -60,58 +59,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # References to tasks or decisions in comments, and colours written by hand instead of Ant Design tokens, on
-      # the lines this change adds or modifies: compared with the pull request's base, with the previous main for
-      # a push, else with the parent commit. In the folders whose comments have been cleaned (CLEANED in
-      # ci/change_guard.py) every comment is checked for references, changed or not.
-      - name: Change guard on the added and modified lines, and its tests
+      # ci/check guard: the script tests under ci/, the name guard, and the change guard on the lines the last commit adds or
+      # modifies
+      - name: Script tests, change guard and name guard (ci/check guard)
         run: |
-          set -euo pipefail
-          python3 -m unittest ci.test_change_guard
-          base=""
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
-            base="${{ github.event.before }}"
-          fi
-          if [ -n "$base" ]; then
-            git fetch -q --no-tags --depth=1 origin "$base"
-          else
-            git fetch -q --no-tags --deepen=1 origin "$GITHUB_SHA"
-            base="HEAD~1"
-          fi
-          python3 ci/change_guard.py --base "$base"
+          git fetch -q --no-tags --deepen=1 origin "$GITHUB_SHA"
+          ci/check guard HEAD~1
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
-      # From the root, so the jq and mapping engines the steps depend on are built in the same build.
-      # rail8.engines.skipTests: the engines' own tests run in jq-ci and mapping-ci.
-      # jacoco.skip: coverage is measured only in the nightly coverage job, so a fall in coverage never blocks a change.
-      # -T 1C: modules that do not depend on each other build at the same time; inside a module the test classes are spread
-      # over one test JVM per core (rail8.test.forks in platform/pom.xml).
-      - name: Verify (unit tests, integration tests with Testcontainers, ArchUnit)
-        run: ./mvnw -B -ntp -T 1C verify -Pit -Djacoco.skip=true -Drail8.engines.skipTests
-      - name: The demo package validates through the launcher
-        run: bin/rail8 validate examples/demo
-      - name: The demo package's flow tests pass through the launcher
-        run: bin/rail8 test examples/demo
-      # The verify above built the sample plugin's jar into examples/webhook-plugin/target/plugin
-      - name: The sample plugin's package validates and its flow tests pass through the launcher, with the plugin
-        run: |
-          set -euo pipefail
-          bin/rail8 validate --plugins examples/webhook-plugin/target/plugin examples/webhook-plugin/package
-          bin/rail8 test --plugins examples/webhook-plugin/target/plugin examples/webhook-plugin/package
-      - name: Script tests (coverage check, name guard, comment-only check, fork kill check, site checks) and the name guard itself
-        run: |
-          set -euo pipefail
-          python3 -m unittest ci.test_coverage_check
-          python3 -m unittest ci.test_comment_only_check
-          python3 -m unittest ci.test_fork_kill_check
-          python3 -m unittest ci.test_name_guard
-          python3 ci/name_guard.py
-          python3 -m unittest ci.test_site
+      - name: Verify (unit tests, integration tests with Testcontainers, ArchUnit), the demo package and the sample plugin (ci/check platform)
+        run: ci/check platform
       - name: Test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -131,7 +91,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       - name: Verify on Postgres 17.11
         run: ./mvnw -B -ntp verify -Pit -Djacoco.skip=true -Drail8.engines.skipTests -Drail8.it.postgres=postgres:17.11
@@ -145,7 +105,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       # The floors of platform/pom.xml (90 % for api and core, 75 % elsewhere) fail this job when missed.
       - name: Verify with the coverage floors
@@ -175,227 +135,29 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
-      - name: Build the jars the node image and the deploy one-shot use, with the engines they need
-        run: ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
-      # a key of this run's own is the node's emergency key; it is never written to a file of the repository
-      - name: Generate the emergency key
-        run: |
-          set -euo pipefail
-          key=$(bin/rail8 key new)
-          echo "::add-mask::$key"
-          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
-      - name: Start the stack and wait for /health (60 s bound)
-        working-directory: deploy/compose
-        run: |
-          set -euo pipefail
-          docker compose up -d --build
-          start=$(date +%s)
-          until curl -sf localhost:8081/health > /dev/null; do
-            if [ $(( $(date +%s) - start )) -ge 60 ]; then echo "::error::/health not green within 60 s of up"; exit 1; fi
-            sleep 1
-          done
-          echo "seconds from up to /health green: $(( $(date +%s) - start ))"
-      # the administrator and the deploy account, made through the admin API with the key; the administrator's password is not kept
-      - name: Bootstrap the administrator and the deploy account
-        run: |
-          set -euo pipefail
-          password=$(bin/rail8 bootstrap --admin ci-admin --deploy-account ci-deploy --token-file "$RUNNER_TEMP/deploy-token")
-          echo "::add-mask::$password"
-          token=$(cat "$RUNNER_TEMP/deploy-token")
-          echo "::add-mask::$token"
-          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
-      - name: The deploy one-shot exits 0 and the demo is listed
-        working-directory: deploy/compose
-        run: |
-          set -euo pipefail
-          docker compose run --rm deploy || { echo "::error::deploy failed"; docker compose logs rail8 | tail -50; exit 1; }
-          curl -sf -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages | grep -q '"name":"demo"'
-      - name: An invoice sent to the node's HTTP port, published on 8080, is answered by the partner
-        run: |
-          set -euo pipefail
-          reply=$(curl -sf -X POST --data-binary @examples/demo/fixtures/sample-invoice.xml -H 'Content-Type: application/xml' localhost:8080/http/in)
-          echo "$reply"
-          echo "$reply" | grep -q '<PartnerInvoice number="4711" currency="CZK"'
-      - name: Stack logs on failure
-        if: failure()
-        working-directory: deploy/compose
-        run: docker compose logs --no-color | tail -200
-      - name: Tear down
-        if: always()
-        working-directory: deploy/compose
-        run: docker compose --profile history --profile kafka down -v
+      - name: The stack up, /health within 60 s, bootstrap, the deploy one-shot, the demo listed, an invoice answered (ci/check stack)
+        run: ci/check stack
 
   quickstart:
     name: "nightly · quickstart (docs/QUICKSTART.md: first-run commands, node and UI started, a mapping read through the node, an invoice found, listed and counted)"
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    env:
-      # the quickstart commits the demo in its working folder: the runner's git has no identity of its own
-      GIT_AUTHOR_NAME: Rail8 CI
-      GIT_AUTHOR_EMAIL: ci@rail8.invalid
-      GIT_COMMITTER_NAME: Rail8 CI
-      GIT_COMMITTER_EMAIL: ci@rail8.invalid
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      # The commands of the quickstart's first run, in its order.
-      - name: Build the node's jar and the command line, install the UI
-        run: |
-          set -euo pipefail
-          ./mvnw -B -ntp -q package -DskipTests -pl :rail8-node,:rail8-cli -am
-          (cd ui && npm ci)
-      - name: Make the working folder, the demo in it a git repository with its first commit
-        run: |
-          set -euo pipefail
-          mkdir -p ~/rail8-workspace && cp -r examples/demo ~/rail8-workspace/demo
-          cp -r mapping/corpus ~/rail8-workspace/mapping-corpus
-          (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')
-      - name: Start the node with an emergency key of this run, wait for /health, bootstrap and deploy the demo
-        run: |
-          set -euo pipefail
-          key=$(bin/rail8 key new)
-          echo "::add-mask::$key"
-          echo "RAIL8_ADMIN_TOKEN=$key" >> "$GITHUB_ENV"
-          export RAIL8_ADMIN_TOKEN=$key
-          docker compose up -d --build
-          start=$(date +%s)
-          until curl -sf localhost:8081/health > /dev/null; do
-            if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; exit 1; fi
-            sleep 2
-          done
-          password=$(bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file "$RUNNER_TEMP/deploy-token")
-          echo "::add-mask::$password"
-          token=$(cat "$RUNNER_TEMP/deploy-token")
-          echo "::add-mask::$token"
-          echo "RAIL8_TOKEN=$token" >> "$GITHUB_ENV"
-          RAIL8_TOKEN=$token bin/rail8 deploy demo HEAD --expect none
-          # CI cannot log in through a browser, so the UI below runs in token mode as the deploy account; the administrator gives
-          # it the operator role, which reads the messages
-          session=$(curl -sf -X POST localhost:8081/admin/sessions -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg password "$password" '{name: "owner", password: $password}')" | jq -r .session)
-          echo "::add-mask::$session"
-          curl -sf -X POST localhost:8081/admin/users/deploy/roles -H "Authorization: Bearer $session" -H 'Content-Type: application/json' \
-            -d '{"add":["operator"],"remove":[]}' > /dev/null
-      - name: Start the UI in token mode as the deploy account
-        run: |
-          set -euo pipefail
-          (cd ui && RAIL8_WORKSPACE=$HOME/rail8-workspace nohup npm run dev > "$RUNNER_TEMP/ui.log" 2>&1 &)
-          start=$(date +%s)
-          until curl -sf localhost:5173/ > /dev/null; do
-            if [ $(( $(date +%s) - start )) -ge 90 ]; then echo "::error::the UI not answering within 90 s"; exit 1; fi
-            sleep 2
-          done
-      - name: The mapping studio lists the corpus copy and opens a mapping through the node
-        run: |
-          set -euo pipefail
-          # the Sec-Fetch-Site header stands in for the browser's own page, as in the steps below
-          listed=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/api/mappings || true)
-          echo "$listed" | grep -q '"id":"mapping-corpus/mappings/order-id-copy"' \
-            || { echo "::error::the studio does not list mapping-corpus/mappings/order-id-copy: $listed"; exit 1; }
-          code=$(curl -s -o "$RUNNER_TEMP/mapping.json" -D "$RUNNER_TEMP/mapping.headers" -w '%{http_code}' -H 'Sec-Fetch-Site: same-origin' localhost:5173/api/mappings/mapping-corpus/mappings/order-id-copy)
-          [ "$code" = 200 ] && grep -qi '^etag: "sha256:' "$RUNNER_TEMP/mapping.headers" \
-            || { echo "::error::opening order-id-copy through the node answered $code: $(cat "$RUNNER_TEMP/mapping.json")"; exit 1; }
-      - name: An invoice is sent in, found, listed and counted through the UI's server
-        run: |
-          set -euo pipefail
-          reply=$(curl -sf -X POST --data-binary @examples/demo/fixtures/sample-invoice.xml -H 'Content-Type: application/xml' localhost:8080/http/in)
-          echo "$reply"
-          echo "$reply" | grep -q '<PartnerInvoice number="4711" currency="CZK"'
-          # the UI's server adds the token itself; the Sec-Fetch-Site header stands in for the browser's own page
-          for _ in $(seq 1 30); do
-            found=$(curl -sf -H 'Sec-Fetch-Site: same-origin' 'localhost:5173/admin/messages?key=invoiceId:4711' || true)
-            echo "$found" | grep -q '"items":\[{"id":"' && break
-            sleep 2
-          done
-          echo "$found" | grep -q '"items":\[{"id":"' || { echo "::error::the invoice was not found through the UI's /admin: $found"; exit 1; }
-          # the list Messages opens on: the last hour, the invoice in it, completed, with its key
-          listed=$(curl -sf -H 'Sec-Fetch-Site: same-origin' "localhost:5173/admin/messages?from=$(date -u -d '1 hour ago' +%FT%TZ)&to=$(date -u -d '1 minute' +%FT%TZ)" || true)
-          echo "$listed"
-          echo "$listed" | grep -q '"flow":"demo/invoice-sync","status":"completed"' && echo "$listed" | grep -q '"keys":{"invoiceId":"4711"}' \
-            || { echo "::error::the invoice is not in the list of recent messages through the UI's /admin: $listed"; exit 1; }
-          # the strip of counts above the list: the invoice among the completed ones, none failed
-          counted=$(curl -sf -H 'Sec-Fetch-Site: same-origin' "localhost:5173/admin/message-counts?from=$(date -u -d '1 hour ago' +%FT%TZ)&to=$(date -u -d '1 minute' +%FT%TZ)" || true)
-          echo "$counted"
-          echo "$counted" | grep -Eq '"completed":[1-9]' && echo "$counted" | grep -q '"failed":0' \
-            || { echo "::error::the invoice is not counted as completed through the UI's /admin: $counted"; exit 1; }
-      - name: One message to each of the other demo flows, found through the UI's server
-        run: |
-          set -euo pipefail
-          ui() { curl -sf -H 'Sec-Fetch-Site: same-origin' "localhost:5173$1" || true; }
-          # invoice-async answers 202 after the durable save
-          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST --data-binary @examples/demo/fixtures/sample-invoice.xml -H 'Content-Type: application/xml' localhost:8080/http/invoice/async)
-          [ "$code" = 202 ] || { echo "::error::invoice-async answered $code, not 202"; exit 1; }
-          # sftp-invoice: a file dropped in the inbox is polled, saved and deleted
-          docker compose cp examples/demo/fixtures/inbox/invoice-4711.xml sftp:/home/demo/inbox/
-          # order-jq calls order-partner; the reply is the partner's echo of the mapped order
-          order=$(curl -sf -X POST --data-binary @examples/demo/fixtures/sample-order.json -H 'Content-Type: application/json' localhost:8080/http/order)
-          echo "$order"
-          echo "$order" | grep -q '"orderId":42' || { echo "::error::order-jq did not answer the mapped order: $order"; exit 1; }
-          for flow in invoice-async sftp-invoice order-jq order-partner; do
-            for _ in $(seq 1 40); do
-              found=$(ui "/admin/messages?from=$(date -u -d '1 hour ago' +%FT%TZ)&to=$(date -u -d '1 minute' +%FT%TZ)&flow=demo/$flow&status=completed")
-              echo "$found" | grep -q '"items":\[{' && break
-              sleep 2
-            done
-            echo "$found" | grep -q '"items":\[{' || { echo "::error::no completed message of demo/$flow through the UI's /admin: $found"; docker compose logs --no-color | tail -50; exit 1; }
-          done
-      - name: The demo flows are drawn from their files and the node's step types, saved and created, through the UI's server
-        run: |
-          set -euo pipefail
-          flows=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/files/flows || true)
-          echo "$flows"
-          echo "$flows" | grep -q '"path":"demo/flows/invoice-sync.yaml","id":"invoice-sync"' \
-            || { echo "::error::the Flows screen does not list the demo's invoice-sync: $flows"; exit 1; }
-          file=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/files/flows/demo/flows/invoice-sync.yaml || true)
-          echo "$file" | grep -q '"id":"partner-domestic"' \
-            || { echo "::error::invoice-sync's file comes without its package's endpoints: $file"; exit 1; }
-          steps=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/admin/steps || true)
-          echo "$steps"
-          echo "$steps" | grep -q '"type":"xslt"' || { echo "::error::the node does not list its xslt step at /admin/steps: $steps"; exit 1; }
-          # Save of the flow's tab: its text sent back with the version read keeps the file and its version; a stale version is refused
-          flow=localhost:5173/files/flows/demo/flows/invoice-sync.yaml
-          etag=$(curl -sf -D - -o "$RUNNER_TEMP/flow.json" -H 'Sec-Fetch-Site: same-origin' "$flow" | tr -d '\r' | sed -n 's/^etag: //Ip')
-          jq '{text}' "$RUNNER_TEMP/flow.json" > "$RUNNER_TEMP/save.json"
-          save() { curl -s -o /dev/null -D "$RUNNER_TEMP/saved.headers" -w '%{http_code}' -X PUT -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -H "If-Match: $1" --data-binary @"$RUNNER_TEMP/save.json" "$flow"; }
-          saved=$(save "$etag")
-          [ "$saved" = 200 ] && grep -qiF "etag: $etag" "$RUNNER_TEMP/saved.headers" \
-            || { echo "::error::saving invoice-sync unchanged through the UI's server answered $saved, or a new version"; exit 1; }
-          stale=$(save '"sha256-0"')
-          [ "$stale" = 412 ] || { echo "::error::a save of invoice-sync with a stale version answered $stale, not 412"; exit 1; }
-          cmp -s examples/demo/flows/invoice-sync.yaml ~/rail8-workspace/demo/flows/invoice-sync.yaml \
-            || { echo "::error::the saves changed ~/rail8-workspace/demo/flows/invoice-sync.yaml"; exit 1; }
-          # New flow, and the endpoint a call of a flow creates: a file that does not exist is written once, never over itself
-          create() { curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' -H 'If-None-Match: *' --data-binary "$2" "localhost:5173/files/$1"; }
-          newFlow=$(jq -n '{text: "schemaVersion: 1\nkind: flow\nid: audit\nversion: 0.1.0\nfrom:\n  endpoint: http-in\ndelivery:\n  mode: sync\nlimits:\n  maxBodyBytes: 1048576\nsteps:\n  - type: to\n    endpoint: partner-domestic\n"}')
-          newEndpoint=$(jq -n '{text: "schemaVersion: 1\nkind: endpoint\nid: call-audit\nscheme: direct\ndirection: out\nconfig:\n  address: /audit\n"}')
-          for file in flows/demo/flows/audit.yaml endpoints/demo/endpoints/call-audit.yaml; do
-            body=$newFlow; [ "${file%%/*}" = endpoints ] && body=$newEndpoint
-            first=$(create "$file" "$body"); again=$(create "$file" "$body")
-            [ "$first" = 201 ] && [ "$again" = 412 ] \
-              || { echo "::error::creating $file through the UI's server answered $first, then $again, not 201 and 412"; exit 1; }
-          done
-          grep -q '^id: audit$' ~/rail8-workspace/demo/flows/audit.yaml && grep -q '^id: call-audit$' ~/rail8-workspace/demo/endpoints/call-audit.yaml \
-            || { echo "::error::the files created are not in ~/rail8-workspace/demo"; exit 1; }
-          rm ~/rail8-workspace/demo/flows/audit.yaml ~/rail8-workspace/demo/endpoints/call-audit.yaml
-      - name: Logs on failure
-        if: failure()
-        run: |
-          docker compose logs --no-color | tail -200
-          tail -100 "$RUNNER_TEMP/ui.log" || true
-      - name: Tear down
-        if: always()
-        run: docker compose down -v
+      - name: The quickstart's first run, node and UI, a mapping read through the node, invoices found, flows saved (ci/check quickstart)
+        run: ci/check quickstart
 
   adapter-kit:
     name: "nightly · adapter kit (docs/ADAPTERS.md: a new adapter built and tested, run with the UI, a test message found)"
@@ -406,50 +168,15 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      # The commands of docs/ADAPTERS.md, in its order.
-      - name: Build the kit, create an adapter, run its tests
-        run: |
-          set -euo pipefail
-          ./mvnw -B -ntp -q install -DskipTests -pl :rail8-cli -am
-          (cd ui && npm ci)
-          bin/rail8 new-adapter ~/acme-adapter --scheme acme --package com.acme.rail8
-          mvn -B -ntp -q -f ~/acme-adapter/pom.xml verify
-          bin/rail8 validate --plugins ~/acme-adapter/target/plugin ~/acme-adapter/package
-          bin/rail8 test --plugins ~/acme-adapter/target/plugin ~/acme-adapter/package
-      - name: Run it with the UI, send a test message through it and find it
-        run: |
-          set -euo pipefail
-          nohup bin/run-adapter ~/acme-adapter > "$RUNNER_TEMP/run-adapter.log" 2>&1 &
-          start=$(date +%s)
-          until grep -q 'Ctrl+C stops everything' "$RUNNER_TEMP/run-adapter.log"; do
-            if [ $(( $(date +%s) - start )) -ge 300 ]; then echo "::error::bin/run-adapter not running within 300 s"; exit 1; fi
-            sleep 2
-          done
-          # the UI's server answers for the node; the Sec-Fetch-Site header stands in for the browser's own page
-          ui() { curl -sf -H 'Sec-Fetch-Site: same-origin' "localhost:5173$1"; }
-          components=$(ui /admin/components)
-          echo "$components" | grep -q '"scheme":"acme"'
-          endpoints=$(ui /files/endpoints)
-          echo "$endpoints" | grep -q '"path":"package/endpoints/orders-in.yaml"'
-          reply=$(curl -sf -X POST --data-binary @"$HOME/acme-adapter/package/fixtures/order.xml" -H 'Content-Type: application/xml' localhost:18090/acme/orders)
-          echo "$reply"
-          [ "$reply" = '<Order><Id>7</Id></Order>' ]
-          for _ in $(seq 1 30); do
-            found=$(ui '/admin/messages?key=orderId:7' || true)
-            echo "$found" | grep -q '"items":\[{"id":"' && exit 0
-            sleep 2
-          done
-          echo "::error::the test message was not found through the UI's /admin: $found"; exit 1
-      - name: Logs on failure
-        if: failure()
-        run: tail -100 "$RUNNER_TEMP/run-adapter.log" ~/acme-adapter/target/run-adapter/*.log || true
+      - name: An adapter created, built, tested, run with the UI, a test message found (ci/check adapter-kit)
+        run: ci/check adapter-kit
 
   fork-kill:
     name: "nightly · a test JVM that dies fails the build, in every module (ci/fork_kill_check.py)"
@@ -460,7 +187,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       # Each reactor is checked even when an earlier one has a finding. The platform's is checked from the root, with the
       # engines built in the same build and their tests left to the engines' own checks below.
@@ -488,7 +215,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       - name: Start native Postgres
         # the runner's packaged Postgres, deliberately not pinned to PostgresImage (D-129): its version is recorded with the
@@ -519,7 +246,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version-file: .java-version
           cache: maven
       # Scoped to api + core: -DskipTests would make pitest-maven skip silently, so tests are compiled
       # the normal way; the ≥ 80 % threshold (platform/pom.xml) fails the job below the floor.

@@ -28,15 +28,31 @@ change touches. Everything in the repository is in English, except the UI's tran
 ## One task
 
 1. One task = one GitHub issue = one fresh session, branched from `main`.
-2. The session writes the test and the code. Before it merges, it runs the build with the tests of the
-   modules it touched and of every module that depends on them (`./mvnw verify -pl <modules>,:rail8-component-mock,:rail8-sim -am -amd`; the two added modules are
-   needed by `rail8-cli` and `rail8-archtest`, which `-amd` builds but whose own upstream `-am` leaves out),
-   and `python3 ci/change_guard.py --base origin/main`.
+2. The session writes the test and the code. Before it merges, it runs `ci/check` for every row the
+   paths of its change match: the commands the workflows run (`ci/check help`). The pull request lists
+   each command with its result, or why it could not run.
+
+   | The change touches | Before the merge | On `main` after it |
+   | --- | --- | --- |
+   | any path | `ci/check guard` | |
+   | `platform/`, `examples/`, `bench/`, a `pom.xml`, `.mvn/`, `.java-version` | `ci/check platform <modules>` (the modules it touched, as `-pl` names them) | `ci` |
+   | `ui/`, `.nvmrc`, `mapping/contract/` | `ci/check ui` | `ui-ci` |
+   | the UI's server (`ui/server/`, `ui/src/**/server/`, `ui/vite.config.ts`), the admin API (`platform/runtime/**/admin/`), `ui/e2e/`, `mapping/corpus/` | `ci/check ui-stack quickstart adapter-kit` | `ui-ci`, `ci` |
+   | `docs/QUICKSTART.md`, `docs/ADAPTERS.md`, `HANDOVER.md`, a compose file, `deploy/`, `bin/`, `examples/`, `platform/cli/`, how the node starts (`platform/node/`, `platform/runtime/**/Main.java`) | `ci/check quickstart adapter-kit stack` | `ci` |
+   | `mapping/` | `ci/check mapping` | `mapping-ci` |
+   | `jq/` | `ci/check jq` | `jq-ci` |
+   | a file a test or script reads (`git grep -l <its name>`) | the area of that test | its workflow |
+   | `ci/check`, `.github/workflows/` | every area the change alters | their workflows |
 3. It opens a pull request. Every commit is signed off (`git commit -s`, checked by DCO).
 4. One review by a different agent (`reviewer`), launched at the effort the class sets: correct behaviour, needless complexity, readable
    comments. Wording in docs is never a reason to send a change back. One round of fixes.
 5. Its own build green and the sign-off check green, then the session merges the pull request with the
    rebase method. It does not wait for other checks on GitHub.
+6. After the merge, it starts each workflow of the table's last column on `main` and fixes what turns it
+   red before it ends. GitHub tools: `actions_run_trigger` (`run_workflow`, ref `main`); the run's id
+   from `actions_list` (`list_workflow_runs`, event `workflow_dispatch`, branch `main`); `actions_get`
+   (`get_workflow_run`) until `completed`, a background `sleep 600` between reads; `get_job_logs` for
+   a red job. Without them it sends its parent the merge commit and the workflows to start.
 
 The dispatcher (`.claude/routines/dispatcher.md`) picks the tasks and starts their sessions; a
 session removes the label `in-progress` from its issue once its pull request is merged.
