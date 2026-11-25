@@ -1,3 +1,4 @@
+import { LoadingOutlined } from '@ant-design/icons';
 import { App, ConfigProvider, theme } from 'antd';
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import enUS from 'antd/locale/en_US';
@@ -22,9 +23,9 @@ function initialMode(): Mode {
 
 /**
  * The theme of the workspace and of everything Ant Design mounts outside it, with the notification context: compact
- * sizing, English texts, and a light or dark mode. The mode starts from the choice saved in localStorage, or else from
- * the system's preference. `children` is called with whether the mode is dark and a function that switches it; a
- * switch is saved in localStorage when the browser allows it.
+ * sizing, English texts, a loading icon that leaves a button at once, and a light or dark mode. The mode starts from
+ * the choice saved in localStorage, or else from the system's preference. `children` is called with whether the mode is
+ * dark and a function that switches it; a switch is saved in localStorage when the browser allows it.
  */
 export function Rail8Theme({ children }: { children: (dark: boolean, toggle: () => void) => ReactNode }) {
   const [mode, setMode] = useState(initialMode);
@@ -48,6 +49,9 @@ export function Rail8Theme({ children }: { children: (dark: boolean, toggle: () 
         token: { fontFamily: 'Inter, "Segoe UI", sans-serif', fontSize: 16, borderRadius: 5 },
         components: { Typography: { titleMarginTop: 0 }, Layout: { headerHeight: 52 } },
       }}
+      // A button's own loading icon is shown while it loads and removed as soon as it stops. The default one shrinks
+      // away instead, and when that motion does not end, its "loading" stays in the name of a button that is done.
+      button={{ loadingIcon: <LoadingOutlined /> }}
     >
       <App className="rail8-app" style={{ colorScheme: mode }}>
         <ModeContext.Provider value={mode}>{children(dark, toggle)}</ModeContext.Provider>
