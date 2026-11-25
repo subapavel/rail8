@@ -62,10 +62,14 @@ cloud environment over this repository, read-only.
    it does not, the owner pastes the answer instead.
 4. Read the answer. Take each objection, or turn it down with a reason in the issue. Remove the
    label and go on.
-5. When no answer has come by the next morning's daily overview (08:00 Prague time), an agent on a
-   different Claude model than yours argues against the recommendation instead. Say so in the
-   issue, remove the label and go on. An answer that arrives later but before the merge is still
-   handled as in step 4.
+5. The wait ends at the second morning's daily overview (08:00 Prague time) after the prompt was
+   posted, so the owner has seen the prompt in one overview and had a whole day for it. When no
+   answer has come by then, an agent on a different Claude model than yours argues against the
+   recommendation instead. Say so in the issue, remove the label and go on. An answer that
+   arrives later but before the merge is still handled as in step 4.
+6. A design of security, of a storage format or of a public contract is never merged without the
+   answer from Codex, and its build does not start before it. The other Claude model may argue
+   earlier, so that the design is ready; the label stays and the merge waits for the owner.
 
 Give the brief, the drafts, the recommendation and the objections to the `owner-proxy` agent; it
 chooses.
