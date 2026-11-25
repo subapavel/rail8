@@ -41,11 +41,13 @@ values from a file.
 - Two stores: the secret store keeps the values of secrets, sealed; the configuration keeps references to them by name.
   The screen of a connection is one form with its secrets: a secret field picks a secret by name and kind, and a user
   who holds both roles creates one from the form, through the secret store's own route.
-- A secret goes through a new field, to a new adapter or to a new destination only with the secret administrator's
-  consent, given to exactly what the draft sends.
+- A secret goes through a new field, to a new adapter, to a new destination or under a looser trust only with the
+  secret administrator's consent, given to exactly what the draft sends. Only a verified version in force counts as
+  consented.
 - Everything the UI does goes through the admin API, and the UI uses nothing else.
 - Export and import use one documented, versioned format, one file per object. A file holds no secret's value and no
-  state. An import is first a dry run, then writes drafts. It adds and changes; it never deletes and never activates.
+  state. An import is first a dry run, then writes drafts. It adds and changes; it never deletes, never replaces
+  another draft and never activates.
 - Only `rail8-runtime` reads or writes these tables. Clock, timers, ids and random numbers are injected.
 - Every refusal carries a stable code and an English text. The UI translates by the code.
 
@@ -62,16 +64,20 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
 
 - `values` are the fields of the adapter's connection form, the format 2 description at `GET /admin/components`. A
   secret field holds `secret://<name>` and nothing else; no other field holds `secret://`. A name under `rail8.` is
-  refused. A URL holds no user information.
+  refused. A URL holds no user information, and a credential is never part of a URL: an adapter that sends a token in a
+  query takes it from a secret field.
 - `mock` is the platform's built-in mock: `{reply: echo | empty, delay?, fail?: retryable | invalid}`, the delay at most
-  60 s. While it is set the connection is mocked, and `values` are kept as they were, unchecked, so switching the mock
-  off brings them back. A mocked connection sends no secret.
+  60 s. While it is set the connection is mocked, and `values` are kept as they were, so switching the mock off brings
+  them back. Kept values are checked for their shape at every save, import, seed and going back, as any values are; only
+  completeness and whether their secrets are set wait until the mock is switched off. A mocked connection sends no
+  secret.
 - **Whether the environment allows mocks** is one switch of the environment, `config_store.mocks_allowed`, off unless
   set, since a mocked send completes a message without reaching the partner and Rail8 has no replay. The environment
   file seeds it from its `mocksAllowed`. After that a connection administrator changes it with
   `POST /admin/config/-/mocks`, which writes an audit row `config.mocks` and a new generation. It is never exported, so
-  a file from test never makes production mock. Turning it off while a used connection is mocked needs `confirm`
-  listing those connections; their sends then wait for their connection.
+  a file from test never makes production mock. Turning it on or off while a used connection is mocked needs the
+  confirmation of those uses: turned off, their sends wait for their connection; turned on, they complete against the
+  mock.
 - A **removal** is a draft too: `{removed: true}`, activated like any other change.
 - Each stored body carries its kind's format number, as a file does, and is read through the same chain of upgrades.
 - Whether a connection is **stopped** is not part of its body. It is never drafted and never exported. An operator or
@@ -84,59 +90,71 @@ An object is a **kind** and a **key**. The keys are those of the design of syste
   environments unchanged. A number sequence's current number is state: it lives in a table of its own, written in the
   message's transaction, and is never a version, a draft or a line of an export.
 
-## Three numbers
+## Numbers and tokens
 
-| Number | Of | Raised by | Stated by |
+| What | Of | Changes at | Used for |
 | --- | --- | --- | --- |
-| `revision` | one object | a save, a discard, an activation | every save, discard, consent and activation, as `expect` |
-| `version` | one object | an activation: 1, 2, 3 … | going back, as `fromVersion` |
-| `generation` | the environment | an activation, a stop, a start, the switch of mocks | the deploy's record; each node's report |
+| `revision` | one object | a save, a discard, an activation | the history; people |
+| `version` | one object | an activation: 1, 2, 3 … | going back, as `fromVersion`; people |
+| `activation` | one object | an activation: a new random 64-bit id, never reused | the connection's version in a node's snapshot, so a producer is never taken for other values; the binding |
+| `incarnation` | one row | the row's creation: a new random 64-bit id | the tokens and the binding, so a row deleted and created again never matches an old request |
+| `etag` | one object | any change of its row's revision, draft or consent | `expect` of every save, discard, consent, withdrawal and activation |
+| `run` | one connection | a stop, a start, a removal | `expect` of a stop and a start |
+| `generation` | the environment | an activation, a stop, a start, the switch of mocks, a batch of binding again | the deploy's record; each node's report |
 
-- A stop or a start states the state it saw (`expect: "running"` or `"stopped"`), not the revision. So an operator who
-  stops a connection never refuses an administrator's pending activation, nor the other way round.
-- A consent and a test raise nothing. A draft never raises the generation and never wakes a node.
+- `etag` is the SHA-256 of the row's incarnation, revision, draft and consent, as opaque text; `run` is its
+  incarnation and a counter. Neither is secret or bound: they only say what the caller saw. A write whose `expect`
+  differs is 412 `changed`, answering the object as it is now.
+- A stop or a start states `run`, not `etag`. So an operator who stops a connection never refuses an administrator's
+  pending activation, nor the other way round, and a stop delayed past a colleague's stop and start is refused.
+- A draft never raises the generation and never wakes a node.
 
 ## Storage
 
 ```sql
--- The environment's counter: raised, with a new random stamp, by every activation, stop and start.
+-- The environment: its counter, raised with a new random stamp by every change a node must read.
 create table config_store (
-    one        boolean primary key default true check (one),
-    generation bigint  not null check (generation >= 0),
-    stamp      bigint  not null,
-    mocks_allowed boolean not null default false
+    one           boolean primary key default true check (one),
+    generation    bigint  not null check (generation >= 0),
+    stamp         bigint  not null,
+    mocks_allowed boolean not null default false,
+    seeded_at     timestamptz                       -- the seed ran, or the first activation; never again after
 );
 
 -- One row per object: its version in force, its draft with the consent to it, and a connection's state.
 create table config_objects (
-    kind     text   not null check (kind in ('connection', 'system')),
-    key      text   not null,
-    revision bigint not null check (revision >= 0),
+    kind        text   not null check (kind in ('connection', 'system')),
+    key         text   not null,
+    incarnation bigint not null,
+    revision    bigint not null check (revision >= 0),
     -- the version in force
-    version      int not null default 0 check (version >= 0),   -- 0 before the first activation
+    version      int    not null default 0 check (version >= 0),  -- 0 before the first activation
+    activation   bigint,                                          -- null before the first activation
     format       smallint,
-    body         jsonb,                                         -- null before the first activation and after a removal
-    key_id       bytea check (length(key_id) = 8),              -- the binding (below); null: not bound
-    tag          bytea check (length(tag) = 32),
+    body         jsonb,                                           -- null before the first activation and after a removal
+    key_id       bytea  check (length(key_id) = 8),  -- the binding: null both, never bound; a key id alone, it failed
+    tag          bytea  check (length(tag) = 32),
     activated_at timestamptz, activated_by text,
-    changed_generation bigint not null default 0,               -- the generation of its last activation, stop or start
     -- the draft; null when there is none
+    draft_id     bigint,                                          -- a new random id when a draft starts
     draft_format smallint, draft jsonb, draft_at timestamptz, draft_by text,
     -- the secret administrator's consent to what the draft sends
-    consent        bytea check (length(consent) = 32),          -- the digest of the draft's sends (below)
+    consent        bytea check (length(consent) = 32),            -- the digest of the draft's sends (below)
     consent_key_id bytea check (length(consent_key_id) = 8),
     consent_tag    bytea check (length(consent_tag) = 32),
     consent_at     timestamptz, consent_by text,
     -- a connection's state
-    stopped_at   timestamptz, stopped_by text,                  -- null: running
+    run          int not null default 0,
+    stopped_at   timestamptz, stopped_by text,                    -- null: running
     primary key (kind, key),
     check (kind = 'connection' and key ~ '^(?!rail8/)[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63}){1,2}$'
         or kind = 'system' and key ~ '^(?!rail8(/|$))[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63})?$'),
     check ((body is null) = (format is null)),
-    check ((key_id is null) = (tag is null)),
-    check ((draft is null) = (draft_format is null)),
+    check ((version = 0) = (activation is null)),
+    check (tag is null or key_id is not null),
+    check ((draft is null) = (draft_format is null) and (draft is null) = (draft_id is null)),
     check (consent is null or draft is not null),
-    check ((consent_key_id is null) = (consent_tag is null)),
+    check (consent_tag is null or consent_key_id is not null),
     check (kind = 'connection' or stopped_at is null)
 );
 
@@ -157,21 +175,23 @@ create table config_history (
 create index config_history_object on config_history (kind, key, id);
 
 alter table nodes add column config_generation bigint, add column config_stamp bigint, add column config_epoch bigint,
-    add column config_refused text[];              -- the objects it left out, at most 100
+    add column config_read_at timestamptz,         -- its last read of the store that succeeded
+    add column config_refused text[],              -- the objects it left out, at most 100
+    add column config_refused_count int;
 ```
 
-- The migration inserts the one row of `config_store`: generation 0, a random stamp, mocks not allowed.
+- The migration inserts the one row of `config_store`: generation 0, a random stamp, mocks not allowed, not seeded.
 - `deployments.config_generation` exists already, filled with the environment file's generation. The seed (below)
   starts the store's generation above the highest one recorded, so one generation never names two states.
 - **The versions kept** are the activation rows of the history. Going back copies one of them into a draft.
 - **Retention.** The node's retention job deletes history rows older than `RAIL8_AUDIT_MAX_AGE` (P30D to P3660D, P365D by
-  default), in its batches. A write that would give an object more than 1,000 history rows deletes its oldest rows that
-  are not among its 100 newest activations, so saves, stops and starts never push out the versions kept. The version in
-  force and the draft are in `config_objects` and are never deleted by retention, so an object can always be read and
-  changed. A version whose history row is gone cannot be brought back.
+  default), in its batches, except each object's 100 newest activations. A write that would give an object more than
+  1,000 history rows deletes its oldest rows that are not among those 100, so saves, stops and starts never push out
+  the versions kept. The version in force and the draft are in `config_objects` and are never deleted by retention, so
+  an object can always be read and changed. A version whose history row is gone cannot be brought back.
 - A row with no version in force, no draft and no history row left is deleted by the same job.
-- `nodes.config_generation`, `config_stamp`, `config_epoch` and `config_refused` are what each node holds. Nothing
-  decides by them.
+- The columns of `nodes` are what each node holds. Nothing decides by them but the screen and the refusal of writes
+  while nodes read different sources (below).
 
 ## Roles and actions
 
@@ -184,7 +204,7 @@ One list of roles. Each says who may hold it: a person, a technical account, or 
 | Operator | `operator` | both | monitoring, retry, cancel, release, discard; stops and starts a connection |
 | Message bodies | `message-bodies` | both | a message's body after each step |
 | Secret administrator | `secret-administrator` | both | the secret store; consents that a secret may go where a draft sends it |
-| Connection administrator | `connection-administrator` | both | systems in the environment, the values of connections, credentials, instance names, technical identifiers |
+| Connection administrator | `connection-administrator` | both | systems in the environment, the values of connections, credentials, instance names, technical identifiers, the switch of mocks |
 | Partner administrator | `partner-administrator` | both | partner profiles, business identifiers, agreements, API products, subscriptions, number sequences |
 | Message sender | `message-sender` | both | sends a test message to a flow (the design of who may send to a flow) |
 
@@ -212,7 +232,7 @@ an import's at most 4 MiB.
 
 | Route | Action | Body | Does |
 | --- | --- | --- | --- |
-| `GET /admin/config` | `config.read` | | the environment: its generation, whether it allows mocks, each live node's generation and what it left out |
+| `GET /admin/config` | `config.read` | | the environment: its generation, whether it allows mocks, each live node's generation, last read and what it left out |
 | `POST /admin/config/-/mocks` | `config.connections` | `{expect: true \| false, allowed, confirm?}` | allows or refuses mocks in the environment |
 | `GET /admin/config/connections?prefix&needs&after&limit` | `config.read` | | the list: key, adapter, state, version, whether a draft waits, whether it needs consent, the nodes behind; `needs=consent` or `needs=activation` narrows it |
 | `GET /admin/config/connections/{key}` | `config.read` | | one connection, as the screen shows it (below) |
@@ -220,17 +240,17 @@ an import's at most 4 MiB.
 | `POST /admin/config/connections/{key}/-/discard` | `config.connections` | `{expect}` | drops the draft and its consent |
 | `POST /admin/config/connections/{key}/-/consent` | `config.consent` | `{expect, digest}`; `digest: null` withdraws | consents to exactly what the draft sends |
 | `POST /admin/config/connections/{key}/-/activate` | `config.connections` | `{expect, confirm?}` | puts the draft in force |
-| `POST /admin/config/connections/{key}/-/stop`, `/-/start` | `config.run` | `{expect: "running" \| "stopped"}` | stops or starts it at once |
+| `POST /admin/config/connections/{key}/-/stop`, `/-/start` | `config.run` | `{expect: <run>}` | stops or starts it at once |
 | `GET /admin/config/connections/{key}/-/history?after&limit` | `config.read` | | its history, newest first, 50 a page, at most 500 |
 | `GET /admin/config/systems?prefix&after&limit`, `GET /admin/config/systems/{key}` | `config.read` | | the systems' instance names |
 | `POST /admin/config/systems/{key}/-/save`, `/-/discard`, `/-/activate`; `GET …/-/history` | as for connections | `{expect, instanceName}` | the same, without consent, stop and start |
 | `GET /admin/config/export?kind&prefix` | `config.read` | | `{files: [{path, text}]}`: every version in force |
-| `POST /admin/config/import?check=true` | `config.import` | `{files}` | the dry run |
-| `POST /admin/config/import` | `config.import` | `{files, expect}` | writes the drafts, all or none |
+| `POST /admin/config/import?check=true` | `config.import` | `{scope: {kind?, prefix?}, files}` | the dry run |
+| `POST /admin/config/import` | `config.import` | `{scope, files, expect}` | writes the drafts, all or none |
 
 A read of a key that no row holds and no deployed system names is 404 `not-found`. A key that a deployed system names
-and no row holds reads as an object of revision 0 with nothing in force. A save of a key no row holds states
-`expect: 0` and creates the row.
+and no row holds reads as an object with nothing in force and an `etag` that a first save states; that save creates
+the row.
 
 `GET /admin/systems` of the design of systems and connections reads each connection's state from here: set, mocked,
 stopped, missing, or a draft waiting.
@@ -239,6 +259,7 @@ stopped, missing, or a draft waiting.
 
 ```json
 {"kind": "connection", "key": "acme/erp/rest", "system": "acme/erp", "adapter": "http", "revision": 12,
+ "etag": "…", "run": "…",
  "inForce": {"version": 4, "values": {"url": "https://erp.acme.example:8443/api", "timeoutMs": 5000,
              "password": "secret://erp-pw"},
              "activatedAt": "…", "activatedBy": "jana", "generation": 381, "binding": "ok"},
@@ -246,8 +267,8 @@ stopped, missing, or a draft waiting.
  "stopped": null,
  "secrets": [{"field": "password", "name": "erp-pw", "kinds": ["value", "credentials"], "kind": "value",
               "set": true, "changedAt": "…", "changedBy": "petr", "unreadable": false}],
- "nodes": [{"node": "node-a", "holds": true}, {"node": "node-b", "holds": false, "generation": 380}],
- "usedBy": [{"flow": "invoices/invoice-async", "step": "partner", "direction": "out"}],
+ "nodes": [{"node": "node-a", "holds": "yes"}, {"node": "node-b", "holds": "no", "generation": 380, "readAt": "…"}],
+ "usedBy": {"digest": "…", "flows": [{"flow": "invoices/invoice-async", "step": "partner", "direction": "out"}]},
  "form": ["the adapter's connection form, format 2"]}
 ```
 
@@ -256,18 +277,23 @@ stopped, missing, or a draft waiting.
   "given": null | {at, by}}}`. `problems` and `consent` are computed at the read, so the form shows what an activation
   would refuse before anyone presses it. `consent` is null when the draft needs none.
 - `binding` is `ok`, `none` (an installation without the store's key, below) or `fails`.
-- A node `holds` the version in force when its lease holds, its `config_epoch` is its epoch, its `config_generation`
-  is at least the object's `changed_generation`, and its `config_refused` does not name the object.
+- A node `holds` the version in force (`yes`) when its lease holds, its `config_epoch` is its epoch, its
+  `config_generation` and `config_stamp` are the store's, and its `config_refused` does not name the object. It is
+  `unknown` when the node left out more objects than it can name, and `no` otherwise. A node one change behind shows
+  `no` for a moment even for an object that did not change; the screen never shows `yes` for a node that lacks it.
 - `secrets` comes from the secret store's list: it shows that a secret changed, never its value.
-- `usedBy` comes from `deployment_connection_uses`.
+- `usedBy` comes from `deployment_connection_uses`, paged, with the digest of the whole sorted set of uses that a
+  confirmation states.
 
 ### Every write
 
 1. The action at the door (403), then the body (400, 413).
-2. One transaction. Locks in this order, which every writer keeps:
-   1. the secret store's row, by an activation and a consent, which bind under the store's key as every seal does;
-   2. `config_store` `for update`, by an activation, a stop, a start and the switch of mocks;
-   3. the object's row `for update`, inserted at revision 0 when absent;
+2. One transaction. Locks in this order, which every writer keeps, the seed included:
+   1. the secret store's row, by an activation, a consent and the seed, which bind under the store's key as every seal
+      does;
+   2. `config_store` `for update`, by an activation, a stop, a start, the switch of mocks, the seed, a batch of binding
+      again, and a save that creates a row;
+   3. the object's row `for update`, inserted when absent with a new incarnation;
    4. the names' advisory locks, through the secret store's one method of uses.
 3. `expect` is compared: 412 `changed`, answering the object as it is now. Then the verb's own checks (409, 422).
 4. The row, its history row, the audit row where the audit lists one, the uses, the generation and stamp, and
@@ -275,35 +301,42 @@ stopped, missing, or a draft waiting.
 5. The node that wrote reads the store again before it answers, so a change in force holds on that node when it is
    answered. Every other node has it within one notice, or one tick when the notice is lost; the read's `nodes` shows
    which do.
+6. While a live node does not report this store for its epoch (a node of a release before the store, which reads the
+   environment file), every write is 409 `nodes-differ`, naming it, and `/health` is `DEGRADED`.
 
-**Save** checks the shape:
+**Save** checks the shape, of the values kept under a mock too:
 - the adapter is known to the node; it is the adapter the deployed system file names, when one does (409
   `adapter-differs`);
 - each value is a field of the connection form, of its field's type; a URL holds no user information;
 - a secret field holds only `secret://<name>`, and no other field holds `secret://` (422 `invalid`, naming the field,
   never echoing a value); no `rail8.` name (422 `reserved`).
 
-A draft may be incomplete. `fromVersion` copies that version's body from the history into the draft. A save equal to the
-version in force drops the draft. A save over a draft replaces it, and drops its consent when what it sends changes.
+A save that creates a row counts the rows under `config_store`'s lock, drafts and removed objects included (409
+`config-full`). A draft may be incomplete. `fromVersion` copies that version's body from the history into the draft,
+checked as any save. A save equal to the version in force drops the draft. A save over a draft replaces it, keeps its
+`draft_id`, and drops its consent when what it sends changes.
 
 **Activate** checks against the state of its own transaction:
+- **the adapter**: the adapter the deployed system definition names for the key now, in `deployment_systems`, when one
+  does (409 `adapter-differs`), so a system deployed after the save is checked;
 - **complete**: the values pass the connection form for each direction `deployment_connection_uses` names the key in; a
   connection that no deployed flow uses passes for at least one direction its adapter connects; every secret it names is
   set, as the secret store counts it, of a kind its field takes; a system keeps an instance name while a connection of
-  it is used. Else 422 `incomplete`, one line per field and direction, never a value;
+  it is used, unless confirmed below. Else 422 `incomplete`, one line per field and direction, never a value;
 - **consented**: when the draft needs consent, its consent equals the digest of what the draft sends now and its tag
-  verifies (409 `consent-needed`, with the sends and the destination fields);
+  verifies for this row, draft and version in force (409 `consent-needed`, with the sends and the destination fields);
 - **mocks**: a mocked body only in an environment that allows mocks (409 `mocks-refused`);
-- **a confirmation**: a removal or a switch to the mock of a connection that `deployment_connection_uses` names, an
-  emptied `allowedHosts` while a use goes through an address field, and a removal of the instance name of a system with
-  such a connection, each need `confirm` to list exactly the flows that use it now (409 `in-use`, naming them). Once a
-  removal is confirmed, every send through the connection waits for it and its polling sender is not built, as the
-  design of systems and connections says;
+- **a confirmation**: these changes of a connection that `deployment_connection_uses` names need `confirm`, the digest
+  of the uses as the caller saw them (409 `in-use`, with the uses and their digest):
+  - a removal: every send through it then waits for it, and its polling sender is not built;
+  - a switch to the mock: its sends then complete against the mock;
+  - an emptied `allowedHosts` while a use goes through an address field: those sends then wait for their connection;
+  - for a system, a removal of its instance name: the receiver's facts then say it is not set, and sends go on;
 - **the key**: every live node holds the key it binds under (409 `keys-differ`, the secret store's rule).
 
-It then binds the body, writes `version + 1` and `changed_generation`, clears the draft and its consent, clears the stop
-on a removal, and replaces the object's rows of `secret_uses` through the store's one method: its secret names, none for
-a mocked or removed connection.
+It then binds the body, writes `version + 1` and a new `activation`, clears the draft and its consent, clears the stop
+and raises `run` on a removal, sets `seeded_at` when it is empty, and replaces the object's rows of `secret_uses`
+through the store's one method: its secret names, none for a mocked or removed connection.
 
 A **stop** of a connection with nothing in force is 409 `not-set`. A stop holds for every attempt that starts after
 it, which waits for its connection; an attempt already started ends.
@@ -315,32 +348,46 @@ consent is held on the object and given to the exact draft it covers.
 
 - **Destination fields.** A field of an adapter's connection form counts as a destination unless the adapter marks it
   otherwise:
-  - `.tuning()`: a field that never changes where bytes go, such as a time limit or a pool's size; it does not count;
-  - `.origin()`: a URL counted by its scheme, host and port, so a new path needs no consent.
+  - `.tuning()`: a field that never changes where bytes go or whom they trust, such as a time limit or a pool's size;
+    it does not count;
+  - `.origin()`: a URL counted by its scheme, host and port. An adapter marks it only when one credential serves the
+    whole origin; otherwise the URL counts whole, its path included, since two tenants behind one origin may hold
+    different credentials under different paths;
+  - `.trust()`: a secret field that holds trust, such as a pinned certificate, a certificate authority or a host key.
+    Its reference counts as a destination, not as a send, so removing or changing a pin needs consent.
   Every other field that is not a secret counts whole: an address, a host, a port, a proxy, a trusted certificate, a
-  host key, a switch of TLS verification. The platform's `allowedHosts` counts whole. A field counts only when it is
-  set: a field left at its default is not part of the destination. An adapter that marks nothing asks for consent at
-  every change; that is safe, and it is the adapter's to improve.
-- **What a body sends.** A connection's sends are each secret field it sets, as the pair of field and secret name,
-  together with its adapter and its destination. A mocked or removed connection, and a system, send nothing.
+  switch of TLS verification. The platform's `allowedHosts` counts as a set: adding a host needs consent, reordering or
+  removing one does not.
+- **The effective destination.** A field counts only when it differs from its default; a scheme and a host are
+  compared in lower case, a port with the scheme's default filled in. One function in `rail8-runtime` computes the
+  destination and the sends, and the read, the consent, the activation and a test all call it.
+- **What a body sends.** A connection's sends are each secret field it sets that is not marked `.trust()`, as the pair
+  of field and secret name, together with its adapter and its destination. A mocked or removed connection, and a
+  system, send nothing.
+- **What counts as consented.** Only the version in force whose tag verifies inside the transaction that decides. With
+  the store's key, a body in force that is unbound or does not verify counts as sending nothing, so every send of the
+  draft over it needs consent.
 - **When a draft needs consent.** When it sends a secret through a field, an adapter or to a destination the version in
   force does not: a pair of field and secret that the version in force lacks, or another adapter or destination while
-  it sends any secret. Taking a secret away, changing a tuning field, or changing a URL's path needs none.
+  it sends any secret. Taking a sent secret away, changing a tuning field, or changing the path of a URL marked
+  `.origin()` needs none.
 - **The digest** is the SHA-256 of the RFC 8785 JSON `{adapter, destination, sends}`, the sends sorted. The read shows
   it with the sends and the destination fields.
-- **Consent.** `/-/consent {expect, digest}` writes the digest on the row, bound, and one audit row `config.consent`
-  naming the sends and the destination fields. When the digest is not that of the draft as it is now, it is 412
-  `changed`, answering the object; so a draft changed after the secret administrator read it, through the API or in
-  SQL, is never consented unseen. With no draft, or one that needs none, it is 409 `nothing-to-consent`.
-  `digest: null` withdraws a consent given by mistake.
+- **Consent.** `/-/consent {expect, digest}` writes the digest on the row, bound with the row's incarnation, the
+  draft's id and the activation in force, and one audit row `config.consent` naming the sends and the destination
+  fields. When the digest is not that of the draft as it is now, it is 412 `changed`, answering the object; so a draft
+  changed after the secret administrator read it, through the API or in SQL, is never consented unseen. With no draft,
+  or one that needs none, it is 409 `nothing-to-consent`. `digest: null` withdraws a consent given by mistake. A
+  consent and a withdrawal change the `etag`, so of two secret administrators the later one sees the earlier one's act.
 - **The consent belongs to its draft.** An activation uses it up; a discard, or a save that changes what the draft
-  sends, drops it. A version in force carries its own consent in its bound body: what it sends is what was consented.
+  sends, drops it; a save that keeps what it sends keeps it. A consent of an earlier draft never verifies for a later
+  one, since each draft has its own id. A version in force carries its own consent in its bound body.
 - **Going back** to an earlier destination is a new consent, unless it is the destination in force. In an emergency
   that is one more step for the secret administrator; it keeps a consent from outliving the draft it was given to.
 - **The inbox.** `GET /admin/config/connections?needs=consent` is the secret administrator's list of drafts that wait.
-- **A test** sends secrets as an activation does, and needs the same consent (the step that builds the test).
-- The rule holds from the first step that stores a connection: a secret never goes through a new field, to a new
-  address, proxy or trust, nor with verification off, without consent.
+- **A test** sends secrets as an activation does, and needs the same consent (the step that builds the test). It runs
+  on the copy of the values its check read, never on a draft read again.
+- The rule holds from the first step that stores a connection.
 - A user who holds both roles consents with one call and activates with another, so the act is always visible as a
   consent in the audit. `rail8 config consent` takes the digest that the read shows, never computes it.
 - A secret deleted and created again under the same name goes where the versions in force that name it send it. The
@@ -350,23 +397,30 @@ consent is held on the object and given to the exact draft it covers.
 
 - Each body in force is bound: an HMAC-SHA256 tag through the secret store's binding (a subkey of the store's key, HKDF
   info `rail8 settings v1 bind`, named by the key's id) over the RFC 8785 JSON array `["rail8 config v1", kind, key,
-  version, format, body]`. A consent is bound over `["rail8 consent v1", kind, key, digest]`.
+  incarnation, version, activation, format, body]`. A consent is bound over `["rail8 consent v1", kind, key,
+  incarnation, draft id, activation in force or null, digest]`.
 - With the store's key, a node refuses a body in force that is unbound or whose tag does not verify, whether it names a
-  secret or not: it is absent from the node's snapshot, so sends through it wait for their connection, `/health` is `DEGRADED`, the
-  read shows `binding: fails`, the node's `config_refused` names it, and a WARNING names the key and the key's id once. A
-  connection administrator saves it again and activates.
+  secret or not, at its start and at every read: it is absent from the node's snapshot, so sends through it wait for
+  their connection, `/health` is `DEGRADED`, the read shows `binding: fails`, the node's `config_refused` names it, and
+  a WARNING names the key and the key's id once. A connection administrator saves it again and activates, with the
+  secret administrator's consent when it sends a secret.
 - **Without the store's key.** The secret store then runs on variables only. In `dev` and `ci` nothing is bound, a
   consent is written unbound, and the read shows `binding: none`. In a deployed environment, an activation or a consent
-  of a body that sends a secret is 503 `no-key`; a body that sends none is activated unbound. When a key is set for the
-  first time, the job below binds every unbound row as it stands, and a WARNING says how many.
+  of a body that sends a secret is 503 `no-key`; a body that sends none is activated unbound.
+- **When a key is set for the first time**, the job below binds every unbound body that sends no secret, as it stands.
+  An unbound body that sends a secret is not bound: it stays left out until it is activated again with the secret
+  administrator's consent, since nothing proves who put it there. A WARNING says how many.
 - **A change of the store's key** binds the rows again, as the secret store asks at its tick: up to 100 rows a batch,
-  `for update skip locked`, so a running activation is never waited on. Each tag is verified under the key it names
-  before it is bound under the new one. A row that does not verify loses its tag and stays refused, with a WARNING.
-  Binding again changes the key id and the tag only: no revision, no generation, no history row. So the previous key is
-  dropped once no row needs it.
+  `for update skip locked`, so a row being written is skipped and bound by a later batch. Each tag, of a body and of a consent, is
+  verified under the key it names before it is bound under the new one. A tag that does not verify is cleared and its
+  key id kept, which marks it failed: it stays refused and is never bound again, with a WARNING. A batch raises the
+  generation and the stamp and notifies, so every node reads the new tags and leaves out a failed row without anyone
+  activating. It changes no revision, version, activation or history. So the previous key is dropped once no row is
+  bound under it.
 - Drafts are not bound. What a draft sends is checked against its bound consent at its test and its activation.
-- A connection's stop is not bound. A database writer can start a stopped connection, as they can delete a secret's
-  row; neither sends a secret anywhere new.
+- A connection's stop and the switch of mocks are not bound. A database writer can start a stopped connection or allow
+  mocks, as they can delete a secret's row or a message's work; none of it sends a secret anywhere new. The UI calls a
+  stop an operator's control, not a security one.
 - A database writer can put back an older bound row, which verifies, as an old secret row does. That is a restore of
   one object, and it is accepted.
 
@@ -380,14 +434,14 @@ this store inside `rail8-runtime`:
 final class StoredEnvironment implements Environment {
     private volatile Snapshot held;                 // immutable; current() is this one read and never blocks
     public Snapshot current() { return held; }
-    public void onActivation(Consumer<Snapshot> listener);   // once per snapshot taken, in increasing generation
+    public void onActivation(Consumer<Snapshot> listener);   // once per snapshot taken, in the order taken
 }
 interface ConfigStore {                             // Postgres, or one in memory; one contract suite for both
     ObjectView read(Ref ref);                       // the object as the screen shows it
     Page<ObjectView> list(Query query);
     ObjectView write(Actor actor, Ref ref, Change change);   // every write, in the order above
     State state(Held held);                         // what a node lacks against what it holds
-    void holds(String node, long epoch, long generation, long stamp, List<Ref> refused);
+    void holds(String node, long epoch, long generation, long stamp, Refused refused);
     Page<HistoryRow> history(Ref ref, OptionalLong after, int limit);
 }
 record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
@@ -395,29 +449,35 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
 
 - **Wake.** Each node listens on `rail8_config` on the connection it already holds for `LISTEN`. It reads
   `config_store` on each notice, after every `LISTEN` acknowledged (a reconnect may have lost notices), and at each 5 s
-  tick of the injected timer. The payload is only a wake-up.
+  tick of the injected timer. The payload is only a wake-up. Notices are coalesced: one read runs at a time, and a
+  notice during it makes one more.
 - **Read.** When the generation or the stamp differs from what it holds, it reads in one repeatable-read transaction
-  every row's kind, key, version, key id, tag and stop, and the bodies of the rows whose version, key id or tag differ
-  from what it holds. Every read compares every row, so a database set back, set back and written again, or with a row
-  deleted, is read right. A generation behind its own, or the same generation with another stamp, is a WARNING.
-- A row changed in SQL without a change of `config_store` is read at the node's next start, or when its version or tag
-  changes; its tag fails then. Until then the node keeps the body it verified.
+  every row's kind, key, incarnation, activation, key id, tag and stop, and the bodies of the rows whose incarnation,
+  activation, key id or tag differ from what it holds. Every read compares every row, so a database set back, set back
+  and written again, or with a row deleted, is read right, bound or not. A generation behind its own, or the same
+  generation with another stamp, is a WARNING.
+- A row changed in SQL without a change of `config_store` is read at the node's next start, or when its activation or
+  tag changes; its tag fails then. Until then the node keeps the body it verified.
 - **Verify.** It verifies each body's tag and upgrades an older format in memory. A body that fails is left out, as
   above.
-- **Swap.** It builds an immutable snapshot (per connection key `Values` or `Mocked` with the connection's version and
-  `stopped`; per system key the instance name; whether mocks are allowed; the generation), swaps it in, and calls the
-  listeners. A snapshot may
-  cover several activations; a listener compares it with the one before. Then it writes `config_generation`,
-  `config_stamp`, `config_epoch` and `config_refused` into its row of `nodes`, only while that row carries its own
-  epoch. A failed write is a WARNING, and the next tick writes again.
-- **At start**, a node reads the whole store before it restores its packages.
-- **Postgres away.** A node that cannot read keeps its snapshot. When it has not read `config_store` for 30 s,
-  `/health` is `DEGRADED`, naming the time of its last read. A change, a stop included, reaches it at its next read.
+- **Swap.** It builds an immutable snapshot (per connection key `Values` or `Mocked` with `stopped` and, as the
+  connection's version, its `activation`; per system key the instance name; whether mocks are allowed; the
+  generation), swaps it in, and calls the listeners. A snapshot may cover several activations, and after a database
+  set back it may carry a lower generation; a listener compares it with the one before. Then it writes
+  `config_generation`, `config_stamp`, `config_epoch`, `config_read_at` and what it left out into its row of `nodes`,
+  only while that row carries its own epoch. A failed write is a WARNING, and the next tick writes again.
+- **At start**, a node reads the whole store before it restores its packages and takes any work.
+- **Postgres away.** A node that cannot read keeps its snapshot. After 30 s without a successful read, `/health` is
+  `DEGRADED`, naming the time of its last read. After 60 s it starts no new attempt and no poll: an attempt waits for
+  its connection as for a stopped one, and a sync flow answers 503 with `Retry-After: 30`; attempts already started
+  end. The next successful read lets them go on. So a stop committed on another node holds on a cut-off one within
+  60 s.
 - **A message in flight.** Each attempt reads one snapshot and keeps it, and the producer it took, until its send
-  settles. The next attempt through a connection whose version differs from its producer's builds a new producer; a
-  stop, a start, or a new value of a secret it names rebuilds nothing. A send on the wire ends with the old values.
-  Every later attempt, a retry waiting in the queue included, reads the newest snapshot, so a message that waited
-  because of a wrong address goes through once the address is corrected. A message already parked waits for an
+  settles. The next attempt through a connection whose `activation` differs from its producer's builds a new producer;
+  since an activation's id is never reused, a restore followed by a new activation never meets an old producer. A stop,
+  a start, binding again, or a new value of a secret it names rebuilds nothing. A send on the wire ends with the old
+  values. Every later attempt, a retry waiting in the queue included, reads the newest snapshot, so a message that
+  waited because of a wrong address goes through once the address is corrected. A message already parked waits for an
   operator's retry, as any parked message does.
 - No read of a send goes to Postgres. A secret stays a reference in the snapshot, read through its handle at each use.
 
@@ -432,7 +492,10 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
 - In its record's transaction, the deploy takes `config_store` `for share` before the names' locks, reads again from
   Postgres the objects it reaches, checks them again, and writes `deployments.config_generation`, the generation it
   read. An activation takes `config_store` `for update`, so a removal waits for the record and sees its uses, and a
-  deploy waits for an activation and checks it.
+  deploy waits for an activation and checks it. The uses of a retiring flow count until its drain ends.
+- **The window before the record.** The flows a deploy starts before its record is saved read the snapshot at every
+  attempt, so each of their sends goes through a connection as it is in force at that attempt, or waits. A deploy whose
+  record is refused then stops them; what they sent meanwhile went where the configuration in force said.
 - **What names the state.** The record names the generation. The history's rows of activations, stops and starts carry
   the generation they made, so the history says which version of each object was in force at that generation, for as
   long as it keeps those rows.
@@ -445,16 +508,22 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
 
 The design of systems and connections reads the environment from `RAIL8_ENVIRONMENT_FILE` until this store exists. With
 the store:
-- When the store holds no row, a node started with the variable seeds it. In one transaction under `config_store`
-  `for update`, it checks again that no row exists, sets the generation above the highest `deployments.config_generation`
-  and the switch of mocks from `mocksAllowed`, then activates each connection and each instance name of the file, each
-  with its consent. The actor is `environment-file`, the way `local`, and each activation is an audit row. Whoever sets
-  a node's environment holds its secrets and the store's key already. Two nodes that start together seed once.
-- From then on a connection's activation, not the deploy, records the uses of its secrets, and a deploy no longer
-  compares the nodes' digests of their files.
+- **The seed.** When `config_store.seeded_at` is empty and no row exists, a node started with the variable seeds the
+  store. In one transaction, under the secret store's row and then `config_store` `for update`, it checks both again,
+  sets the generation above the highest `deployments.config_generation`, the switch of mocks from `mocksAllowed`, and
+  `seeded_at`, then activates each connection and each instance name of the file, each with its consent. The actor is
+  `environment-file`, the way `local`, and each activation is an audit row. Whoever sets a node's environment holds its
+  secrets and the store's key already. Two nodes that start together seed once, and a store emptied later is never
+  seeded again.
 - In a deployed environment without the store's key, a file that sends a secret refuses the node's start, naming the
   first connection that does; in `dev` and `ci` the seed is unbound.
-- When the store holds a row, the file is not read, and the node logs once, at INFO, that it is ignored.
+- Once seeded, the file is not read, and the node logs once, at INFO, that it is ignored.
+- From then on a connection's activation, not the deploy, records the uses of its secrets, and a deploy no longer
+  compares the nodes' digests of their files.
+- **The move to the store.** During a rolling upgrade, nodes of the release before the store keep reading the same file,
+  so they serve what the seed activated. Every write is refused (`nodes-differ`) until every live node reports the
+  store, so no change is made that a file-reading node would miss. The release note says to finish the upgrade on every
+  node, and never to start a release before the store against a seeded database.
 - So a fresh quickstart or development node comes up configured, its secrets from variables as today, and a change of
   the file after the first start takes `docker compose down -v`, or a change through the UI or `rail8 config`.
 
@@ -499,9 +568,12 @@ instanceName: ACME-ERP-TEST
 - The kinds are `environment.connection` and `environment.system`, so a file of a configuration is never taken for a
   package's system file. Each kind has its JSON Schema, `urn:rail8:schema:environment.<kind>:<n>`, in `rail8-schemas`;
   unknown keys are refused. A connection's `values` are checked by the adapter's form, not by the schema.
-- A file holds no secret's value, no state (the stop, a sequence's current number), no revision, version, date or name
-  of who changed it, no draft and no consent. In place of a secret it holds the reference, and under `secrets` the
-  secret's kind.
+- A file holds no secret's value, no state (the stop, a sequence's current number), no revision, version, token, date
+  or name of who changed it, no draft and no consent. In place of a secret it holds the reference, and under `secrets`
+  the secret's kind and, for a key pair, its public facts (algorithm, the leaf's subject and end, the fingerprint of its
+  public key), as the secret store's export promises.
+- The export leaves out a field at its default, so a file stays readable by a target whose adapter does not know a
+  field added since.
 - **Versions of a kind.** A node reads every format of a kind up to its own and upgrades an older one in memory, one
   pure, tested step per format; the same chain reads stored bodies. A newer format is 422 `format`, naming the newest
   it reads. A format is raised only for a change an older reader would misread, and a release reads a new format one
@@ -509,74 +581,79 @@ instanceName: ACME-ERP-TEST
   A new kind is a new schema of its own.
 - **Versions of a connection's values.** An adapter's connection form is a contract of its own: a field is added only
   with a default that means "as before", and never renamed, removed or narrowed. A change that would is a new adapter.
-  So every stored body and every file stays readable, and a destination stays the same when a field is added.
-- **The dry run** answers `{expect, objects: [{kind, key, change, fields, overDraft, inForce}], missing, notes,
-  unnamed, problems}`:
-  - `change` is `created`, `changed` or `unchanged`, against the draft, else the version in force; `overDraft` says a
-    draft waits that differs from the file, and the import would replace it; `inForce` says whether the file equals the
-    version in force;
-  - `missing` is every secret the files name that the target does not hold, with the kinds its field takes;
+  So every stored body and every file stays readable, and a destination stays the same when a field is added. A file
+  that sets a field the target's adapter does not know is a problem of the dry run, naming the adapter and the field.
+- **The dry run** takes the scope it covers (`kind` and `prefix`, or everything) and answers `{expect, objects: [{kind,
+  key, change, fields, inForce}], blockers, notes, unnamed, problems}`:
+  - `change` is `created`, `changed` or `unchanged`, against the draft, else the version in force; `inForce` says
+    whether the file equals the version in force;
+  - `blockers` are what would refuse a later activation without refusing the draft: a secret the target does not hold,
+    holds unreadable, or holds of a kind its field does not take;
   - `notes` are keys that no deployed system defines yet, and mocked files in an environment that does not allow mocks;
-  - `unnamed` are the target's objects of the kinds and keys the files cover that no file names. The import leaves
-    them alone;
-  - `problems` are the schema's and the save's refusals, and they refuse the write;
-  - `expect` is the SHA-256 over the files as sent and each named object's kind, key and revision in the target.
-- **The write** sends the files and `expect` back. When a file or an object changed since the dry run it is 412
-  `changed`, answering a new dry run. It writes a draft for each created or changed object in one transaction, the rows
-  locked in the order of their keys, and never deletes, discards or activates. It answers each object with its revision
-  and `inForce`. Each object gets a history row `import`; the import gets one audit row `config.import`.
-- A call holds at most 1,000 files. `rail8 config import` refuses a folder beyond that and says to import it by
-  `--kind` or `--prefix`, each call all or none.
+  - `unnamed` are the target's objects in the scope that no file names. The import leaves them alone;
+  - `problems` refuse the write: the schema's and the save's refusals, two files of one kind and key, a file outside
+    the scope, a field the target's adapter does not know, and a draft that waits and differs from the file
+    (`draft-waits`): an import never replaces another's draft, which its author or a connection administrator first
+    discards;
+  - `expect` is the SHA-256 over the scope, the files as sent, and each named object's kind, key and `etag`.
+- **The write** sends the scope, the files and `expect` back. It locks the named rows in the order of their kind and
+  key, computes the dry run again under those locks, and when anything differs from `expect` it is 412 `changed`,
+  answering the new dry run. It writes a draft for each created or changed object in one transaction and never
+  deletes, discards or activates. An object whose file equals its draft keeps the draft and its consent. It answers
+  each object with its `etag` and `inForce`. Each object gets a history row `import`; the import gets one audit row
+  `config.import`.
+- A file is at most 128 KiB, so every body a store accepts has a file. A call holds at most 1,000 files and 4 MiB;
+  `rail8 config import` refuses a folder beyond either and says to import it by `--kind` or `--prefix`, each call all
+  or none. The UI's server passes the import's 4 MiB on that one route.
 - An export is not a backup: it holds what is in force only, no history, no draft, no state, no consent, no value.
 
 ## The command `rail8 config`
 
 It sends `RAIL8_TOKEN` to `RAIL8_ADMIN_URL`, as `rail8 deploy` does. Exit 0 when done, 1 for a refusal or problems, 2
-for a usage error. It never fills in an expected state or a digest for its caller.
+for a usage error. It never fills in an expected state, a confirmation or a digest for its caller.
 
 | Command | Calls |
 | --- | --- |
-| `rail8 config get connection\|system <key>` | the read, printed as JSON |
+| `rail8 config get connection\|system <key>` | the read, printed as JSON with its `etag` and `run` |
 | `rail8 config export <dir> [--kind k] [--prefix p]` | the export, one file per object |
 | `rail8 config import <dir> [--kind k] [--prefix p] --check` | the dry run; prints it and its `expect` |
-| `rail8 config import <dir> [--kind k] [--prefix p] --expect <sha256>` | the write of the drafts; prints each object's revision |
-| `rail8 config consent connection <key> --expect <revision> --digest <sha256>` | one consent |
-| `rail8 config activate connection\|system <key> --expect <revision>` | one activation |
-| `rail8 config stop\|start <key>` | stops or starts a connection, expecting the other state |
+| `rail8 config import <dir> [--kind k] [--prefix p] --expect <sha256>` | the write of the drafts; prints each object's `etag` |
+| `rail8 config consent connection <key> --expect <etag> --digest <sha256>` | one consent |
+| `rail8 config activate connection\|system <key> --expect <etag> [--confirm <digest>]` | one activation |
+| `rail8 config stop\|start <key> --expect <run>` | stops or starts a connection |
 
 A pipeline that keeps an environment's configuration in a git repository of its own, with approvals on its host:
 
 ```sh
 set -euo pipefail
 plan=$(rail8 config import config/test --check)
-if jq -e 'any(.objects[]; .overDraft)' <<<"$plan" >/dev/null; then
-  echo "a draft waits in the target, and the import would replace it" >&2; exit 1
-fi
 written=$(rail8 config import config/test --expect "$(jq -r .expect <<<"$plan")")
-jq -r '.objects[] | select(.inForce | not) | "\(.kind) \(.key) \(.revision)"' <<<"$written" |
-while read -r kind key revision; do
-  rail8 config activate "$kind" "$key" --expect "$revision" || exit 1
+jq -r '.objects[] | select(.inForce | not) | "\(.kind) \(.key) \(.etag)"' <<<"$written" |
+while read -r kind key etag; do
+  rail8 config activate "$kind" "$key" --expect "$etag" || exit 1
 done
 ```
 
-Each activation stands alone: one refused (`consent-needed`, `incomplete`) leaves the ones before it in force and fails
-the job. The next run, once the secret administrator has consented, activates what is still not in force. This is a
-loop of activations, not a change list.
+Each activation stands alone: one refused (`consent-needed`, `incomplete`, `in-use`) leaves the ones before it in force
+and fails the job. The next run, once the secret administrator has consented, activates what is still not in force.
+This is a loop of activations, not a change list.
 
 ## Audit and history
 
 | Change | History | Audit row |
 | --- | --- | --- |
 | a save, a discard | `save`, `discard`, with the old and new values | none |
-| an import | `import` on each object | `config.import`: the objects, their changes, the missing secrets |
+| an import | `import` on each object | `config.import`: the objects, their changes, the blockers |
 | an activation, a removal | `activate`, with the body put in force | `config.activate`: the version, the changed fields, the confirmation |
 | a consent, a withdrawal | none | `config.consent`: the sends and the destination fields, or the withdrawal |
 | a stop, a start | `stop`, `start` | `config.stop`, `config.start` |
-| the switch of mocks | none | `config.mocks`: the new state and the confirmation |
-| a test | none | `config.test`: the version or draft tested, the outcome (the step that builds the test) |
+| the switch of mocks | none | `config.mocks`: the new state, the generation, the confirmation |
+| a test | none | `config.test`: the intent before the call, the outcome after (the step that builds the test) |
 
 - An audit row is written in the transaction of its change: a change whose row cannot be written does not happen (503
-  `audit-unavailable`). Its subject is `config/<kind>/<key>`.
+  `audit-unavailable`). Its subject is `config/<kind>/<key>`. A test is the one act outside a transaction: its intent
+  is committed with an id before the adapter is called, no lock is held during the call, and its outcome is a second
+  row; a node that dies between them leaves the outcome unknown, and the screen says so.
 - The audit names fields, never their values: a production address stays in the history, which the roles that read the
   configuration read, and out of the audit.
 - That a secret changed is shown by the read's `secrets`, from the secret store's list, never by its value.
@@ -587,7 +664,8 @@ loop of activations, not a change list.
   does not hold the store's key. Restored with the key, everything verifies. Restored without it, every bound body and
   consent fails to verify: each is absent on every node until a connection administrator saves it again and a secret
   administrator consents; its secrets are unreadable in any case.
-- A database set back to an earlier state is read whole by every node, with a WARNING.
+- A database set back to an earlier state is read whole by every node, with a WARNING, and a producer of a later
+  activation is never used for it.
 - An export is not a backup: it holds no state, no history and no secret.
 
 ## A new environment and its secrets
@@ -600,15 +678,17 @@ loop of activations, not a change list.
 ## The rules of the secret store
 
 1. **No secret where the secret administrator did not agree.** A draft that sends a secret through a new field, to a new
-   adapter or a new destination needs a consent to its exact digest; TLS verification and trust are destination fields.
-   It ships with the first step that stores a connection.
-2. **No test past rule 1.** A test needs the same consent as an activation.
+   adapter or a new destination, or under a changed trust, needs a consent to its exact digest; TLS verification,
+   trusted certificates and pinned keys are destinations. It ships with the first step that stores a connection.
+2. **No test past rule 1.** A test needs the same consent as an activation, and runs on the values it checked.
 3. **Nothing a database writer could change unseen.** With the store's key every body in force and every consent is
-   bound, and a node refuses what is unbound or does not verify; a consent states the digest its giver saw.
+   bound, and a node refuses what is unbound or does not verify. Only a verified version in force counts as consented,
+   an unbound body that sends a secret is never bound by the first key, and a consent states the digest its giver saw.
 4. **No secret read back, no kind from elsewhere.** Answers and files hold names; the kind is read from the store at each
    check; `secrets` in a file is never read; no route changes a secret's kind; no key is a secret's name.
-5. **No value in a draft, a history or a diff.** A secret field holds only a reference, and a URL no user information;
-   going back copies a body into a draft and runs every check again against today's secrets.
+5. **No value in a draft, a history or a diff.** A secret field holds only a reference, a URL no user information and no
+   credential, under a mock too; going back copies a body into a draft and runs every check again against today's
+   secrets.
 6. **An inbound caller's password only as a reference.** A system's credential, when its kind comes, holds its secret in
    a secret field.
 7. **No git base, store's key or `rail8.` name as a setting.** No kind holds them; keys refuse a `rail8` segment and
@@ -618,7 +698,7 @@ loop of activations, not a change list.
 ## Open places
 
 - **A second person's approval of an activation.** Its place is the activation, after the checks and before the
-  binding: a route `/-/approve {expect}` that records an approver of a draft's revision, and a check that one is there.
+  binding: a route `/-/approve {expect}` that records an approver of a draft's `etag`, and a check that one is there.
   Not built.
 - **A scope of the two roles by partner or by package.** The decision point already takes a scope with each action:
   each route asks it with its object's key. A partner scope matches the keys of that partner's systems, a package scope
@@ -640,14 +720,14 @@ loop of activations, not a change list.
 
 | What | Limit |
 | --- | --- |
-| Connections; systems | 20,000; 4,096, as an installation holds. A later kind sets its own |
+| Connections; systems | 20,000; 4,096, as an installation holds; drafts and removed objects count. A later kind sets its own |
 | A body; all bodies in force together | 64 KiB as canonical JSON, 128 fields; 64 MiB |
-| History | 1,000 rows an object, its 100 newest activations always kept, and `RAIL8_AUDIT_MAX_AGE` |
-| A request's body; an import | 64 KiB; 1,000 files, 64 KiB a file, 4 MiB a call |
+| History | 1,000 rows an object and `RAIL8_AUDIT_MAX_AGE`, its 100 newest activations always kept |
+| A request's body; an import | 64 KiB; 1,000 files, 128 KiB a file, 4 MiB a call |
 | A page of a list; of a history | 500; 500 |
-| Objects a node reports as left out | 100 |
+| Objects a node names as left out | 100, and their count |
 | The time a change takes to reach a node | the notice; at most one tick, 5 s, when a notice is lost |
-| A node without a read of the store | `DEGRADED` after 30 s |
+| A node without a read of the store | `DEGRADED` after 30 s; no new attempt after 60 s |
 
 ## Tests
 
@@ -656,36 +736,48 @@ loop of activations, not a change list.
   nodes, each with its own fake clock and timer. A tamper hook on each (SQL, or a method) plays the database writer.
   Across them:
   - every refusal code, and `expect` on every verb: a save over another's save is 412; a stop beside a pending draft
-    refuses neither;
-  - a change in force seen on the other node after the notice, and after one tick with the notice dropped; `holds`;
-  - a database set back; set back and then written past the generation the node holds; a row deleted: each read right,
-    with the WARNING where the generation went back;
-  - a tampered body, an unbound body with the key, a consent forged or moved to another draft: each refused, never used;
-  - binding again after a change of key: a tampered row loses its tag and is not blessed; the tag's encoding tells
-    version 1 with format 12 from version 11 with format 2;
-  - consent: a new host, port, proxy, trust, TLS switch, field or adapter needs it; a tuning field, a new path, a field
-    added at its default and a secret taken away do not; two secret fields swapped need it; a draft changed in SQL after
-    the read is refused at the consent, and after the consent at the activation; a withdrawal;
+    refuses neither; a stop delayed past a stop and a start is 412; an old request against a row created again is 412;
+  - a change in force seen on the other node after the notice, and after one tick with the notice dropped; `holds`
+    `yes`, `no` and `unknown`, never `yes` for a node one change behind or on the other side of a set back;
+  - a database set back; set back and then activated to the same version number; a row deleted: each read right, bound
+    and unbound, and the next send goes to the receiver in force, never through an old producer;
+  - a tampered body, an unbound body with the key, a consent forged, replayed for a later draft or moved to another
+    row: each refused, never used; an activation over a tampered version in force asks consent for every send;
+  - the first key: bodies that send no secret bound, an unbound one that sends a secret left out until consented;
+    binding again: a tampered body or consent loses its tag and is not blessed, and the other node leaves it out with
+    nobody activating; the tag's encoding tells version 1 with format 12 from version 11 with format 2;
+  - consent: a new host, port, path of an unmarked URL, proxy, trust, pin, TLS switch, field or adapter needs it; a
+    tuning field, a new path of an `.origin()` URL, a field set to its default, a host's case, hosts reordered or
+    removed, and a sent secret taken away do not; two secret fields swapped need it; a draft changed in SQL after the
+    read is refused at the consent, and after the consent at the activation; two secret administrators granting and
+    withdrawing; a withdrawal;
   - activation: complete per direction `deployment_connection_uses` names; a secret of a kind its field does not take;
-    a removal or a switch to the mock refused without `confirm`, and refused again when a deploy added a flow after the
-    refusal; a mocked body refused where mocks are not allowed, and mocks turned off only with the mocked used
-    connections confirmed;
+    an adapter changed by a system deployed after the save; each confirmation refused without its digest, refused again
+    when a deploy changed the uses after the refusal, and the next send after it as the design of systems and
+    connections says; a mocked body refused where mocks are not allowed; mocks turned on or off only with the mocked
+    used connections confirmed;
   - a removal racing a deploy and a deploy racing an activation, both ways, end in a consistent record or a refusal; a
-    deploy through another node right after an activation sees it;
-  - retention by age and by count, the 100 newest activations kept through 1,000 stops and starts; going back from a
-    kept version; a version beyond retention refused;
-  - the import: the dry run's lists, 412 after a change of a file or an object, all or none, a format 1 file read once
-    format 2 exists; the pipeline above run twice around a consent activates what the first run left;
-  - the environment file seeds an empty store once from two nodes started together, unbound without the key in `dev`,
-    and is ignored after.
+    deploy through another node right after an activation sees it; a retiring flow's uses count;
+  - retention by age and by count: 100 activations of a quiet object older than the age kept, and of a busy one through
+    1,000 stops and starts; going back from a kept version; a version beyond retention refused; two first saves at the
+    limit, one refused;
+  - the import: the dry run's lists in its scope, `draft-waits`, duplicates, an unknown field, 412 after a change of a
+    file or an object, all or none, a format 1 file read once format 2 exists; the pipeline above run twice around a
+    consent activates what the first run left;
+  - the seed: once from two nodes started together and never after the store is emptied; unbound without the key in
+    `dev`; writes refused while a node of the release before reads the file.
 - The send path: a retry waiting in the queue goes out with the corrected values; a send on the wire ends with the old
   ones; a stop makes the next attempt wait for its connection and a start lets it go; a change of one connection
   rebuilds no other producer, and a new value of a secret rebuilds none.
-- A node cut off from Postgres keeps its snapshot and is `DEGRADED` after 30 s of the fake clock.
+- A node cut off from Postgres keeps its snapshot, is `DEGRADED` after 30 s and starts no attempt after 60 s of the fake
+  clock, and goes on after a read.
 - The routes: each called as every role, through a session and a token; each refusal of the codes gives its code.
 - No answer, log line, history row, audit row or export of any test holds a secret's value, checked by searching every
   captured text for each value written to the secret store.
 - A fake clock and an injected timer move every tick. No test sleeps.
+- The store's step measures, in `bench/`, the time a change takes to reach every node and the time a write takes, with
+  the store at its limits, during an import of 1,000 objects activated one by one, and with notices lost. An index of
+  changes, beside the full comparison that a set back needs, comes only if that measurement asks for it.
 
 ## Refusals
 
@@ -695,16 +787,18 @@ loop of activations, not a change list.
 | 404 | `not-found` | a read of a key no row holds and no deployed system names |
 | 409 | `no-draft`, `nothing-to-consent` | a discard or activation without a draft; a consent with no draft, or to one that needs none |
 | 409 | `not-set` | a stop or start of a connection with nothing in force |
-| 409 | `consent-needed` | an activation or a test of a draft whose consent is missing or does not match; names the sends |
-| 409 | `in-use` | a removal, a switch to the mock, an emptied `allowedHosts` or mocks turned off, whose `confirm` does not list exactly what is used |
+| 409 | `consent-needed` | an activation or a test of a draft whose consent is missing or does not verify; names the sends |
+| 409 | `in-use` | a change that needs a confirmation, without the digest of the uses as they are |
 | 409 | `mocks-refused` | an activation of a mocked body in an environment that does not allow mocks |
-| 409 | `adapter-differs` | a connection's adapter other than its deployed system file names |
+| 409 | `adapter-differs` | a connection's adapter other than its deployed system definition names |
 | 409 | `keys-differ` | an activation or a consent while a live node lacks the key it binds under |
+| 409 | `nodes-differ` | any write while a live node does not read this store |
 | 409 | `config-full` | beyond a limit |
 | 412 | `changed` | `expect` or a digest differs; answers the object, or a new dry run, as it is now |
 | 422 | `invalid`, `reserved` | a value against its field, a value in a secret field, a URL with user information; a `rail8.` name |
 | 422 | `incomplete` | an activation's problems, each with field, code and direction, never a value |
 | 422 | `format` | an import file of an unknown kind or a newer format |
+| 422 | `problems` | an import whose dry run has problems, `draft-waits` among them |
 | 503 | `no-key` | in a deployed environment without the store's key, an activation or consent of a body that sends a secret |
 | 503 | `audit-unavailable` | an audit row not written |
 
@@ -712,13 +806,16 @@ loop of activations, not a change list.
 
 That design is agreed, and this one follows it. It relies on:
 - the keys, and `Environment` with its snapshot: `onActivation` once per new snapshot, a version per connection that
-  changes only when its values or its mock change, `stopped`, and `mocksAllowed`;
+  changes only when its values or its mock change, `stopped`, and `mocksAllowed`. The version this store gives is the
+  activation's random id, never reused, so "differs from its producer's" holds after a database set back; and a
+  snapshot after a set back may carry a lower generation, which a listener compares as any other;
 - producers kept per connection and version, and a secret's handle read at each use;
 - an attempt that waits for a connection that is stopped, not set or left out, every 30 s, and is parked after 72 hours;
-- the connection form's format 2, with the marks `.tuning()` and `.origin()` and the rule that a form only adds fields
-  with a default meaning "as before", which the first step here adds;
-- `deployment_connection_uses` with its directions and its uses through an address field, `deployments.config_generation`,
-  and the confirmation before a used connection is removed, switched to the mock, or loses its allowed hosts;
+- the connection form's format 2, with the marks `.tuning()`, `.origin()` and `.trust()` and the rule that a form only
+  adds fields with a default meaning "as before", which the first step here adds;
+- `deployment_systems`, `deployment_connection_uses` with its directions and its uses through an address field,
+  `deployments.config_generation`, and the confirmation before a used connection is removed, switched to the mock, or
+  loses its allowed hosts;
 - the built-in mock, and `GET /admin/systems` reading each connection's state from here;
 - the environment file, which becomes the seed of an empty store.
 
@@ -726,33 +823,42 @@ That design is agreed, and this one follows it. It relies on:
 
 Each step is one issue, built and merged on its own.
 
-1. **The marks on the connection form.** `class:C`, after the adapter's contract of systems and connections. `.tuning()`
-   and `.origin()` on a form's fields in `rail8-api`; the destination of a connection's values and the digest of what it
-   sends; the rule that a form only adds fields with a default, checked by the component contract suite against a
-   recorded form; `http` and `sftp` marked; a URL with user information refused. No change to the database.
+1. **The marks on the connection form.** `class:C`, after the adapter's contract of systems and connections.
+   `.tuning()`, `.origin()` and `.trust()` on a form's fields in `rail8-api`; the function that computes a connection's
+   effective destination, its sends and their digest; the rule that a form only adds fields with a default, checked by
+   the component contract suite against a recorded form; `http` and `sftp` marked (`sftp`'s host key as trust); a URL
+   with user information refused. No change to the demo, the quickstart or the database.
 2. **The store.** `class:C`, after step 1, the steps of systems and connections up to systems and flows by name, and
    the secret store's store and its credentials in adapters.
-   - The migration; the objects `connection` and `system`; drafts, activation, removal, going back; the three numbers.
-   - The consent on the object; the binding and binding again; the rule without the store's key.
-   - The read path, the nodes' report, `DEGRADED` without a read, the deploy's check and record.
-   - Stop and start; the routes with their actions; the roles connection administrator and partner administrator, and
-     who may hold each role; `secret.list` for them; the audit and the history with its retention.
-   - The environment file as the seed of an empty store; `GET /admin/systems` reading from it.
-   - The switch of mocks; a mocked body is accepted once the built-in mock of systems and connections is in, and
-     `allowedHosts` counts as a destination once a whole address from the message is.
-   - Changes the database; the quickstart's text says how a change of its environment file takes effect.
+   - The migration; the objects `connection` and `system`; drafts, activation, removal, going back; the numbers and
+     tokens.
+   - The consent on the object; the binding, the first key and binding again; the rule without the store's key.
+   - The read path, the nodes' report, the hold of sends without a read, the deploy's check and record.
+   - Stop and start; the switch of mocks; the routes with their actions; the roles connection administrator and
+     partner administrator, and who may hold each role; `secret.list` for them; the audit and the history with its
+     retention.
+   - The environment file as the seed of an empty store and the move to the store; `GET /admin/systems` reading from it.
+   - A mocked body is accepted once the built-in mock of systems and connections is in, and `allowedHosts` counts as a
+     destination once a whole address from the message is.
+   - The measurement in `bench/`.
+   - Changes the database; the quickstart's text says how a change of its environment file takes effect. No change to
+     the demo.
 3. **Export, import and `rail8 config`.** `class:C`, after 2: a file format that is a contract, with its JSON Schemas.
-   The format with its chain of upgrades, the dry run and the write, and the command. No change to the database.
+   The format with its chain of upgrades, the dry run and the write, and the command. No change to the demo, the
+   quickstart or the database.
 4. **Test connection.** `class:C`, after 2: a new contract of the adapter. A `probe` on `Component` with a default that
-   answers it cannot test; the probes of `http` and `sftp` and their mocks, checked by the component contract suite;
-   `/-/test` of the version in force and `/-/test-draft` of a draft, with the consent of rule 2 and the audit row.
-5. **Editing on the Systems screen under Configure.** `class:B`, after 2, the Secrets screen and the Systems screen of
+   answers it cannot test; the probes of `http` and `sftp` and their mocks, checked by the component contract suite,
+   with Postgres away during a probe among the cases; `/-/test` of the version in force and `/-/test-draft` of a draft,
+   with the consent of rule 2, the copy of the values it checked, and the intent and outcome in the audit. No change to
+   the demo or the quickstart; changes the database only if the outcome needs a table of its own.
+5. **Editing on the Systems screen under Configure.** `class:B`, after 2, 3, the Secrets screen and the Systems screen of
    systems and connections. The one form of a connection with its secrets; the draft beside the version in force with
-   its changes, problems and the consent it needs; activate, discard, go back; the history; which nodes hold it;
-   instance names; the secret administrator's list of drafts that wait for consent, with consent and withdrawal. Test
-   connection once step 4 is in.
+   its changes, problems and the consent it needs; activate, discard, go back, with the confirmation of uses; the
+   history; which nodes hold it; instance names; the switch of mocks; the secret administrator's list of drafts that
+   wait for consent, with consent and withdrawal; an import from a folder through the UI's server, which passes 4 MiB on
+   that route. Test connection once step 4 is in. No change to the demo, the quickstart or the database.
 6. **Connections in Monitor.** `class:B`, after 2 and 4. Each connection's state, its last success and last error,
    stop and start, test. Each node keeps, per connection, the time of its last success and its last error (the fault's
    kind and its scrubbed text) and writes them to a table of its own at most every 5 s; the view reads the live nodes'
-   rows. Changes the database.
+   rows. Changes the database; no change to the demo or the quickstart.
 7. **Partner profiles and identifiers.** `class:C`, with the design of partners first. It adds its kinds to this store.
