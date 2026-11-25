@@ -1,16 +1,28 @@
 import { Badge, Button, Flex, Input, Tag } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { useMemo, useState } from 'react';
+import { useText } from '../../../../language';
 import type { FunctionCatalogue as Catalogue } from '../../../api/client';
 import { deviationNote } from './fidelity';
-import { drilldown, type DrilldownFunction } from './function-groups';
+import { drilldown, type DrilldownFunction, type Group } from './function-groups';
 
 /** The drag type of a function dragged from the drilldown onto the canvas; its data is the catalogue name. */
 export const functionDragType = 'application/x-mapping-function';
 
-/** What a function the catalogue lacks says, and the follow-up issue that adds it: a preview, or not available yet. */
-const unavailable = (fn: DrilldownFunction) =>
-  fn.preview === undefined ? `Not available yet (#${fn.issue})` : `Preview: kept in this browser only, never in the mapping file (#${fn.issue})`;
+/** The id of what a function the catalogue lacks says, with the follow-up issue that adds it: a preview, or not available yet. */
+const unavailable = (fn: DrilldownFunction) => (fn.preview === undefined ? 'studio.catalogue.unavailable' : 'studio.catalogue.preview');
+
+/** The id of each group's name. */
+const GROUP_NAMES: Record<Group, string> = {
+  arithmetic: 'studio.group.arithmetic',
+  boolean: 'studio.group.boolean',
+  text: 'studio.group.text',
+  conversions: 'studio.group.conversions',
+  date: 'studio.group.date',
+  constants: 'studio.group.constants',
+  node: 'studio.group.node',
+  statistic: 'studio.group.statistic',
+};
 
 /**
  * The functions drilldown over the catalogue: its groups open one by one, or all that match while a search is typed;
@@ -32,19 +44,21 @@ export function FunctionCatalogue({
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [collapsedResults, setCollapsedResults] = useState<Record<string, boolean>>({});
+  const { t } = useText();
   const groups = useMemo(() => drilldown(catalogue), [catalogue]);
   const filter = query.trim().toLowerCase();
   const shown = groups.map(({ group, functions }) => ({
     group,
-    entries: functions.filter((fn) => [group, fn.name].some((value) => value.toLowerCase().includes(filter))),
+    name: t(GROUP_NAMES[group]),
+    entries: functions.filter((fn) => [t(GROUP_NAMES[group]), fn.name].some((value) => value.toLowerCase().includes(filter))),
   }));
   return (
-    <Flex vertical gap="small" role="region" aria-label="Function catalogue">
+    <Flex vertical gap="small" role="region" aria-label={t('studio.catalogue')}>
       <div>
         <Input
           allowClear
-          aria-label="Search functions"
-          placeholder="Search functions"
+          aria-label={t('studio.catalogue.search')}
+          placeholder={t('studio.catalogue.search')}
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -53,7 +67,7 @@ export function FunctionCatalogue({
         />
       </div>
       <div>
-        {shown.map(({ group, entries }) => {
+        {shown.map(({ group, name, entries }) => {
           if (entries.length === 0) return null;
           const open = filter ? !collapsedResults[group] : Boolean(expanded[group]);
           return (
@@ -66,7 +80,7 @@ export function FunctionCatalogue({
                   else setExpanded((old) => ({ ...old, [group]: !open }));
                 }}
               >
-                {group} <Badge count={entries.length} overflowCount={Infinity} color="var(--ant-color-text-secondary)" />
+                {name} <Badge count={entries.length} overflowCount={Infinity} color="var(--ant-color-text-secondary)" />
               </Button>
               {open && (
                 <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -75,7 +89,7 @@ export function FunctionCatalogue({
                     const lacking = fn.fn === undefined && !preview;
                     const off = disabled || lacking;
                     // a catalogue function is described by its deviation note, if any; one the catalogue lacks by why it is not there
-                    const description = fn.fn === undefined ? unavailable(fn) : deviationNote(catalogue[fn.fn]!.fidelity);
+                    const description = fn.fn === undefined ? t(unavailable(fn), { issue: fn.issue }) : deviationNote(catalogue[fn.fn]!.fidelity);
                     return (
                       <li key={fn.key}>
                         <Button
@@ -98,17 +112,17 @@ export function FunctionCatalogue({
                           }}
                         >
                           {fn.name}
-                          {fn.overload !== undefined && <small> {fn.overload} inputs</small>}
+                          {fn.overload !== undefined && <small> {t('studio.catalogue.inputs', { count: fn.overload })}</small>}
                           {(fn.configurable || preview) && (
                             <>
                               {' '}
-                              <SettingOutlined aria-label="Configurable" />
+                              <SettingOutlined aria-label={t('studio.catalogue.configurable')} />
                             </>
                           )}
                           {preview && (
                             <>
                               {' '}
-                              <Tag color="purple">Preview</Tag>
+                              <Tag color="purple">{t('studio.preview')}</Tag>
                             </>
                           )}
                         </Button>
@@ -120,7 +134,7 @@ export function FunctionCatalogue({
             </section>
           );
         })}
-        {shown.every(({ entries }) => entries.length === 0) && <p>No matching functions.</p>}
+        {shown.every(({ entries }) => entries.length === 0) && <p>{t('studio.catalogue.noMatch')}</p>}
       </div>
     </Flex>
   );

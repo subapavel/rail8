@@ -1,13 +1,15 @@
 import { Button, Tooltip } from 'antd';
 import { CheckOutlined, CopyOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
+import { useText } from '../../../language';
 
-const COPIED = 'Copied!';
 /** How long the receipt shows. */
 const RECEIPT_MS = 2400;
 
+type Receipt = 'copied' | 'failed';
+
 /**
- * Copies `text` to the clipboard: its icon, its tooltip and a screen-reader status
+ * Copies `text` to the clipboard, a button named by `label`, such as "Copy field path to clipboard": its icon, its tooltip and a screen-reader status
  * say whether it did, for 2.4 s. The tooltip shows while the button is hovered or focused, or a receipt shows; Escape
  * hides it and the receipt. There is no `execCommand('copy')` fallback: the browsers the studio
  * supports all have the asynchronous clipboard.
@@ -15,7 +17,8 @@ const RECEIPT_MS = 2400;
 export function CopyTextButton({ label, text }: { label: string; text: string }) {
   const [hover, setHover] = useState(false);
   const [focus, setFocus] = useState(false);
-  const [receipt, setReceipt] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const { t } = useText();
   useEffect(() => {
     if (receipt === null) return undefined;
     const timer = setTimeout(() => setReceipt(null), RECEIPT_MS);
@@ -25,18 +28,19 @@ export function CopyTextButton({ label, text }: { label: string; text: string })
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
-      setReceipt(COPIED);
+      setReceipt('copied');
     } catch {
-      setReceipt('Could not copy. Select the text and copy it manually.');
+      setReceipt('failed');
     }
   };
-  const icon = receipt === null ? <CopyOutlined aria-hidden /> : receipt === COPIED ? <CheckOutlined aria-hidden /> : <ExclamationCircleOutlined aria-hidden />;
+  const said = receipt === null ? null : t(receipt === 'copied' ? 'studio.copy.copied' : 'studio.copy.failed');
+  const icon = receipt === null ? <CopyOutlined aria-hidden /> : receipt === 'copied' ? <CheckOutlined aria-hidden /> : <ExclamationCircleOutlined aria-hidden />;
   return (
     <>
-      <Tooltip trigger={[]} open={hover || focus || receipt !== null} placement="topRight" title={receipt ?? 'Copy to clipboard'}>
+      <Tooltip trigger={[]} open={hover || focus || receipt !== null} placement="topRight" title={said ?? t('studio.copy')}>
         <Button
           type="text"
-          aria-label={`Copy ${label} to clipboard`}
+          aria-label={label}
           onClick={() => void copy()}
           icon={icon}
           onMouseEnter={() => setHover(true)}
@@ -52,7 +56,7 @@ export function CopyTextButton({ label, text }: { label: string; text: string })
         />
       </Tooltip>
       <span style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' }} role="status">
-        {receipt}
+        {said}
       </span>
     </>
   );

@@ -60,7 +60,7 @@ export function httpApiClient(baseUrl = '', fetchPort: typeof fetch = uiFetch): 
 /** A model answer: the canonical model and its ETag, which a later save sends back. */
 async function storedOf(response: Response): Promise<StoredMapping> {
   const etag = response.headers.get('etag');
-  if (etag === null) throw new Error('the service answered a mapping with no ETag');
+  if (etag === null) throw new Error('the service answered a mapping with no ETag'); // untranslated: a developer's error, the service breaking its contract
   return { model: (await response.json()) as MappingModel, etag };
 }
 

@@ -14,11 +14,11 @@ export interface ChoiceDraft {
   fault: string;
 }
 
-/** The kinds of root in the order the Type and Root selects offer them, with their words. */
+/** The kinds of root in the order the Type and Root selects offer them, with the ids of their words. */
 export const ROOT_KINDS: readonly [RootKind, string][] = [
-  ['element', 'XML element'],
-  ['json', 'JSON document'],
-  ['wsdl', 'WSDL message'],
+  ['element', 'studio.rootKind.element'],
+  ['json', 'studio.rootKind.json'],
+  ['wsdl', 'studio.rootKind.wsdl'],
 ];
 
 /** The draft of a message already chosen, or an empty one; `kind` replaces the chosen root's kind. */

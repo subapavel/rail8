@@ -68,7 +68,7 @@ const menuItem = (name: string) => page.getByRole('menuitem', { name, exact: tru
 const filterChoice = (name: string) => page.getByRole('menuitemradio', { name, exact: true });
 const canvasPanel = () => page.getByRole('region', { name: 'Field mapping canvas' });
 const node = (name: RegExp) => canvasPanel().getByRole('group', { name: 'Mapping canvas' }).getByRole('group', { name });
-const footer = () => canvasPanel().getByText(/nodes · /);
+const footer = () => canvasPanel().getByText(/ nodes? · /);
 const button = (name: string) => page.getByRole('button', { name, exact: true });
 
 beforeEach(async () => {
@@ -168,7 +168,7 @@ describe('the Definition tab panes', () => {
     await expect.element(canvasPanel()).toHaveTextContent('Select a target field to see its mapping expression.');
     await field('target', 'Note').click();
     await expect.element(node(/^Target field Note\. Incomplete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('1 nodes · 0 connections');
+    await expect.element(footer()).toHaveTextContent('1 node · 0 connections');
   });
 
   test('in edit mode a source row dropped on a target row adds a source-field box to its mapping and selects it', async () => {
@@ -182,7 +182,7 @@ describe('the Definition tab panes', () => {
     expect(selectUnsaved(store.getState())).toBe(true);
     await expect.element(row('target', 'Note').getByRole('img', { name: 'Connected' })).toBeVisible();
     await expect.element(node(/^Source field Note\. Complete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connections');
+    await expect.element(footer()).toHaveTextContent('2 nodes · 1 connection');
   });
 
   test('in edit mode a double click on a source field adds its box to the selected target field mapping', async () => {
@@ -846,7 +846,7 @@ describe('mapping variables, a preview feature', () => {
     await addVariable('Order', 'total');
     await field('target', 'Variable total').click();
     await expect.element(node(/^Mapping variable total\. Incomplete/)).toBeVisible();
-    await expect.element(footer()).toHaveTextContent('1 nodes · 0 connections');
+    await expect.element(footer()).toHaveTextContent('1 node · 0 connections');
 
     await button('Cancel').click();
     await page.getByRole('dialog', { name: 'Discard changes?' }).getByRole('button', { name: 'Discard changes' }).click();

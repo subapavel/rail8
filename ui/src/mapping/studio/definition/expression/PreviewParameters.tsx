@@ -2,6 +2,7 @@ import { Button, Col, Descriptions, Empty, Flex, Form, Input, Radio, Row, Select
 import { MountedModal } from '../../../../MountedModal';
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState } from 'react';
+import { useText } from '../../../../language';
 import type { PreviewParam } from '../../mock/definition-preview';
 import { initialParams, RFC_MODULE, RFC_NAMESPACE, type PreviewFunction, type PreviewFunctionParameter } from '../../mock/preview-functions';
 import { moveRow } from '../../mock/signature-mock';
@@ -9,18 +10,21 @@ import { Tool } from '../../shared/Tool';
 
 type Values = Record<string, PreviewParam>;
 
-/** The choices of Behaviour if lookup fails. */
+/** The choices of Behaviour if lookup fails, with the ids of their names. */
 const STRATEGIES = [
-  ['2', 'Use Key'],
-  ['1', 'Use Default Value'],
-  ['0', 'Throw Exception'],
+  ['2', 'studio.param.value.key'],
+  ['1', 'studio.param.value.default'],
+  ['0', 'studio.param.value.error'],
 ] as const;
 
-const TITLES: Record<PreviewFunction['key'], string> = { valuemap: 'Value Mapping Properties', tableLookup: 'JDBC Lookup', rfclookup: 'RFC Lookup' };
+/** The id of each dialog's title. */
+const TITLES: Record<PreviewFunction['key'], string> = { valuemap: 'studio.vm.title', tableLookup: 'studio.lookup.jdbc', rfclookup: 'studio.lookup.rfc' };
 
 /** A field of the Value Mapping Properties: a text, an agency with its default offered, or the strategy. */
 function Field({ param, value, change, disabled }: { param: PreviewFunctionParameter; value: string; change: (value: string) => void; disabled: boolean }) {
-  const { key, label, type } = param;
+  const { t } = useText();
+  const { key, type } = param;
+  const label = t(param.label);
   const id = `preview-param-${key}`;
   if (type === 'vmstrategy') {
     return (
@@ -31,7 +35,7 @@ function Field({ param, value, change, disabled }: { param: PreviewFunctionParam
           value={value}
           disabled={disabled}
           onChange={(event) => change(event.target.value)}
-          options={STRATEGIES.map(([v, name]) => ({ value: v, label: name }))}
+          options={STRATEGIES.map(([v, name]) => ({ value: v, label: t(name) }))}
         />
       </Form.Item>
     );
@@ -52,11 +56,12 @@ function Field({ param, value, change, disabled }: { param: PreviewFunctionParam
 /** A list of a lookup's fields: reorder or remove the selected field. */
 function FieldList({ title, fields, change, disabled }: { title: string; fields: string[]; change: (fields: string[]) => void; disabled: boolean }) {
   const [selected, setSelected] = useState('');
+  const { t } = useText();
   const index = fields.indexOf(selected);
   return (
     <Form.Item label={title} htmlFor={`field-list-${title}`}>
       {fields.length === 0 ? (
-        <small>No fields</small>
+        <small>{t('studio.lookup.noFields')}</small>
       ) : (
         <ul aria-label={title}>
           {fields.map((name) => (
@@ -69,15 +74,15 @@ function FieldList({ title, fields, change, disabled }: { title: string; fields:
         </ul>
       )}
       <Flex gap={0}>
-        <Tool label={`Move ${title} up`} icon={ArrowUpOutlined} disabled={disabled || index <= 0} onClick={() => change([...moveRow(fields, index, -1)])} />
+        <Tool label={t('studio.lookup.up', { list: title })} icon={ArrowUpOutlined} disabled={disabled || index <= 0} onClick={() => change([...moveRow(fields, index, -1)])} />
         <Tool
-          label={`Move ${title} down`}
+          label={t('studio.lookup.down', { list: title })}
           icon={ArrowDownOutlined}
           disabled={disabled || index < 0 || index >= fields.length - 1}
           onClick={() => change([...moveRow(fields, index, 1)])}
         />
         <Tool
-          label={`Remove selected field from ${title}`}
+          label={t('studio.lookup.remove', { list: title })}
           icon={DeleteOutlined}
           disabled={disabled || index < 0}
           onClick={() => change(fields.filter((n) => n !== selected))}
@@ -91,26 +96,27 @@ function FieldList({ title, fields, change, disabled }: { title: string; fields:
 function LookupPicker({ rfc, current, apply, close }: { rfc: boolean; current: string; apply: (ref: string) => void; close: () => void }) {
   const [selected, setSelected] = useState('');
   const [query, setQuery] = useState('');
+  const { t } = useText();
   const entries = [...new Set([...(rfc ? [RFC_MODULE] : []), ...(current ? [current] : [])])];
   const rows = entries.filter((n) => n.toLowerCase().includes(query.trim().toLowerCase()));
-  const title = rfc ? 'Choose Function Module' : 'Choose External Definition';
+  const title = t(rfc ? 'studio.lookup.chooseModule' : 'studio.lookup.chooseDefinition');
   return (
-    <MountedModal width={720} title={title} onCancel={close} onOk={() => apply(selected)} okText="Apply" okButtonProps={{ disabled: !rows.includes(selected) }}>
-      <h3>Search Criteria</h3>
-      <Descriptions size="small" items={[{ key: 'category', label: 'Category', children: rfc ? 'rfc' : 'dbtab' }]} />
-      <h3>Search Result</h3>
-      <Input aria-label="Search" placeholder="Search" value={query} allowClear onChange={(event) => setQuery(event.target.value)} />
+    <MountedModal width={720} title={title} onCancel={close} onOk={() => apply(selected)} okText={t('studio.apply')} okButtonProps={{ disabled: !rows.includes(selected) }}>
+      <h3>{t('studio.lookup.criteria')}</h3>
+      <Descriptions size="small" items={[{ key: 'category', label: t('studio.lookup.category'), children: rfc ? 'rfc' : 'dbtab' }]} />
+      <h3>{t('studio.lookup.result')}</h3>
+      <Input aria-label={t('studio.lookup.search')} placeholder={t('studio.lookup.search')} value={query} allowClear onChange={(event) => setQuery(event.target.value)} />
       <Table
-        aria-label="Search Result"
+        aria-label={t('studio.lookup.result')}
         size="small"
         pagination={false}
         rowKey={(name) => name}
         rowClassName={(name) => (name === selected ? 'studio-chosen' : '')}
         dataSource={rows}
-        locale={{ emptyText: <Empty description="No Suitable Data Found" /> }}
+        locale={{ emptyText: <Empty description={t('studio.lookup.noData')} /> }}
         columns={[
           {
-            title: 'Name',
+            title: t('studio.name'),
             key: 'name',
             render: (_, name) => (
               <Button type="link" aria-pressed={selected === name} onClick={() => setSelected(name)}>
@@ -118,7 +124,7 @@ function LookupPicker({ rfc, current, apply, close }: { rfc: boolean; current: s
               </Button>
             ),
           },
-          { title: 'Namespace', key: 'namespace', render: (_, name) => (name === RFC_MODULE ? RFC_NAMESPACE : '—') },
+          { title: t('studio.lookup.namespace'), key: 'namespace', render: (_, name) => (name === RFC_MODULE ? RFC_NAMESPACE : '—') },
         ]}
       />
     </MountedModal>
@@ -137,11 +143,13 @@ interface LookupParametersProps {
 function LookupParameters({ fn, draft, change, openPicker, disabled }: LookupParametersProps) {
   const rfc = fn.key === 'rfclookup';
   const flag = rfc ? 'useExc' : 'split';
+  const { t } = useText();
+  const flagLabel = t(rfc ? 'studio.lookup.useException' : 'studio.lookup.split');
   const flagSwitch = (
-    <Form.Item label={rfc ? 'Use Exception' : 'Insert Context Change After Each Result Value'} htmlFor={`lookup-${flag}`}>
+    <Form.Item label={flagLabel} htmlFor={`lookup-${flag}`}>
       <Switch
         id={`lookup-${flag}`}
-        aria-label={rfc ? 'Use Exception' : 'Insert Context Change After Each Result Value'}
+        aria-label={flagLabel}
         checked={draft[flag] as boolean}
         disabled={disabled}
         onChange={(checked) => change(flag, checked)}
@@ -151,38 +159,38 @@ function LookupParameters({ fn, draft, change, openPicker, disabled }: LookupPar
   const ref = draft.ref as string;
   return (
     <>
-      <Form.Item label="Communication Channel" htmlFor="lookup-channel">
+      <Form.Item label={t('studio.lookup.channel')} htmlFor="lookup-channel">
         {/* the mapping parameters have no Adapter category yet: no channel to offer */}
         <Select
           id="lookup-channel"
-          aria-label="Communication Channel"
+          aria-label={t('studio.lookup.channel')}
           value=""
           disabled
-          options={[{ value: '', label: "No suitable parameter found; define new parameter of type 'Channel' first" }]}
+          options={[{ value: '', label: t('studio.lookup.noChannel') }]}
         />
       </Form.Item>
       <Flex align="center">
-        <div>{ref || (rfc ? 'Select an RFC module' : 'Select a database table')}</div>
+        <div>{ref || t(rfc ? 'studio.lookup.selectModule' : 'studio.lookup.selectTable')}</div>
         <div>
           <Button type="default" size="small" disabled={disabled} onClick={openPicker}>
-            {rfc ? 'Choose RFC module' : 'Choose database table'}
+            {t(rfc ? 'studio.lookup.chooseRfc' : 'studio.lookup.chooseTable')}
           </Button>
         </div>
       </Flex>
       {!rfc && flagSwitch}
       <Row gutter={16}>
         <Col xs={24} md={rfc ? 12 : 8}>
-          <FieldList title={rfc ? 'Import fields' : 'Input fields'} fields={draft.ins as string[]} change={(v) => change('ins', v)} disabled={disabled} />
+          <FieldList title={t(rfc ? 'studio.lookup.imports' : 'studio.lookup.inputs')} fields={draft.ins as string[]} change={(v) => change('ins', v)} disabled={disabled} />
         </Col>
         {!rfc && (
           <Col xs={24} md={rfc ? 12 : 8}>
-            <Form.Item label="Database table fields" htmlFor="lookup-table-fields">
-              <small>No fields available</small>
+            <Form.Item label={t('studio.lookup.tableFields')} htmlFor="lookup-table-fields">
+              <small>{t('studio.lookup.noFieldsAvailable')}</small>
             </Form.Item>
           </Col>
         )}
         <Col xs={24} md={rfc ? 12 : 8}>
-          <FieldList title={rfc ? 'Export fields' : 'Output fields'} fields={draft.outs as string[]} change={(v) => change('outs', v)} disabled={disabled} />
+          <FieldList title={t(rfc ? 'studio.lookup.exports' : 'studio.lookup.outputs')} fields={draft.outs as string[]} change={(v) => change('outs', v)} disabled={disabled} />
         </Col>
       </Row>
       {rfc && flagSwitch}
@@ -208,6 +216,7 @@ export function PreviewParameters({ fn, values, readOnly, save, close }: Preview
   const initial = initialParams(fn);
   const [draft, setDraft] = useState<Values>(() => ({ ...initial, ...values }));
   const [picking, setPicking] = useState(false);
+  const { t } = useText();
   const change = (key: string, value: PreviewParam) => setDraft((d) => ({ ...d, [key]: value }));
   const lookup = fn.key !== 'valuemap';
   if (picking) {
@@ -229,11 +238,11 @@ export function PreviewParameters({ fn, values, readOnly, save, close }: Preview
   return (
     <MountedModal
       width={lookup ? 720 : undefined}
-      title={TITLES[fn.key]}
+      title={t(TITLES[fn.key])}
       onCancel={close}
-      okText="Apply"
+      okText={t('studio.apply')}
       okButtonProps={{ htmlType: 'submit', form: 'preview-parameters' }}
-      footer={readOnly ? <Button onClick={close}>Close</Button> : undefined}
+      footer={readOnly ? <Button onClick={close}>{t('frame.tab.close')}</Button> : undefined}
     >
       <Form layout="vertical" id="preview-parameters" onFinish={submit}>
         {lookup ? (

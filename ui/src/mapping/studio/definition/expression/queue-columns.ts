@@ -1,3 +1,4 @@
+import type { Texts } from '../../../../language';
 import type { TraceEntry } from '../../../api/client';
 import { displayEntry, queueSize, type ShownValue } from './display-queue';
 import type { ExpressionGraph, ExpressionNode } from './expression-graph';
@@ -16,25 +17,31 @@ export interface QueueColumn {
 }
 
 /** A column of a trace entry: a queue's values with each context's end after them, or a value; nothing traced, no cells. */
-function column(label: string, entry: TraceEntry | undefined): QueueColumn {
-  const shown = entry === undefined ? undefined : displayEntry(entry);
+function column(texts: Texts, label: string, entry: TraceEntry | undefined): QueueColumn {
+  const shown = entry === undefined ? undefined : displayEntry(entry, texts);
   if (shown?.kind === 'atomic') return { label, cells: [{ kind: 'value', value: shown.value }] };
   if (shown?.kind !== 'queue') return { label, cells: undefined };
   const cells = shown.contexts.flatMap((context, i): QueueCell[] => [
     ...context.map((value) => ({ kind: 'value' as const, value })),
     { kind: i === shown.contexts.length - 1 ? 'end' : 'boundary' },
   ]);
-  return { label, cells, size: queueSize(entry), capped: shown.capped };
+  return { label, cells, size: queueSize(entry, texts), capped: shown.capped };
 }
 
 /**
  * The Display Queue of `node` of `graph` (over the trace of the last test run by authoring id): a
  * column per input, the queue of the box wired into it, then the node's own output; the target field has its result's.
+ * Sizes and cuts are in the language of `texts`.
  */
-export function queueColumns(graph: ExpressionGraph, node: ExpressionNode, trace: Readonly<Record<string, TraceEntry>>): { name: string; columns: QueueColumn[] } {
+export function queueColumns(
+  graph: ExpressionGraph,
+  node: ExpressionNode,
+  trace: Readonly<Record<string, TraceEntry>>,
+  texts: Texts,
+): { name: string; columns: QueueColumn[] } {
   const inputs = node.inputs.map((port) => {
     const wire = graph.edges.find((e) => e.target === node.id && (e.slot ?? 0) === port.slot);
-    return column(`${node.name}:${port.label}`, wire && trace[wire.source]);
+    return column(texts, `${node.name}:${port.label}`, wire && trace[wire.source]);
   });
-  return { name: node.name, columns: node.output ? [...inputs, column(`${node.name}:out`, trace[node.id])] : inputs };
+  return { name: node.name, columns: node.output ? [...inputs, column(texts, `${node.name}:out`, trace[node.id])] : inputs };
 }

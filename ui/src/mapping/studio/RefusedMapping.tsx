@@ -1,4 +1,5 @@
 import { Alert, Button } from 'antd';
+import { useText } from '../../language';
 import { describeError } from '../api/client';
 
 export interface RefusedMappingProps {
@@ -11,6 +12,7 @@ export interface RefusedMappingProps {
 /** A mapping that does not open, read-only: the problem, its diagnostics and Retry, and no edit control. */
 export function RefusedMapping({ error, retrying, onRetry }: RefusedMappingProps) {
   const failure = describeError(error);
+  const { t } = useText();
   return (
     <Alert
       type="error"
@@ -18,16 +20,16 @@ export function RefusedMapping({ error, retrying, onRetry }: RefusedMappingProps
       title={<h2>{failure.title}</h2>}
       action={
         <Button type="link" onClick={onRetry} loading={retrying} disabled={retrying}>
-          Retry
+          {t('studio.retry')}
         </Button>
       }
       description={
         <>
           <p>{failure.detail}</p>
-          <ul aria-label="Load diagnostics">
+          <ul aria-label={t('studio.load.diagnostics')}>
             {failure.diagnostics.map((d, i) => (
               <li key={i}>
-                {d.severity} <code>{d.code}</code>: {d.message}
+                {t(`studio.severity.${d.severity}`)} <code>{d.code}</code>: {d.message}
               </li>
             ))}
           </ul>

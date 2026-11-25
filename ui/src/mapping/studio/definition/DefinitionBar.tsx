@@ -2,6 +2,7 @@ import { Button, Card, Flex } from 'antd';
 import { MountedModal } from '../../../MountedModal';
 import { BranchesOutlined, CodeOutlined, FolderOpenOutlined, LinkOutlined, GroupOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useState } from 'react';
+import { useText } from '../../../language';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import type { FieldPath, MappingModel } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
@@ -29,6 +30,7 @@ const isDependencyView = (value: unknown): value is DependencyView =>
 export function useDependencies(browserState: BrowserStateStore, mappingId: string) {
   const key = `definition.${mappingId}.dependencies`;
   const [view, setView] = useState<DependencyView>(() => readPanelPreference(browserState, key, { visible: false, targets: null }, isDependencyView));
+  const { t } = useText();
   const change = (visible: boolean, targets: FieldPath[] | null = null) => {
     const next = { visible, targets };
     setView(next);
@@ -36,9 +38,9 @@ export function useDependencies(browserState: BrowserStateStore, mappingId: stri
   };
   /** The Dependencies menu over `targets`: Show those, Show All, Hide All. */
   const items = (targets: FieldPath[]): ToolMenuItem[] => [
-    { label: 'Show', run: () => change(true, targets) },
-    { label: 'Show All', run: () => change(true) },
-    { label: 'Hide All', run: () => change(false), disabled: !view.visible },
+    { label: t('studio.dependencies.show'), run: () => change(true, targets) },
+    { label: t('studio.dependencies.showAll'), run: () => change(true) },
+    { label: t('studio.dependencies.hideAll'), run: () => change(false), disabled: !view.visible },
   ];
   return { view, change, items };
 }
@@ -59,24 +61,33 @@ export interface DefinitionBarProps {
 
 /** The Definition tab's tool bar: messages, Clear Mapping, the data flow or text view, Dependencies and the split. */
 export function DefinitionBar({ editing, dataFlow, onDataFlow, view, onView, onChooseMessages, onClearMapping, onDependencies, dependencyItems }: DefinitionBarProps) {
+  const { t } = useText();
   return (
-    <Flex wrap align="center" gap="var(--ant-size-xxs)" role="toolbar" aria-label="Definition actions">
+    <Flex wrap align="center" gap="var(--ant-size-xxs)" role="toolbar" aria-label={t('studio.definition.actions')}>
       <ToolMenu
-        label="Select Message"
+        label={t('studio.definition.selectMessage')}
         icon={FolderOpenOutlined}
         disabled={!editing}
         items={[
-          { label: 'Source Message', run: onChooseMessages },
-          { label: 'Target Message', run: onChooseMessages },
+          { label: t('studio.definition.sourceMessage'), run: onChooseMessages },
+          { label: t('studio.definition.targetMessage'), run: onChooseMessages },
         ]}
       />
-      <Tool label="Map Selected Fields and Substructures if Names Are Identical" icon={GroupOutlined} disabled onClick={() => undefined} />
-      <Tool label="Clear Mapping" icon={DeleteOutlined} disabled={!editing} onClick={onClearMapping} />
-      <Tool label="Data Flow Editor" icon={BranchesOutlined} pressed={dataFlow} onClick={() => onDataFlow(true)} />
-      <Tool label="Text Preview" icon={CodeOutlined} pressed={!dataFlow} onClick={() => onDataFlow(false)} />
-      <Tool label="Dependencies" icon={LinkOutlined} onClick={onDependencies} />
-      <ToolMenu label="Dependencies options" items={dependencyItems} />
-      {dataFlow && <PaneSizeTools upper pane="message trees" label="Message tree layout" view={view} onChange={onView} />}
+      <Tool label={t('studio.definition.mapIdentical')} icon={GroupOutlined} disabled onClick={() => undefined} />
+      <Tool label={t('studio.definition.clear')} icon={DeleteOutlined} disabled={!editing} onClick={onClearMapping} />
+      <Tool label={t('studio.definition.dataFlow')} icon={BranchesOutlined} pressed={dataFlow} onClick={() => onDataFlow(true)} />
+      <Tool label={t('studio.definition.textPreview')} icon={CodeOutlined} pressed={!dataFlow} onClick={() => onDataFlow(false)} />
+      <Tool label={t('studio.dependencies')} icon={LinkOutlined} onClick={onDependencies} />
+      <ToolMenu label={t('studio.dependencies.options')} items={dependencyItems} />
+      {dataFlow && (
+        <PaneSizeTools
+          upper
+          names={{ minimize: t('studio.definition.trees.minimize'), maximize: t('studio.definition.trees.maximize') }}
+          label={t('studio.definition.trees.layout')}
+          view={view}
+          onChange={onView}
+        />
+      )}
     </Flex>
   );
 }
@@ -96,23 +107,29 @@ export function ExpressionHeader({
   onView: (view: SplitView) => void;
   instances: Omit<InstanceToolsProps, 'validateFile' | 'selectLabel'>;
 }) {
+  const { t } = useText();
   return (
-    <Flex wrap align="center" gap="middle" role="toolbar" aria-label="Mapping expression">
+    <Flex wrap align="center" gap="middle" role="toolbar" aria-label={t('studio.expression')}>
       <Flex align="center" gap="small">
         <div>
           <h2>
-            <BranchesOutlined aria-hidden /> Mapping expression
+            <BranchesOutlined aria-hidden /> {t('studio.expression')}
           </h2>
         </div>
         <div>
           <code title={targetField ?? undefined}>{targetField === null ? '' : `/${localPath(targetField)}`}</code>
         </div>
       </Flex>
-      <Flex role="group" aria-label="Queue test input" align="center" gap="small">
-        <InstanceTools {...instances} selectLabel="Queue test input" validateFile />
+      <Flex role="group" aria-label={t('studio.expression.input')} align="center" gap="small">
+        <InstanceTools {...instances} selectLabel={t('studio.expression.input')} validateFile />
       </Flex>
       <div style={{ marginInlineStart: 'auto' }}>
-        <PaneSizeTools pane="mapping expression" label="Expression layout" view={view} onChange={onView} />
+        <PaneSizeTools
+          names={{ minimize: t('studio.expression.minimize'), maximize: t('studio.expression.maximize') }}
+          label={t('studio.expression.layout')}
+          view={view}
+          onChange={onView}
+        />
       </div>
     </Flex>
   );
@@ -121,9 +138,10 @@ export function ExpressionHeader({
 /** Text Preview: each mapped target field and its expression; a click opens it in the data flow editor. */
 export function TextPreview({ model, onOpen }: { model: MappingModel; onOpen: (targetField: FieldPath) => void }) {
   const mapped = Object.entries(model.targetFieldMappings ?? {}).filter(([, mapping]) => expressionText(mapping) !== '');
+  const { t } = useText();
   return (
-    <section aria-label="Text Preview">
-      <Card size="small" title={<h2>Text Preview</h2>}>
+    <section aria-label={t('studio.definition.textPreview')}>
+      <Card size="small" title={<h2>{t('studio.definition.textPreview')}</h2>}>
         {mapped.length ? (
           mapped.map(([path, mapping]) => (
             <div key={path}>
@@ -133,7 +151,7 @@ export function TextPreview({ model, onOpen }: { model: MappingModel; onOpen: (t
             </div>
           ))
         ) : (
-          <p>No mapped fields.</p>
+          <p>{t('studio.definition.noMapped')}</p>
         )}
       </Card>
     </section>
@@ -142,9 +160,16 @@ export function TextPreview({ model, onOpen }: { model: MappingModel; onOpen: (t
 
 /** The Clear Mapping dialog: asks before it clears the expressions of all target fields. */
 export function ClearMapping({ onClear, onClose }: { onClear: () => void; onClose: () => void }) {
+  const { t } = useText();
   return (
-    <MountedModal title="Clear Mapping" onCancel={onClose} onOk={onClear} okText="Clear mapping" okButtonProps={{ danger: true, icon: <DeleteOutlined aria-hidden /> }}>
-      Clear the expressions for all target fields in this local mapping?
+    <MountedModal
+      title={t('studio.definition.clear')}
+      onCancel={onClose}
+      onOk={onClear}
+      okText={t('studio.definition.clear.ok')}
+      okButtonProps={{ danger: true, icon: <DeleteOutlined aria-hidden /> }}
+    >
+      {t('studio.definition.clear.question')}
     </MountedModal>
   );
 }

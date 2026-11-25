@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useText } from '../../../language';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import type { AuthoringId, FieldPath, MappingModel, TargetFieldMapping } from '../../generated/mapping-model';
 import { stepName } from '../../model/field-path';
@@ -62,6 +63,7 @@ const MARK_TEXT = 'var(--ant-color-text)';
  */
 function FieldConnections({ model, targets, selectedTarget, onSelect }: FieldConnectionsProps) {
   const gutter = useRef<HTMLDivElement>(null);
+  const { t } = useText();
   const links = useMemo(
     () =>
       Object.entries(model.targetFieldMappings ?? {})
@@ -103,7 +105,7 @@ function FieldConnections({ model, targets, selectedTarget, onSelect }: FieldCon
 
   return (
     <div ref={gutter} style={{ flex: '0 0 var(--ant-size-xxl)', position: 'relative' }}>
-      <svg role="group" aria-label="Field connections" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}>
+      <svg role="group" aria-label={t('studio.connections')} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible' }}>
         {lines.map(({ source, target, functions, width, y1, y2 }, i) => {
           const curve = `M0 ${y1} C${width * 0.43} ${y1} ${width * 0.57} ${y2} ${width} ${y2}`;
           const label = [stepName(source), ...functions, stepName(target)].join(' → ');
@@ -157,9 +159,10 @@ export interface MessageOverviewProps {
  * Dependencies tool shows them, the field connections stand between the panes instead.
  */
 export function MessageOverview({ browserState, model, dependencies, selectedTarget, onSelect, children }: MessageOverviewProps) {
+  const { t } = useText();
   return (
     <SideBySide
-      label="Resize source and target panels"
+      label={t('studio.definition.resizePanels')}
       leftId="source-message-pane"
       browserState={browserState}
       widthKey="definition.width"

@@ -3,6 +3,7 @@ import { LOOKUPS_ISSUE, VALUE_MAPPING_ISSUE, type PreviewParam } from './definit
 /** A parameter of a preview function. */
 export interface PreviewFunctionParameter {
   key: string;
+  /** The id of its label's text. */
   label: string;
   type: 'String' | 'vmsagency' | 'vmtagency' | 'vmstrategy' | 'field_list' | 'bool' | 'Channel';
   initial: PreviewParam;
@@ -23,47 +24,47 @@ export interface PreviewFunction {
 export const PREVIEW_FUNCTIONS: readonly PreviewFunction[] = [
   {
     key: 'valuemap',
-    name: 'Value mapping',
+    name: 'Value mapping', // untranslated: the function's name in SAP PO
     inputs: ['a'],
     output: true,
     issue: VALUE_MAPPING_ISSUE,
     parameters: [
       // no namespace parameter (http://sap.com/xi/XI): the studio has no namespace
-      { key: 'context', label: 'Value-Mapping Context', type: 'String', initial: '' },
-      { key: 'agency1', label: 'Source Agency', type: 'vmsagency', initial: 'SenderParty' },
-      { key: 'schema1', label: 'Source Schema', type: 'String', initial: '' },
-      { key: 'agency2', label: 'Target Agency', type: 'vmtagency', initial: 'ReceiverParty' },
-      { key: 'schema2', label: 'Target Schema', type: 'String', initial: '' },
-      { key: 'vmstrategy', label: 'Behaviour if lookup fails', type: 'vmstrategy', initial: '2' },
-      { key: 'vmdefault', label: 'Default Value', type: 'String', initial: '' },
+      { key: 'context', label: 'studio.vm.context', type: 'String', initial: '' },
+      { key: 'agency1', label: 'studio.vm.sourceAgency', type: 'vmsagency', initial: 'SenderParty' },
+      { key: 'schema1', label: 'studio.vm.sourceSchema', type: 'String', initial: '' },
+      { key: 'agency2', label: 'studio.vm.targetAgency', type: 'vmtagency', initial: 'ReceiverParty' },
+      { key: 'schema2', label: 'studio.vm.targetSchema', type: 'String', initial: '' },
+      { key: 'vmstrategy', label: 'studio.param.missing', type: 'vmstrategy', initial: '2' },
+      { key: 'vmdefault', label: 'studio.param.default', type: 'String', initial: '' },
     ],
   },
   {
     key: 'tableLookup',
-    name: 'JDBC Lookup',
+    name: 'JDBC Lookup', // untranslated: the function's name in SAP PO
     inputs: [],
     output: false,
     issue: LOOKUPS_ISSUE,
     parameters: [
-      { key: 'ref', label: 'Database table', type: 'String', initial: '' },
-      { key: 'ins', label: 'Input fields', type: 'field_list', initial: [] },
-      { key: 'outs', label: 'Output fields', type: 'field_list', initial: [] },
-      { key: 'split', label: 'Insert Context Change After Each Result Value', type: 'bool', initial: false },
-      { key: 'channel', label: 'Communication Channel', type: 'Channel', initial: '' },
+      { key: 'ref', label: 'studio.lookup.table', type: 'String', initial: '' },
+      { key: 'ins', label: 'studio.lookup.inputs', type: 'field_list', initial: [] },
+      { key: 'outs', label: 'studio.lookup.outputs', type: 'field_list', initial: [] },
+      { key: 'split', label: 'studio.lookup.split', type: 'bool', initial: false },
+      { key: 'channel', label: 'studio.lookup.channel', type: 'Channel', initial: '' },
     ],
   },
   {
     key: 'rfclookup',
-    name: 'RFC Lookup',
+    name: 'RFC Lookup', // untranslated: the function's name in SAP PO
     inputs: [],
     output: false,
     issue: LOOKUPS_ISSUE,
     parameters: [
-      { key: 'ref', label: 'RFC interface', type: 'String', initial: '' },
-      { key: 'channel', label: 'Communication Channel', type: 'Channel', initial: '' },
-      { key: 'useExc', label: 'Use Exception', type: 'bool', initial: false },
-      { key: 'ins', label: 'Import fields', type: 'field_list', initial: [] },
-      { key: 'outs', label: 'Export fields', type: 'field_list', initial: [] },
+      { key: 'ref', label: 'studio.lookup.rfcInterface', type: 'String', initial: '' },
+      { key: 'channel', label: 'studio.lookup.channel', type: 'Channel', initial: '' },
+      { key: 'useExc', label: 'studio.lookup.useException', type: 'bool', initial: false },
+      { key: 'ins', label: 'studio.lookup.imports', type: 'field_list', initial: [] },
+      { key: 'outs', label: 'studio.lookup.exports', type: 'field_list', initial: [] },
     ],
   },
 ];

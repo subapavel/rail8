@@ -2,6 +2,7 @@ import { Button, Flex, Input, Table, Tag } from 'antd';
 import { MountedModal } from '../../../MountedModal';
 import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useRef, useState, type FormEvent } from 'react';
+import { useText } from '../../../language';
 import { ARCHIVE_EXAMPLES, type Archive } from '../mock/function-model';
 import { Tool } from '../shared/Tool';
 
@@ -12,14 +13,15 @@ import { Tool } from '../shared/Tool';
  */
 export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'namespace'; onApply: (entry: Archive) => void; close: () => void }) {
   const namespaces = kind === 'namespace';
+  const { t } = useText();
   const rows: readonly Archive[] = namespaces
     ? [...new Set(ARCHIVE_EXAMPLES.map((r) => r.namespace))].map((name) => ({ name, namespace: name }))
     : ARCHIVE_EXAMPLES;
   const columns: [string, keyof Archive][] = namespaces
-    ? [['Namespace', 'name']]
+    ? [[t('studio.lookup.namespace'), 'name']]
     : [
-        ['Name', 'name'],
-        ['Namespace', 'namespace'],
+        [t('studio.name'), 'name'],
+        [t('studio.lookup.namespace'), 'namespace'],
       ];
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState('');
@@ -34,12 +36,12 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
     const matches = rows.filter((r) => columns.some(([, key]) => r[key].toLowerCase().includes(q)));
     if (!matches.length) {
       setHit('');
-      setNotice('No match.');
+      setNotice(t('studio.archive.noMatch'));
       return;
     }
     const next = matches[(matches.findIndex((r) => r.name === hit) + 1) % matches.length]!;
     setHit(next.name);
-    setNotice(`Match: ${next.name}`);
+    setNotice(t('studio.archive.matched', { name: next.name }));
     table.current?.querySelector(`[data-row-key="${CSS.escape(next.name)}"]`)?.scrollIntoView({ block: 'nearest' });
   }
   function refresh() {
@@ -50,22 +52,22 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
   }
   return (
     <MountedModal
-      title={namespaces ? 'Choose Namespace' : 'Choose Imported Archive'}
+      title={t(namespaces ? 'studio.archive.chooseNamespace' : 'studio.archive.choose')}
       onCancel={close}
-      cancelText="Cancel"
-      okText="Apply"
+      cancelText={t('frame.cancel')}
+      okText={t('studio.apply')}
       onOk={() => chosen && onApply(chosen)}
       okButtonProps={{ disabled: !chosen }}
     >
-      <h3>Search Result</h3>
+      <h3>{t('studio.lookup.result')}</h3>
       <form onSubmit={go}>
         <Flex align="center" gap="small">
-          <Tool label="Refresh results" icon={ReloadOutlined} onClick={refresh} />
+          <Tool label={t('studio.archive.refresh')} icon={ReloadOutlined} onClick={refresh} />
 
           <Input
             autoFocus
-            aria-label="Search catalog"
-            placeholder="Find in results"
+            aria-label={t('studio.archive.search')}
+            placeholder={t('studio.archive.find')}
             prefix={<SearchOutlined />}
             value={query}
             onChange={(event) => {
@@ -77,14 +79,14 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
           />
 
           <Button htmlType="submit" size="small" type="default" disabled={!query.trim()}>
-            Go
+            {t('studio.archive.go')}
           </Button>
         </Flex>
       </form>
 
       <div ref={table}>
         <Table<Archive>
-          aria-label="Catalog results"
+          aria-label={t('studio.archive.results')}
           rowKey="name"
           size="small"
           pagination={false}
@@ -100,7 +102,7 @@ export function ArchiveCatalog({ kind, onApply, close }: { kind: 'archive' | 'na
                   <Button type="link" aria-pressed={row.name === selected} onClick={() => setSelected(row.name)}>
                     {row[field]}
                   </Button>
-                  {hit === row.name && <Tag color="blue">Match</Tag>}
+                  {hit === row.name && <Tag color="blue">{t('studio.archive.match')}</Tag>}
                 </>
               ) : (
                 row[field]

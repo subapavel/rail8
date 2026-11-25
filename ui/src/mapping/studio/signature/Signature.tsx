@@ -17,6 +17,7 @@ import {
 import { useMutation } from '@tanstack/react-query';
 import { Fragment, useId, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { useStore } from 'zustand';
+import { msg, say, useText, type Label } from '../../../language';
 import { describeError, type ApiClient } from '../../api/client';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import { PreviewBadge } from '../mock/PreviewBadge';
@@ -40,8 +41,6 @@ import { MessageChoiceModal, type ChoiceFailure } from './MessageChoiceModal';
 
 /** The row id of a side's message in the mapping file, the first row of its table. */
 const PRIMARY = 'message';
-
-const cap = (side: Side) => (side === 'source' ? 'Source' : 'Target');
 
 /** A tool of a section's toolbar: an icon button named by its label, disabled with the tab in view mode. */
 interface ToolProps {
@@ -142,7 +141,9 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
   const mock = signatureMock(store, browserState, mappingId);
   const [clipboard, setClipboard] = useState<MessageChoice | null>(null);
   const [choosing, setChoosing] = useState<Choosing | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Label | null>(null);
+  const texts = useText();
+  const { t } = texts;
   const [log, setLog] = useState('');
   const [showLog, setShowLog] = useState(false);
   const pkg = mappingId.slice(0, Math.max(mappingId.lastIndexOf('/'), 0));
@@ -155,14 +156,14 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
     const bundle = [...choice.bundle] as [string, ...string[]];
     try {
       const loaded = await loadStructure({ bundle, root: choice.root });
-      if (loaded.kind === 'refused') return { title: 'The structure could not be loaded', diagnostics: loaded.diagnostics };
+      if (loaded.kind === 'refused') return { title: t('studio.signature.notLoaded'), diagnostics: loaded.diagnostics };
       store.getState().setStructure(side, { bundle, root: choice.root, fingerprint: loaded.fingerprint });
     } catch (error) {
       const { title, diagnostics } = describeError(error);
       return { title, diagnostics };
     }
     setChoosing(null);
-    refresh.mutate(undefined, { onError: (error) => setNotice(`The structures could not be refreshed: ${describeError(error).title}`) });
+    refresh.mutate(undefined, { onError: (error) => setNotice(msg('studio.notice.notRefreshed', { reason: describeError(error).title })) });
     return null;
   };
 
@@ -186,8 +187,8 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
             type="warning"
             showIcon
             role="status"
-            title={<h3>{notice}</h3>}
-            action={<Button size="small" onClick={() => setNotice(null)} aria-label="Dismiss signature message" type="text" icon={<CloseOutlined />} />}
+            title={<h3>{say(texts, notice)}</h3>}
+            action={<Button size="small" onClick={() => setNotice(null)} aria-label={t('studio.signature.dismiss')} type="text" icon={<CloseOutlined />} />}
           />
         </div>
       )}
@@ -227,12 +228,8 @@ export function Signature({ mappingId, api, store, browserState }: SignatureProp
       {showLog && <LogDialog log={log} onClose={() => setShowLog(false)} />}
       {choosing && (
         <MessageChoiceModal
-          title={`Choose ${choosing.side} message`}
-          description={
-            choosing.row === PRIMARY
-              ? `The ${choosing.side} structure of the mapping, loaded when you apply.`
-              : 'A further message is a preview: it is kept in this browser only, never in the mapping file.'
-          }
+          title={t('studio.signature.choose', { side: choosing.side })}
+          description={choosing.row === PRIMARY ? t('studio.signature.choose.primary', { side: choosing.side }) : t('studio.signature.choose.preview')}
           initial={chosenRow ?? undefined}
           kind={choosing.kind}
           onApply={apply}
@@ -268,7 +265,7 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
   const row = rows.find((r) => r.id === selected);
   const at = previews.findIndex((m) => m.id === selected);
   const actions = signatureActions(mock);
-  const label = cap(side);
+  const { t } = useText();
 
   // without the side's message, Insert row chooses it; with it, a preview message goes after the selected row, or last
   const insert = () => {
@@ -291,47 +288,47 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
   };
 
   return (
-    <Card role="region" aria-label={`${label} messages`}>
+    <Card role="region" aria-label={t('studio.signature.messages', { side })}>
       <SectionHeader
         icon={BlockOutlined}
         title={
           <>
-            {label} Message(s) <span aria-hidden="true">*</span>
-            <span className="studio-sr-only">required</span>
+            {t('studio.signature.messages.title', { side })} <span aria-hidden="true">*</span>
+            <span className="studio-sr-only">{t('studio.signature.required')}</span>
           </>
         }
         count={rows.filter((r) => r.choice).length}
-        countLabel={`${label} messages chosen`}
+        countLabel={t('studio.signature.messages.chosen', { side })}
       />
 
       <dl className="studio-details">
         <div>
-          <dt>Package</dt>
+          <dt>{t('frame.package')}</dt>
           <dd>{pkg || '—'}</dd>
         </div>
       </dl>
       <Tools
-        label={`${label} message actions`}
+        label={t('studio.signature.messages.actions', { side })}
         editing={editing}
         groups={[
           [
-            { label: 'Insert row', icon: PlusOutlined, onClick: insert },
-            { label: 'Delete row', icon: DeleteOutlined, disabled: !row?.preview, onClick: remove },
+            { label: t('studio.signature.insertRow'), icon: PlusOutlined, onClick: insert },
+            { label: t('studio.signature.deleteRow'), icon: DeleteOutlined, disabled: !row?.preview, onClick: remove },
           ],
           [
-            { label: 'Move up', icon: ArrowUpOutlined, disabled: at < 1, onClick: () => actions.moveMessage(side, selected, -1) },
+            { label: t('studio.moveUp'), icon: ArrowUpOutlined, disabled: at < 1, onClick: () => actions.moveMessage(side, selected, -1) },
             {
-              label: 'Move down',
+              label: t('studio.moveDown'),
               icon: ArrowDownOutlined,
               disabled: at < 0 || at === previews.length - 1,
               onClick: () => actions.moveMessage(side, selected, 1),
             },
           ],
           [
-            { label: 'Cut Object', icon: ScissorOutlined, disabled: !row?.preview || !row.choice, onClick: () => copy(true) },
-            { label: 'Copy Object', icon: CopyOutlined, disabled: !row?.choice, onClick: () => copy(false) },
+            { label: t('studio.signature.cut'), icon: ScissorOutlined, disabled: !row?.preview || !row.choice, onClick: () => copy(true) },
+            { label: t('studio.signature.copy'), icon: CopyOutlined, disabled: !row?.choice, onClick: () => copy(false) },
             {
-              label: 'Paste Object',
+              label: t('studio.signature.paste'),
               icon: SnippetsOutlined,
               disabled: !clipboard || !row?.preview,
               onClick: () => actions.patchMessage(side, selected, { choice: clipboard! }),
@@ -340,16 +337,16 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
         ]}
       />
 
-      <table className="studio-edit-grid" aria-label={`${label} signature`} role="table">
+      <table className="studio-edit-grid" aria-label={t('studio.signature.table', { side })} role="table">
         <thead>
           <tr>
-            <th scope="col" aria-label="Select row">
+            <th scope="col" aria-label={t('studio.signature.selectRow')}>
               #
             </th>
-            <th scope="col">Type</th>
-            <th scope="col">Name</th>
-            <th scope="col">Namespace / ID</th>
-            <th scope="col">Occurrence</th>
+            <th scope="col">{t('studio.signature.type')}</th>
+            <th scope="col">{t('studio.name')}</th>
+            <th scope="col">{t('studio.signature.namespace')}</th>
+            <th scope="col">{t('studio.signature.occurrence')}</th>
           </tr>
         </thead>
         <tbody>
@@ -360,7 +357,7 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
                   <Radio
                     id={`${radios}-${r.id}`}
                     name={radios}
-                    aria-label={`Select row ${i + 1}`}
+                    aria-label={t('studio.signature.selectRow.number', { row: i + 1 })}
                     checked={selected === r.id}
                     disabled={!editing}
                     onChange={() => select(r.id)}
@@ -371,9 +368,9 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
               </td>
               <td>
                 <FieldSelect
-                  label="Message type"
+                  label={t('studio.signature.messageType')}
                   value={r.choice ? rootKind(r.choice.root) : 'element'}
-                  options={ROOT_KINDS}
+                  options={ROOT_KINDS.map(([kind, id]) => [kind, t(id)] as const)}
                   disabled={!editing}
                   onChange={(kind) => choose(r.id, kind)}
                 />
@@ -383,21 +380,21 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
                   type="link"
                   icon={<SearchOutlined />}
                   iconPlacement="end"
-                  aria-label={`Choose message ${i + 1}`}
-                  title={r.choice ? r.choice.bundle.join(', ') : 'Choose message'}
+                  aria-label={t('studio.signature.chooseMessage.number', { row: i + 1 })}
+                  title={r.choice ? r.choice.bundle.join(', ') : t('studio.signature.chooseMessage')}
                   disabled={!editing}
                   onClick={() => choose(r.id)}
                 >
-                  {r.choice ? messageName(r.choice) : 'Choose…'}
+                  {r.choice ? messageName(r.choice) : t('studio.signature.chooseEllipsis')}
                 </Button>{' '}
-                {r.preview && <PreviewBadge feature="Several source or target messages" issue={SEVERAL_MESSAGES_ISSUE} />}
+                {r.preview && <PreviewBadge feature={t('studio.preview.severalMessages')} issue={SEVERAL_MESSAGES_ISSUE} />}
               </td>
               <td>
                 <Button
                   type="link"
                   icon={<SearchOutlined />}
                   iconPlacement="end"
-                  aria-label={`Choose namespace or ID ${i + 1}`}
+                  aria-label={t('studio.signature.chooseNamespace.number', { row: i + 1 })}
                   disabled={!editing}
                   onClick={() => choose(r.id)}
                 >
@@ -406,7 +403,7 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
               </td>
               <td>
                 <FieldSelect
-                  label="Occurrence"
+                  label={t('studio.signature.occurrence')}
                   value={r.occurrence}
                   options={OCCURRENCES.map((o) => [o, o] as const)}
                   disabled={!editing || !r.preview}
@@ -419,9 +416,9 @@ function Messages({ side, pkg, editing, store, mock, clipboard, setClipboard, ch
       </table>
       {!primary && (
         <p>
-          No {side} message yet.{' '}
+          {t('studio.signature.none', { side })}{' '}
           <Button type="link" disabled={!editing} onClick={() => choose(PRIMARY)}>
-            Add {side} message
+            {t('studio.signature.add', { side })}
           </Button>
         </p>
       )}
@@ -444,6 +441,7 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
   const table = useRef<HTMLTableElement>(null);
   const actions = signatureActions(mock);
   const parameter = parameters.find((p) => p.id === selected);
+  const { t } = useText();
 
   const add = (name = '') => {
     const p = newParameter(blankId, name);
@@ -464,26 +462,26 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
   const rows = editing ? [...parameters, newParameter(blankId)] : parameters;
 
   return (
-    <Card role="region" aria-label="Signature parameters">
+    <Card role="region" aria-label={t('studio.parameters.region')}>
       <SectionHeader
         icon={CodeOutlined}
         title={
           <>
-            Parameters <PreviewBadge feature="Mapping parameters" issue={PARAMETERS_ISSUE} />
+            {t('studio.parameters')} <PreviewBadge feature={t('studio.preview.parameters')} issue={PARAMETERS_ISSUE} />
           </>
         }
         count={parameters.length}
-        countLabel="Parameters"
+        countLabel={t('studio.parameters')}
       />
 
       <Tools
-        label="Parameter actions"
+        label={t('studio.parameters.actions')}
         editing={editing}
         groups={[
           [
-            { label: 'Add parameter', icon: PlusOutlined, onClick: addAndFocus },
+            { label: t('studio.parameters.add'), icon: PlusOutlined, onClick: addAndFocus },
             {
-              label: 'Delete parameter',
+              label: t('studio.parameters.delete'),
               icon: DeleteOutlined,
               disabled: !parameter,
               onClick: () => {
@@ -493,9 +491,9 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
             },
           ],
           [
-            { label: 'Where Used', icon: PartitionOutlined, disabled: !parameter?.name, onClick: () => onLog(`Parameter ${parameter!.name} is not in use`) },
+            { label: t('studio.parameters.whereUsed'), icon: PartitionOutlined, disabled: !parameter?.name, onClick: () => onLog(t('studio.parameters.unused', { name: parameter!.name })) },
             {
-              label: 'Refresh',
+              label: t('studio.parameters.refresh'),
               icon: ReloadOutlined,
               onClick: () => {
                 actions.sortParameters();
@@ -505,12 +503,12 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
           ],
         ]}
       />
-      <table className="studio-edit-grid" ref={table} aria-label="Mapping parameters" role="table">
+      <table className="studio-edit-grid" ref={table} aria-label={t('studio.preview.parameters')} role="table">
         <thead>
           <tr>
-            {['Name', 'Category', 'Type', 'Parameter', 'Description'].map((h) => (
+            {['studio.name', 'studio.parameters.category', 'studio.signature.type', 'studio.parameters.parameter', 'studio.description'].map((h) => (
               <th scope="col" key={h}>
-                {h}
+                {t(h)}
               </th>
             ))}
           </tr>
@@ -523,8 +521,8 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
               <tr key={p.id} data-param={p.id} data-selected={selected === p.id} onFocus={() => select(p.id)} onClick={() => select(p.id)}>
                 <td>
                   <Input
-                    aria-label="Parameter name"
-                    placeholder={blank ? 'New parameter…' : 'Name'}
+                    aria-label={t('studio.parameters.name')}
+                    placeholder={blank ? t('studio.parameters.new') : t('studio.name')}
                     value={p.name}
                     disabled={!editing}
                     onChange={({ target: { value: name } }) => changeName(p, name)}
@@ -536,16 +534,16 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
                   <>
                     <td>
                       <FieldSelect
-                        label="Parameter category"
+                        label={t('studio.parameters.category.label')}
                         value="simple"
-                        options={[['simple', 'Simple Type']]}
+                        options={[['simple', t('studio.parameters.simpleType')]]}
                         disabled={!editing}
                         onChange={() => undefined}
                       />
                     </td>
                     <td>
                       <FieldSelect
-                        label="Parameter type"
+                        label={t('studio.parameters.type')}
                         value={p.type}
                         options={[
                           ['string', `${prefix}string`],
@@ -557,11 +555,11 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
                     </td>
                     <td>
                       <FieldSelect
-                        label="Parameter direction"
+                        label={t('studio.parameters.direction')}
                         value={p.direction}
                         options={[
-                          ['Import', 'Import'],
-                          ['Export', 'Export'],
+                          ['Import', t('studio.parameters.import')],
+                          ['Export', t('studio.parameters.export')],
                         ]}
                         disabled={!editing}
                         onChange={(direction) => actions.patchParameter(p.id, { direction })}
@@ -569,7 +567,7 @@ function Parameters({ store, mock, editing, onLog }: { store: WorkingCopyStore; 
                     </td>
                     <td>
                       <Input
-                        aria-label="Parameter description"
+                        aria-label={t('studio.parameters.description')}
                         value={p.description}
                         disabled={!editing}
                         onChange={({ target: { value: description } }) => actions.patchParameter(p.id, { description })}

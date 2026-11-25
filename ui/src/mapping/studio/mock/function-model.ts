@@ -1,3 +1,5 @@
+import { currentLanguage, textsIn, type Texts } from '../../../language';
+
 /**
  * The model of the Functions tab, a preview feature until the engine runs user-defined functions: the user-defined
  * functions, Java areas, import instructions and archives of one mapping, kept in the browser only and never in the
@@ -7,13 +9,13 @@
  */
 
 /** The Java areas every mapping has, before its functions: shared members, then the two lifecycle methods. */
-export const AREAS = ['Attributes and Methods', 'init', 'cleanUp'] as const;
+export const AREAS = ['Attributes and Methods', 'init', 'cleanUp'] as const; // untranslated: stored names; the tab shows the first one's name in the user's language
 export type AreaName = (typeof AREAS)[number];
 /** The area of class attributes and shared methods, which has no method declaration. */
 export const ATTRIBUTES: AreaName = AREAS[0];
 
-/** What one call of a function sees: one value, one context or the whole queue. */
-export const EXECUTION_KINDS = ['Single value', 'Context', 'Queue'] as const;
+/** What one call of a function sees: one value, one context or the whole queue; the last two are also Java types. */
+export const EXECUTION_KINDS = ['Single value', 'Context', 'Queue'] as const; // untranslated: stored values; the tab shows their names in the user's language
 export type ExecutionKind = (typeof EXECUTION_KINDS)[number];
 
 /** The import instructions every source starts with: the UDF API and the allow-listed JDK packages. */
@@ -97,7 +99,7 @@ export function variable(kind: VariableKind, variables: readonly Variable[], id:
 }
 
 export function newFunction(name: string, id: string = crypto.randomUUID()): Udf {
-  return { id, name, title: name, category: 'User-Defined', description: '', execution: 'Single value', variables: [variable('Argument', [], 'in0')], body: '' };
+  return { id, name, title: name, category: 'User-Defined', description: '', execution: 'Single value', variables: [variable('Argument', [], 'in0')], body: '' }; // untranslated: a stored value
 }
 
 /** A Java area as it is now: its edited state, or empty. */
@@ -107,10 +109,10 @@ export function builtIn(state: FunctionsState, name: AreaName): JavaArea & { nam
 
 const KEYWORDS = new Set(
   (
-    'abstract assert boolean break byte case catch char class const continue default do double else enum extends final ' +
-    'finally float for goto if implements import instanceof int interface long native new package private protected ' +
-    'public return short static strictfp super switch synchronized this throw throws transient try void volatile while ' +
-    'true false null'
+    'abstract assert boolean break byte case catch char class const continue default do double else enum extends final ' + // untranslated: Java keywords
+    'finally float for goto if implements import instanceof int interface long native new package private protected ' + // untranslated: Java keywords
+    'public return short static strictfp super switch synchronized this throw throws transient try void volatile while ' + // untranslated: Java keywords
+    'true false null' // untranslated: Java keywords
   ).split(' '),
 );
 
@@ -131,20 +133,23 @@ export function metadata(mappingId: string): { className: string; packageName: s
 /** The opening line of a function's or lifecycle area's method, in the UDF API's shape. */
 export function declaration(fn: { name: string; variables: readonly Variable[]; execution?: ExecutionKind }): string {
   const lifecycle = fn.name === 'init' || fn.name === 'cleanUp';
-  const execution = lifecycle ? 'Single value' : (fn.execution ?? 'Single value');
-  const list = execution !== 'Single value';
+  const execution = lifecycle ? 'Single value' : (fn.execution ?? 'Single value'); // untranslated: a stored value
+  const list = execution !== 'Single value'; // untranslated: a stored value
   const args = fn.variables.map((v) =>
     v.kind === 'Parameter' ? `@Parameter("${v.name}") ${v.javaType} ${v.name}` : `${list ? execution : v.javaType} ${v.name}`,
   );
-  if (list) args.push('ContextOut out');
-  args.push('MappingRun run');
+  if (list) args.push('ContextOut out'); // untranslated: Java code
+  args.push('MappingRun run'); // untranslated: Java code
   return `public static ${list || lifecycle ? 'void' : 'String'} ${fn.name}(${args.join(', ')}) {`;
 }
 
-/** Why `value` cannot name a method or variable: not a Java identifier, or one of `taken`; empty when it can. */
-export function nameIssue(value: string, taken: readonly string[]): string {
-  if (!/^[a-zA-Z_$][\w$]*$/.test(value) || KEYWORDS.has(value)) return 'Enter a valid Java identifier.';
-  return taken.includes(value) ? 'This name is already in use.' : '';
+/**
+ * Why `value` cannot name a method or variable, in the language of `texts`: not a Java identifier, or one of `taken`;
+ * empty when it can.
+ */
+export function nameIssue(value: string, taken: readonly string[], { t }: Texts = textsIn(currentLanguage())): string {
+  if (!/^[a-zA-Z_$][\w$]*$/.test(value) || KEYWORDS.has(value)) return t('studio.functions.badName');
+  return taken.includes(value) ? t('studio.functions.takenName') : '';
 }
 
 /** `rows` with the row at `from` swapped with the one `delta` away; `rows` itself when either is out of range. */

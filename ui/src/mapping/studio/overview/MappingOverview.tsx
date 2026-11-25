@@ -1,6 +1,7 @@
 import { Card, Col, Form, Input, Row } from 'antd';
 import { useId, type ReactNode } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../language';
 import type { StructureRef } from '../../generated/mapping-model';
 import { messageName } from '../shared/structure-names';
 import type { WorkingCopyStore } from '../store/working-copy';
@@ -27,20 +28,21 @@ export function MappingOverview({ mappingId, store }: MappingOverviewProps) {
   const source = useStore(store, (s) => s.workingCopy.source);
   const target = useStore(store, (s) => s.workingCopy.target);
   const descriptionId = useId();
+  const { t } = useText();
   const slash = mappingId.lastIndexOf('/');
   const fields: [string, ReactNode][] = [
-    ['Name', mappingId.slice(slash + 1)],
-    ['Mapping ID', <code key="id">{mappingId}</code>],
-    ['Package', orDash(mappingId.slice(0, Math.max(slash, 0)))],
-    ['Source', nameOf(source)],
-    ['Target', nameOf(target)],
+    [t('studio.name'), mappingId.slice(slash + 1)],
+    [t('studio.overview.id'), <code key="id">{mappingId}</code>],
+    [t('frame.package'), orDash(mappingId.slice(0, Math.max(slash, 0)))],
+    [t('mapping.list.source'), nameOf(source)],
+    [t('mapping.list.target'), nameOf(target)],
   ];
 
   return (
-    <section aria-label="Overview">
+    <section aria-label={t('studio.tab.overview')}>
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={10}>
-          <Card title={<h2>Mapping details</h2>}>
+          <Card title={<h2>{t('studio.overview.details')}</h2>}>
             <dl className="studio-details">
               {fields.map(([term, value]) => (
                 <div key={term}>
@@ -54,9 +56,9 @@ export function MappingOverview({ mappingId, store }: MappingOverviewProps) {
         <Col xs={24} lg={14}>
           <Card>
             <Form layout="vertical" component="div">
-              <Form.Item label="Description" htmlFor={descriptionId}>
+              <Form.Item label={t('studio.description')} htmlFor={descriptionId}>
                 <Input.TextArea
-                  aria-label="Description"
+                  aria-label={t('studio.description')}
                   id={descriptionId}
                   readOnly={!editing}
                   rows={8}

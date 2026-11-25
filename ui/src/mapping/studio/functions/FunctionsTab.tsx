@@ -3,6 +3,7 @@ import { CodeOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icon
 import { useQuery } from '@tanstack/react-query';
 import { useId, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
+import { useText, type Texts } from '../../../language';
 import type { ApiClient } from '../../api/client';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import {
@@ -29,7 +30,18 @@ import type { WorkingCopyStore } from '../store/working-copy';
 import { exportSource, importSource } from './function-source';
 import { Dependencies, NameEditor, RowTools, Variables } from './FunctionTables';
 
-const JDK = 'JDK 25 (Default)';
+const JDK = 'JDK 25';
+const JAVA = 'Java'; // untranslated: the programming language's name
+
+/** The id of the name of each execution kind. */
+const EXECUTION_NAMES: Record<ExecutionKind, string> = {
+  'Single value': 'studio.functions.execution.single', // untranslated: a stored value, the key of its name
+  Context: 'studio.functions.execution.context',
+  Queue: 'studio.functions.execution.queue',
+};
+
+/** The name of a Java area or function as the list shows it: the shared members' area in the language of `t`. */
+const shownName = (t: Texts['t'], name: string) => (name === ATTRIBUTES ? t('studio.functions.attributes') : name);
 const MONO = { fontFamily: 'var(--ant-font-family-code, monospace)' } as const;
 
 export interface FunctionsTabProps {
@@ -62,6 +74,8 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
   const [showLog, setShowLog] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const ids = useId();
+  const texts = useText();
+  const { t } = texts;
 
   const list = state.functions;
   const index = list.findIndex((fn) => fn.id === selected);
@@ -101,7 +115,7 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
   function download() {
     const filename = `${meta.className}.java`;
     downloadFile(filename, new Blob([exportSource(mappingId, state)], { type: 'text/plain;charset=utf-8' }));
-    setLog(`Exported ${filename}`);
+    setLog(t('studio.functions.exported', { file: filename }));
     setShowLog(true);
   }
   async function readFile(event: ChangeEvent<HTMLInputElement>) {
@@ -109,10 +123,10 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
     event.target.value = '';
     const text = await chosen.text();
     try {
-      edit((s) => importSource(mappingId, s, text));
-      setLog(`Imported source text from ${chosen.name}`);
+      edit((s) => importSource(mappingId, s, text, texts));
+      setLog(t('studio.functions.imported', { file: chosen.name }));
     } catch (error) {
-      setLog(`Import failed. ${(error as Error).message}`);
+      setLog(t('studio.functions.importFailed', { reason: (error as Error).message }));
     }
     setShowLog(true);
   }
@@ -121,45 +135,45 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
   const field = (name: string) => `${ids}-${name}`;
   return (
     <Flex vertical gap="middle">
-      <Card role="region" aria-label="Function class">
+      <Card role="region" aria-label={t('studio.functions.class')}>
         <Flex align="center" gap="small" wrap>
           <dl className="studio-details">
             <div>
-              <dt>Class Name</dt>
+              <dt>{t('studio.functions.className')}</dt>
               <dd>
                 <code>{meta.className}</code>
               </dd>
             </div>
             <div>
-              <dt>Package Name</dt>
+              <dt>{t('studio.functions.packageName')}</dt>
               <dd>
-                <code>{meta.packageName || '(default package)'}</code>
+                <code>{meta.packageName || t('studio.functions.defaultPackage')}</code>
               </dd>
             </div>
           </dl>
-          <PreviewBadge feature="User-defined functions" issue={FUNCTIONS_ISSUE} />
+          <PreviewBadge feature={t('studio.preview.functions')} issue={FUNCTIONS_ISSUE} />
           <Divider vertical />
-          <Flex align="center" gap="small" wrap role="toolbar" aria-label="Java source actions">
-            <Tool label="Export Source Text" icon={DownloadOutlined} onClick={download} />
-            <Tool label="Import Source Text" icon={UploadOutlined} disabled={!ready} onClick={() => file.current!.click()} />
+          <Flex align="center" gap="small" wrap role="toolbar" aria-label={t('studio.functions.sourceActions')}>
+            <Tool label={t('studio.functions.export')} icon={DownloadOutlined} onClick={download} />
+            <Tool label={t('studio.functions.import')} icon={UploadOutlined} disabled={!ready} onClick={() => file.current!.click()} />
           </Flex>
           <Divider vertical />
           <Flex align="center" gap="small" wrap>
-            <small aria-hidden="true">JDK Compliance</small>
-            <Select virtual={false} aria-label="JDK Compliance" value={JDK} disabled={!ready} options={[{ value: JDK, label: JDK }]} />
+            <small aria-hidden="true">{t('studio.functions.jdk')}</small>
+            <Select virtual={false} aria-label={t('studio.functions.jdk')} value={JDK} disabled={!ready} options={[{ value: JDK, label: t('studio.functions.jdk.default', { jdk: JDK }) }]} />
           </Flex>
         </Flex>
-        <input type="file" disabled={!ready} hidden accept=".java,text/plain" aria-label="Java source file" ref={file} onChange={(e) => void readFile(e)} />
+        <input type="file" disabled={!ready} hidden accept=".java,text/plain" aria-label={t('studio.functions.file')} ref={file} onChange={(e) => void readFile(e)} />
       </Card>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={8}>
           <Flex vertical gap="middle">
-            <Card role="region" aria-label="Functions and Java Areas">
-              <h2>Functions and Java Areas</h2>
+            <Card role="region" aria-label={t('studio.functions.list')}>
+              <h2>{t('studio.functions.list')}</h2>
 
               <RowTools
-                label="Function actions"
+                label={t('studio.functions.actions')}
                 disabled={!ready}
                 onAdd={add}
                 canRemove={isCustom}
@@ -168,20 +182,20 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
                 onRemove={remove}
                 onMove={(delta) => edit((s) => ({ ...s, functions: [...moveRow(s.functions, index, delta)] }))}
               />
-              <Flex vertical role="list" aria-label="Functions">
+              <Flex vertical role="list" aria-label={t('studio.canvas.functions')}>
                 {AREAS.map((name) => (
                   <div key={name} role="listitem">
-                    <Entry label={name} pressed={active.name === name} onClick={() => select(name)} />
+                    <Entry label={shownName(t, name)} pressed={active.name === name} onClick={() => select(name)} />
                   </div>
                 ))}
                 {list.map((fn) => (
                   <div key={fn.id} role="listitem">
-                    <Entry label={fn.name} name={`Select function ${fn.name}`} pressed={active.id === fn.id} onClick={() => select(fn.id)} />
+                    <Entry label={fn.name} name={t('studio.functions.select', { name: fn.name })} pressed={active.id === fn.id} onClick={() => select(fn.id)} />
                     {ready && fn.id === active.id && (
-                      <Form.Item label="Method name" htmlFor={field('method')}>
+                      <Form.Item label={t('studio.functions.method')} htmlFor={field('method')}>
                         <NameEditor
                           id={field('method')}
-                          label="Method name"
+                          label={t('studio.functions.method')}
                           value={fn.name}
                           taken={[...taken, ...list.filter((f) => f.id !== fn.id).map((f) => f.name)]}
                           onCommit={(name) => change({ name })}
@@ -197,12 +211,12 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
           </Flex>
         </Col>
         <Col xs={24} lg={16}>
-          <Card role="region" aria-label="Function editor">
+          <Card role="region" aria-label={t('studio.functions.editor')}>
             <Flex align="center" justify="space-between">
               <h2>
-                <CodeOutlined aria-hidden /> {active.name}
+                <CodeOutlined aria-hidden /> {shownName(t, active.name)}
               </h2>
-              <Tag>Java</Tag>
+              <Tag>{JAVA}</Tag>
             </Flex>
 
             <Flex vertical gap="middle">
@@ -210,9 +224,9 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
                 <div>
                   <Form colon={false} layout="vertical" component="div" key={`properties-${selected}`}>
                     {custom && (
-                      <Form.Item label="Title" htmlFor={field('title')}>
+                      <Form.Item label={t('studio.functions.title')} htmlFor={field('title')}>
                         <Input
-                          aria-label="Title"
+                          aria-label={t('studio.functions.title')}
                           id={field('title')}
                           value={custom.title}
                           disabled={!ready}
@@ -220,9 +234,9 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
                         />
                       </Form.Item>
                     )}
-                    <Form.Item label="Description" htmlFor={field('description')}>
+                    <Form.Item label={t('studio.description')} htmlFor={field('description')}>
                       <Input
-                        aria-label="Description"
+                        aria-label={t('studio.description')}
                         id={field('description')}
                         value={active.description}
                         disabled={!ready}
@@ -231,18 +245,18 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
                     </Form.Item>
                     {custom && (
                       <>
-                        <Form.Item label="Execution Kind" htmlFor={field('execution')}>
+                        <Form.Item label={t('studio.functions.execution')} htmlFor={field('execution')}>
                           <Select
                             virtual={false}
-                            aria-label="Execution Kind"
+                            aria-label={t('studio.functions.execution')}
                             id={field('execution')}
                             value={custom.execution}
                             disabled={!ready}
                             onChange={(execution) => change({ execution: execution as ExecutionKind })}
-                            options={EXECUTION_KINDS.map((m) => ({ value: m, label: m }))}
+                            options={EXECUTION_KINDS.map((m) => ({ value: m, label: t(EXECUTION_NAMES[m]) }))}
                           />
                         </Form.Item>
-                        <Form.Item label="Category" htmlFor={field('category')}>
+                        <Form.Item label={t('studio.lookup.category')} htmlFor={field('category')}>
                           <Input
                             id={field('category')}
                             value={custom.category}
@@ -268,17 +282,17 @@ export function FunctionsTab({ mappingId, store, browserState, api }: FunctionsT
               )}
               <div>
                 {attributes ? (
-                  <p>Class attributes and shared methods are available to all functions in this mapping.</p>
+                  <p>{t('studio.functions.attributes.why')}</p>
                 ) : (
                   <>
-                    {lifecycle && <p>{active.name === 'init' ? 'Called before mapping.' : 'Called after mapping.'}</p>}
+                    {lifecycle && <p>{t(active.name === 'init' ? 'studio.functions.init' : 'studio.functions.cleanUp')}</p>}
                     <pre>{declaration(active)}</pre>
                   </>
                 )}
               </div>
 
               <Input.TextArea
-                aria-label={`Source code for ${active.name}`}
+                aria-label={t('studio.functions.source', { name: shownName(t, active.name) })}
                 readOnly={!ready}
                 spellCheck={false}
                 rows={16}

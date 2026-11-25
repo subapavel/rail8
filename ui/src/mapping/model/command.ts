@@ -1,3 +1,4 @@
+import { currentLanguage, textsIn, type Texts } from '../../language';
 import type { components } from '../generated/api';
 import type { AuthoringId, BoxReference, FieldPath, MappingModel, TargetFieldMapping } from '../generated/mapping-model';
 
@@ -56,38 +57,30 @@ export function refusalOf(result: { kind: 'refused' } & Refusal): Refusal {
   return refusal;
 }
 
-/** A refused field's reason and the position of the declaration that causes it, in words. */
-export const describeFieldRefusal = ({ code, file, line, column }: FieldRefusal): string =>
-  `${code}, declared at ${file}:${line}:${column}`;
+/** The id of the text of each refusal at a box, which takes the box's `id`. */
+const BOX_REFUSALS: Readonly<Record<BoxRefusal['code'], string>> = {
+  'box-cycle': 'mapping.refusal.cycle',
+  'cross-target-field-reference': 'mapping.refusal.otherField',
+  'duplicate-authoring-id': 'mapping.refusal.duplicate',
+  'unknown-box-reference': 'mapping.refusal.unknownBox',
+  'wrong-arity': 'mapping.refusal.noSlot',
+  'context-not-ancestor': 'mapping.refusal.context',
+  'unknown-parameter': 'mapping.refusal.unknownParameter',
+  'wrong-parameter-type': 'mapping.refusal.parameterType',
+  'invalid-parameter-value': 'mapping.refusal.parameterValue',
+  'not-source-field-box': 'mapping.refusal.notSource',
+};
 
-/** What the editor tells the author about a refusal. */
-export function describeRefusal(refusal: Refusal): string {
+/**
+ * What the editor tells the author about a refusal, in the language of `texts`, by default the one the UI shows; a
+ * refused field names its reason's code and the position of the declaration that causes it.
+ */
+export function describeRefusal(refusal: Refusal, { t }: Texts = textsIn(currentLanguage())): string {
   if (refusal.code === 'refused-field') {
-    return `The ${refusal.side} field ${refusal.field} is refused: ${describeFieldRefusal(refusal.refusal)}.`;
+    const { code, file, line, column } = refusal.refusal;
+    return t(`mapping.refusal.field.${refusal.side}`, { field: refusal.field, code, file, line, column });
   }
-  const { code, id } = refusal;
-  switch (code) {
-    case 'box-cycle':
-      return `The wire would close a cycle: box ${id} already feeds the box it would read.`;
-    case 'cross-target-field-reference':
-      return `Box ${id} belongs to another target field mapping.`;
-    case 'duplicate-authoring-id':
-      return `The id ${id} is already used.`;
-    case 'unknown-box-reference':
-      return `There is no box ${id}.`;
-    case 'wrong-arity':
-      return `Box ${id} has no input slot there.`;
-    case 'context-not-ancestor':
-      return `That context is not a proper ancestor of the field box ${id} reads.`;
-    case 'unknown-parameter':
-      return `Box ${id} has no such parameter to set.`;
-    case 'wrong-parameter-type':
-      return `That value has the wrong type for the parameter of box ${id}.`;
-    case 'invalid-parameter-value':
-      return `That value is not one the parameter of box ${id} takes.`;
-    case 'not-source-field-box':
-      return `Box ${id} reads no source field, so it cannot be remapped.`;
-  }
+  return t(BOX_REFUSALS[refusal.code], { id: refusal.id });
 }
 
 /**

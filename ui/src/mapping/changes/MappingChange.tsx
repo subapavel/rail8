@@ -2,6 +2,7 @@ import { ProTable } from '@ant-design/pro-components';
 import { Alert, Flex, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import type { Side } from '../../artifacts';
+import { useText } from '../../language';
 import { LineDiff } from '../../LineDiff';
 import { ReadSpinner } from '../../ReadSpinner';
 import { mappingChanges, udfSourcePaths, type MappingChanges, type MappingRow } from './mappingChanges';
@@ -20,8 +21,14 @@ async function sourcesOf(path: string, side: Side | null): Promise<Map<string, s
   return new Map(await Promise.all(paths.map(async (p) => [p, await side.read(p)] as const)));
 }
 
-const COLOR: Record<MappingRow['status'], string> = { added: 'success', removed: 'error', changed: 'warning', 'structure changed': 'warning' };
-const LABEL: Record<MappingRow['status'], string> = { added: 'Added', removed: 'Removed', changed: 'Changed', 'structure changed': 'Structure changed' };
+const COLOR: Record<MappingRow['status'], string> = { added: 'success', removed: 'error', changed: 'warning', 'structure changed': 'warning' }; // untranslated: statuses
+/** The id of the text of each status. */
+const LABEL: Record<MappingRow['status'], string> = {
+  added: 'mapping.change.status.added',
+  removed: 'mapping.change.status.removed',
+  changed: 'mapping.change.status.changed',
+  'structure changed': 'mapping.change.status.structure', // untranslated: a status
+};
 
 /**
  * The readable change of a mapping file between two versions, as a table of target field, before, after and status:
@@ -31,11 +38,13 @@ const LABEL: Record<MappingRow['status'], string> = { added: 'Added', removed: '
  */
 export function MappingChange({ path, before, after }: MappingChangeProps) {
   const [read, setRead] = useState<{ before: Side | null; after: Side | null; changes: MappingChanges } | { failed: string } | null>(null);
+  const texts = useText();
+  const { t } = texts;
 
   useEffect(() => {
     let current = true;
     Promise.all([sourcesOf(path, before), sourcesOf(path, after)])
-      .then(([b, a]) => mappingChanges(path, before?.text ?? null, after?.text ?? null, { before: b, after: a }))
+      .then(([b, a]) => mappingChanges(path, before?.text ?? null, after?.text ?? null, { before: b, after: a }, texts))
       .then(
         (changes) => current && setRead({ before, after, changes }),
         (error: unknown) => current && setRead({ failed: error instanceof Error ? error.message : String(error) }),
@@ -43,18 +52,18 @@ export function MappingChange({ path, before, after }: MappingChangeProps) {
     return () => {
       current = false;
     };
-  }, [path, before, after]);
+  }, [path, before, after, texts]);
 
-  if (read === null || ('changes' in read && (read.before !== before || read.after !== after))) return <ReadSpinner label={`Reading the UDF sources of ${path}`} />;
-  if ('failed' in read) return <Alert type="error" showIcon title="The change could not be read" description={read.failed} />;
+  if (read === null || ('changes' in read && (read.before !== before || read.after !== after))) return <ReadSpinner label={t('mapping.change.reading', { path })} />;
+  if ('failed' in read) return <Alert type="error" showIcon title={t('mapping.change.unread')} description={read.failed} />;
   const { changes } = read;
-  if (changes.status === 'same') return <Typography.Text type="secondary">No change.</Typography.Text>;
-  if (changes.status === 'formatting') return <Typography.Text>Only the formatting changed.</Typography.Text>;
+  if (changes.status === 'same') return <Typography.Text type="secondary">{t('mapping.change.same')}</Typography.Text>;
+  if (changes.status === 'formatting') return <Typography.Text>{t('mapping.change.formatting')}</Typography.Text>;
   if (changes.status === 'unreadable') {
     return (
       <Flex vertical gap="small">
         {changes.unreadable.map((u) => (
-          <Alert key={u.side} type="error" showIcon title={`The ${u.side === 'before' ? 'older' : 'newer'} version cannot be read`} description={u.message} />
+          <Alert key={u.side} type="error" showIcon title={t(`mapping.change.unreadable.${u.side}`)} description={u.message} />
         ))}
       </Flex>
     );
@@ -62,14 +71,14 @@ export function MappingChange({ path, before, after }: MappingChangeProps) {
   const rows: MappingRow[] =
     changes.moved === 0
       ? changes.rows
-      : [...changes.rows, { key: 'moved', field: `Boxes moved in ${changes.moved} target ${changes.moved === 1 ? 'field' : 'fields'}`, before: '', after: '', status: 'changed' }];
-  if (rows.length === 0) return <Typography.Text>No target field changed: the boxes are only numbered differently.</Typography.Text>;
+      : [...changes.rows, { key: 'moved', field: t('mapping.change.moved', { count: changes.moved }), before: '', after: '', status: 'changed' }];
+  if (rows.length === 0) return <Typography.Text>{t('mapping.change.renumbered')}</Typography.Text>;
   return (
     <Flex vertical gap="small">
-      {changes.status === 'added' && <Alert type="success" showIcon title="Added: every target field is new." />}
-      {changes.status === 'deleted' && <Alert type="warning" showIcon title="Deleted: every target field is removed." />}
+      {changes.status === 'added' && <Alert type="success" showIcon title={t('mapping.change.added')} />}
+      {changes.status === 'deleted' && <Alert type="warning" showIcon title={t('mapping.change.deleted')} />}
       <ProTable<MappingRow>
-        aria-label={`Changes of ${path}`}
+        aria-label={t('mapping.change.table', { path })}
         rowKey="key"
         size="small"
         dataSource={rows}
@@ -82,10 +91,10 @@ export function MappingChange({ path, before, after }: MappingChangeProps) {
           expandedRowRender: (row) => (row.diff === undefined ? null : <LineDiff before={row.diff.before} after={row.diff.after} />),
         }}
         columns={[
-          { title: 'Target field', dataIndex: 'field', render: (_, row) => <Typography.Text code={row.field.startsWith('/')}>{row.field}</Typography.Text> },
-          { title: 'Before', dataIndex: 'before', render: (_, row) => (row.before === '' ? null : <Typography.Text code>{row.before}</Typography.Text>) },
-          { title: 'After', dataIndex: 'after', render: (_, row) => (row.after === '' ? null : <Typography.Text code>{row.after}</Typography.Text>) },
-          { title: 'Status', dataIndex: 'status', width: 150, render: (_, row) => <Tag color={COLOR[row.status]}>{LABEL[row.status]}</Tag> },
+          { title: t('mapping.change.column.field'), dataIndex: 'field', render: (_, row) => <Typography.Text code={row.field.startsWith('/')}>{row.field}</Typography.Text> },
+          { title: t('mapping.change.column.before'), dataIndex: 'before', render: (_, row) => (row.before === '' ? null : <Typography.Text code>{row.before}</Typography.Text>) },
+          { title: t('mapping.change.column.after'), dataIndex: 'after', render: (_, row) => (row.after === '' ? null : <Typography.Text code>{row.after}</Typography.Text>) },
+          { title: t('mapping.change.column.status'), dataIndex: 'status', width: 150, render: (_, row) => <Tag color={COLOR[row.status]}>{t(LABEL[row.status])}</Tag> },
         ]}
       />
     </Flex>

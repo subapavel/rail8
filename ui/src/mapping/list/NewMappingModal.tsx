@@ -2,6 +2,7 @@ import { Alert, Form, Input } from 'antd';
 import { MountedModal } from '../../MountedModal';
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
+import { useText, type Texts } from '../../language';
 import { describeError, type ApiClient, type CreateMappingRequest } from '../api/client';
 
 // A workspace path segment as the service accepts it: the service checks again and refuses reserved names.
@@ -11,22 +12,20 @@ const MAX_FOLDERS = 15;
 /** A description of at most 4,000 code points. */
 const MAX_DESCRIPTION = 4000;
 
-const count = (n: number) => n.toLocaleString('en-US');
-
-function nameError(name: string): string | undefined {
-  return SEGMENT.test(name) ? undefined : 'Use letters, digits, ".", "_" and "-", up to 64, not starting with ".".';
+function nameError(name: string, { t }: Texts): string | undefined {
+  return SEGMENT.test(name) ? undefined : t('mapping.new.name.invalid');
 }
 
-function packageError(pkg: string): string | undefined {
+function packageError(pkg: string, { t }: Texts): string | undefined {
   if (pkg === '') return undefined;
   const folders = pkg.split('/');
-  if (!folders.every((folder) => SEGMENT.test(folder))) return 'Use folder names of letters, digits, ".", "_" and "-", separated by "/".';
-  return folders.length > MAX_FOLDERS ? `Use at most ${MAX_FOLDERS} folders.` : undefined;
+  if (!folders.every((folder) => SEGMENT.test(folder))) return t('mapping.new.package.invalid');
+  return folders.length > MAX_FOLDERS ? t('mapping.new.package.tooDeep', { max: MAX_FOLDERS }) : undefined;
 }
 
-function descriptionError(description: string): string | undefined {
+function descriptionError(description: string, { t }: Texts): string | undefined {
   const length = [...description].length;
-  return length > MAX_DESCRIPTION ? `Use at most ${count(MAX_DESCRIPTION)} characters; this has ${count(length)}.` : undefined;
+  return length > MAX_DESCRIPTION ? t('mapping.new.description.tooLong', { max: MAX_DESCRIPTION, length }) : undefined;
 }
 
 export interface NewMappingModalProps {
@@ -52,14 +51,16 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
   });
   const failure = create.isError ? describeError(create.error) : undefined;
   const ids = { form: useId(), name: useId(), pkg: useId(), text: useId() };
+  const texts = useText();
+  const { t } = texts;
 
   const trimmedName = name.trim();
   const trimmedPkg = pkg.trim();
   // an empty name is asked for only once Create was chosen; any other error shows while typing
   const errors = {
-    name: trimmedName === '' ? (submitted ? 'Enter a name.' : undefined) : nameError(trimmedName),
-    pkg: packageError(trimmedPkg),
-    description: descriptionError(description),
+    name: trimmedName === '' ? (submitted ? t('mapping.new.name.required') : undefined) : nameError(trimmedName, texts),
+    pkg: packageError(trimmedPkg, texts),
+    description: descriptionError(description, texts),
   };
 
   const submit = () => {
@@ -69,34 +70,34 @@ export function NewMappingModal({ api, onClose, onCreated }: NewMappingModalProp
   };
 
   const fields = [
-    { id: ids.name, label: 'Name', value: name, change: setName, error: errors.name, hint: 'The file name of the mapping in its package.' },
+    { id: ids.name, label: t('mapping.new.name'), value: name, change: setName, error: errors.name, hint: t('mapping.new.name.hint') },
     {
       id: ids.pkg,
-      label: 'Package',
+      label: t('mapping.new.package'),
       value: pkg,
       change: setPkg,
       error: errors.pkg,
-      hint: 'The workspace folder, such as orders/inbound; empty for the top folder.',
+      hint: t('mapping.new.package.hint'),
     },
     {
       id: ids.text,
-      label: 'Description',
+      label: t('mapping.new.description'),
       value: description,
       change: setDescription,
       error: errors.description,
-      hint: `Up to ${count(MAX_DESCRIPTION)} characters.`,
+      hint: t('mapping.new.description.hint', { max: MAX_DESCRIPTION }),
     },
   ];
   return (
     <MountedModal
-      title="New mapping"
+      title={t('mapping.list.new')}
       onCancel={onClose}
-      okText="Create"
-      cancelText="Cancel"
+      okText={t('mapping.new.create')}
+      cancelText={t('frame.cancel')}
       confirmLoading={create.isPending}
-      okButtonProps={{ 'aria-label': 'Create', form: ids.form, htmlType: 'submit', disabled: create.isPending }}
+      okButtonProps={{ 'aria-label': t('mapping.new.create'), form: ids.form, htmlType: 'submit', disabled: create.isPending }}
     >
-      <p>Choose its source and target messages on the Signature tab once it is created.</p>
+      <p>{t('mapping.new.intro')}</p>
       {failure && <Alert type="error" showIcon title={<h3>{failure.title}</h3>} description={failure.detail} />}
       <Form colon={false} id={ids.form} layout="vertical" onFinish={submit}>
         {fields.map(({ id, label, value, change, error, hint }) => {

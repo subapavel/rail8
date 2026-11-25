@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 're
 import { useStore } from 'zustand';
 import { describeError, type ApiClient } from '../api/client';
 import { describeRefusal, type Refusal } from '../model/command';
+import { msg, say, useText, type Label, type Message } from '../../language';
 import { AboutStudio } from './AboutStudio';
 import type { BrowserStateStore } from './browser-state/browser-state';
 import { DefinitionTab } from './definition/DefinitionTab';
@@ -32,13 +33,13 @@ import { refreshMutation } from './shared/structure-query';
 import { useTestSession } from './shared/test-session';
 import { selectUnsaved, type StudioTab, type WorkingCopyState, type WorkingCopyStore } from './store/working-copy';
 
-/** The tabs the studio shows, in their order, each with its title and icon. */
+/** The tabs the studio shows, in their order, each with the id of its title and its icon. */
 const VIEWS = [
-  ['overview', 'Overview', ProfileOutlined],
-  ['definition', 'Definition', PartitionOutlined],
-  ['test', 'Test', ExperimentOutlined],
-  ['signature', 'Signature', SwapOutlined],
-  ['functions', 'Functions', CodeOutlined],
+  ['overview', 'studio.tab.overview', ProfileOutlined],
+  ['definition', 'studio.tab.definition', PartitionOutlined],
+  ['test', 'studio.tab.test', ExperimentOutlined],
+  ['signature', 'studio.tab.signature', SwapOutlined],
+  ['functions', 'studio.tab.functions', CodeOutlined],
 ] as const satisfies readonly (readonly [StudioTab, string, typeof ProfileOutlined])[];
 
 /** The key of the tab a mapping was last left on, kept per mapping as a viewer preference. */
@@ -49,19 +50,17 @@ export function openingTab(kept: unknown): StudioTab {
   return VIEWS.find(([tab]) => tab === kept)?.[0] ?? 'overview';
 }
 
-const CHECK_PASSED = 'Structures assigned and graph connections complete.';
-
 /**
  * What a check finds in the working copy, over the real compile: a missing source or target in our words, then the
  * failure of the latest compile, or else each of its errors and warnings but the missing structures already named.
  */
-function checkIssues({ workingCopy, compileFailure, diagnostics }: WorkingCopyState): string[] {
-  const issues: string[] = [];
-  if (workingCopy.source === undefined) issues.push('Choose a source structure.');
-  if (workingCopy.target === undefined) issues.push('Choose a target structure.');
-  if (compileFailure !== null) return [...issues, `The mapping could not be compiled: ${compileFailure}`];
+function checkIssues({ workingCopy, compileFailure, diagnostics }: WorkingCopyState): Message[] {
+  const issues: Message[] = [];
+  if (workingCopy.source === undefined) issues.push(msg('studio.check.noSource'));
+  if (workingCopy.target === undefined) issues.push(msg('studio.check.noTarget'));
+  if (compileFailure !== null) return [...issues, msg('studio.check.notCompiled', { reason: compileFailure })];
   for (const { code, severity, message } of diagnostics) {
-    if (code !== 'missing-structure') issues.push(`${severity === 'error' ? 'Error' : 'Warning'}: ${message}`);
+    if (code !== 'missing-structure') issues.push(msg(severity === 'error' ? 'studio.check.error' : 'studio.check.warning', { message }));
   }
   return issues;
 }
@@ -82,12 +81,15 @@ function movedTo(key: string, index: number, count: number): number | undefined 
   }
 }
 
-/** Arrow keys, Home and End move the focus to another tab and choose it: only the active tab is in the tab order. */
-function navigateTabs(event: KeyboardEvent<HTMLElement>) {
+/**
+ * Arrow keys, Home and End move the focus to another tab of the tab list named `views` and choose it: only the active
+ * tab is in the tab order.
+ */
+function navigateTabs(event: KeyboardEvent<HTMLElement>, views: string) {
   const target = event.target as HTMLElement;
   if (target.getAttribute('role') !== 'tab') return;
   const list = target.closest('[role="tablist"]');
-  if (!list || list.getAttribute('aria-label') !== 'Editor views') return;
+  if (!list || list.getAttribute('aria-label') !== views) return;
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.stopPropagation();
     return;
@@ -133,6 +135,8 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   const panelRef = useRef<HTMLElement>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const testSession = useTestSession(store, api, mappingId, browserState);
+  const texts = useText();
+  const { t } = texts;
 
   const changeTab = useCallback(
     (next: StudioTab) => {
@@ -153,16 +157,16 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
 
   // Refresh on open. The answer is taken in mutate's callbacks, which TanStack Query calls only while the
   // studio is open: an answer that comes after it closed leaves the store alone.
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Label | null>(null);
   const { mutate: refresh } = useMutation(refreshMutation(api, mappingId, store));
   useEffect(
     () =>
       refresh(undefined, {
         onSuccess: ({ sent, answer }) => {
           const orphaned = store.getState().applyRefresh(sent, answer);
-          if (orphaned !== null) setNotice(`The structures changed. Orphaned references: ${orphaned}`);
+          if (orphaned !== null) setNotice(msg('studio.notice.orphaned', { orphaned }));
         },
-        onError: (error) => setNotice(`The structures could not be refreshed: ${describeError(error).title}`),
+        onError: (error) => setNotice(msg('studio.notice.notRefreshed', { reason: describeError(error).title })),
       }),
     [refresh, store],
   );
@@ -171,7 +175,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   useEffect(() => () => store.getState().cancelCompile(), [store]);
 
   // Check: a compile of the working copy as it is now; its answer is the result, an edit before it ends the check.
-  const [check, setCheck] = useState<string[] | null>(null);
+  const [check, setCheck] = useState<Message[] | null>(null);
   const [checking, setChecking] = useState(false);
   useEffect(
     () =>
@@ -231,7 +235,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   });
 
   useWorkingFile(`${mappingId}.mapping.json`, () => unsaved, () =>
-    void store.getState().reload().catch((error: unknown) => setNotice(`The mapping could not be read again: ${describeError(error).title}`)),
+    void store.getState().reload().catch((error: unknown) => setNotice(msg('studio.notice.notReread', { reason: describeError(error).title }))),
   );
 
   // Ctrl+S or Cmd+S saves and F7 checks, as Save and Check do, in the studio shown; a key pressed in a dialog is the
@@ -271,9 +275,9 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
   useEffect(() => {
     // Name the tab list and keep each tab's name stable while its keyboard hint is announced.
     const list = panelRef.current?.querySelector('[role="tablist"]');
-    list?.setAttribute('aria-label', 'Editor views');
-    list?.querySelectorAll('[role="tab"]').forEach((item, index) => item.setAttribute('aria-label', VIEWS[index]![1]));
-  }, []);
+    list?.setAttribute('aria-label', t('studio.views'));
+    list?.querySelectorAll('[role="tab"]').forEach((item, index) => item.setAttribute('aria-label', t(VIEWS[index]![1])));
+  }, [t]);
 
   const panel = {
     overview: <MappingOverview mappingId={mappingId} store={store} />,
@@ -305,17 +309,17 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
         <Flex align="center" gap="small">
           {editing ? (
             <>
-              <Button onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>Cancel</Button>
+              <Button onClick={() => (unsaved ? setDiscarding(true) : leaveEditing())}>{t('frame.cancel')}</Button>
               <Button icon={<CheckCircleOutlined aria-hidden />} disabled={!unsaved || checking} onClick={runCheck}>
-                {checking ? 'Checking…' : 'Check'}
+                {checking ? t('studio.checking') : t('studio.check')}
               </Button>
               <Button type="primary" icon={<SaveOutlined aria-hidden />} disabled={!unsaved || saving} onClick={() => void save()}>
-                Save
+                {t('studio.save')}
               </Button>
             </>
           ) : (
             <Button ref={editButtonRef} type="primary" icon={<EditOutlined aria-hidden />} onClick={() => store.getState().startEditing()}>
-              Edit
+              {t('studio.edit')}
             </Button>
           )}
           <AboutStudio />
@@ -323,7 +327,7 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
       </Flex>
       {check !== null && <CheckResult issues={check} onDismiss={() => setCheck(null)} />}
       {notice !== null && (
-        <Alert type="info" role="status" showIcon title={<h3>{notice}</h3>} action={<Dismiss label="Dismiss message" onClick={() => setNotice(null)} />} />
+        <Alert type="info" role="status" showIcon title={<h3>{say(texts, notice)}</h3>} action={<Dismiss label={t('studio.dismiss.message')} onClick={() => setNotice(null)} />} />
       )}
       {failure && (
         <Alert
@@ -333,10 +337,10 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
           description={
             <>
               <p>{failure.detail}</p>
-              <ul aria-label="Save diagnostics">
+              <ul aria-label={t('studio.save.diagnostics')}>
                 {failure.diagnostics.map(({ severity, code, message }, i) => (
                   <li key={i}>
-                    {severity} <code>{code}</code>: {message}
+                    {t(`studio.severity.${severity}`)} <code>{code}</code>: {message}
                   </li>
                 ))}
               </ul>
@@ -348,17 +352,17 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
         <Alert
           type="warning"
           showIcon
-          title={<h3>{describeRefusal(refusal)}</h3>}
-          action={<Dismiss label="Dismiss refusal" onClick={() => setDismissed(refusal)} />}
+          title={<h3>{describeRefusal(refusal, texts)}</h3>}
+          action={<Dismiss label={t('studio.dismiss.refusal')} onClick={() => setDismissed(refusal)} />}
         />
       )}
-      <div onKeyDownCapture={navigateTabs}>
+      <div onKeyDownCapture={(event) => navigateTabs(event, t('studio.views'))}>
         <Tabs
           activeKey={tab}
           onChange={(key) => changeTab(key as StudioTab)}
           animated={false}
           destroyOnHidden
-          items={VIEWS.map(([key, label, Icon]) => ({ key, label, icon: <Icon aria-hidden />, children: panel[key] }))}
+          items={VIEWS.map(([key, label, Icon]) => ({ key, label: t(label), icon: <Icon aria-hidden />, children: panel[key] }))}
         />
       </div>
       <DiscardDialog isOpen={discarding} name={name} onDiscard={leaveEditing} onKeepEditing={() => setDiscarding(false)} />
@@ -369,8 +373,8 @@ export function StudioFrame({ mappingId, api, store, browserState, onSaved, guar
           type="success"
           showIcon
           role="status"
-          title={<h3>Mapping {name} saved</h3>}
-          action={<Dismiss label="Dismiss save notification" onClick={() => setSaved(0)} />}
+          title={<h3>{t('studio.saved', { name })}</h3>}
+          action={<Dismiss label={t('studio.dismiss.saved')} onClick={() => setSaved(0)} />}
         />
       )}
     </section>
@@ -381,31 +385,34 @@ function Dismiss({ label, onClick }: { label: string; onClick: () => void }) {
   return <Button size="small" type="text" aria-label={label} onClick={onClick} icon={<CloseOutlined />} />;
 }
 
-function CheckResult({ issues, onDismiss }: { issues: string[]; onDismiss: () => void }) {
+function CheckResult({ issues, onDismiss }: { issues: Message[]; onDismiss: () => void }) {
+  const texts = useText();
+  const { t } = texts;
   const found = issues.length > 0;
-  const text = found ? ['Check found issues', ...issues].join('\n') : `Check passed · ${CHECK_PASSED}`;
+  const shown = issues.map((issue) => say(texts, issue));
+  const text = found ? [t('studio.check.found'), ...shown].join('\n') : t('studio.check.passed.copy');
   return (
     <Alert
       type={found ? 'warning' : 'success'}
       showIcon
       role="status"
-      aria-label={found ? 'Warning' : 'Success'}
-      title={<h3>{found ? 'Check found issues' : 'Check passed'}</h3>}
+      aria-label={found ? t('studio.check.warning.label') : t('studio.check.success.label')}
+      title={<h3>{found ? t('studio.check.found') : t('studio.check.passed')}</h3>}
       description={
         found ? (
           <ul>
-            {issues.map((issue, i) => (
+            {shown.map((issue, i) => (
               <li key={i}>{issue}</li>
             ))}
           </ul>
         ) : (
-          CHECK_PASSED
+          t('studio.check.passed.detail')
         )
       }
       action={
         <Flex>
-          <CopyTextButton label="check result" text={text} />
-          <Dismiss label="Dismiss check" onClick={onDismiss} />
+          <CopyTextButton label={t('studio.check.copy')} text={text} />
+          <Dismiss label={t('studio.dismiss.check')} onClick={onDismiss} />
         </Flex>
       }
     />
@@ -413,16 +420,17 @@ function CheckResult({ issues, onDismiss }: { issues: string[]; onDismiss: () =>
 }
 
 function ChooseMessages({ onChoose }: { onChoose: () => void }) {
+  const { t } = useText();
   return (
     <Empty
       description={
         <>
-          <h2>Choose the source and target messages</h2>
-          <p>This tab needs both messages of the mapping.</p>
+          <h2>{t('studio.chooseMessages')}</h2>
+          <p>{t('studio.chooseMessages.why')}</p>
         </>
       }
     >
-      <Button onClick={onChoose}>Choose them on the Signature tab</Button>
+      <Button onClick={onChoose}>{t('studio.chooseMessages.go')}</Button>
     </Empty>
   );
 }

@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { createStore } from 'zustand/vanilla';
+import { currentLanguage, textsIn, type Texts } from '../../../language';
 import { describeError, type ApiClient, type Diagnostic, type TestRequest, type TestResult } from '../../api/client';
 import { testSourceKey, type BrowserStateStore } from '../browser-state/browser-state';
 import type { WorkingCopyStore } from '../store/working-copy';
@@ -8,7 +9,10 @@ import { currentInstance, instanceChoice, testInput, testInstances, type TestIns
 import { testPreview } from '../mock/test-preview';
 import { formatOf } from './documents';
 
-/** A line of the processing log: its time when it opens a section, else a detail of the section above it. */
+/**
+ * A line of the processing log: its time when it opens a section, else a detail of the section above it. A line is
+ * written in the language the UI shows when it is logged.
+ */
 export interface LogLine {
   time?: string;
   message: string;
@@ -24,38 +28,46 @@ export interface LogSection {
 /** A log line's time: hours, minutes and seconds on a 24-hour clock. */
 export const stamp = (at: Date) => at.toLocaleTimeString('en-GB', { hour12: false });
 
-const diagnosticLine = ({ severity, code, message }: Diagnostic): LogLine => ({
-  message: `${severity === 'error' ? 'Error' : 'Warning'} ${code}: ${message}`,
+const diagnosticLine = ({ t }: Texts, { severity, code, message }: Diagnostic): LogLine => ({
+  message: t(severity === 'error' ? 'studio.log.error' : 'studio.log.warning', { code, message }),
   detail: true,
 });
 
-/** The log section of a compile that answered at `at`: its diagnostics, or the transport error it failed with. */
-export function compileLines(at: Date, diagnostics: readonly Diagnostic[], failure: string | null): LogLine[] {
-  const head: LogLine = { time: stamp(at), message: 'Compile of the working copy' };
-  if (failure !== null) return [head, { message: `The mapping could not be compiled: ${failure}`, detail: true }];
-  return [head, ...(diagnostics.length > 0 ? diagnostics.map(diagnosticLine) : [{ message: 'No diagnostics.', detail: true }])];
+/**
+ * The log section of a compile that answered at `at`: its diagnostics, or the transport error it failed with, in the
+ * language of `texts`.
+ */
+export function compileLines(at: Date, diagnostics: readonly Diagnostic[], failure: string | null, texts: Texts = textsIn(currentLanguage())): LogLine[] {
+  const { t } = texts;
+  const head: LogLine = { time: stamp(at), message: t('studio.log.compile') };
+  if (failure !== null) return [head, { message: t('studio.check.notCompiled', { reason: failure }), detail: true }];
+  return [head, ...(diagnostics.length > 0 ? diagnostics.map((d) => diagnosticLine(texts, d)) : [{ message: t('studio.log.noDiagnostics'), detail: true }])];
 }
 
 /** What a run ended in: the service's answer, or the title of the error the call failed with. */
 export type RunAnswer = { result: TestResult } | { failure: string };
 
-function outcome(result: TestResult): LogLine {
+function outcome({ t }: Texts, result: TestResult): LogLine {
   switch (result.kind) {
     case 'output':
-      return { message: 'Executed successfully' };
+      return { message: t('studio.log.done') };
     case 'refused':
-      return { message: 'Compile refused the working copy: nothing ran.' };
+      return { message: t('studio.log.refused') };
     case 'error': {
       const { code, message, authoringId } = result.error;
-      return { message: `Runtime error ${code}: ${message}${authoringId === undefined ? '' : ` (${authoringId})`}` };
+      return { message: authoringId === undefined ? t('studio.log.runtime', { code, message }) : t('studio.log.runtimeAt', { code, message, id: authoringId }) };
     }
   }
 }
 
-/** The log section of a run from `start` to `end`: its diagnostics and outcome. */
-export function runLines(start: Date, end: Date, answer: RunAnswer): LogLine[] {
-  const body = 'failure' in answer ? [{ message: `The test could not run: ${answer.failure}` }] : [...answer.result.diagnostics.map(diagnosticLine), outcome(answer.result)];
-  return [{ time: stamp(start), message: 'Start of test' }, ...body, { time: stamp(end), message: 'End of test' }];
+/** The log section of a run from `start` to `end`: its diagnostics and outcome, in the language of `texts`. */
+export function runLines(start: Date, end: Date, answer: RunAnswer, texts: Texts = textsIn(currentLanguage())): LogLine[] {
+  const { t } = texts;
+  const body =
+    'failure' in answer
+      ? [{ message: t('studio.log.notRun', { reason: answer.failure }) }]
+      : [...answer.result.diagnostics.map((d) => diagnosticLine(texts, d)), outcome(texts, answer.result)];
+  return [{ time: stamp(start), message: t('studio.log.start') }, ...body, { time: stamp(end), message: t('studio.log.end') }];
 }
 
 /** The processing log: the latest compile's section and the last run's, in the order they began. */

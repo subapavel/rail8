@@ -19,6 +19,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useEffect, useMemo, useRef, useState, type AriaAttributes, type CSSProperties, type DragEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../../language';
 import type { FunctionCatalogue as Catalogue } from '../../../api/client';
 import type { AuthoringId, BoxPosition, FieldPath, MappingModel } from '../../../generated/mapping-model';
 import type { CommandResult } from '../../../model/command';
@@ -172,6 +173,8 @@ export interface CanvasProps {
 
 function Drawing({ mappingId, store, session, targetField, catalogue, browserState, fieldTypes, findField, orphaned, sourceFields, remap }: CanvasProps) {
   const host = useRef<HTMLDivElement>(null);
+  const texts = useText();
+  const { t } = texts;
   const edgeDrag = useRef<string | null>(null);
   const inputDrag = useRef<ExpressionEdge | undefined>(undefined);
   const flow = useReactFlow();
@@ -200,7 +203,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
     [variable, canvasData.target, mapping?.layout],
   );
   const shown = useMemo(() => previewPositions(graph, shownPositions(modelGraph, layout), canvasData), [graph, modelGraph, layout, canvasData]);
-  const { states, floating } = useMemo(() => inspectExpression(graph), [graph]);
+  const { states, floating } = useMemo(() => inspectExpression(graph, texts), [graph, texts]);
   const edgeById = useMemo(() => new Map(graph.edges.map((e) => [e.id, e])), [graph]);
   const [moving, setMoving] = useState<Positions>({});
   const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
@@ -320,10 +323,10 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
     const n = graph.nodes.find((item) => item.id === id)!;
     const own = previewNodes.get(id);
     actions.select(id);
-    const items: ActionMenuItem[] = [{ label: 'Display Queue', run: () => openDialog('queue', id) }];
-    if (hasParameters(n)) items.push({ label: 'Properties', run: () => openDialog('parameters', id) });
+    const items: ActionMenuItem[] = [{ label: t('studio.canvas.queue'), run: () => openDialog('queue', id) }];
+    if (hasParameters(n)) items.push({ label: t('studio.canvas.properties'), run: () => openDialog('parameters', id) });
     const destinations = editing && n.output ? connectionActions(n) : [];
-    if (destinations.length) items.push({ label: 'Connect to', children: destinations });
+    if (destinations.length) items.push({ label: t('studio.canvas.connectTo'), children: destinations });
     const wired = graph.edges.some((e) => e.source === id || e.target === id);
     const disconnectAll = () => {
       if (own || variable) editPreview((d) => disconnectNode(d, targetField, id));
@@ -331,42 +334,42 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
       else actions.disconnectBox(targetField, id);
     };
     items.push(
-      { label: 'Disconnect', run: disconnectAll, disabled: !editing || !wired },
-      { label: 'Delete', run: () => remove([id]), danger: true, disabled: !editing || n.kind === 'target' },
+      { label: t('studio.canvas.disconnect'), run: disconnectAll, disabled: !editing || !wired },
+      { label: t('studio.delete'), run: () => remove([id]), danger: true, disabled: !editing || n.kind === 'target' },
     );
     // another target field of a grouped expression leaves the canvas
-    if (own?.kind === 'target') items.push({ label: 'Ungroup', run: () => remove([id]), disabled: !editing });
+    if (own?.kind === 'target') items.push({ label: t('studio.canvas.ungroup'), run: () => remove([id]), disabled: !editing });
     // a variable is found in the target tree
-    if (n.kind !== 'function') items.push({ label: 'Find Field', run: () => findField(n.kind === 'source' && !n.role ? 'source' : 'target', n.path!) });
+    if (n.kind !== 'function') items.push({ label: t('studio.canvas.findField'), run: () => findField(n.kind === 'source' && !n.role ? 'source' : 'target', n.path!) });
     // a preview node is no box to copy, nor has a context
     if (!own) {
-      if (n.kind !== 'target') items.push({ label: 'Copy', run: () => copyBranch(id) });
+      if (n.kind !== 'target') items.push({ label: t('studio.canvas.copy'), run: () => copyBranch(id) });
       if (n.kind === 'source') {
-        if (orphaned.has(id)) items.push({ label: 'Remap', run: () => openDialog('remap', id), disabled: !editing });
+        if (orphaned.has(id)) items.push({ label: t('studio.canvas.remap'), run: () => openDialog('remap', id), disabled: !editing });
         const choices = properAncestors(n.path!);
         const context = n.context ?? choices[0];
         items.push({
-          label: 'Context',
+          label: t('studio.canvas.context'),
           disabled: !editing || choices.length === 0,
           children: choices.map((c) => ({ label: stepName(c), key: c, checked: c === context, run: () => actions.setContext(targetField, id, c) })),
         });
       }
     }
-    showMenu(event, `Node actions for ${n.name}`, items, element);
+    showMenu(event, t('studio.canvas.nodeActions', { name: n.name }), items, element);
   };
   const canvasMenu = (event: ReactMouseEvent | MouseEvent | KeyboardEvent) =>
     showMenu(
       event,
-      'Canvas actions',
+      t('studio.canvas.actions'),
       [
-        { label: 'Delete Floating Objects', run: deleteFloatingObjects, danger: true, disabled: !editing || floating.length === 0 },
-        { label: 'Lay Out Mapping', run: layOut, disabled: !editing },
-        { label: 'Paste', run: paste, disabled: !editing || !canPaste || variable },
+        { label: t('studio.canvas.deleteFloating'), run: deleteFloatingObjects, danger: true, disabled: !editing || floating.length === 0 },
+        { label: t('studio.canvas.layOut'), run: layOut, disabled: !editing },
+        { label: t('studio.canvas.paste'), run: paste, disabled: !editing || !canPaste || variable },
       ],
       host.current!,
     );
   const edgeMenu = (event: ReactMouseEvent | KeyboardEvent, edge: ExpressionEdge, element: Element) =>
-    showMenu(event, 'Connection actions', [{ label: 'Disconnect', run: () => disconnect(edge), disabled: !editing }], element);
+    showMenu(event, t('studio.canvas.connectionActions'), [{ label: t('studio.canvas.disconnect'), run: () => disconnect(edge), disabled: !editing }], element);
 
   const onCanvasKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!isContextMenuKey(event)) return;
@@ -452,7 +455,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
       selected: selected.has(n.id),
       deletable: n.kind !== 'target',
       // React Flow describes a node by its keyboard help, so a deviation note ends the name
-      ariaLabel: `${nodeRole(n)} ${n.name}. ${state.description}${note ? ` ${note}` : ''}`,
+      ariaLabel: `${t('studio.node.label', { role: t(nodeRole(n)), name: n.name })} ${state.description}${note ? ` ${note}` : ''}`,
     };
   });
   const edges: Edge[] = graph.edges.map((e) => {
@@ -475,7 +478,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
 
   return (
     <section
-      aria-label="Field mapping canvas"
+      aria-label={t('studio.canvas.region')}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -487,21 +490,21 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
       }}
     >
       <SideBySide
-        label="Resize functions panel"
+        label={t('studio.canvas.resize')}
         leftId="mapping-functions"
         browserState={browserState}
         widthKey="definition.functions.width"
         initialShare={0.1}
         leftHidden={!paletteOpen}
       >
-        <aside id="mapping-functions" aria-label="Functions" style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', padding: 'var(--ant-size-xs)' }}>
-          <h3 style={{ marginBlockEnd: 'var(--ant-size-xs)' }}>Functions</h3>
+        <aside id="mapping-functions" aria-label={t('studio.canvas.functions')} style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto', padding: 'var(--ant-size-xs)' }}>
+          <h3 style={{ marginBlockEnd: 'var(--ant-size-xs)' }}>{t('studio.canvas.functions')}</h3>
           {paletteOpen && <FunctionCatalogue catalogue={catalogue} disabled={!editing} add={(fn) => addFunction(fn)} addPreview={addPreview} />}
         </aside>
         <div style={{ display: 'flex', flex: '1 1 0', minHeight: 0 }}>
           <div
             role="toolbar"
-            aria-label="Mapping tools"
+            aria-label={t('studio.canvas.tools')}
             aria-orientation="vertical"
             style={{
               display: 'flex',
@@ -513,40 +516,40 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
             }}
           >
             <RailTool
-              label={paletteOpen ? 'Hide functions' : 'Show functions'}
+              label={t(paletteOpen ? 'studio.canvas.hideFunctions' : 'studio.canvas.showFunctions')}
               aria-controls="mapping-functions"
               aria-expanded={paletteOpen}
               icon={<AppstoreOutlined aria-hidden />}
               onClick={() => setPaletteOpen(!paletteOpen)}
             />
-            <RailTool label="Add node" icon={<BlockOutlined aria-hidden />} disabled={!editing} onClick={() => actions.openCanvasDialog({ kind: 'add' })} />
+            <RailTool label={t('studio.canvas.add')} icon={<BlockOutlined aria-hidden />} disabled={!editing} onClick={() => actions.openCanvasDialog({ kind: 'add' })} />
             <RailTool
-              label="Display Queue"
-              title="Display Queue: the queue of the selected node in the last test run"
+              label={t('studio.canvas.queue')}
+              title={t('studio.canvas.queue.why')}
               icon={<UnorderedListOutlined aria-hidden />}
               disabled={!selectedNode}
               onClick={() => openDialog('queue', selectedNode!.id)}
             />
             <RailTool
-              label="Delete Floating Objects"
-              title="Delete Floating Objects: remove all objects with no path to the target"
+              label={t('studio.canvas.deleteFloating')}
+              title={t('studio.canvas.deleteFloating.why')}
               icon={<DeleteOutlined aria-hidden />}
               disabled={!editing || floating.length === 0}
               onClick={deleteFloatingObjects}
             />
-            <RailTool label="Layout mapping" title="Lay Out Mapping" icon={<ApartmentOutlined aria-hidden />} disabled={!editing} onClick={layOut} />
+            <RailTool label={t('studio.canvas.layout')} title={t('studio.canvas.layOut')} icon={<ApartmentOutlined aria-hidden />} disabled={!editing} onClick={layOut} />
             <RailTool
-              label="Copy"
+              label={t('studio.canvas.copy')}
               icon={<CopyOutlined aria-hidden />}
               disabled={!selectedNode || selectedNode.kind === 'target' || isPreviewId(selectedNode.id)}
               onClick={() => copyBranch(selectedNode!.id)}
             />
-            <RailTool label="Paste" icon={<SnippetsOutlined aria-hidden />} disabled={!editing || !canPaste || variable} onClick={paste} />
+            <RailTool label={t('studio.canvas.paste')} icon={<SnippetsOutlined aria-hidden />} disabled={!editing || !canPaste || variable} onClick={paste} />
           </div>
           <div
             ref={host}
             role="group"
-            aria-label="Mapping canvas"
+            aria-label={t('studio.canvas')}
             tabIndex={0}
             style={{ position: 'relative', flex: '1 1 0', minWidth: 0 }}
             onKeyDown={onCanvasKey}
@@ -614,13 +617,13 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
         }}
       >
         <small>
-          {nodes.length} nodes · {edges.length} connections
+          {t('studio.canvas.count', { nodes: nodes.length, edges: edges.length })}
         </small>
-        <Flex component="ul" aria-label="Mapping status key" gap="middle" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        <Flex component="ul" aria-label={t('studio.canvas.key')} gap="middle" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {Object.values(STATE_MARKS).map(({ icon: Mark, color, label }) => (
             <li key={label}>
               <small>
-                <Mark aria-hidden style={{ color }} /> {label}
+                <Mark aria-hidden style={{ color }} /> {t(label)}
               </small>
             </li>
           ))}
@@ -653,7 +656,7 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
         />
       )}
       {dialog?.kind === 'add' && (
-        <MountedModal title="Add node" onCancel={closeDialog} footer={null}>
+        <MountedModal title={t('studio.canvas.add')} onCancel={closeDialog} footer={null}>
           <Flex vertical gap="small">
             <div>
               <FunctionCatalogue
@@ -668,16 +671,11 @@ function Drawing({ mappingId, store, session, targetField, catalogue, browserSta
                 }}
               />
             </div>
-            <section aria-label="Variables">
+            <section aria-label={t('studio.preview.variables')}>
               <h3>
-                Variables <PreviewBadge feature="Variables" issue={VARIABLES_ISSUE} />
+                {t('studio.preview.variables')} <PreviewBadge feature={t('studio.preview.variables')} issue={VARIABLES_ISSUE} />
               </h3>
-              {scope.length === 0 ? (
-                <p>
-                  No variables are available for this target. Choose Add Variable on a parent in the target tree, or open a target that follows an existing variable in
-                  the same branch.
-                </p>
-              ) : (
+              {scope.length === 0 ? <p>{t('studio.canvas.noVariables')}</p> : (
                 <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
                   {scope.map((v) => (
                     <li key={v}>

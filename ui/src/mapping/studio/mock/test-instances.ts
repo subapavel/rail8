@@ -1,5 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import { currentLanguage, textsIn, type Texts } from '../../../language';
 import type { BrowserStateStore } from '../browser-state/browser-state';
 import type { WorkingCopyStore } from '../store/working-copy';
 import { perWorkingCopy, previewDraft, type PreviewDraftStore } from './preview-draft';
@@ -63,9 +64,19 @@ export function currentInstance(list: readonly TestInstance[], format: InstanceF
 
 const nextUse = (list: readonly TestInstance[]) => list.reduce((order, i) => Math.max(order, i.lastUsed), 0) + 1;
 
-/** The library with a new instance `name` of `resource` as the current one; throws for a name the format has already. */
-export function createInstance(list: readonly TestInstance[], format: InstanceFormat, name: string, resource: InstanceResource, id: string): TestInstance[] {
-  if (instancesOf(list, format).some((i) => i.name === name)) throw new Error('This name already exists.');
+/**
+ * The library with a new instance `name` of `resource` as the current one; throws for a name the format has already,
+ * with an error in the language of `texts`.
+ */
+export function createInstance(
+  list: readonly TestInstance[],
+  format: InstanceFormat,
+  name: string,
+  resource: InstanceResource,
+  id: string,
+  { t }: Texts = textsIn(currentLanguage()),
+): TestInstance[] {
+  if (instancesOf(list, format).some((i) => i.name === name)) throw new Error(t('studio.instances.taken'));
   return [...list, { id, name, format, text: resource.text, values: resource.values, lastUsed: nextUse(list) }];
 }
 
@@ -167,6 +178,6 @@ export async function readInstance(file: Blob, format: InstanceFormat): Promise<
   if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) return new TextDecoder().decode(bytes);
   const name = entryName(format);
   const archive = unzipSync(bytes, { filter: (entry) => entry.name === name && entry.originalSize < LARGEST });
-  if (!archive[name]) throw new Error(`The archive needs a ${name} file under 16 MB.`);
+  if (!archive[name]) throw new Error(`The archive needs a ${name} file under 16 MB.`); // untranslated: never shown, the tools say the file could not be read
   return strFromU8(archive[name]).replace(BYTE_ORDER_MARK, '');
 }

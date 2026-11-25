@@ -1,3 +1,4 @@
+import { currentLanguage, textsIn, type Texts } from '../../../../language';
 import type { FunctionCatalogue } from '../../../api/client';
 import type { AuthoringId, Box, FieldPath, Params, TargetFieldMapping, Udfs } from '../../../generated/mapping-model';
 import { stepName } from '../../../model/field-path';
@@ -117,7 +118,7 @@ export interface NodeState {
  * unconnected input is incomplete, and so is one that reads an incomplete node; the others it reaches are complete. A box
  * it does not reach is detached and floating. A cycle of a hand-written model reads as incomplete.
  */
-export function inspectExpression({ nodes, edges }: ExpressionGraph): { states: Map<string, NodeState>; floating: AuthoringId[] } {
+export function inspectExpression({ nodes, edges }: ExpressionGraph, { t }: Texts = textsIn(currentLanguage())): { states: Map<string, NodeState>; floating: AuthoringId[] } {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const inputs = new Map(nodes.map((n) => [n.id, new Map<string, string>()]));
   const wired = new Set<string>();
@@ -136,14 +137,14 @@ export function inspectExpression({ nodes, edges }: ExpressionGraph): { states: 
     const wires = inputs.get(id)!;
     const missing = node.inputs.filter((p) => !wires.has(p.id));
     const upstream = [...wires.values()].filter((source) => visit(source).kind !== 'complete');
-    const reason = missing.length
-      ? `Connect ${missing.map((p) => p.label).join(', ')}.`
+    const description = missing.length
+      ? t('studio.state.connect', { inputs: missing.map((p) => p.label).join(', ') })
       : upstream.length
-        ? `Complete the input from ${byId.get(upstream[0]!)!.name}.`
+        ? t('studio.state.completeFrom', { name: byId.get(upstream[0]!)!.name })
         : '';
     const state: NodeState = {
-      kind: reason ? 'incomplete' : 'complete',
-      description: reason ? `Incomplete: ${reason}` : 'Complete: all inputs on this path are connected.',
+      kind: description ? 'incomplete' : 'complete',
+      description: description || t('studio.state.complete.why'),
       missing: missing.map((p) => p.id),
     };
     visiting.delete(id);
@@ -157,7 +158,7 @@ export function inspectExpression({ nodes, edges }: ExpressionGraph): { states: 
     if (states.has(n.id)) continue;
     states.set(n.id, {
       kind: 'detached',
-      description: wired.has(n.id) ? 'Detached: this branch has no path to the target.' : 'Detached: this object has no connections.',
+      description: t(wired.has(n.id) ? 'studio.state.detached.branch' : 'studio.state.detached.object'),
       missing: [],
     });
     floating.push(n.id);

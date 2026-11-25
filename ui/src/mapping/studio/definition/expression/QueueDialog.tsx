@@ -3,6 +3,7 @@ import { MountedModal } from '../../../../MountedModal';
 import { ImportOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useStore } from 'zustand';
+import { useText } from '../../../../language';
 import type { TraceEntry } from '../../../api/client';
 import type { BrowserStateStore } from '../../browser-state/browser-state';
 import { currentInstance, type TestInstancesStore } from '../../mock/test-instances';
@@ -17,7 +18,8 @@ import { queueColumns, type QueueCell } from './queue-columns';
 const MAX_ROWS = 500;
 const NUMBERS_KEY = 'definition.queue.numbers';
 const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
-const STATUS = { created: 'created', suppressed: 'suppressed (SUPPRESS)', truncated: 'truncated (maxOccurs)' } as const;
+/** The id of the line of a slot by its status. */
+const STATUS = { created: 'studio.queue.slot.created', suppressed: 'studio.queue.slot.suppressed', truncated: 'studio.queue.slot.truncated' } as const;
 
 export interface QueueDialogProps {
   graph: ExpressionGraph;
@@ -57,6 +59,7 @@ function NoTrace({ test: { session, format, level, editing } }: { test: QueueTes
   const empty = useStore(session, (s) => s.source === '');
   const running = useStore(session, (s) => s.running);
   const file = useRef<HTMLInputElement>(null);
+  const { t } = useText();
 
   const load = async (event: ChangeEvent<HTMLInputElement>) => {
     // the input is cleared after each read, so a change always brings a file
@@ -67,26 +70,26 @@ function NoTrace({ test: { session, format, level, editing } }: { test: QueueTes
       text = await chosen.text();
       parseDocument(text, format);
     } catch (error) {
-      session.getState().failRun(level, `${chosen.name} is not a valid ${format} test input: ${(error as Error).message}`);
+      session.getState().failRun(level, t('studio.queue.badFile', { name: chosen.name, format, reason: (error as Error).message }));
       return;
     }
     session.getState().setSource(text);
     await session.getState().runTest(level);
   };
 
-  if (running) return <p role="status">Running the simulation…</p>;
+  if (running) return <p role="status">{t('studio.queue.running')}</p>;
   if (!empty) return null;
-  if (!editing) return <p>No test data yet. A test document can be loaded in edit mode.</p>;
+  if (!editing) return <p>{t('studio.queue.noData.view')}</p>;
   return (
     <Flex vertical gap="small">
       <div>
-        <p>No test data yet. Load a test file: the simulation runs on it and the queue shows here.</p>
+        <p>{t('studio.queue.noData.edit')}</p>
       </div>
       <div>
         <Button type="default" icon={<ImportOutlined aria-hidden />} onClick={() => file.current?.click()}>
-          Load test file
+          {t('studio.queue.load')}
         </Button>
-        <input ref={file} type="file" hidden aria-label="Test file" accept={`.${format.toLowerCase()}`} onChange={(e) => void load(e)} />
+        <input ref={file} type="file" hidden aria-label={t('studio.queue.file')} accept={`.${format.toLowerCase()}`} onChange={(e) => void load(e)} />
       </div>
     </Flex>
   );
@@ -96,14 +99,15 @@ function NoTrace({ test: { session, format, level, editing } }: { test: QueueTes
 function RunFailure({ session }: { session: TestSession }) {
   // a failed run always has its log section; a run under way is not failed yet
   const failure = useStore(session, (s) => (s.runFailed && !s.running ? s.runLog : null));
+  const { t } = useText();
   if (failure === null) return null;
   return (
     <Alert
       type="error"
       showIcon
-      title={<h3>The simulation failed</h3>}
+      title={<h3>{t('studio.queue.failed')}</h3>}
       description={
-        <ul aria-label="Run diagnostics">
+        <ul aria-label={t('studio.queue.diagnostics')}>
           {failure.lines
             .filter((line) => line.time === undefined)
             .map((line, i) => (
@@ -138,13 +142,14 @@ function Value({ value }: { value: ShownValue }) {
     case 'empty':
       return <code>""</code>;
     case 'suppress':
-      return <Tag>SUPPRESS</Tag>;
+      return <Tag>SUPPRESS</Tag>; // untranslated: SAP PO's keyword for a suppressed value
   }
 }
 
 function Cell({ cell }: { cell: QueueCell }) {
+  const { t } = useText();
   if (cell.kind === 'value') return <Value value={cell.value} />;
-  return <small>{cell.kind === 'end' ? 'End' : 'Boundary'}</small>;
+  return <small>{t(cell.kind === 'end' ? 'studio.queue.end' : 'studio.queue.boundary')}</small>;
 }
 
 /**
@@ -156,19 +161,21 @@ function Cell({ cell }: { cell: QueueCell }) {
  */
 export function QueueDialog({ graph, node, trace, stale, mappingId, browserState, test, onClose }: QueueDialogProps) {
   useRunWithoutTrace(trace !== undefined, test);
+  const texts = useText();
+  const { t } = texts;
   const [numbers, setNumbers] = useState(() => readPanelPreference(browserState, NUMBERS_KEY, false, isBoolean));
-  const { name, columns } = queueColumns(graph, node, trace ?? {});
+  const { name, columns } = queueColumns(graph, node, trace ?? {}, texts);
   const count = Math.max(0, ...columns.map((c) => c.cells?.length ?? 0));
   const occurrences = node.id === TARGET && mappingId !== undefined ? trace?.[mappingId] : undefined;
-  const shownOccurrences = occurrences === undefined ? undefined : displayEntry(occurrences);
+  const shownOccurrences = occurrences === undefined ? undefined : displayEntry(occurrences, texts);
   const changeNumbers = (checked: boolean) => {
     setNumbers(checked);
     savePanelPreference(browserState, NUMBERS_KEY, checked);
   };
 
   return (
-    <MountedModal title="Display Queue" onCancel={onClose} width={760} footer={null}>
-      <p>{trace === undefined ? 'No test run yet' : 'Traced queue · last test run'}</p>
+    <MountedModal title={t('studio.canvas.queue')} onCancel={onClose} width={760} footer={null}>
+      <p>{t(trace === undefined ? 'studio.queue.noRun' : 'studio.queue.traced')}</p>
       <Flex vertical gap="small">
         <div>
           <Flex justify="space-between" align="center">
@@ -177,7 +184,7 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
             </div>
             <div>
               <Flex align="center" gap="small">
-                <label htmlFor="queue-row-numbers">Row numbers</label>
+                <label htmlFor="queue-row-numbers">{t('studio.queue.numbers')}</label>
                 <Switch id="queue-row-numbers" checked={numbers} onChange={changeNumbers} />
               </Flex>
             </div>
@@ -195,14 +202,14 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
             {stale && (
               <div>
                 <p>
-                  <Tag color="warning">stale</Tag> The working copy changed since this run.
+                  <Tag color="warning">{t('studio.queue.stale')}</Tag> {t('studio.queue.stale.why')}
                 </p>
               </div>
             )}
             <div style={{ maxHeight: '24rem', overflow: 'auto' }}>
               <Table<number>
                 size="small"
-                aria-label={`${name} queue`}
+                aria-label={t('studio.queue.table', { name })}
                 pagination={false}
                 rowKey={(index) => String(index)}
                 className="queue-table"
@@ -217,7 +224,7 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
                     }),
                     render: (_: unknown, index: number) => {
                       const cell = col.cells?.[index];
-                      return cell ? <Cell cell={cell} /> : col.cells === undefined && index === 0 ? <em>Not evaluated in the last test run</em> : null;
+                      return cell ? <Cell cell={cell} /> : col.cells === undefined && index === 0 ? <em>{t('studio.queue.notEvaluated')}</em> : null;
                     },
                   })),
                 ]}
@@ -229,40 +236,37 @@ export function QueueDialog({ graph, node, trace, stale, mappingId, browserState
                 <div key={c.label}>
                   <small>
                     {c.label} · {c.size}
-                    {c.capped && ` · capped: ${c.capped}`}
+                    {c.capped && ` · ${t('studio.queue.capped', { what: c.capped })}`}
                   </small>
                 </div>
               ))}
             {count > MAX_ROWS && (
               <div>
-                <small>
-                  Showing the first {MAX_ROWS} of {count} rows.
-                </small>
+                <small>{t('studio.queue.rows', { max: MAX_ROWS, count })}</small>
               </div>
             )}
             {shownOccurrences?.kind === 'occurrences' && (
-              <section aria-label="Occurrences">
+              <section aria-label={t('studio.pane.occurrences')}>
                 <h4>
-                  Occurrences of {name}, {shownOccurrences.min}..{shownOccurrences.max ?? 'unbounded'}
+                  {shownOccurrences.max === undefined
+                    ? t('studio.queue.occurrences.unbounded', { name, min: shownOccurrences.min })
+                    : t('studio.queue.occurrences', { name, min: shownOccurrences.min, max: shownOccurrences.max })}
                 </h4>
-                {shownOccurrences.capped && <small>capped: {shownOccurrences.capped}</small>}
-                <ol aria-label="Parent slots">
+                {shownOccurrences.capped && <small>{t('studio.queue.capped', { what: shownOccurrences.capped })}</small>}
+                <ol aria-label={t('studio.queue.parents')}>
                   {shownOccurrences.rows.map((row) =>
                     row.kind === 'left-out' ? (
                       <li key={`${row.from}-${row.to}`}>
-                        <em>
-                          parent slots {row.from}–{row.to} not in the trace
-                        </em>
+                        <em>{t('studio.queue.leftOut', { from: row.from, to: row.to })}</em>
                       </li>
                     ) : (
                       <li key={row.parentSlot}>
-                        parent slot {row.parentSlot}: {row.created} created
-                        {row.minOccurs && ` · po:MINOCCURS, fewer than ${shownOccurrences.min}`}
+                        {row.minOccurs
+                          ? t('studio.queue.parent.min', { slot: row.parentSlot, created: row.created, min: shownOccurrences.min })
+                          : t('studio.queue.parent', { slot: row.parentSlot, created: row.created })}
                         <ul>
                           {row.slots.map(({ slot, status }) => (
-                            <li key={slot}>
-                              slot {slot} {STATUS[status]}
-                            </li>
+                            <li key={slot}>{t(STATUS[status], { slot })}</li>
                           ))}
                         </ul>
                       </li>

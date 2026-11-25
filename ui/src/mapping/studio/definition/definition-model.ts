@@ -7,11 +7,11 @@ export type Side = 'source' | 'target';
 
 /** The filters of the Filter Tree options, in menu order; the source pane offers the first two. */
 export const FILTERS = [
-  'Show Mapped Fields Only',
-  'Show Unmapped Fields Only',
-  'Show Fields Mapped Directly Only',
-  'Show Fields Mapped Indirectly Only',
-  'Show Selected Fields',
+  'studio.filter.mapped',
+  'studio.filter.unmapped',
+  'studio.filter.direct',
+  'studio.filter.indirect',
+  'studio.filter.selected',
 ] as const;
 
 /**

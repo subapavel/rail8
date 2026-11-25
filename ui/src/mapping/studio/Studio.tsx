@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useText } from '../../language';
 import { ReadSpinner } from '../../ReadSpinner';
 import type { UnsavedChanges } from '../../screens';
 import { isBusy, type ApiClient, type StoredMapping } from '../api/client';
@@ -66,6 +67,7 @@ export function Studio(props: StudioProps) {
 
 function Loader(props: StudioProps) {
   const { mappingId, api } = props;
+  const { t } = useText();
   const mapping = useQuery({
     queryKey: ['mapping', mappingId],
     queryFn: async ({ signal }) => {
@@ -78,7 +80,7 @@ function Loader(props: StudioProps) {
     <section>
       {mapping.isPending ? (
         <div role="status">
-          <ReadSpinner size="small" /> Opening {mappingId}…
+          <ReadSpinner size="small" /> {t('studio.opening', { mappingId })}
         </div>
       ) : (
         <RefusedMapping error={mapping.error} retrying={mapping.isFetching} onRetry={() => void mapping.refetch()} />

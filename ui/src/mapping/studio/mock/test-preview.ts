@@ -6,16 +6,16 @@ import { perWorkingCopy } from './preview-draft';
 /** The follow-up issue of the trace level in test runs, a preview feature. */
 export const TRACE_LEVEL_ISSUE = 171;
 
-/** The trace levels offered; the engine's trace has no levels. */
-export const TRACE_LEVELS = ['No trace', 'Warning', 'Info', 'Debug', 'All'] as const;
+/** The trace levels offered; the engine's trace has no levels. The Test tab shows their names in the user's language. */
+export const TRACE_LEVELS = ['No trace', 'Warning', 'Info', 'Debug', 'All'] as const; // untranslated: stored values
 export type TraceLevel = (typeof TRACE_LEVELS)[number];
 
 /** The message header parameters of a test run, with their default values. */
 export const HEADER_DEFAULTS: Readonly<Record<string, string>> = Object.fromEntries(
   (
-    'ConversationId Interface InterfaceNamespace MessageId ProcessingMode Profiling ReceiverName ReceiverNamespace ReceiverParty ' +
-    'ReceiverPartyAgency ReceiverPartyScheme ReceiverService ReceiverSystem RefToMessageId SenderName SenderNamespace SenderParty ' +
-    'SenderPartyAgency SenderPartyScheme SenderService SenderSystem TimeSent VersionMajor VersionMinor'
+    'ConversationId Interface InterfaceNamespace MessageId ProcessingMode Profiling ReceiverName ReceiverNamespace ReceiverParty ' + // untranslated: header names
+    'ReceiverPartyAgency ReceiverPartyScheme ReceiverService ReceiverSystem RefToMessageId SenderName SenderNamespace SenderParty ' + // untranslated: header names
+    'SenderPartyAgency SenderPartyScheme SenderService SenderSystem TimeSent VersionMajor VersionMinor' // untranslated: header names
   )
     .split(' ')
     .map((key) => [key, key === 'Profiling' ? 'off' : /^(Sender|Receiver)(Party|Service|System)$/.test(key) ? `Test_${key}` : '']),

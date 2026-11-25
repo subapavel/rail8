@@ -1,5 +1,6 @@
 import { Button, Flex } from 'antd';
 import { WarningOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useText } from '../../../language';
 import type { FieldPath } from '../../generated/mapping-model';
 import { localPath } from '../../model/field-path';
 
@@ -21,32 +22,33 @@ export interface OrphanedMappingsProps {
  * only.
  */
 export function OrphanedMappings({ paths, selected, editing, onOpen, onDelete }: OrphanedMappingsProps) {
+  const { t } = useText();
   return (
-    <section aria-label="Orphaned target field mappings">
+    <section aria-label={t('studio.orphaned')}>
       <h3>
-        <WarningOutlined aria-hidden style={{ color: 'var(--ant-color-warning)' }} /> Orphaned target field mappings ({paths.length})
+        <WarningOutlined aria-hidden style={{ color: 'var(--ant-color-warning)' }} /> {t('studio.orphaned.count', { count: paths.length })}
       </h3>
-      <p>The target structure has no such fields. Open one to see its expression, or delete it in edit mode.</p>
-      <ul aria-label="Orphaned target field mappings list">
+      <p>{t('studio.orphaned.why')}</p>
+      <ul aria-label={t('studio.orphaned.list')}>
         {paths.map((path) => {
           const shown = `/${localPath(path)}`;
           return (
             <li key={path} aria-label={shown}>
               <Flex align="center" gap="small">
                 <code title={path}>{shown}</code>
-                <Button type="link" size="small" aria-label={`Open ${shown}`} aria-pressed={selected === path} onClick={() => onOpen(path)}>
-                  Open
+                <Button type="link" size="small" aria-label={t('studio.orphaned.open', { path: shown })} aria-pressed={selected === path} onClick={() => onOpen(path)}>
+                  {t('studio.open')}
                 </Button>
                 <Button
                   type="link"
                   danger
                   size="small"
                   icon={<DeleteOutlined aria-hidden />}
-                  aria-label={`Delete ${shown}`}
+                  aria-label={t('studio.orphaned.delete', { path: shown })}
                   disabled={!editing}
                   onClick={() => onDelete(path)}
                 >
-                  Delete
+                  {t('studio.delete')}
                 </Button>
               </Flex>
             </li>
