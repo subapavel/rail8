@@ -218,6 +218,8 @@ stop_stack() {
 check_stack() {
   need_java
   need_docker
+  # the node reads this checkout as its package repository rail8, and refuses a shallow one
+  [ "$(git rev-parse --is-shallow-repository)" = false ] || cannot "this checkout is shallow: git fetch --unshallow origin"
   build_node
   cd deploy/compose
   docker compose --profile history --profile kafka down -v --remove-orphans > /dev/null 2>&1 || true
