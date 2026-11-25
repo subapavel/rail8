@@ -285,10 +285,11 @@ A whole address taken from the message goes only through a connection that allow
   dead-letter queue goes through.
 - The node limits the sends in flight through such a field by the connection's key, whatever host each one names.
 - The deploy refuses a step that uses an address field through a connection whose `allowedHosts` is empty in the
-  environment, and records the use as one with an address, so that the configuration of an environment refuses to empty
-  the list while it is used.
-- `allowedHosts` is an address under the secret store's rule: a connection that carries a secret and lists allowed hosts
-  takes effect only with the secret administrator's consent.
+  environment, and records the use as one with an address, so that emptying the list while it is used asks the
+  configuration's one confirmation; its sends then fail and are retried, as any failed send.
+- Each entry of `allowedHosts` is a server of its own under the configuration's rule of consent: a connection that
+  carries a secret takes an entry that adds a new pair of a secret and a server only with the secret administrator's
+  consent.
 - `http` gains `absoluteUrl` as such a field, which a step uses instead of `path`.
 
 ## The adapter's contract
@@ -490,9 +491,10 @@ never from what this node installed, so a package that failed to install here st
 1. **Systems**: each file against its schema; the key rules above; every adapter known to the node and declaring a
    connection for some direction; a drop or a change of a used system or connection, as above.
 2. **Flows**: the sender and every send step: the adapter known and serving that direction; the connection named
-   exactly when the adapter connects in that direction; every key in `connection` and `connections` defined by this deploy or a deployed package, with the
-   step's adapter; the settings checked against the flow form for the direction; templates compiled, only in the fields
-   that take them; no two senders on one connection and polled place; internal addresses and cycles as today.
+   exactly when the adapter connects in that direction; every key in `connection` and `connections` defined by this
+   deploy or a deployed package, with the step's adapter; the settings checked against the flow form for the direction;
+   templates compiled, only in the fields that take them; no two senders on one connection and polled place; internal
+   addresses and cycles as today.
 3. **The environment**, in the state the configuration holds when the deploy runs: every connection a flow can reach is
    set for its adapter (values that pass its connection form for every direction it is used in, with every secret they
    name set and of a kind its field takes), or mocked where mocks are allowed; every system with a used connection has
@@ -718,9 +720,10 @@ The node reads both shapes while the steps land, and the last step removes the o
 - `rail8 migrate` moves a package of one's own: it writes, beside the old files, a system file for each endpoint a flow
   sends through or polls, flows and tests of `schemaVersion: 2`, and, outside the package, a folder of the
   configuration's import files for each environment the endpoints' overrides name: a connection's file with the split
-  the node already makes of an endpoint's `config`; the instance names are entered in each environment. A system is named after
-  its endpoint's id unless a map given to the command names its key. Secrets stay `secret://` references. It deletes
-  nothing; its author reviews the result and commits it.
+  the node already makes of an endpoint's `config`; the instance names are entered in each environment. That folder is
+  imported and activated in an environment before the migrated package is deployed there, since the deploy checks the
+  environment. A system is named after its endpoint's id unless a map given to the command names its key. Secrets stay
+  `secret://` references. It deletes nothing; its author reviews the result and commits it.
 - Once the demo, the template and the documents are on the new shape, the last step removes `kind: endpoint`,
   `endpoint.schema.json`, flows of `schemaVersion: 1` and the Endpoints screen. A package that still holds them is refused,
   naming the file and what replaces it.
@@ -939,10 +942,10 @@ contract suite's checks of them. It changes no file of the demo, the quickstart 
    Changes `examples/demo` (`invoice-sync`, `order-jq` and `order-partner` on the new shape, with the call from
    `order-jq` through `direct` to `order-partner` run for real; its endpoint files gone), the template's package with
    the configuration's files for its partner on port 18091, `rail8 new-adapter` and `bin/run-adapter`, which imports
-   and activates them, the quickstart
-   check of `ci/check` (which creates `endpoints/call-audit.yaml` and looks for `partner-domestic` in invoice-sync's
-   file), and the quickstart's text. From this step a deploy warns of each file of the
-   old shape. No change to the database.
+   and activates them with its technical account's token after `rail8 bootstrap --role connection-administrator --role
+   secret-administrator`, as the quickstart does, the quickstart check of `ci/check` (which creates
+   `endpoints/call-audit.yaml` and looks for `partner-domestic` in invoice-sync's file), and the quickstart's text. From
+   this step a deploy warns of each file of the old shape. No change to the database.
 5. **The Systems screen under Configure.** Every system with the package that defines it, its connections, their
    adapters, the flows that use each and whether it is set, mocked, stopped or missing in the environment, and the
    instance names; editing the values comes with the configuration's own screen, and until then the quickstart's text
