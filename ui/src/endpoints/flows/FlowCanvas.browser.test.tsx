@@ -5,6 +5,9 @@ import { page, userEvent } from 'vitest/browser';
 import { Rail8Theme } from '../../theme';
 import { FlowCanvas } from './FlowCanvas';
 import { view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 it('marks and previews a single-step process from the connection inside its lane', async () => {
   const host = document.createElement('div');
@@ -23,7 +26,7 @@ processes:
     steps:
       - type: jq
         name: Normalize
-`, { endpoints: [], steps: [], flows: [] });
+`, { endpoints: [], steps: [], flows: [] }, en);
   const rangeChanged = vi.fn();
   const insert = vi.fn();
   const button = (name: string) => page.getByRole('button', { name, exact: true });
@@ -63,7 +66,7 @@ steps:
   - type: to
     endpoint: depot
 `;
-  const parse = (yaml: string) => view(yaml, { endpoints: [], flows: [], steps: [] });
+  const parse = (yaml: string) => view(yaml, { endpoints: [], flows: [], steps: [] }, en);
   const flow = parse(source);
   const button = (name: string) => page.getByRole('button', { name, exact: true });
   const render = (sequence: number, picture = flow) => root.render(<Rail8Theme>{() => <ReactFlowProvider>
@@ -142,7 +145,7 @@ it('reveals the exact external receiver found outside a long diagram at its mini
   const root = createRoot(host);
   const steps = Array.from({ length: 48 }, (_, i) => `  - type: jq\n    name: map-${i}`).join('\n');
   const picture = view(`schemaVersion: 1\nkind: flow\nid: long\nfrom: { endpoint: orders }\nsteps:\n${steps}\n  - type: to\n    endpoint: partner`,
-    { endpoints: [], flows: [], steps: [] });
+    { endpoints: [], flows: [], steps: [] }, en);
   const draw = (request: number) => root.render(<ReactFlowProvider><FlowCanvas view={picture} onSelect={vi.fn()}
     selected="/steps/48" inspectSequence={request} inspectTarget="receiver:/steps/48" /></ReactFlowProvider>);
   const receiver = page.getByRole('button', { name: 'Inspect partner' });
@@ -170,7 +173,7 @@ it('selects only the clicked card when a send step and its receiver share the sa
   document.body.append(host);
   const root = createRoot(host);
   const picture = view('schemaVersion: 1\nkind: flow\nid: ship\nfrom: { endpoint: in }\nsteps:\n  - type: to\n    name: Deliver\n    endpoint: depot',
-    { endpoints: [], flows: [], steps: [] });
+    { endpoints: [], flows: [], steps: [] }, en);
   const station = page.getByRole('button', { name: 'Inspect Deliver' });
   const receiver = page.getByRole('button', { name: 'Inspect depot' });
   try {

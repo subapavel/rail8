@@ -2,6 +2,7 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { Alert, Button, Card, Flex, Table, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { Side } from '../../artifacts';
+import { useText, type Texts } from '../../language';
 import { ReadSpinner } from '../../ReadSpinner';
 import { contextOf, surveyOf } from '../files/flowContext';
 import type { FlowsApi } from './api';
@@ -83,24 +84,26 @@ function Diagnostics({ title, problems }: { title: string; problems: readonly Fl
 /** One line of the list of changes under the picture. */
 interface Line {
   key: string;
-  change: string;
+  change: StepChange['status'];
   what: string;
   /** The step the line selects in the picture, when it is drawn there. */
   select?: Path;
   settings: SettingChange[];
 }
 
-const STATUS: Record<StepChange['status'], string> = { added: 'Added', removed: 'Removed', moved: 'Moved', changed: 'Changed' };
+/** The colour of the tag of each kind of change. */
+const TAG: Record<StepChange['status'], string> = { added: 'success', removed: 'error', moved: 'warning', changed: 'warning' };
 
-/** The lines of `changes`, the flow's own settings first; a step selects when it is in the version drawn. */
-function linesOf(changes: FlowChanges, drawnIsOlder: boolean): Line[] {
+/** The lines of `changes` in `texts`' language, the flow's own settings first; a step selects when it is in the version drawn. */
+function linesOf({ t }: Texts, changes: FlowChanges, drawnIsOlder: boolean): Line[] {
   const lines: Line[] = [];
-  if (changes.settings.length > 0) lines.push({ key: 'settings', change: 'Changed', what: 'The flow’s settings', settings: changes.settings });
-  for (const p of changes.processes) lines.push({ key: `process:${p.name}`, change: p.status === 'added' ? 'Added' : 'Removed', what: `Process ${p.name}`, settings: [] });
+  if (changes.settings.length > 0) lines.push({ key: 'settings', change: 'changed', what: t('flows.change.settings'), settings: changes.settings });
+  for (const p of changes.processes) lines.push({ key: `process:${p.name}`, change: p.status, what: t('flows.change.process', { name: p.name }), settings: [] });
   changes.steps.forEach((s, i) => {
     const drawn = (s.status === 'removed') === drawnIsOlder;
-    const place = s.status === 'removed' ? `, after ${s.follows ?? 'nothing: it was first'}` : '';
-    lines.push({ key: `step:${i}`, change: STATUS[s.status], what: `${s.name} in ${s.list}${place}`, ...(drawn ? { select: s.path } : {}), settings: s.settings });
+    const values = { name: s.name, list: s.list, follows: s.follows ?? '' };
+    const what = s.status !== 'removed' ? t('flows.change.step', values) : t(s.follows === null ? 'flows.change.step.wasFirst' : 'flows.change.step.after', values);
+    lines.push({ key: `step:${i}`, change: s.status, what, ...(drawn ? { select: s.path } : {}), settings: s.settings });
   });
   return lines;
 }
@@ -114,6 +117,8 @@ function linesOf(changes: FlowChanges, drawnIsOlder: boolean): Line[] {
  * formatting only says so, and a version that cannot be drawn shows its diagnostics.
  */
 export function FlowChange({ api, path, before, after }: FlowChangeProps) {
+  const texts = useText();
+  const { t, rich } = texts;
   const changes = useMemo(() => flowChanges(before?.text ?? null, after?.text ?? null), [before, after]);
   const drawn = changes.status === 'deleted' ? before : after;
   const [context, setContext] = useState<{ side: Side; context: FlowContext } | { side: Side; failed: string } | null>(null);
@@ -137,41 +142,41 @@ export function FlowChange({ api, path, before, after }: FlowChangeProps) {
       new Map(changes.status === 'deleted' ? [] : changes.steps.flatMap((s) => (s.status === 'removed' ? [] : [[pointer(s.path), s.status === 'added' ? 'added' : 'changed'] as const]))),
     [changes],
   );
-  const picture = useMemo(() => (context !== null && 'context' in context && drawn !== null ? view(drawn.text, context.context) : null), [context, drawn]);
+  const picture = useMemo(() => (context !== null && 'context' in context && drawn !== null ? view(drawn.text, context.context, texts) : null), [context, drawn, texts]);
 
-  if (changes.status === 'same') return <Typography.Text type="secondary">No change.</Typography.Text>;
-  if (changes.status === 'formatting') return <Typography.Text>Only comments or formatting changed.</Typography.Text>;
+  if (changes.status === 'same') return <Typography.Text type="secondary">{t('endpoints.change.none')}</Typography.Text>;
+  if (changes.status === 'formatting') return <Typography.Text>{t('endpoints.change.formatting')}</Typography.Text>;
   if (changes.status === 'unreadable') {
     return (
       <Flex vertical gap="small">
         {changes.unreadable.map((u) => (
           <Diagnostics
             key={u.side}
-            title={`The ${u.side === 'before' ? 'older' : 'newer'} version cannot be drawn`}
-            problems={view((u.side === 'before' ? before : after)?.text ?? '', { endpoints: [], flows: [], steps: [] }).problems}
+            title={t(u.side === 'before' ? 'flows.change.olderUndrawn' : 'flows.change.newerUndrawn')}
+            problems={view((u.side === 'before' ? before : after)?.text ?? '', { endpoints: [], flows: [], steps: [] }, texts).problems}
           />
         ))}
       </Flex>
     );
   }
-  if (drawn === null || context === null || context.side !== drawn) return <ReadSpinner label={`Reading the context of ${path}`} />;
-  if ('failed' in context) return <Alert type="error" showIcon title="The context of the flow could not be read" description={context.failed} />;
+  if (drawn === null || context === null || context.side !== drawn) return <ReadSpinner label={t('flows.change.readingContext', { path })} />;
+  if ('failed' in context) return <Alert type="error" showIcon title={t('flows.change.contextUnread')} description={context.failed} />;
   if (picture === null || !picture.readable) {
-    return <Diagnostics title={`The ${changes.status === 'deleted' ? 'older' : 'newer'} version cannot be drawn`} problems={picture?.problems ?? []} />;
+    return <Diagnostics title={t(changes.status === 'deleted' ? 'flows.change.olderUndrawn' : 'flows.change.newerUndrawn')} problems={picture?.problems ?? []} />;
   }
 
   const removed = changes.status === 'modified' ? changes.steps.filter((s) => s.status === 'removed') : [];
-  const lines = linesOf(changes, changes.status === 'deleted');
+  const lines = linesOf(texts, changes, changes.status === 'deleted');
   const select = (at: Path) => setSelected((old) => ({ at: pointer(at), sequence: (old?.sequence ?? 0) + 1 }));
   return (
     <Flex vertical gap="small">
-      {changes.status === 'deleted' && <Alert type="warning" showIcon title="Deleted: the older version is drawn." />}
-      {changes.status === 'added' && <Alert type="success" showIcon title="Added: every step is new." />}
+      {changes.status === 'deleted' && <Alert type="warning" showIcon title={t('flows.change.deleted')} />}
+      {changes.status === 'added' && <Alert type="success" showIcon title={t('flows.change.added')} />}
       {changes.repeated.map((r) => (
-        <Alert key={r.list} type="info" showIcon title={`Steps share a name in ${r.list} (${r.names.join(', ')}): they are matched in their order.`} />
+        <Alert key={r.list} type="info" showIcon title={t('flows.change.repeated', { list: r.list, names: r.names.join(', ') })} />
       ))}
       <Flex gap="small" align="stretch">
-        <div className="rail8-flow-change" aria-label={`Flow picture of ${path}`}>
+        <div className="rail8-flow-change" aria-label={t('flows.change.picture', { path })}>
           <ReactFlowProvider>
             <FlowCanvas
               view={picture}
@@ -183,14 +188,17 @@ export function FlowChange({ api, path, before, after }: FlowChangeProps) {
           </ReactFlowProvider>
         </div>
         {removed.length > 0 && (
-          <Card size="small" title="Removed steps" className="rail8-flow-removed">
-            <ul aria-label="Removed steps">
+          <Card size="small" title={t('flows.change.removed')} className="rail8-flow-removed">
+            <ul aria-label={t('flows.change.removed')}>
               {removed.map((s) => (
                 <li key={`${s.list}:${pointer(s.path)}`}>
-                  <Typography.Text delete>{s.name}</Typography.Text>{' '}
-                  <Typography.Text type="secondary">
-                    in {s.list}, after {s.follows ?? 'nothing: it was first'}
-                  </Typography.Text>
+                  {rich(s.follows === null ? 'flows.change.removedStep.wasFirst' : 'flows.change.removedStep', {
+                    name: s.name,
+                    list: s.list,
+                    follows: s.follows ?? '',
+                    step: (chunks) => <Typography.Text delete>{chunks}</Typography.Text>,
+                    where: (chunks) => <Typography.Text type="secondary">{chunks}</Typography.Text>,
+                  })}
                 </li>
               ))}
             </ul>
@@ -198,20 +206,20 @@ export function FlowChange({ api, path, before, after }: FlowChangeProps) {
         )}
       </Flex>
       <Table<Line>
-        aria-label={`Changes of ${path}`}
+        aria-label={t('endpoints.change.table', { path })}
         size="small"
         pagination={false}
         rowKey="key"
         dataSource={lines}
         columns={[
           {
-            title: 'Change',
+            title: t('flows.change.change'),
             dataIndex: 'change',
             width: 110,
-            render: (change: string) => <Tag color={change === 'Added' ? 'success' : change === 'Removed' ? 'error' : 'warning'}>{change}</Tag>,
+            render: (change: StepChange['status']) => <Tag color={TAG[change]}>{t('flows.change.status', { status: change })}</Tag>,
           },
           {
-            title: 'What',
+            title: t('flows.change.what'),
             dataIndex: 'what',
             render: (what: string, line) =>
               line.select === undefined ? (
@@ -223,7 +231,7 @@ export function FlowChange({ api, path, before, after }: FlowChangeProps) {
               ),
           },
           {
-            title: 'Settings',
+            title: t('endpoints.raw.label'),
             dataIndex: 'settings',
             render: (settings: SettingChange[]) =>
               settings.map((s) => (

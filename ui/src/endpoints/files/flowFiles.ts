@@ -82,7 +82,7 @@ async function survey(root: string, signal?: AbortSignal) {
 export function flowFiles(options: FlowFilesOptions) {
   let saves: Promise<unknown> = Promise.resolve();
   const rootOf = async () => {
-    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE');
+    if (options.workspace === undefined) throw new Refusal(404, 'no working folder is set: start the UI with RAIL8_WORKSPACE'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return realpath(options.workspace);
   };
 
@@ -94,11 +94,11 @@ export function flowFiles(options: FlowFilesOptions) {
 
   const read = async (path: string, signal?: AbortSignal) => {
     const root = await rootOf();
-    const file = await locate(root, path, isYaml, 'flow file');
+    const file = await locate(root, path, isYaml, 'flow file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file, { signal });
     const text = bytes.toString('utf8');
     const flow = readFlow(text);
-    if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, `${path} is not a flow file`);
+    if (flow.kind === 'other' || (flow.kind === 'problem' && !saysFlow(text))) throw new Refusal(404, `${path} is not a flow file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const { truncated, ...found } = await survey(root, signal);
     const context = contextOf(found, path, truncated);
     return { file: { path, text, editable: options.editable, context } satisfies FlowFile, etag: etagOf(bytes) };
@@ -109,37 +109,37 @@ export function flowFiles(options: FlowFilesOptions) {
     const sent = await jsonBody(req);
     if (!isRecord(sent) || typeof sent.text !== 'string') throw new Refusal(400, 'a save sends {"text": "..."}');
     const text = sent.text;
-    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB');
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) throw new Refusal(413, 'the text is over 1 MiB'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const flow = readFlow(text);
     if (flow.kind === 'problem') throw new Refusal(422, flow.message);
-    if (flow.kind === 'other') throw new Refusal(422, 'the text is not a flow');
+    if (flow.kind === 'other') throw new Refusal(422, 'the text is not a flow'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return text;
   };
 
   const create = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
-    await createFile(lock, await rootOf(), path, isYaml, 'flow file', await flowText(req));
+    await createFile(lock, await rootOf(), path, isYaml, 'flow file', await flowText(req)); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     return read(path);
   };
 
   const save = async (req: IncomingMessage, path: string, lock: WorkingFolderLock) => {
-    if (!options.editable) throw new Refusal(403, 'this server shows flow files read-only');
+    if (!options.editable) throw new Refusal(403, 'this server shows flow files read-only'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const ifMatch = req.headers['if-match'];
     const ifNoneMatch = req.headers['if-none-match'];
-    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both');
+    if (ifNoneMatch !== undefined && ifMatch !== undefined) throw new Refusal(400, 'a save sends If-Match or If-None-Match, not both'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (ifNoneMatch === '*') return { ...(await create(req, path, lock)), created: true };
-    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match, or creates the file with If-None-Match: *');
+    if (ifMatch === undefined) throw new Refusal(428, 'a save names the version it changes in If-Match, or creates the file with If-None-Match: *'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const text = await flowText(req);
-    const file = await locate(await rootOf(), path, isYaml, 'flow file');
+    const file = await locate(await rootOf(), path, isYaml, 'flow file'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     const bytes = await readFile(file);
     const current = bytes.toString('utf8');
     const old = readFlow(current);
-    if (old.kind === 'other' || (old.kind === 'problem' && !saysFlow(current))) throw new Refusal(404, `${path} is not a flow file`);
+    if (old.kind === 'other' || (old.kind === 'problem' && !saysFlow(current))) throw new Refusal(404, `${path} is not a flow file`); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     // under the lock: a file that is gone, or a path that now leads to another file, has changed too
     const unchanged = async () => {
-      const now = await locate(await rootOf(), path, isYaml, 'flow file').catch(() => undefined);
-      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+      const now = await locate(await rootOf(), path, isYaml, 'flow file').catch(() => undefined); // untranslated: the development server refuses with this text, as the node does, and it has no translations
+      if (now !== file || etagOf(await readFile(file)) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     };
-    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved');
+    if (etagOf(bytes) !== ifMatch) throw new Refusal(412, 'the file changed since it was read; nothing was saved'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (!bytes.equals(Buffer.from(text, 'utf8'))) await replaceFile(lock, file, text, unchanged);
     return { ...(await read(path)), created: false };
   };
@@ -150,7 +150,7 @@ export function flowFiles(options: FlowFilesOptions) {
       next();
       return;
     }
-    const refused = foreign(req.headers, options.origins, 'the working folder');
+    const refused = foreign(req.headers, options.origins, 'the working folder'); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     if (refused !== undefined) {
       send(res, 403, { error: refused });
       return;
@@ -172,7 +172,7 @@ export function flowFiles(options: FlowFilesOptions) {
           return done;
         });
         send(res, created ? 201 : 200, file, etag);
-      } else send(res, 405, { error: 'the flow files take GET, and PUT of one file' });
+      } else send(res, 405, { error: 'the flow files take GET, and PUT of one file' }); // untranslated: the development server refuses with this text, as the node does, and it has no translations
     };
     answer().catch((error: unknown) => {
       if (!res.destroyed) sendFailure(res, error);

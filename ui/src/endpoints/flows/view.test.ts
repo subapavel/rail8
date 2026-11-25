@@ -9,6 +9,9 @@ import { flowFiles, type FlowFile } from '../files/flowFiles';
 import { BUILT_IN, type StepType } from './steps';
 import type { FlowContext, FlowView } from './types';
 import { MAX_NODES, pointer, view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const repo = join(__dirname, '..', '..', '..', '..');
 const fixtures = join(__dirname, 'fixtures');
@@ -86,7 +89,7 @@ describe('view of the flows under examples', () => {
     ]);
     for (const item of items) {
       const file = (await get(`${base}/${item.path}`)) as FlowFile;
-      const drawn = view(file.text, { ...file.context, steps: moduleSteps });
+      const drawn = view(file.text, { ...file.context, steps: moduleSteps }, en);
       expect(drawn.problems, item.path).toEqual([]);
       await expect(golden(drawn)).toMatchFileSnapshot(join('golden', `${item.path.split('/').at(-1)!.replace(/\.ya?ml$/, '')}.txt`));
     }
@@ -97,22 +100,22 @@ describe('view of awkward files', () => {
   const names = readdirSync(fixtures).filter((f) => f.endsWith('.yaml'));
 
   it.each(names)('draws %s as its golden view says', async (name) => {
-    const drawn = view(readFileSync(join(fixtures, name), 'utf8'), demo);
+    const drawn = view(readFileSync(join(fixtures, name), 'utf8'), demo, en);
     await expect(golden(drawn)).toMatchFileSnapshot(join('golden', name.replace('.yaml', '.txt')));
   });
 
   it('gives the same view of a file with CRLF line ends', () => {
     const text = readFileSync(join(fixtures, 'comments.yaml'), 'utf8');
-    expect(view(text.replaceAll('\n', '\r\n'), demo)).toEqual(view(text, demo));
+    expect(view(text.replaceAll('\n', '\r\n'), demo, en)).toEqual(view(text, demo, en));
   });
 
   it('gives the same view every time', () => {
     const text = readFileSync(join(fixtures, 'processes.yaml'), 'utf8');
-    expect(view(text, demo)).toEqual(view(text, demo));
+    expect(view(text, demo, en)).toEqual(view(text, demo, en));
   });
 
   it('locks what the editor cannot change, and says why', () => {
-    const drawn = view(readFileSync(join(fixtures, 'anchors.yaml'), 'utf8'), demo);
+    const drawn = view(readFileSync(join(fixtures, 'anchors.yaml'), 'utf8'), demo, en);
     const locked = Object.fromEntries(drawn.nodes.filter((n) => n.locked !== undefined).map((n) => [n.id, n.locked]));
     expect(locked).toEqual({
       '/steps/0': 'The file holds an anchor (&check) here, which the editor does not change.',
@@ -122,15 +125,15 @@ describe('view of awkward files', () => {
   });
 
   it('finds the problems of each awkward file, each at its path', () => {
-    const problems = (name: string) => view(readFileSync(join(fixtures, name), 'utf8'), demo).problems;
+    const problems = (name: string) => view(readFileSync(join(fixtures, name), 'utf8'), demo, en).problems;
     expect(problems('comments.yaml')).toEqual([]);
     expect(problems('anchors.yaml')).toEqual([
       { path: ['steps', 1, '<<'], message: 'the node does not merge keys: it reads << as a key of its own' },
       { path: ['steps', 1, '<<'], message: 'the node reads the alias *check as the text check, not as what &check holds' },
       { path: ['steps', 1], message: 'a step is a mapping with a text type' },
     ]);
-    expect(view(readFileSync(join(fixtures, 'one-line.yaml'), 'utf8'), demo).readOnly).toBe('steps is written on one line ([ … ])');
-    expect(view(readFileSync(join(fixtures, 'comments.yaml'), 'utf8'), demo).readOnly).toBeUndefined();
+    expect(view(readFileSync(join(fixtures, 'one-line.yaml'), 'utf8'), demo, en).readOnly).toBe('steps is written on one line ([ … ])');
+    expect(view(readFileSync(join(fixtures, 'comments.yaml'), 'utf8'), demo, en).readOnly).toBeUndefined();
     expect(problems('one-line.yaml')).toEqual([
       { path: ['steps'], message: 'the list is written on one line ([ … ]): the editor shows this flow read-only', warning: true },
     ]);
@@ -150,7 +153,7 @@ describe('view of awkward files', () => {
   });
 
   it('labels the choices of a to by prop with the conditions its route makes certain', () => {
-    const drawn = view(readFileSync(join(fixtures, 'processes.yaml'), 'utf8'), demo);
+    const drawn = view(readFileSync(join(fixtures, 'processes.yaml'), 'utf8'), demo, en);
     expect(drawn.edges.filter((e) => e.kind === 'choice').map((e) => e.label)).toEqual([
       "domestic · when /Invoice/Currency = 'CZK'",
       'foreign · otherwise',
@@ -159,7 +162,7 @@ describe('view of awkward files', () => {
   });
 
   it('counts the names a process step runs under, and frames what a split in a process repeats', () => {
-    const drawn = view(readFileSync(join(fixtures, 'processes.yaml'), 'utf8'), demo);
+    const drawn = view(readFileSync(join(fixtures, 'processes.yaml'), 'utf8'), demo, en);
     const byId = new Map(drawn.nodes.map((n) => [n.id, n]));
     expect(byId.get('/processes/lines/steps/1')).toMatchObject({ runs: 2, runsAs: ['first/lines/validate', 'second/lines/validate'] });
     expect(byId.get('/processes/enrich/steps/0')).toMatchObject({ runs: 2, runsAs: ['first/extractKey', 'second/extractKey'] });
@@ -169,12 +172,12 @@ describe('view of awkward files', () => {
   });
 
   it('warns, and does not refuse, what is not found in a working folder read in part', () => {
-    const drawn = view(readFileSync(join(fixtures, 'unknown.yaml'), 'utf8'), { ...demo, partial: true });
+    const drawn = view(readFileSync(join(fixtures, 'unknown.yaml'), 'utf8'), { ...demo, partial: true }, en);
     expect(drawn.problems).toContainEqual({ path: ['steps', 4, 'endpoint'], message: "'nowhere' names no endpoint of the package: not found in the working folder", warning: true });
   });
 
   it('shows the steps of modules undescribed when the node cannot say what it serves', () => {
-    const drawn = view(readFileSync(join(fixtures, 'comments.yaml'), 'utf8'), { ...demo, steps: { missing: 'the node is not running' } });
+    const drawn = view(readFileSync(join(fixtures, 'comments.yaml'), 'utf8'), { ...demo, steps: { missing: 'the node is not running' } }, en);
     expect(drawn.nodes.find((n) => n.id === '/steps/0')?.form?.missing).toBe("The node's step types could not be read: the node is not running");
     expect(drawn.problems).toEqual([]);
   });
@@ -182,26 +185,26 @@ describe('view of awkward files', () => {
 
 describe('view of a file it cannot draw', () => {
   it('is not readable, with the reason', () => {
-    expect(view('kind: flow\nid: [unclosed\n', demo)).toMatchObject({ readable: false, nodes: [], problems: [{ path: [], message: expect.stringContaining('the file is not YAML') }] });
-    expect(view('kind: flow\nid: x\nsteps: {}\n', demo)).toMatchObject({ readable: false, problems: [{ path: [], message: 'the flow has no list of steps under steps' }] });
-    expect(view('kind: endpoint\nid: x\n', demo)).toMatchObject({ readable: false, problems: [{ path: [], message: 'the file is not a flow' }] });
+    expect(view('kind: flow\nid: [unclosed\n', demo, en)).toMatchObject({ readable: false, nodes: [], problems: [{ path: [], message: expect.stringContaining('the file is not YAML') }] });
+    expect(view('kind: flow\nid: x\nsteps: {}\n', demo, en)).toMatchObject({ readable: false, problems: [{ path: [], message: 'the flow has no list of steps under steps' }] });
+    expect(view('kind: endpoint\nid: x\n', demo, en)).toMatchObject({ readable: false, problems: [{ path: [], message: 'the file is not a flow' }] });
   });
 
   it(`draws no flow of more than ${MAX_NODES} nodes`, () => {
     const steps = Array.from({ length: MAX_NODES }, (_, i) => ({ type: 'xsd', name: `s${i}`, schema: 'flows/invoice.xsd' }));
-    const drawn = view(stringify({ schemaVersion: 1, kind: 'flow', id: 'big', version: '0.1.0', from: { endpoint: 'http-in' }, delivery: { mode: 'sync' }, limits: { maxBodyBytes: 1024 }, steps }), demo);
+    const drawn = view(stringify({ schemaVersion: 1, kind: 'flow', id: 'big', version: '0.1.0', from: { endpoint: 'http-in' }, delivery: { mode: 'sync' }, limits: { maxBodyBytes: 1024 }, steps }), demo, en);
     expect(drawn).toMatchObject({ readable: false, nodes: [], problems: [{ path: [], message: `the flow would be drawn with ${MAX_NODES + 2} nodes, more than the ${MAX_NODES} the editor draws` }] });
   });
 
   it('draws a file of another schemaVersion, with the problem', () => {
-    const drawn = view('schemaVersion: 2\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - type: to\n    endpoint: partner-domestic\n', demo);
+    const drawn = view('schemaVersion: 2\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - type: to\n    endpoint: partner-domestic\n', demo, en);
     expect(drawn.readable).toBe(true);
     expect(drawn.problems).toEqual([{ path: ['schemaVersion'], message: 'schemaVersion is 2, not 1: the editor shows this flow read-only' }]);
     expect(drawn.readOnly).toBe('schemaVersion is 2, not 1');
   });
 
   it('draws a step that is no mapping in its place, locked', () => {
-    const drawn = view('schemaVersion: 1\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - just text\n', demo);
+    const drawn = view('schemaVersion: 1\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - just text\n', demo, en);
     expect(drawn.problems).toEqual([{ path: ['steps', 0], message: 'a step is a mapping with a text type' }]);
     expect(drawn.nodes.find((n) => n.id === '/steps/0')).toMatchObject({ label: 'step 1', locked: expect.stringContaining('no mapping') });
   });
@@ -221,7 +224,7 @@ describe('the rules of names and processes, shared with the node', () => {
   it.each(cases)('$name', ({ steps, processes, problems }) => {
     const text = stringify({ schemaVersion: 1, kind: 'flow', id: 'cases', version: '0.1.0', from: { endpoint: 'in' }, delivery: { mode: 'sync' }, limits: { maxBodyBytes: 1024 }, steps, ...(processes === undefined ? {} : { processes }) });
     const order = (p: { path: readonly (string | number)[] }) => pointer(p.path);
-    const found = view(text, context).problems;
+    const found = view(text, context, en).problems;
     expect([...found].sort((a, b) => order(a).localeCompare(order(b)))).toEqual([...problems].sort((a, b) => order(a).localeCompare(order(b))));
   });
 });
@@ -261,7 +264,7 @@ steps:
 `;
 
   it('draws a fork of one column per list, each joining the step after it', async () => {
-    const drawn = view(text, demo, types);
+    const drawn = view(text, demo, en, types);
     await expect(golden(drawn)).toMatchFileSnapshot(join('golden', 'branching.txt'));
     expect(drawn.edges.filter((e) => e.source === '/steps/0')).toEqual([
       { id: '/steps/0->/steps/0/when/0/steps/0', source: '/steps/0', target: '/steps/0/when/0/steps/0', kind: 'choice', label: 'when 0' },
@@ -271,7 +274,7 @@ steps:
   });
 
   it('applies the rules of names to each list on its own', () => {
-    expect(view(text, demo, types).problems).toEqual([
+    expect(view(text, demo, en, types).problems).toEqual([
       { path: ['steps', 0, 'when', 0, 'steps', 1], message: "has no name, and its default 'xsd' is the name of steps[0].when[0].steps[0] too: step names are unique in a list" },
     ]);
   });
@@ -281,7 +284,7 @@ describe('where messages arrive', () => {
   const flow = 'schemaVersion: 1\nkind: flow\nid: invoice\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nsteps:\n  - type: log\n';
   const httpIn = { id: 'http-in', path: 'demo/endpoints/http-in.yaml', scheme: 'http', direction: 'in' as const, address: '/in' };
   const ingress = { environment: 'dev', httpOrigin: 'http://localhost:8080', prefixes: { http: '/http' } };
-  const from = (context: Partial<FlowContext>) => view(flow, { ...demo, ...context }).nodes.find((n) => n.kind === 'from')?.detail;
+  const from = (context: Partial<FlowContext>) => view(flow, { ...demo, ...context }, en).nodes.find((n) => n.kind === 'from')?.detail;
 
   it("shows a preview of the URL senders call, the node's origin, prefix and the endpoint's address", () => {
     expect(from({ endpoints: [httpIn], ingress })).toBe('http · preview · http://localhost:8080/http/in');

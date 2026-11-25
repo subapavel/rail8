@@ -1,3 +1,4 @@
+import { msg, say, type Label, type Message, type Texts } from '../../language';
 import { fieldProblem, type SettingsField, type SettingsRule } from '../settings';
 import type { FlowProblem, Path, StepField, StepSettings, ValueField } from './types';
 
@@ -10,7 +11,7 @@ export interface StepType {
   rules?: SettingsRule[];
   stepLists?: readonly (readonly string[])[];
   detail?: string;
-  check?: (values: Record<string, unknown>) => { key: string; message: string }[];
+  check?: (values: Record<string, unknown>) => { key: string; message: Message }[];
 }
 
 /** The keys of a step that are the platform's, on the "Step" tab: never the step's own settings. */
@@ -23,7 +24,7 @@ export const STEP_NAME = '[a-z][a-zA-Z0-9_-]*';
 
 type Extra = Partial<Omit<ValueField, 'name' | 'type'>>;
 
-const field = (name: string, type: ValueField['type'], help: string, extra: Extra = {}): ValueField => ({
+const field = (name: string, type: ValueField['type'], help: Label, extra: Extra = {}): ValueField => ({
   name,
   type,
   help,
@@ -33,65 +34,65 @@ const field = (name: string, type: ValueField['type'], help: string, extra: Extr
   ...extra,
 });
 
-const language = field('language', 'text', 'The language of the expressions; the node knows xpath and the languages of its plugins.', { default: 'xpath' });
+const language = field('language', 'text', msg('flows.help.language'), { default: 'xpath' });
 
 /** The built-in steps, described in the UI. The choices of `endpoint` and `process` are filled from the flow and its context. */
 export const BUILT_IN: Readonly<Record<string, StepType>> = {
   to: {
     fields: [
-      field('endpoint', 'choice', 'The out endpoint every message is sent to.', { choices: [], reference: 'endpoint' }),
-      field('byProp', 'text', 'The prop whose value picks the endpoint, set by a route before.', { pattern: KEY_NAME }),
+      field('endpoint', 'choice', msg('flows.help.to.endpoint'), { choices: [], reference: 'endpoint' }),
+      field('byProp', 'text', msg('flows.help.to.byProp'), { pattern: KEY_NAME }),
       {
-        ...field('endpoints', 'text', "The endpoint for each value of byProp."),
+        ...field('endpoints', 'text', msg('flows.help.to.endpoints')),
         type: 'map',
         key: {},
-        value: field('endpoint', 'choice', 'The out endpoint for this value.', { required: true, choices: [], reference: 'endpoint' }),
+        value: field('endpoint', 'choice', msg('flows.help.to.endpointsValue'), { required: true, choices: [], reference: 'endpoint' }),
       },
     ],
     rules: [{ kind: 'exactlyOne', fields: ['endpoint', 'byProp'] }],
     check: (values) =>
       values.byProp !== undefined && values.byProp !== null && (values.endpoints === undefined || values.endpoints === null)
-        ? [{ key: 'endpoints', message: 'is required when byProp is set' }]
+        ? [{ key: 'endpoints', message: msg('flows.check.endpointsRequired') }]
         : [],
   },
   route: {
     fields: [
-      field('prop', 'text', 'The prop the route sets.', { required: true, pattern: KEY_NAME }),
+      field('prop', 'text', msg('flows.help.route.prop'), { required: true, pattern: KEY_NAME }),
       language,
       {
-        ...field('routes', 'text', 'The rules, in order: the first whose condition holds sets the prop.', { required: true }),
+        ...field('routes', 'text', msg('flows.help.route.routes'), { required: true }),
         type: 'list',
         item: [
-          field('when', 'text', 'The condition.', { required: true }),
-          field('set', 'text', 'The value the prop is set to.', { required: true, emptyAllowed: true }),
+          field('when', 'text', msg('flows.help.route.when'), { required: true }),
+          field('set', 'text', msg('flows.help.route.set'), { required: true, emptyAllowed: true }),
         ],
       },
-      field('otherwise', 'text', 'The value when no rule holds; without it such a message fails here.', { emptyAllowed: true }),
+      field('otherwise', 'text', msg('flows.help.route.otherwise'), { emptyAllowed: true }),
     ],
     detail: 'prop',
   },
   filter: {
-    fields: [field('when', 'text', 'The condition a message goes on under; any other ends here.', { required: true }), language],
+    fields: [field('when', 'text', msg('flows.help.filter.when'), { required: true }), language],
     detail: 'when',
   },
   extractKey: {
     fields: [
-      field('key', 'text', 'The business key the message is found by.', { required: true, pattern: KEY_NAME }),
-      field('xpath', 'text', 'The expression whose value is the key.', { required: true }),
+      field('key', 'text', msg('flows.help.extractKey.key'), { required: true, pattern: KEY_NAME }),
+      field('xpath', 'text', msg('flows.help.extractKey.xpath'), { required: true }),
       language,
     ],
     detail: 'key',
   },
   validate: {
-    fields: [field('required', 'text', 'The condition every message must meet, else it fails here.', { required: true }), language],
+    fields: [field('required', 'text', msg('flows.help.validate.required'), { required: true }), language],
     detail: 'required',
   },
   split: {
-    fields: [field('xpath', 'text', 'Selects the parts; each one goes through the rest of the list on its own.', { required: true }), language],
+    fields: [field('xpath', 'text', msg('flows.help.split.xpath'), { required: true }), language],
     detail: 'xpath',
   },
   process: {
-    fields: [field('process', 'choice', 'The process of this flow whose steps run here.', { required: true, choices: [], reference: 'process' })],
+    fields: [field('process', 'choice', msg('flows.help.process.process'), { required: true, choices: [], reference: 'process' })],
     detail: 'process',
   },
 };
@@ -103,23 +104,23 @@ const duration = { pattern: '\\d+(ms|s|m|h)' };
  * key inside a key dotted (`delivery.mode`). The choices of `from.endpoint` are the in endpoints of the package.
  */
 export const FLOW_FIELDS: StepField[] = [
-  field('id', 'text', 'The flow’s id, unique in its package.', { required: true, pattern: '[a-z][a-z0-9-]*' }),
-  field('version', 'text', 'The flow’s version, as major.minor.patch.', { required: true, pattern: '\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?' }),
-  field('description', 'text', 'What the flow does.'),
-  field('from.endpoint', 'choice', 'The in endpoint the flow listens on.', { required: true, choices: [], reference: 'endpoint' }),
-  field('delivery.mode', 'choice', 'How a message is delivered: answered at once, saved first, or taken once.', { required: true, choices: ['sync', 'at-least-once', 'at-most-once'] }),
-  field('delivery.timeout', 'text', 'The time each run of a message has, such as 30s.', duration),
-  field('delivery.saveTimeout', 'text', 'at-least-once: the time the durable save has, such as 5s.', duration),
-  field('delivery.queue', 'choice', 'at-least-once: the work queue behind the durable save.', { choices: ['postgres', 'kafka'] }),
-  field('delivery.retries', 'raw', 'at-least-once: the retries of a failed message, as count, interval, multiplier and maxInterval.'),
-  field('recording.level', 'choice', 'What the flow records of each message.', { choices: ['all', 'ends', 'errors', 'off'] }),
-  field('recording.payload', 'choice', 'Whether the flow keeps the payloads it records.', { choices: ['keep', 'metadata-only'] }),
-  field('limits.maxBodyBytes', 'integer', 'The largest body the flow takes, in bytes.', { required: true, min: 1 }),
-  field('limits.maxInFlight', 'integer', 'The most messages of the flow in flight at once.', { min: 1 }),
-  field('limits.maxInFlightBytes', 'integer', 'The most bytes of the flow in flight at once.', { min: 1 }),
-  field('partitionBy', 'text', 'at-least-once: the key whose messages run one at a time, in the order they came.', { pattern: KEY_NAME }),
-  field('forwardHeaders', 'raw', 'The headers of an arrival that reach the endpoints the flow sends to, as a list.'),
-  field('retry', 'raw', 'The retry of steps marked retryable, as attempts, initial, max and multiplier.'),
+  field('id', 'text', msg('flows.help.flow.id'), { required: true, pattern: '[a-z][a-z0-9-]*' }),
+  field('version', 'text', msg('flows.help.flow.version'), { required: true, pattern: '\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?' }),
+  field('description', 'text', msg('flows.help.flow.description')),
+  field('from.endpoint', 'choice', msg('flows.help.flow.from'), { required: true, choices: [], reference: 'endpoint' }),
+  field('delivery.mode', 'choice', msg('flows.help.flow.deliveryMode'), { required: true, choices: ['sync', 'at-least-once', 'at-most-once'] }),
+  field('delivery.timeout', 'text', msg('flows.help.flow.deliveryTimeout'), duration),
+  field('delivery.saveTimeout', 'text', msg('flows.help.flow.saveTimeout'), duration),
+  field('delivery.queue', 'choice', msg('flows.help.flow.queue'), { choices: ['postgres', 'kafka'] }),
+  field('delivery.retries', 'raw', msg('flows.help.flow.retries')),
+  field('recording.level', 'choice', msg('flows.help.flow.recordingLevel'), { choices: ['all', 'ends', 'errors', 'off'] }),
+  field('recording.payload', 'choice', msg('flows.help.flow.recordingPayload'), { choices: ['keep', 'metadata-only'] }),
+  field('limits.maxBodyBytes', 'integer', msg('flows.help.flow.maxBodyBytes'), { required: true, min: 1 }),
+  field('limits.maxInFlight', 'integer', msg('flows.help.flow.maxInFlight'), { min: 1 }),
+  field('limits.maxInFlightBytes', 'integer', msg('flows.help.flow.maxInFlightBytes'), { min: 1 }),
+  field('partitionBy', 'text', msg('flows.help.flow.partitionBy'), { pattern: KEY_NAME }),
+  field('forwardHeaders', 'raw', msg('flows.help.flow.forwardHeaders')),
+  field('retry', 'raw', msg('flows.help.flow.retry')),
 ];
 
 /** The top-level keys of a flow file that are not among its own settings. */
@@ -127,19 +128,19 @@ export const FLOW_PARTS = new Set(['schemaVersion', 'kind', 'steps', 'processes'
 
 /** The fields of the "Step" tab: a process call takes only the name. */
 export function stepTabFields(type: string | undefined, defaultName: string): StepField[] {
-  const name = field('name', 'text', `The step's name in a message's history; without one it is ${defaultName}.`, { pattern: STEP_NAME });
+  const name = field('name', 'text', msg('flows.help.step.name', { name: defaultName }), { pattern: STEP_NAME });
   if (type === 'process') return [name];
   return [
     name,
-    field('retryable', 'boolean', "Whether the step is tried again under the flow's retry policy when it fails."),
-    field('recording.level', 'choice', 'What the step records, instead of the flow’s level.', { choices: ['all', 'ends', 'errors', 'off'] }),
-    field('recording.payload', 'choice', 'Whether the step keeps its payload, instead of the flow’s choice.', { choices: ['keep', 'metadata-only'] }),
+    field('retryable', 'boolean', msg('flows.help.step.retryable')),
+    field('recording.level', 'choice', msg('flows.help.step.recordingLevel'), { choices: ['all', 'ends', 'errors', 'off'] }),
+    field('recording.payload', 'choice', msg('flows.help.step.recordingPayload'), { choices: ['keep', 'metadata-only'] }),
   ];
 }
 
 /** A settings description of `fields` and `rules`, on one tab. */
 export function settingsOf(fields: StepField[], rules: SettingsRule[] = []): StepSettings {
-  return { format: 1, described: true, tabs: [{ id: 'general', label: 'Settings', common: false }], fields, rules };
+  return { format: 1, described: true, tabs: [{ id: 'general', label: 'Settings', common: false }], fields, rules }; // untranslated: the panel names its own tabs, so this label is never shown
 }
 
 /** A description of no settings: the step's keys go in one raw editor. */
@@ -184,85 +185,90 @@ export function describeSchema(schema: unknown): { settings: StepSettings; close
 
 const present = (value: unknown) => value !== null && value !== undefined;
 
-/** What is wrong with `value` for `field`, by path below the field's own, or nothing. */
-function judge(field: StepField, value: unknown, at: Path): FlowProblem[] {
+/** What is wrong with `value` for `field`, by path below the field's own, in `texts`' language, or nothing. */
+function judge(texts: Texts, field: StepField, value: unknown, at: Path): FlowProblem[] {
+  const { t } = texts;
   if (field.type === 'list') {
-    if (!Array.isArray(value)) return [{ path: at, message: 'must be a list' }];
+    if (!Array.isArray(value)) return [{ path: at, message: t('flows.check.list') }];
     return value.flatMap((item, i) =>
-      isRecord(item) ? checkFields(field.item, item, [...at, i]) : [{ path: [...at, i], message: 'must be a mapping' }],
+      isRecord(item) ? checkFields(texts, field.item, item, [...at, i]) : [{ path: [...at, i], message: t('flows.check.mapping') }],
     );
   }
   if (field.type === 'map') {
-    if (!isRecord(value)) return [{ path: at, message: 'must be a mapping' }];
+    if (!isRecord(value)) return [{ path: at, message: t('flows.check.mapping') }];
     return Object.entries(value).flatMap(([key, v]) => {
       const found: FlowProblem[] = [];
       if (field.key.pattern !== undefined && !new RegExp(`^(?:${field.key.pattern})$`).test(key)) {
-        found.push({ path: [...at, key], message: `the key must match ${field.key.pattern}` });
+        found.push({ path: [...at, key], message: t('flows.check.keyPattern', { pattern: field.key.pattern }) });
       }
-      return [...found, ...judge(field.value, v, [...at, key])];
+      return [...found, ...judge(texts, field.value, v, [...at, key])];
     });
   }
   if ('emptyAllowed' in field && field.emptyAllowed === true && value === '') return [];
   // what a reference names is judged against the flow and its context, which knows when the working folder was read in part
-  if ('reference' in field && field.reference !== undefined) return typeof value === 'string' ? [] : [{ path: at, message: 'must be text' }];
-  const problem = fieldProblem(field as SettingsField, value);
+  if ('reference' in field && field.reference !== undefined) return typeof value === 'string' ? [] : [{ path: at, message: t('endpoints.check.text') }];
+  const problem = fieldProblem(texts, field as SettingsField, value);
   return problem === null ? [] : [{ path: at, message: problem }];
 }
 
 /**
- * What is wrong with `values` for `fields`, each at its path below `at`, a dotted name a key inside a key: a value that
- * does not fit, or a required one left out.
+ * What is wrong with `values` for `fields`, each at its path below `at`, a dotted name a key inside a key, in `texts`'
+ * language: a value that does not fit, or a required one left out.
  */
-export function checkFields(fields: readonly StepField[], values: Record<string, unknown>, at: Path): FlowProblem[] {
+export function checkFields(texts: Texts, fields: readonly StepField[], values: Record<string, unknown>, at: Path): FlowProblem[] {
   const problems: FlowProblem[] = [];
   for (const f of fields) {
     const keys = f.name.split('.');
     const value = keys.reduce<unknown>((v, k) => (isRecord(v) ? v[k] : undefined), values);
-    if (present(value)) problems.push(...judge(f, value, [...at, ...keys]));
-    else if (f.required) problems.push({ path: [...at, ...keys], message: 'is required' });
+    if (present(value)) problems.push(...judge(texts, f, value, [...at, ...keys]));
+    else if (f.required) problems.push({ path: [...at, ...keys], message: texts.t('endpoints.check.required') });
   }
   return problems;
 }
 
 /**
- * What is wrong with the step `values` at `at` for its description: its fields, then the rules, then its type's own
- * check, then, when `closed`, each key that no field describes. The keys of the "Step" tab are judged by
- * {@link checkStepTab}.
+ * What is wrong with the step `values` at `at` for its description, in `texts`' language: its fields, then the rules,
+ * then its type's own check, then, when `closed`, each key that no field describes. The keys of the "Step" tab are
+ * judged by {@link checkStepTab}.
  */
-export function checkStep(settings: StepSettings, values: Record<string, unknown>, at: Path, closed: boolean, own?: StepType['check']): FlowProblem[] {
+export function checkStep(texts: Texts, settings: StepSettings, values: Record<string, unknown>, at: Path, closed: boolean, own?: StepType['check']): FlowProblem[] {
   if (!settings.described) return [];
-  const problems = checkFields(settings.fields, values, at);
+  const { t } = texts;
+  const problems = checkFields(texts, settings.fields, values, at);
   for (const rule of settings.rules) {
     if (rule.kind === 'exactlyOne' && rule.fields.filter((name) => present(values[name])).length !== 1) {
-      problems.push({ path: at, message: `set exactly one of ${rule.fields.join(', ')}` });
+      problems.push({ path: at, message: t('endpoints.check.exactlyOne', { fields: rule.fields.join(', ') }) });
     }
   }
-  for (const { key, message } of own?.(values) ?? []) problems.push({ path: [...at, key], message });
+  for (const { key, message } of own?.(values) ?? []) problems.push({ path: [...at, key], message: say(texts, message) });
   if (closed) {
     const described = new Set(settings.fields.map((f) => f.name));
     for (const key of Object.keys(values)) {
-      if (!described.has(key) && !STEP_KEYS.has(key)) problems.push({ path: [...at, key], message: 'no such setting' });
+      if (!described.has(key) && !STEP_KEYS.has(key)) problems.push({ path: [...at, key], message: t('endpoints.check.unknown') });
     }
   }
   return problems;
 }
 
-/** What is wrong with the keys of the "Step" tab of the step `values` at `at`; a process call's are judged by the rules of calls. */
-export function checkStepTab(values: Record<string, unknown>, at: Path): FlowProblem[] {
+/**
+ * What is wrong with the keys of the "Step" tab of the step `values` at `at`, in `texts`' language; a process call's are
+ * judged by the rules of calls.
+ */
+export function checkStepTab(texts: Texts, values: Record<string, unknown>, at: Path): FlowProblem[] {
   if (values.type === 'process') {
-    return present(values.name) ? judge(stepTabFields('process', '')[0]!, values.name, [...at, 'name']) : [];
+    return present(values.name) ? judge(texts, stepTabFields('process', '')[0]!, values.name, [...at, 'name']) : [];
   }
   const [name, retryable, level, payload] = stepTabFields(undefined, '');
-  const problems = checkFields([name!, retryable!], values, at);
+  const problems = checkFields(texts, [name!, retryable!], values, at);
   const recording = values.recording;
   if (present(recording)) {
-    if (!isRecord(recording)) problems.push({ path: [...at, 'recording'], message: 'must be a mapping of level and payload' });
+    if (!isRecord(recording)) problems.push({ path: [...at, 'recording'], message: texts.t('flows.check.recording') });
     else {
       for (const [key, f] of [['level', level!], ['payload', payload!]] as const) {
-        if (present(recording[key])) problems.push(...judge(f, recording[key], [...at, 'recording', key]));
+        if (present(recording[key])) problems.push(...judge(texts, f, recording[key], [...at, 'recording', key]));
       }
       for (const key of Object.keys(recording)) {
-        if (key !== 'level' && key !== 'payload') problems.push({ path: [...at, 'recording', key], message: 'no such setting' });
+        if (key !== 'level' && key !== 'payload') problems.push({ path: [...at, 'recording', key], message: texts.t('endpoints.check.unknown') });
       }
     }
   }

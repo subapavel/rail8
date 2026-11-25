@@ -1,6 +1,7 @@
 import { leaves, same, type SettingChange } from '../../leaves';
 import { readFlow } from './flowYaml';
 import type { Path } from './types';
+import { currentLanguage, textsIn } from '../../language';
 
 export type { SettingChange };
 
@@ -134,7 +135,7 @@ export function flowChanges(before: string | null, after: string | null): FlowCh
     if (text === null) return null;
     const read = readFlow(text);
     if (read.kind === 'flow') return read.value;
-    out.unreadable.push({ side, message: read.kind === 'problem' ? read.message : 'the file is not a flow' });
+    out.unreadable.push({ side, message: read.kind === 'problem' ? read.message : textsIn(currentLanguage()).t('flows.change.notFlow') });
     return null;
   };
   const older = valueOf(before, 'before');

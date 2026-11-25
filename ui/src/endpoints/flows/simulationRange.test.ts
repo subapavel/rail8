@@ -2,6 +2,9 @@ import { expect, it } from 'vitest';
 import { canvasGraph } from './canvasGraph';
 import { simulationRange } from './simulationRange';
 import { view } from './view';
+import { textsIn } from '../../language';
+
+const en = textsIn('en');
 
 const flow = view(`schemaVersion: 1
 kind: flow
@@ -18,7 +21,7 @@ processes:
     steps:
       - type: jq
       - type: xslt
-`, { endpoints: [], steps: [], flows: [] });
+`, { endpoints: [], steps: [], flows: [] }, en);
 const edges = canvasGraph(flow, false, false).edges;
 const before = (target: string) => edges.find(edge => edge.target === target)?.insertAt;
 const start = before('/steps/0');

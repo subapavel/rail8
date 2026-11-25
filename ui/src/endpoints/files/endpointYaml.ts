@@ -30,7 +30,7 @@ function parse(text: string): unknown {
   try {
     return load(text);
   } catch (error) {
-    throw new EndpointFileError(`the file is not YAML: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+    throw new EndpointFileError(`the file is not YAML: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   }
 }
 
@@ -43,9 +43,9 @@ export function readEndpoint(text: string): EndpointDocument | null {
   const doc = parse(text);
   if (!isRecord(doc) || doc.kind !== 'endpoint') return null;
   const { id, scheme, direction, description, config, environments } = doc;
-  if (typeof id !== 'string' || typeof scheme !== 'string') throw new EndpointFileError('an endpoint file names its id and scheme');
-  if (direction !== 'in' && direction !== 'out') throw new EndpointFileError('an endpoint file has the direction in or out');
-  if (!isRecord(config)) throw new EndpointFileError('the endpoint file has no mapping under config');
+  if (typeof id !== 'string' || typeof scheme !== 'string') throw new EndpointFileError('an endpoint file names its id and scheme'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
+  if (direction !== 'in' && direction !== 'out') throw new EndpointFileError('an endpoint file has the direction in or out'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
+  if (!isRecord(config)) throw new EndpointFileError('the endpoint file has no mapping under config'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   const overrides: EndpointDocument['environments'] = [];
   if (isRecord(environments)) {
     for (const [name, env] of Object.entries(environments)) {
@@ -63,7 +63,7 @@ const PLAIN = /^[A-Za-z_/][A-Za-z0-9_./:@+=-]*$/;
 /** `value` as YAML on one line: plain text where no reader can mistake it, else double-quoted; anything else as JSON. */
 function written(value: unknown): string {
   if (typeof value === 'string') return PLAIN.test(value) && !value.endsWith(':') && !WORDS.test(value) ? value : JSON.stringify(value);
-  if (typeof value === 'number' && !Number.isFinite(value)) throw new EndpointFileError('a number must be finite');
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new EndpointFileError('a number must be finite'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   return JSON.stringify(value);
 }
 
@@ -120,14 +120,14 @@ const indentOf = (line: string) => line.length - line.trimStart().length;
  */
 export function writeConfig(text: string, config: Record<string, unknown>): string {
   const before = parse(text);
-  if (!isRecord(before) || !isRecord(before.config)) throw new EndpointFileError('the endpoint file has no mapping under config');
+  if (!isRecord(before) || !isRecord(before.config)) throw new EndpointFileError('the endpoint file has no mapping under config'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   const old = before.config;
   const crlf = text.includes('\r\n');
   const lines = text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 
   const at = lines.findIndex((l) => /^config:/.test(l));
   const head = at < 0 ? null : /^config:(?:\s*(\{\s*\}))?(\s+#.*)?\s*$/.exec(lines[at]!);
-  if (head === null) throw new EndpointFileError('config is not written as a block the form can edit; edit the file in a text editor');
+  if (head === null) throw new EndpointFileError('config is not written as a block the form can edit; edit the file in a text editor'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   let blockEnd = at + 1;
   while (blockEnd < lines.length && (blankOrComment(lines[blockEnd]!) || indentOf(lines[blockEnd]!) > 0)) blockEnd++;
 
@@ -139,7 +139,7 @@ export function writeConfig(text: string, config: Record<string, unknown>): stri
     if (indent < 0) indent = indentOf(line);
     if (indentOf(line) > indent) continue;
     const match = indentOf(line) === indent ? KEY.exec(line) : null;
-    if (match === null) throw new EndpointFileError(`line ${i + 1} of config is not an option the form can edit; edit the file in a text editor`);
+    if (match === null) throw new EndpointFileError(`line ${i + 1} of config is not an option the form can edit; edit the file in a text editor`); // untranslated: the development server reads endpoint files with this module too, and it has no translations
     const value = match[3] ?? '';
     entries.push({ key: keyName(match[2]!), start: i, end: i + 1, head: `${match[1]}${match[2]}:`, comment: trailingComment(value) });
   }
@@ -150,7 +150,7 @@ export function writeConfig(text: string, config: Record<string, unknown>): stri
   }
   const keys = entries.map((e) => e.key);
   if (head[1] !== undefined ? keys.length > 0 : !sameValue([...keys].sort(), Object.keys(old).sort())) {
-    throw new EndpointFileError('config is not written as a block the form can edit; edit the file in a text editor');
+    throw new EndpointFileError('config is not written as a block the form can edit; edit the file in a text editor'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   }
 
   const pad = ' '.repeat(indent < 0 ? 2 : indent);
@@ -183,7 +183,7 @@ export function writeConfig(text: string, config: Record<string, unknown>): stri
 
   const after = parse(result);
   if (!sameValue(after, { ...before, config })) {
-    throw new EndpointFileError('the file would not read back with the settings given; nothing was saved');
+    throw new EndpointFileError('the file would not read back with the settings given; nothing was saved'); // untranslated: the development server reads endpoint files with this module too, and it has no translations
   }
   return result;
 }

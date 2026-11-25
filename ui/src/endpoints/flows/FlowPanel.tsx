@@ -1,6 +1,7 @@
 import { ArrowDownOutlined, ArrowUpOutlined, DeleteOutlined, PlusCircleOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Form, Input, Select, Table, Tabs, Typography } from 'antd';
 import { useState, type ReactNode } from 'react';
+import { say, useText } from '../../language';
 import { FieldControl } from '../FieldControl';
 import { RawOptions } from '../RawOptions';
 import { placeOf, type Op } from './edit';
@@ -67,6 +68,7 @@ const inside = (problems: FlowProblem[], at: Path) => problems.filter((p) => at.
  * a value when its field is required. Read-only it shows the value.
  */
 function Cell({ field, value, label, problem, onChange }: { field: StepField; value: unknown; label: string; problem: boolean; onChange?: (value: unknown) => void }) {
+  const { t } = useText();
   const status = problem ? 'error' : undefined;
   if (onChange === undefined || field.type === 'list' || field.type === 'map' || field.type === 'raw') return <>{shown(value)}</>;
   if (field.type === 'choice' || field.type === 'boolean') {
@@ -79,7 +81,7 @@ function Cell({ field, value, label, problem, onChange }: { field: StepField; va
         status={status}
         aria-invalid={problem}
         options={[
-          { value: '', label: 'Not set' },
+          { value: '', label: t('endpoints.field.notSet') },
           ...(value !== undefined && value !== null && !values.includes(shown(value)) ? [{ value: shown(value), label: shown(value) }] : []),
           ...values.map((v) => ({ value: v, label: v })),
         ]}
@@ -118,11 +120,13 @@ function ListTable({
   problems: FlowProblem[];
   edit?: PanelEdit;
 }) {
+  const texts = useText();
+  const { t } = texts;
   const items = Array.isArray(values[field.name]) ? (values[field.name] as unknown[]) : [];
   const step = at.slice(0, -1);
   return (
     <Form.Item label={field.name}>
-      <Typography.Text type="secondary">{field.help}</Typography.Text>
+      <Typography.Text type="secondary">{say(texts, field.help)}</Typography.Text>
       <Table
         aria-label={field.name}
         size="small"
@@ -138,7 +142,7 @@ function ListTable({
                 <Cell
                   field={f}
                   value={row[f.name]}
-                  label={`${f.name} of row ${i + 1}`}
+                  label={t('flows.panel.cell', { name: f.name, row: i + 1 })}
                   problem={inside(problems, [...at, i, f.name]).length > 0}
                   {...(edit === undefined || !isRecord(item)
                     ? {}
@@ -151,14 +155,14 @@ function ListTable({
             ? []
             : [
                 {
-                  title: 'Row actions',
+                  title: t('flows.panel.rowActions'),
                   key: 'actions',
                   render: (_: unknown, { key: i }: { key: number }) => (
                     <Flex gap="small" wrap>
                       <Button
                         type="text"
                         size="small"
-                        aria-label={`Move row ${i + 1} up`}
+                        aria-label={t('flows.panel.row.up', { row: i + 1 })}
                         icon={<ArrowUpOutlined aria-hidden />}
                         disabled={i === 0}
                         onClick={() => edit.change(moveRow(at, i, i - 1))}
@@ -166,7 +170,7 @@ function ListTable({
                       <Button
                         type="text"
                         size="small"
-                        aria-label={`Move row ${i + 1} down`}
+                        aria-label={t('flows.panel.row.down', { row: i + 1 })}
                         icon={<ArrowDownOutlined aria-hidden />}
                         disabled={i === items.length - 1}
                         onClick={() => edit.change(moveRow(at, i, i + 1))}
@@ -174,7 +178,7 @@ function ListTable({
                       <Button
                         type="text"
                         size="small"
-                        aria-label={`Remove row ${i + 1}`}
+                        aria-label={t('flows.panel.row.remove', { row: i + 1 })}
                         icon={<DeleteOutlined aria-hidden />}
                         disabled={items.length === 1}
                         onClick={() => edit.change(removeRow(at, i))}
@@ -187,7 +191,7 @@ function ListTable({
       />
       {edit !== undefined && (
         <Button type="link" icon={<PlusCircleOutlined aria-hidden />} onClick={() => edit.change(addRow(step, values, field.name, newRow(field.item)))}>
-          Add a row
+          {t('flows.panel.addRow')}
         </Button>
       )}
       <Problems problems={inside(problems, at)} />
@@ -200,15 +204,16 @@ function ListTable({
  * is pressed, and held as typed, unsaveable, while it is empty, taken or does not match the field's pattern.
  */
 function EntryKey({ field, name, taken, at, edit }: { field: Extract<StepField, { type: 'map' }>; name: string; taken: string[]; at: Path; edit: PanelEdit }) {
+  const { t } = useText();
   const [text, setText] = useState(name);
   const key = `${pointer([...at, name])}#key`;
   const wrong =
     text === ''
-      ? 'is empty'
+      ? t('flows.panel.key.empty')
       : text !== name && taken.includes(text)
-        ? 'is taken'
+        ? t('flows.panel.key.taken')
         : field.key.pattern !== undefined && !new RegExp(`^(?:${field.key.pattern})$`).test(text)
-          ? `must match ${field.key.pattern}`
+          ? t('flows.panel.key.pattern', { pattern: field.key.pattern })
           : null;
   const commit = () => {
     if (wrong !== null) return;
@@ -218,7 +223,7 @@ function EntryKey({ field, name, taken, at, edit }: { field: Extract<StepField, 
   return (
     <>
       <Input
-        aria-label={`Value ${name}`}
+        aria-label={t('flows.panel.key.label', { name })}
         value={text}
         status={wrong === null ? undefined : 'error'}
         aria-invalid={wrong !== null}
@@ -253,12 +258,14 @@ function MapTable({
   problems: FlowProblem[];
   edit?: PanelEdit;
 }) {
+  const texts = useText();
+  const { t } = texts;
   const value = values[field.name];
   const entries = isRecord(value) ? Object.entries(value) : [];
   const keys = entries.map(([k]) => k);
   return (
     <Form.Item label={field.name}>
-      <Typography.Text type="secondary">{field.help}</Typography.Text>
+      <Typography.Text type="secondary">{say(texts, field.help)}</Typography.Text>
       <Table
         aria-label={field.name}
         size="small"
@@ -266,7 +273,7 @@ function MapTable({
         dataSource={entries.map(([name, value]) => ({ key: name, name, value }))}
         columns={[
           {
-            title: 'Value',
+            title: t('flows.panel.key.column'),
             key: 'name',
             render: (_, row) => (edit === undefined ? row.name : <EntryKey key={edit.generation} field={field} name={row.name} taken={keys} at={at} edit={edit} />),
           },
@@ -277,7 +284,7 @@ function MapTable({
               <Cell
                 field={field.value}
                 value={row.value}
-                label={`${field.value.name} of ${row.name}`}
+                label={t('flows.panel.entry', { name: field.value.name, row: row.name })}
                 problem={inside(problems, [...at, row.name]).length > 0}
                 {...(edit === undefined
                   ? {}
@@ -289,13 +296,13 @@ function MapTable({
             ? []
             : [
                 {
-                  title: 'Row actions',
+                  title: t('flows.panel.rowActions'),
                   key: 'actions',
                   render: (_: unknown, row: { name: string }) => (
                     <Button
                       type="text"
                       size="small"
-                      aria-label={`Remove ${row.name}`}
+                      aria-label={t('flows.panel.entry.remove', { name: row.name })}
                       icon={<DeleteOutlined aria-hidden />}
                       disabled={entries.length === 1}
                       onClick={() => edit.change(removeRow(at, row.name))}
@@ -307,7 +314,7 @@ function MapTable({
       />
       {edit !== undefined && (
         <Button type="link" icon={<PlusCircleOutlined aria-hidden />} onClick={() => edit.change(addEntry(at.slice(0, -1), values, field.name, ''))}>
-          Add a row
+          {t('flows.panel.addRow')}
         </Button>
       )}
       <Problems problems={inside(problems, at)} />
@@ -317,6 +324,8 @@ function MapTable({
 
 /** The fields of a form, each with its value from `values` and its problem, and editable with `edit`; lists and maps are tables. */
 function Fields({ fields, values, at, problems, edit }: { fields: StepField[]; values: Record<string, unknown>; at: Path; problems: FlowProblem[]; edit?: PanelEdit }) {
+  const texts = useText();
+  const { t } = texts;
   return (
     <Form className="rail8-property-form" size="small" labelAlign="start" labelWrap colon={false}>
       {fields.map((f) => {
@@ -325,7 +334,7 @@ function Fields({ fields, values, at, problems, edit }: { fields: StepField[]; v
         if ((f.type === 'list' || f.type === 'map') && (value === undefined || value === null)) {
           return (
             <Form.Item key={f.name} label={f.name}>
-              <Typography.Text type="secondary">Not set. {f.help}</Typography.Text>
+              <Typography.Text type="secondary">{t('flows.panel.notSet', { help: say(texts, f.help) })}</Typography.Text>
               {edit !== undefined && (
                 <Button
                   type="link"
@@ -333,7 +342,7 @@ function Fields({ fields, values, at, problems, edit }: { fields: StepField[]; v
                   icon={<PlusCircleOutlined aria-hidden />}
                   onClick={() => edit.change(f.type === 'list' ? addRow(at, values, f.name, newRow(f.item)) : addEntry(at, values, f.name, ''))}
                 >
-                  Add a row
+                  {t('flows.panel.addRow')}
                 </Button>
               )}
             </Form.Item>
@@ -365,6 +374,7 @@ const defaultNameOf = (values: Record<string, unknown>) => String(values.type ==
 
 /** A step's form: its own settings, and the "Step" tab of the platform's keys. A rename, while it is edited, warns. */
 function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepForm; problems: FlowProblem[]; edit?: PanelEdit }) {
+  const { t } = useText();
   const [tab, setTab] = useState('settings');
   const [named] = useState(node.label);
   const own = Object.fromEntries(Object.entries(form.values).filter(([k]) => !STEP_KEYS.has(k)));
@@ -374,11 +384,11 @@ function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepFo
     <Tabs
       activeKey={tab}
       onChange={setTab}
-      aria-label="Step settings"
+      aria-label={t('flows.panel.tabs')}
       items={[
         {
           key: 'settings',
-          label: 'Settings',
+          label: t('endpoints.raw.label'),
           children: (
             <Flex vertical gap="middle">
               {form.missing !== undefined && <Alert type="info" showIcon title={form.missing} />}
@@ -399,11 +409,11 @@ function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepFo
         },
         {
           key: 'step',
-          label: 'Step',
+          label: t('flows.panel.stepTab'),
           children: (
             <Flex vertical gap="middle">
               {edit !== undefined && node.label !== named && (
-                <Alert type="warning" showIcon title={`Renamed from ${named}: the message history keeps ${named} on the rows written before.`} />
+                <Alert type="warning" showIcon title={t('flows.panel.renamed', { name: named })} />
               )}
               <Fields
                 fields={stepTabFields(String(form.values.type), defaultNameOf(form.values))}
@@ -425,6 +435,7 @@ function StepTabs({ node, form, problems, edit }: { node: FlowNode; form: StepFo
  * no field shows. With `edit` they are editable, and a process can be added.
  */
 function FlowSettings({ form, problems, edit }: { form: StepForm; problems: FlowProblem[]; edit?: PanelEdit }) {
+  const { t } = useText();
   const described = new Set(form.settings.fields.map((f) => f.name.split('.')[0]!));
   const undescribed = Object.fromEntries(Object.entries(form.values).filter(([k]) => !described.has(k) && !FLOW_PARTS.has(k)));
   const fields = new Set(form.settings.fields.map((f) => pointer(f.name.split('.'))));
@@ -445,7 +456,7 @@ function FlowSettings({ form, problems, edit }: { form: StepForm; problems: Flow
       {edit !== undefined && (
         <div>
           <Button size="small" icon={<PlusCircleOutlined aria-hidden />} onClick={edit.addProcess}>
-            Add a process
+            {t('flows.panel.addProcess')}
           </Button>
         </div>
       )}
@@ -455,34 +466,30 @@ function FlowSettings({ form, problems, edit }: { form: StepForm; problems: Flow
 
 /** A process's lane while the flow is edited: its name, which renames it and every call of it, and Delete while no step calls it. */
 function LaneEdit({ name, calls, edit }: { name: string; calls: FlowNode[]; edit: PanelEdit }) {
+  const { t } = useText();
   const [text, setText] = useState(name);
   const unnamed = calls.filter((c) => c.defaultName).length;
   return (
     <Form layout="vertical">
-      <Form.Item label="Name" htmlFor={`lane-${name}`}>
+      <Form.Item label={t('flows.panel.name')} htmlFor={`lane-${name}`}>
         <Flex gap="small" wrap>
           <div style={{ flex: 1 }}>
-            <Input aria-label="Name" id={`lane-${name}`} value={text} onChange={({ target: { value: next } }) => setText(next)} />
+            <Input aria-label={t('flows.panel.name')} id={`lane-${name}`} value={text} onChange={({ target: { value: next } }) => setText(next)} />
           </div>
           <Button size="small" disabled={text === name || text === ''} onClick={() => edit.renameProcess(name, text)}>
-            Rename
+            {t('flows.panel.rename')}
           </Button>
         </Flex>
         {unnamed > 0 && (
-          <Typography.Text type="warning">
-            {unnamed === 1 ? 'A call' : `${unnamed} calls`} without a name {unnamed === 1 ? 'is' : 'are'} named after the process: a rename changes the names its steps run under,
-            and the message history keeps {name} on the rows written before.
-          </Typography.Text>
+          <Typography.Text type="warning">{t('flows.panel.unnamed', { count: unnamed, name })}</Typography.Text>
         )}
       </Form.Item>
       <Flex align="center" gap="small" wrap>
         <Button danger size="small" icon={<DeleteOutlined aria-hidden />} disabled={calls.length > 0} onClick={() => edit.deleteProcess(name)}>
-          Delete process
+          {t('flows.panel.deleteProcess')}
         </Button>
         {calls.length > 0 && (
-          <Typography.Text type="secondary">
-            {calls.length === 1 ? 'A step calls' : `${calls.length} steps call`} it: {calls.map((c) => placeOf(c.path)).join(', ')}.
-          </Typography.Text>
+          <Typography.Text type="secondary">{t('flows.panel.callers', { count: calls.length, places: calls.map((c) => placeOf(c.path)).join(', ') })}</Typography.Text>
         )}
       </Flex>
     </Form>
@@ -517,11 +524,12 @@ export interface FlowPanelProps {
  * settings changed.
  */
 export function FlowPanel({ flow, settings, node, calls, laneCalls, problems, endpointForm, openEndpoint, openFlow, edit }: FlowPanelProps) {
+  const { t } = useText();
   const own = edit === undefined ? {} : { edit };
   if (node === null) {
     return (
       <Flex vertical gap="middle">
-        <Typography.Title level={2}>Flow {shown(flow.id)}</Typography.Title>
+        <Typography.Title level={2}>{t('flows.panel.flow', { id: shown(flow.id) })}</Typography.Title>
         {settings !== undefined && <FlowSettings key={edit?.generation ?? 0} form={settings} problems={problems} {...own} />}
       </Flex>
     );
@@ -534,27 +542,28 @@ export function FlowPanel({ flow, settings, node, calls, laneCalls, problems, en
   return (
     <Flex vertical gap="middle">
       <div>
-        <Typography.Title level={2}>{node.kind === 'lane' ? `Process ${node.label}` : node.label}</Typography.Title>
+        <Typography.Title level={2}>{node.kind === 'lane' ? t('flows.change.process', { name: node.label }) : node.label}</Typography.Title>
         <Typography.Text type="secondary">
-          {node.type ?? node.kind}
-          {node.runs > 0 && ` · runs as ${node.runsAs.join(', ')}${node.runs > node.runsAs.length ? ` and ${node.runs - node.runsAs.length} more` : ''}`}
+          {node.runs === 0
+            ? (node.type ?? node.kind)
+            : t(node.runs > node.runsAs.length ? 'flows.panel.runsAsMore' : 'flows.panel.runsAs', { type: node.type ?? node.kind, names: node.runsAs.join(', '), more: node.runs - node.runsAs.length })}
         </Typography.Text>
       </div>
       {editable !== undefined && (
         <Flex gap="small" wrap>
           <Button size="small" icon={<ArrowUpOutlined aria-hidden />} disabled={!editable.up} onClick={() => editable.move(-1)}>
-            Move up
+            {t('flows.panel.up')}
           </Button>
           <Button size="small" icon={<ArrowDownOutlined aria-hidden />} disabled={!editable.down} onClick={() => editable.move(1)}>
-            Move down
+            {t('flows.panel.down')}
           </Button>
           <Button danger size="small" icon={<DeleteOutlined aria-hidden />} onClick={editable.remove}>
-            Delete
+            {t('flows.panel.delete')}
           </Button>
           {editable.lists.length > 0 && (
             <Select
-              aria-label="Move to the end of"
-              placeholder="Move to…"
+              aria-label={t('flows.panel.moveTo.label')}
+              placeholder={t('flows.panel.moveTo')}
               value={undefined}
               virtual={false}
               options={editable.lists.map((l) => ({ value: pointer(l.path), label: l.label }))}
@@ -568,26 +577,26 @@ export function FlowPanel({ flow, settings, node, calls, laneCalls, problems, en
       )}
       {edit !== undefined && node.kind === 'lane' && <LaneEdit key={`${node.id}-${edit.generation}`} name={node.label} calls={laneCalls ?? []} edit={edit} />}
       {node.locked !== undefined && <Alert type="info" showIcon title={node.locked} />}
-      {node.kind === 'lane' && node.runs === 0 && <Typography.Text>No step of this flow calls the process.</Typography.Text>}
+      {node.kind === 'lane' && node.runs === 0 && <Typography.Text>{t('flows.panel.uncalled')}</Typography.Text>}
       {node.form === undefined && mine.length > 0 && <Problems problems={mine} />}
       {node.form !== undefined && <StepTabs key={node.id} node={node} form={node.form} problems={mine} {...(editable === undefined ? {} : { edit: editable })} />}
       {node.form !== undefined && mine.some((p) => p.path.length <= at.length) && <Problems problems={mine.filter((p) => p.path.length <= at.length)} />}
       {flowLink !== undefined && (
         <div>
-          <Button onClick={() => openFlow(flowLink)}>Open flow {calls?.label ?? node.label}</Button>
+          <Button onClick={() => openFlow(flowLink)}>{t('flows.panel.openFlow', { name: calls?.label ?? node.label })}</Button>
         </div>
       )}
       {opens !== undefined && 'endpoint' in opens && (
         <Flex vertical gap="middle">
           <div>
-            <Button onClick={() => openEndpoint(opens.endpoint)}>Open endpoint</Button>
+            <Button onClick={() => openEndpoint(opens.endpoint)}>{t('flows.panel.openEndpoint')}</Button>
           </div>
           {endpointForm(opens.endpoint)}
         </Flex>
       )}
       {node.kind === 'from' && settings !== undefined && (
         <div>
-          <Typography.Title level={3}>Flow {shown(flow.id)}</Typography.Title>
+          <Typography.Title level={3}>{t('flows.panel.flow', { id: shown(flow.id) })}</Typography.Title>
           <FlowSettings key={edit?.generation ?? 0} form={settings} problems={problems} {...own} />
         </div>
       )}

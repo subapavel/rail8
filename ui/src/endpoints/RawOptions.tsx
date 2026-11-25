@@ -1,5 +1,6 @@
 import { Form, Input } from 'antd';
 import { useId, useState } from 'react';
+import { useText } from '../language';
 import type { Options } from './settings';
 
 export interface RawOptionsProps {
@@ -15,20 +16,21 @@ const isOptions = (value: unknown): value is Options => typeof value === 'object
 
 /** All of an endpoint's options as one JSON object, for a component that describes none of them. */
 export function RawOptions({ options, readOnly, onChange, onInvalid }: RawOptionsProps) {
+  const { t } = useText();
   const id = useId();
   const [text, setText] = useState(() => JSON.stringify(options, null, 2));
   const [invalid, setInvalid] = useState(false);
   return (
     <Form.Item
-      label="Settings"
+      label={t('endpoints.raw.label')}
       htmlFor={id}
       validateStatus={invalid ? 'error' : undefined}
-      extra={<span id={`${id}-help`}>The component describes no settings: its options are written here as one JSON object.</span>}
-      help={invalid && <span id={`${id}-error`}>is not a JSON object</span>}
+      extra={<span id={`${id}-help`}>{t('endpoints.raw.help')}</span>}
+      help={invalid && <span id={`${id}-error`}>{t('endpoints.raw.notObject')}</span>}
     >
       <Input.TextArea
         id={id}
-        aria-label="Settings"
+        aria-label={t('endpoints.raw.label')}
         readOnly={readOnly}
         value={text}
         rows={Math.min(20, text.split('\n').length + 1)}

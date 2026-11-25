@@ -1,6 +1,7 @@
 import { ApartmentOutlined, EllipsisOutlined, FullscreenExitOutlined, FullscreenOutlined, MinusOutlined, SlidersOutlined } from '@ant-design/icons';
 import { Button, Splitter, Tooltip, Typography } from 'antd';
 import { useId, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useText } from '../../language';
 
 export type InspectorView = 'minimized' | 'split' | 'maximized';
 
@@ -18,13 +19,14 @@ const clampShare = (percent: number) => Math.max(15, Math.min(80, percent));
 
 /** Resizes the properties below the graph and keeps both the camera and unfinished fields when the split is restored. */
 export function FlowInspector({ mode, setMode, selection, onFlowSelect, canvas, children }: FlowInspectorProps) {
+  const { t } = useText();
   const [share, setShare] = useState(DEFAULT_SHARE);
   const fieldsId = useId();
   const split = mode === 'split';
   const minimized = mode === 'minimized';
   const maximized = mode === 'maximized';
-  const minimizeLabel = minimized ? 'Restore split view' : 'Minimize properties';
-  const maximizeLabel = maximized ? 'Restore split view' : 'Maximize properties';
+  const minimizeLabel = t(minimized ? 'flows.inspector.restore' : 'flows.inspector.minimize');
+  const maximizeLabel = t(maximized ? 'flows.inspector.restore' : 'flows.inspector.maximize');
   const resizeByKey = (event: KeyboardEvent) => {
     const next = { ArrowUp: share + 5, ArrowDown: share - 5, Home: 15, End: 80 }[event.key];
     if (next === undefined) return;
@@ -46,7 +48,7 @@ export function FlowInspector({ mode, setMode, selection, onFlowSelect, canvas, 
         onDraggerDoubleClick={() => setShare(DEFAULT_SHARE)}
         draggerIcon={
           split && (
-            <button type="button" className="rail8-properties-grip" aria-label="Resize properties with arrow keys" onKeyDown={resizeByKey}>
+            <button type="button" className="rail8-properties-grip" aria-label={t('flows.inspector.resize')} onKeyDown={resizeByKey}>
               <EllipsisOutlined aria-hidden />
             </button>
           )
@@ -56,7 +58,7 @@ export function FlowInspector({ mode, setMode, selection, onFlowSelect, canvas, 
           {canvas}
         </Splitter.Panel>
         <Splitter.Panel min={split ? '15%' : 0} size={height} resizable={split}>
-          <section className="rail8-properties" aria-label="Flow properties" onKeyDown={restoreOnEscape}>
+          <section className="rail8-properties" aria-label={t('flows.inspector.label')} onKeyDown={restoreOnEscape}>
             <header>
               <Button
                 type="text"
@@ -66,13 +68,13 @@ export function FlowInspector({ mode, setMode, selection, onFlowSelect, canvas, 
                 aria-expanded={!minimized}
                 onClick={() => setMode(minimized ? 'split' : 'minimized')}
               >
-                Properties
+                {t('flows.inspector.properties')}
               </Button>
               <Typography.Text ellipsis type="secondary">{selection}</Typography.Text>
               <div className="rail8-properties-actions">
                 {onFlowSelect && (
-                  <Tooltip title="Show the flow's settings">
-                    <Button size="small" type="text" aria-label="Show the flow's settings" icon={<ApartmentOutlined aria-hidden />} onClick={onFlowSelect} />
+                  <Tooltip title={t('flows.inspector.flowSettings')}>
+                    <Button size="small" type="text" aria-label={t('flows.inspector.flowSettings')} icon={<ApartmentOutlined aria-hidden />} onClick={onFlowSelect} />
                   </Tooltip>
                 )}
                 <Button

@@ -4,6 +4,7 @@ import { readFlow, yamlFindings } from './flowYaml';
 import { layout, type Block } from './layout';
 import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, settingsOf, UNDESCRIBED, type StepType } from './steps';
 import { inboundAddress } from '../inbound';
+import type { Texts } from '../../language';
 import type { FlowContext, FlowEdge, FlowNode, FlowProblem, FlowView, Path, StepField, StepForm } from './types';
 
 /** The most nodes drawn, rules listed on a route's node, names listed in `runsAs`, processes inside each other, and the deepest path. */
@@ -58,39 +59,42 @@ interface Entry {
 
 /**
  * Draws `text`, a flow file, in `context`: its nodes with their positions, its edges and its problems, as the flow screen
- * shows them. The same text and context always give the same view. `types` are the built-in step types; a test may give
- * more. A file that is no flow, or that would be drawn with more than {@link MAX_NODES} nodes, is not readable.
+ * shows them, with the words of `texts`' language. The same text, context and language always give the same view.
+ * `types` are the built-in step types; a test may give more. A file that is no flow, or that would be drawn with more
+ * than {@link MAX_NODES} nodes, is not readable.
  */
-export function view(text: string, context: FlowContext, types: Readonly<Record<string, StepType>> = BUILT_IN): FlowView {
+export function view(text: string, context: FlowContext, texts: Texts, types: Readonly<Record<string, StepType>> = BUILT_IN): FlowView {
+  const { t } = texts;
   const read = readFlow(text);
   if (read.kind !== 'flow') {
-    return { readable: false, nodes: [], edges: [], problems: [{ path: [], message: read.kind === 'problem' ? read.message : 'the file is not a flow' }] };
+    return { readable: false, nodes: [], edges: [], problems: [{ path: [], message: read.kind === 'problem' ? read.message : t('flows.change.notFlow') }] };
   }
   const flow = read.value;
   const problems: FlowProblem[] = [];
-  const locks = yamlFindings(read.doc, text, problems);
-  const lockOf = (path: Path) => locks.find((l) => within(l.path, path) || (l.covers === true && within(path, l.path)))?.reason;
+  const locks = yamlFindings(read.doc, text, problems, texts);
+  const lockOf = (path: Path) => locks.find((l) => within(l.path, path) || (l.covers === true && within(path, l.path)));
   const partial = context.partial === true;
-  const notFound = (what: string): Pick<FlowProblem, 'message' | 'warning'> =>
-    partial ? { message: `${what}: not found in the working folder`, warning: true } : { message: what };
+  /** A reference not found: `whole` as a problem, or `inPart` as a warning when the working folder is read in part. */
+  const notFound = (whole: string, inPart: string): Pick<FlowProblem, 'message' | 'warning'> => (partial ? { message: inPart, warning: true } : { message: whole });
 
-  if (read.documents > 1) problems.push({ path: [], message: 'the file holds a second document, which the node does not read', warning: true });
+  if (read.documents > 1) problems.push({ path: [], message: t('flows.view.secondDocument'), warning: true });
   // why the editor shows the flow read-only, when it does
   let readOnly: string | undefined;
   if (flow.schemaVersion !== 1) {
-    readOnly = `schemaVersion is ${JSON.stringify(flow.schemaVersion ?? null)}, not 1`;
-    problems.push({ path: ['schemaVersion'], message: `${readOnly}: the editor shows this flow read-only` });
+    const version = JSON.stringify(flow.schemaVersion ?? null);
+    readOnly = t('flows.view.schemaVersion', { version });
+    problems.push({ path: ['schemaVersion'], message: t('flows.view.schemaVersion.readOnly', { version }) });
   }
 
   // the lists of steps: the flow's, each process's, and those inside a step whose type holds lists of steps
   const processes = isRecord(flow.processes) ? flow.processes : {};
-  if (flow.processes !== undefined && !isRecord(flow.processes)) problems.push({ path: ['processes'], message: 'processes names each process with its steps' });
+  if (flow.processes !== undefined && !isRecord(flow.processes)) problems.push({ path: ['processes'], message: t('flows.view.processes') });
   const processNames = Object.keys(processes);
   const lists: StepList[] = [];
   const nested = new Map<string, StepList[]>(); // a step's pointer to the lists inside it
   const collect = (path: Path, items: unknown, owner: string | null) => {
     if (!Array.isArray(items) || items.length === 0) {
-      problems.push({ path, message: 'must be a list of at least one step' });
+      problems.push({ path, message: t('flows.view.stepList') });
       return;
     }
     const list: StepList = { path, items, owner };
@@ -101,7 +105,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
         for (const at of matching(item, pattern, [])) {
           const inner = [...path, i, ...at];
           if (inner.length > MAX_PATH) {
-            problems.push({ path: inner, message: `a path is at most ${MAX_PATH} steps deep` });
+            problems.push({ path: inner, message: t('flows.edit.deepPath', { max: MAX_PATH }) });
             continue;
           }
           const before = lists.length;
@@ -114,15 +118,15 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   };
   for (const name of processNames) {
     const process = processes[name];
-    if (!isRecord(process)) problems.push({ path: ['processes', name], message: 'a process has its list of steps under steps' });
+    if (!isRecord(process)) problems.push({ path: ['processes', name], message: t('flows.view.processSteps') });
     else collect(['processes', name, 'steps'], process.steps, name);
   }
   collect(['steps'], flow.steps, null);
   for (const list of lists) {
     const node = read.doc.getIn(list.path, true);
     if (isSeq(node) && node.flow === true) {
-      problems.push({ path: list.path, message: 'the list is written on one line ([ … ]): the editor shows this flow read-only', warning: true });
-      readOnly ??= `${placeOf(list.path)} is written on one line ([ … ])`;
+      problems.push({ path: list.path, message: t('flows.view.oneLine'), warning: true });
+      readOnly ??= t('flows.view.oneLine.reason', { place: placeOf(list.path) });
     }
   }
 
@@ -133,9 +137,9 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
     list.items.forEach((item, i) => {
       const path = [...list.path, i];
       if (!isRecord(item) || typeof item.type !== 'string' || item.type === '') {
-        problems.push({ path, message: 'a step is a mapping with a text type' });
-        locks.push({ path, reason: 'a step that is no mapping with a text type', kind: 'step' });
-        entries.set(pointer(path), { path, value: null, name: `step ${i + 1}`, defaultName: true, owner: list.owner });
+        problems.push({ path, message: t('flows.view.stepMapping') });
+        locks.push({ path, holds: 'step', kind: 'step' });
+        entries.set(pointer(path), { path, value: null, name: t('flows.view.stepNumber', { number: i + 1 }), defaultName: true, owner: list.owner });
         return;
       }
       const type = item.type;
@@ -143,21 +147,21 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       if (type === 'process') {
         for (const key of Object.keys(item)) {
           if (key !== 'type' && key !== 'name' && key !== 'process') {
-            problems.push({ path, message: `a process call takes only type, name and process, not ${key}` });
+            problems.push({ path, message: t('flows.view.callKeys', { key }) });
             break;
           }
         }
         if (typeof item.process === 'string' && Object.hasOwn(processes, item.process)) calls = item.process;
-        else if (typeof item.process === 'string') problems.push({ path: [...path, 'process'], message: `'${item.process}' names no process of this flow` });
+        else if (typeof item.process === 'string') problems.push({ path: [...path, 'process'], message: t('flows.view.noProcess', { process: item.process }) });
       }
       const written = item.name !== undefined && item.name !== null;
       const fallback = type === 'process' && typeof item.process === 'string' ? item.process : type;
       const name = written ? String(item.name) : fallback;
       const at = written ? [...path, 'name'] : path;
-      const what = written ? `'${name}'` : `has no name, and its default '${name}'`;
-      if (name.length > MAX_NAME) problems.push({ path: at, message: `${what} is longer than the ${MAX_NAME} characters of a step name` });
-      else if (name === 'ingress') problems.push({ path: at, message: `${what} is the name of the arrival in a message's history` });
-      else if (named.has(name)) problems.push({ path: at, message: `${what} is the name of ${place(named.get(name)!)} too: step names are unique in a list` });
+      const naming = { name, named: written ? 'written' : 'default' };
+      if (name.length > MAX_NAME) problems.push({ path: at, message: t('flows.view.name.long', { ...naming, max: MAX_NAME }) });
+      else if (name === 'ingress') problems.push({ path: at, message: t('flows.view.name.ingress', naming) });
+      else if (named.has(name)) problems.push({ path: at, message: t('flows.view.name.twice', { ...naming, place: place(named.get(name)!) }) });
       if (!named.has(name)) named.set(name, path);
       entries.set(pointer(path), { path, value: item, type, name, defaultName: !written, ...(calls === undefined ? {} : { calls }), owner: list.owner });
     });
@@ -175,12 +179,12 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       if (height === undefined) {
         const at = calling.indexOf(process);
         if (at >= 0) {
-          problems.push({ path: [...call.path, 'process'], message: `process '${process}' calls itself: ${[...calling.slice(at), process].join(' -> ')}` });
+          problems.push({ path: [...call.path, 'process'], message: t('flows.view.callsItself', { process, chain: [...calling.slice(at), process].join(' -> ') }) });
           loops.add(pointer(call.path));
           continue;
         }
         if (calling.length === MAX_NESTING) {
-          problems.push({ path: [...call.path, 'process'], message: tooDeep([...calling, process]) });
+          problems.push({ path: [...call.path, 'process'], message: t('flows.view.tooDeep', { max: MAX_NESTING, chain: [...calling, process].join(' -> ') }) });
           continue;
         }
         calling.push(process);
@@ -189,7 +193,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
         heights.set(process, height);
       }
       if (calling.length + height > MAX_NESTING) {
-        problems.push({ path: [...call.path, 'process'], message: tooDeep([...calling, process]) });
+        problems.push({ path: [...call.path, 'process'], message: t('flows.view.tooDeep', { max: MAX_NESTING, chain: [...calling, process].join(' -> ') }) });
         continue;
       }
       most = Math.max(most, height);
@@ -251,19 +255,20 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   const flowFields = FLOW_FIELDS.map((f) => (f.name === 'from.endpoint' ? { ...f, choices: context.endpoints.filter((e) => e.direction === 'in').map((e) => e.id) } : f));
   const settings: StepForm = { path: [], settings: settingsOf(flowFields), values: flow };
   const found = new Set(problems.map((p) => pointer(p.path)));
-  problems.push(...checkFields(flowFields, flow, []).filter((p) => !found.has(pointer(p.path))));
+  problems.push(...checkFields(texts, flowFields, flow, []).filter((p) => !found.has(pointer(p.path))));
   const endpointOf = (id: unknown) => (typeof id === 'string' ? context.endpoints.find((e) => e.id === id) : undefined);
 
   /** The flow a `to` of the endpoint `id` calls, through a direct endpoint, with a problem when the call cannot be followed. */
   const calledFlow = (id: string, at: Path) => {
     const endpoint = endpointOf(id);
     if (endpoint === undefined || endpoint.scheme !== 'direct' || endpoint.direction !== 'out') return { detail: undefined, flow: undefined };
-    if (endpoint.overlaid === true) return { detail: 'an environment changes its address: no flow is linked', flow: undefined };
+    if (endpoint.overlaid === true) return { detail: t('flows.view.overlaid'), flow: undefined };
     if (endpoint.address === undefined) return { detail: undefined, flow: undefined };
     const serving = context.flows.filter((f) => f.address === endpoint.address);
     if (serving.length === 1) return { detail: undefined, flow: serving[0] };
-    if (serving.length === 0) problems.push({ path: at, ...notFound(`no flow serves the direct address ${endpoint.address}`) });
-    else problems.push({ path: at, message: `the direct address ${endpoint.address} is served by ${serving.map((f) => f.id).join(' and ')}: no flow is linked`, warning: true });
+    const address = endpoint.address;
+    if (serving.length === 0) problems.push({ path: at, ...notFound(t('flows.view.unserved', { address }), t('flows.view.unserved.inPart', { address })) });
+    else problems.push({ path: at, message: t('flows.view.servedTwice', { address, flows: texts.intl.formatList(serving.map((f) => f.id), { type: 'conjunction' }) }), warning: true });
     return { detail: undefined, flow: undefined };
   };
 
@@ -271,8 +276,8 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   const referTo = (id: unknown, at: Path, direction: 'in' | 'out') => {
     if (typeof id !== 'string') return undefined;
     const endpoint = endpointOf(id);
-    if (endpoint === undefined) problems.push({ path: at, ...notFound(`'${id}' names no endpoint of the package`) });
-    else if (endpoint.direction !== direction) problems.push({ path: at, message: `'${id}' is an ${endpoint.direction} endpoint; ${direction === 'in' ? 'a flow listens on an in endpoint' : 'a to sends to an out endpoint'}` });
+    if (endpoint === undefined) problems.push({ path: at, ...notFound(t('flows.view.noEndpoint', { id }), t('flows.view.noEndpoint.inPart', { id })) });
+    else if (endpoint.direction !== direction) problems.push({ path: at, message: t(direction === 'in' ? 'flows.view.notIn' : 'flows.view.notOut', { id }) });
     return endpoint;
   };
 
@@ -280,26 +285,26 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   const formOf = (entry: Entry): StepForm | undefined => {
     if (entry.value === null || entry.type === undefined) return undefined;
     const values = entry.value;
-    problems.push(...checkStepTab(values, entry.path));
+    problems.push(...checkStepTab(texts, values, entry.path));
     const builtIn = types[entry.type];
     if (builtIn !== undefined) {
       const fields = builtIn.fields.map((f) => withChoices(f, outEndpoints, processNames));
       const settings = settingsOf(fields, builtIn.rules);
       // a process call's keys are judged by the rules of calls above
-      problems.push(...checkStep(settings, values, entry.path, false, builtIn.check));
+      problems.push(...checkStep(texts, settings, values, entry.path, false, builtIn.check));
       return { path: entry.path, settings, values };
     }
     if (served === null) {
-      if (context.steps === undefined) return { path: entry.path, settings: UNDESCRIBED, values, missing: 'Loading the step types from the node.' };
-      return { path: entry.path, settings: UNDESCRIBED, values, missing: `The node's step types could not be read: ${(context.steps as { missing: string }).missing}` };
+      if (context.steps === undefined) return { path: entry.path, settings: UNDESCRIBED, values, missing: t('flows.view.typesLoading') };
+      return { path: entry.path, settings: UNDESCRIBED, values, missing: t('flows.view.typesUnread', { reason: (context.steps as { missing: string }).missing }) };
     }
     if (!served.has(entry.type)) {
-      problems.push({ path: [...entry.path, 'type'], message: `the node serves no step of the type ${entry.type}`, warning: true });
-      return { path: entry.path, settings: UNDESCRIBED, values, missing: `The node serves no step of the type ${entry.type}.` };
+      problems.push({ path: [...entry.path, 'type'], message: t('flows.view.unknownType', { type: entry.type }), warning: true });
+      return { path: entry.path, settings: UNDESCRIBED, values, missing: t('flows.view.unknownType.form', { type: entry.type }) };
     }
     const described = describeSchema(served.get(entry.type));
-    if (described === null) return { path: entry.path, settings: UNDESCRIBED, values, missing: `The step type ${entry.type} describes no settings.` };
-    problems.push(...checkStep(described.settings, values, entry.path, described.closed));
+    if (described === null) return { path: entry.path, settings: UNDESCRIBED, values, missing: t('flows.view.noSettings', { type: entry.type }) };
+    problems.push(...checkStep(texts, described.settings, values, entry.path, described.closed));
     return { path: entry.path, settings: described.settings, values };
   };
 
@@ -309,7 +314,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   const node = (n: Omit<FlowNode, 'x' | 'y' | 'runsAs' | 'runs' | 'defaultName'> & Partial<Pick<FlowNode, 'runsAs' | 'runs' | 'defaultName'>>): FlowNode => {
     const made: FlowNode = { runsAs: [], runs: 0, defaultName: false, ...n, x: 0, y: 0 };
     const locked = n.kind === 'step' || n.kind === 'from' || n.kind === 'destination' ? lockOf(n.path) : undefined;
-    if (locked !== undefined) made.locked = `The file holds ${locked} here, which the editor does not change.`;
+    if (locked !== undefined) made.locked = t('flows.view.locked', { holds: locked.holds, name: locked.name ?? '' });
     nodes.push(made);
     return made;
   };
@@ -358,18 +363,18 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       if (type === 'route') {
         const rules = Array.isArray(value.routes) ? value.routes : [];
         const rows = rules.map((r) => (isRecord(r) ? `${cut(String(r.when ?? ''), 32)} → ${String(r.set ?? '')}` : '?'));
-        if (value.otherwise !== undefined) rows.push(`otherwise → ${String(value.otherwise)}`);
+        if (value.otherwise !== undefined) rows.push(t('flows.view.otherwiseRow', { value: String(value.otherwise) }));
         const shown = rows.slice(0, MAX_ROWS);
-        const n = node({ ...base, detail: `sets ${String(value.prop ?? '?')}`, rows: shown, height: SIZE.step.height + SIZE.row * shown.length });
+        const n = node({ ...base, detail: t('flows.view.sets', { prop: String(value.prop ?? '?') }), rows: shown, height: SIZE.step.height + SIZE.row * shown.length });
         blocks.push({ kind: 'node', node: n });
         into = [{ from: n.id, kind: 'next' }];
         continue;
       }
 
       if (type === 'to' && value.endpoint === undefined && isRecord(value.endpoints)) {
-        const n = node({ ...base, detail: `by ${String(value.byProp ?? '?')}` });
+        const n = node({ ...base, detail: t('flows.view.by', { prop: String(value.byProp ?? '?') }) });
         blocks.push({ kind: 'node', node: n });
-        const labels = choiceLabels(list, i, value, problems);
+        const labels = choiceLabels(texts, list, i, value, problems);
         const columns: Block[] = [];
         const exitsHere: Exit[] = [];
         for (const [key, target] of Object.entries(value.endpoints)) {
@@ -409,8 +414,8 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
 
       if (type === 'filter') {
         const n = node({ ...base, ...(detail === undefined ? {} : { detail }) });
-        const end = node({ id: `${id}#ends`, kind: 'end', path, label: 'ends here', ...(parent === undefined ? {} : { parent }), ...SIZE.end });
-        edge(n.id, end.id, 'ends', { label: 'otherwise' });
+        const end = node({ id: `${id}#ends`, kind: 'end', path, label: t('flows.view.endsHere'), ...(parent === undefined ? {} : { parent }), ...SIZE.end });
+        edge(n.id, end.id, 'ends', { label: t('flows.view.otherwise') });
         blocks.push({ kind: 'beside', main: n, side: end });
         into = [{ from: n.id, kind: 'next' }];
         continue;
@@ -419,7 +424,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       const splitXpath = type === 'split' ? (typeof value.xpath === 'string' ? value.xpath : '?') : entry.calls === undefined ? null : splitOf(entry.calls, new Set());
       const n = node({
         ...base,
-        ...(type === 'process' ? { detail: `runs process ${String(value.process ?? '?')}` } : detail === undefined ? {} : { detail }),
+        ...(type === 'process' ? { detail: t('flows.view.runsProcess', { process: String(value.process ?? '?') }) } : detail === undefined ? {} : { detail }),
       });
       const lane = pointer(['processes', entry.calls ?? '', 'steps']);
       if (entry.calls !== undefined && lists.some((l) => pointer(l.path) === lane)) edge(n.id, lane, 'process');
@@ -441,7 +446,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       blocks.push({ kind: 'node', node: n });
       if (splitXpath !== null && splitXpath !== undefined) {
         const frameId = `${id}#each`;
-        const frame = node({ id: frameId, kind: 'group', path, label: `each part of ${cut(splitXpath)}`, ...(parent === undefined ? {} : { parent }), width: 0, height: 0 });
+        const frame = node({ id: frameId, kind: 'group', path, label: t('flows.view.eachPart', { xpath: cut(splitXpath) }), ...(parent === undefined ? {} : { parent }), width: 0, height: 0 });
         const rest = drawList(list, i + 1, [{ from: n.id, kind: 'each' }], frameId);
         blocks.push({ kind: 'frame', node: frame, inner: { kind: 'column', blocks: rest } });
         return blocks;
@@ -452,7 +457,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       id: `${pointer(list.path)}#end`,
       kind: 'end',
       path: list.path,
-      label: list.path.length === 1 ? 'end' : list.path.length === 3 && list.path[0] === 'processes' ? 'back to the call' : 'joins',
+      label: t(list.path.length === 1 ? 'flows.view.end' : list.path.length === 3 && list.path[0] === 'processes' ? 'flows.view.backToCall' : 'flows.view.joins'),
       ...(parent === undefined ? {} : { parent }),
       ...SIZE.end,
     });
@@ -468,12 +473,12 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
       kind: 'flow',
       path: at,
       label: called.id,
-      detail: called.mode === 'sync' ? 'waits for its reply' : 'hands the message over',
+      detail: t(called.mode === 'sync' ? 'flows.view.waits' : 'flows.view.handsOver'),
       opens: { flow: called.path },
       ...(parent === undefined ? {} : { parent }),
       ...SIZE.flow,
     });
-    edge(caller.id, n.id, 'calls', { label: `calls flow ${called.id}` });
+    edge(caller.id, n.id, 'calls', { label: t('flows.view.callsFlow', { id: called.id }) });
     return n;
   };
 
@@ -488,13 +493,13 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
     const overlay = endpoint.addressIn ?? {};
     const address = Object.hasOwn(overlay, ingress.environment) ? overlay[ingress.environment] : endpoint.address;
     const url = inboundAddress(prefix, address, ingress.httpOrigin);
-    return url === null ? endpoint.scheme : `${endpoint.scheme} · preview · ${url}`;
+    return url === null ? endpoint.scheme : t('flows.view.preview', { scheme: endpoint.scheme, url });
   };
   const fromNode = node({
     id: pointer(['from']),
     kind: 'from',
     path: ['from'],
-    label: typeof from.endpoint === 'string' ? from.endpoint : 'no endpoint',
+    label: typeof from.endpoint === 'string' ? from.endpoint : t('flows.view.noFrom'),
     ...(inbound === undefined ? {} : { detail: arrival(inbound), opens: { endpoint: inbound.path } }),
     ...SIZE.from,
   });
@@ -510,7 +515,7 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   }
 
   if (nodes.length > MAX_NODES) {
-    problems.push({ path: [], message: `the flow would be drawn with ${nodes.length} nodes, more than the ${MAX_NODES} the editor draws` });
+    problems.push({ path: [], message: t('flows.view.tooManyNodes', { count: nodes.length, max: MAX_NODES }) });
     return { readable: false, nodes: [], edges: [], problems };
   }
   layout(lanes);
@@ -518,10 +523,6 @@ export function view(text: string, context: FlowContext, types: Readonly<Record<
   const order = (n: FlowNode) => (n.kind === 'lane' ? 0 : n.kind === 'group' ? 1 : 2);
   const sorted = nodes.map((n, i) => ({ n, i })).sort((a, b) => order(a.n) - order(b.n) || a.i - b.i).map(({ n }) => n);
   return { readable: true, nodes: sorted, edges, problems, settings, ...(readOnly === undefined ? {} : { readOnly }) };
-}
-
-function tooDeep(chain: string[]): string {
-  return `processes run inside each other at most ${MAX_NESTING} deep, and this call goes deeper: ${chain.join(' -> ')}`;
 }
 
 /** `field` with the choices of the references it makes: the out endpoints of the package, or the processes of the flow. */
@@ -539,7 +540,7 @@ function withChoices(field: StepField, endpoints: string[], processes: string[])
  * no step between them may be a process call or a step of a module or plugin. Then a value the route sets that no entry
  * covers is a problem, and an entry it never sets is never taken.
  */
-function choiceLabels(list: StepList, index: number, to: Record<string, unknown>, problems: FlowProblem[]): Map<string, string> {
+function choiceLabels({ t }: Texts, list: StepList, index: number, to: Record<string, unknown>, problems: FlowProblem[]): Map<string, string> {
   const labels = new Map<string, string>();
   const entries = isRecord(to.endpoints) ? Object.keys(to.endpoints) : [];
   let route: Record<string, unknown> | undefined;
@@ -555,13 +556,14 @@ function choiceLabels(list: StepList, index: number, to: Record<string, unknown>
   const rules = (Array.isArray(route.routes) ? route.routes : []).filter(isRecord);
   for (const key of entries) {
     const when = rules.filter((r) => r.set === key).map((r) => cut(String(r.when), 40));
-    const reasons = [...(when.length > 0 ? [`when ${when.join(' or ')}`] : []), ...(route.otherwise === key ? ['otherwise'] : [])];
-    labels.set(key, `${key} · ${reasons.length > 0 ? reasons.join(', ') : 'never taken'}`);
+    const otherwise = route.otherwise === key;
+    const id = when.length > 0 ? (otherwise ? 'flows.view.choice.whenOtherwise' : 'flows.view.choice.when') : otherwise ? 'flows.view.choice.otherwise' : 'flows.view.choice.never';
+    labels.set(key, t(id, { key, when }));
   }
   const sets = [...rules.map((r) => r.set), route.otherwise].filter((v): v is string => typeof v === 'string');
   for (const value of new Set(sets)) {
     if (!entries.includes(value)) {
-      problems.push({ path: [...list.path, index, 'endpoints'], message: `the route ${String(route.name ?? 'route')} sets ${String(to.byProp)} to ${value}, which no entry of endpoints covers` });
+      problems.push({ path: [...list.path, index, 'endpoints'], message: t('flows.view.uncovered', { route: String(route.name ?? 'route'), prop: String(to.byProp), value }) });
     }
   }
   return labels;
