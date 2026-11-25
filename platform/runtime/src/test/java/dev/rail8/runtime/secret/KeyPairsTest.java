@@ -88,6 +88,19 @@ class KeyPairsTest {
     }
 
     @Test
+    void pkcs8KeysWithoutTheirOptionalPublicKeyAreTaken() throws Exception {
+        for (String algorithm : List.of("EC", "Ed25519")) {
+            java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance(algorithm);
+            if (algorithm.equals("EC")) generator.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+            java.security.KeyPair made = generator.generateKeyPair();   // the JDK's PKCS#8 leaves the public key out
+            String pem = "-----BEGIN PRIVATE KEY-----\n" + java.util.Base64.getMimeEncoder().encodeToString(made.getPrivate().getEncoded())
+                    + "\n-----END PRIVATE KEY-----\n";
+            SecretValue.Pair pair = KeyPairs.parse(pem, List.of());
+            assertArrayEquals(made.getPublic().getEncoded(), pair.keyPair().publicKey().getEncoded(), algorithm + ": its public key is derived");
+        }
+    }
+
+    @Test
     void otherAlgorithmsAndSizesAreRefused() throws Exception {
         for (String file : List.of("rsa1024.pem", "k256.pem", "ed448.pem")) {
             SecretRefused r = refused(read(file), List.of());

@@ -89,6 +89,16 @@ class FlowSecretsTest {
     }
 
     @Test
+    void aReferenceTheScrubberPutInIsNeverSearchedAgain() {
+        store.put("secret://token", "the-long-token-value");
+        store.put("secret://short", "secret");
+        FlowSecrets secrets = new FlowSecrets(source, Map.of());
+        take(secrets, "secret://token");
+        take(secrets, "secret://short");
+        assertEquals("a secret://token and secret://short", secrets.scrubber().apply("a the-long-token-value and secret"));
+    }
+
+    @Test
     void theUrlEncodedAndJsonEscapedFormsAreScrubbed() {
         String value = "p@ss w\"rd/\\+&=";
         store.put("secret://k", value);
