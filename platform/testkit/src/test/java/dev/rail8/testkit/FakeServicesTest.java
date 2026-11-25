@@ -70,4 +70,44 @@ class FakeServicesTest {
         assertSame(services, rt.stepResources(Path.of("."), services).services());
         assertSame(rt.clock(), rt.stepResources(Path.of("."), services).clock());
     }
+
+    @Test
+    void everyKindIsHandedOutAndAChangeBetweenTwoReadsIsSeen() {
+        Secret.KeyPair pair = FakeServices.placeholderKeyPair();
+        FakeServices services = FakeServices.create(FakeClock.at(FakeRuntime.T0))
+                .secret("secret://login", new Secret.Credentials("acme", "first"))
+                .secret("secret://tls", pair);
+        Secret login = services.secret(step(Map.of("key", "secret://login")), "key", Secret.Kind.CREDENTIALS);
+        Secret tls = services.secret(step(Map.of("key", "secret://tls")), "key", Secret.Kind.KEY_PAIR, Secret.Kind.VALUE);
+        assertEquals(Secret.Kind.CREDENTIALS, login.kind());
+        assertEquals("first", login.credentials().password());
+        services.secret("secret://login", new Secret.Credentials("acme", "second"));
+        assertEquals("second", login.credentials().password(), "a value set again is read at the next read");
+        assertSame(pair, tls.keyPair());
+        assertThrows(IllegalStateException.class, login::value, "a read of another kind fails");
+    }
+
+    @Test
+    void aSecretOfAKindTheStepDoesNotTakeIsRefused() {
+        FakeServices services = FakeServices.create(FakeClock.at(FakeRuntime.T0)).secret("secret://login", new Secret.Credentials("acme", "pa55"));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> services.secret(step(Map.of("key", "secret://login")), "key"));
+        assertTrue(e.getMessage().contains("credentials") && e.getMessage().contains("value"), e.getMessage());
+        assertFalse(e.getMessage().contains("pa55"), e.getMessage());
+    }
+
+    @Test
+    void thePlaceholderKeyPairIsAnEcP256PairWithItsSelfSignedCertificate() throws Exception {
+        Secret.KeyPair pair = FakeServices.placeholderKeyPair();
+        assertEquals("EC", pair.privateKey().getAlgorithm());
+        assertEquals("CN=invalid", pair.certificates().getFirst().getSubjectX500Principal().getName());
+        pair.certificates().getFirst().verify(pair.publicKey());
+        java.security.Signature sign = java.security.Signature.getInstance("SHA256withECDSA");
+        sign.initSign(pair.privateKey());
+        sign.update(new byte[]{1});
+        byte[] signature = sign.sign();
+        sign.initVerify(pair.publicKey());
+        sign.update(new byte[]{1});
+        assertTrue(sign.verify(signature), "the key and its certificate's key are one pair");
+    }
 }
