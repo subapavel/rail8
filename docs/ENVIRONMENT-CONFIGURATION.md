@@ -704,8 +704,8 @@ This is a loop of activations, not a change list.
    secrets.
 6. **An inbound caller's password only as a reference.** A system's credential, when its kind comes, holds its secret in
    a secret field.
-7. **No git base, store's key or `rail8.` name as a setting.** No kind holds them; keys refuse a `rail8` segment and
-   values a `rail8.` name.
+7. **No git base, store's key or `rail8.` name as a setting.** No kind holds them; a key never starts with a `rail8`
+   segment, and a value never holds a `rail8.` name.
 8. **`secret_uses` only through the store's method, never for a draft.** Only an activation writes them.
 
 ## Open places
