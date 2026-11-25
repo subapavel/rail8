@@ -10,7 +10,7 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons';
 import { useId, useState, type ReactNode } from 'react';
-import { useText } from '../../../language';
+import { say, useText, type Message } from '../../../language';
 import {
   INITIAL_IMPORTS,
   JAVA_TYPES,
@@ -72,19 +72,19 @@ export function NameEditor(props: {
   const { id, value, label, taken, disabled, onCommit } = props;
   const texts = useText();
   const [draft, setDraft] = useState<string | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<Message | null>(null);
   const helper = useId();
   function commit() {
     if (draft === null) return;
     const name = draft.trim();
-    const issue = nameIssue(name, taken, texts);
+    const issue = nameIssue(name, taken);
     if (issue) {
       setError(issue);
       return;
     }
     onCommit(name);
     setDraft(null);
-    setError('');
+    setError(null);
   }
   return (
     <>
@@ -98,7 +98,7 @@ export function NameEditor(props: {
         value={draft ?? value}
         onChange={(event) => {
           const next = event.target.value;
-          setError('');
+          setError(null);
           setDraft(next);
         }}
         onBlur={commit}
@@ -106,13 +106,13 @@ export function NameEditor(props: {
           if (e.key === 'Enter') e.currentTarget.blur();
           if (e.key === 'Escape') {
             setDraft(null);
-            setError('');
+            setError(null);
           }
         }}
       />
       {error && (
         <span className="studio-field-error" id={helper} role="alert">
-          {error}
+          {say(texts, error)}
         </span>
       )}
     </>

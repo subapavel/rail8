@@ -4,6 +4,7 @@ import { strToU8, zipSync } from 'fflate';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import { chooseLanguage } from '../../../language';
 import type { ApiClient } from '../../api/client';
 import { fakeApiClient } from '../../api/fake/fake-api';
 import { testSourceKey, type BrowserStateStore } from '../browser-state/browser-state';
@@ -95,6 +96,8 @@ afterEach(() => {
   host?.remove();
   root = undefined;
   history.replaceState(null, '', window.location.pathname);
+  chooseLanguage('en');
+  localStorage.removeItem('rail8.language');
   expect(consoleError).not.toHaveBeenCalled();
   consoleError.mockRestore();
 });
@@ -157,6 +160,10 @@ describe('the test instance library, a preview feature', () => {
     await expect.poll(() => keptSource(browserState)).toBe(`${INPUT} `);
     await tool('Save Test Instance').click();
     await expect.element(bar().getByRole('status')).toHaveTextContent('Test instance saved. Save the mapping to keep it in this browser.');
+    // the notice follows a language chosen while it shows
+    chooseLanguage('cs');
+    await expect.element(page.getByRole('status').filter({ hasText: 'Testovací instance je uložená. Uložte mapování, aby v tomto prohlížeči zůstala.' })).toBeVisible();
+    chooseLanguage('en');
 
     await chooseOption(select(), 'Second');
     await expect.poll(() => keptSource(browserState)).toBe(OTHER);
