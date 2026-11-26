@@ -1475,7 +1475,7 @@ abstract class ConfigStoreContract {
     void anExportImportsBackUnchangedAndItsFilesHoldNoSecretValueNorADefault() {
         Node a = node("a");
         partnerSecrets(a);
-        MemorySecretStores.createKeyPair(a.secrets, "client.key");
+        await(MemorySecretStores.keyPair(a.secrets, "client.key"));
         inForce(a, API, with(PARTNER, "timeoutMs", 30_000));
         Ref tls = Ref.connection("acme/tls");
         ConfigStore.ObjectView saved = save(a, tls, "tls", values("host", "tls.example", "key", "secret://client.key"));
