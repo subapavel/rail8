@@ -2,6 +2,11 @@ package dev.rail8.api;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -35,5 +40,18 @@ class RefusedTest {
         assertThrows(IllegalArgumentException.class, () -> new Refused(Refused.Reason.TOO_MANY, Optional.of(Duration.ZERO)));
         assertThrows(IllegalArgumentException.class, () -> new Refused(Refused.Reason.UNKNOWN, Optional.of(Duration.ofSeconds(1))));
         assertEquals(Optional.of(Duration.ofSeconds(2)), new Refused(Refused.Reason.TOO_MANY, Optional.of(Duration.ofSeconds(2))).retryAfter());
+    }
+
+    @Test
+    void aSerializedRefusalKeepsItsTimeToTryAgainAfter() throws IOException, ClassNotFoundException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+            out.writeObject(new Refused(Refused.Reason.BUSY, Optional.of(Duration.ofSeconds(2))));
+        }
+        try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            Refused back = (Refused) in.readObject();
+            assertEquals(Optional.of(Duration.ofSeconds(2)), back.retryAfter());
+            assertEquals("Refused[busy, retry after pt2s]", back.toString());
+        }
     }
 }

@@ -409,7 +409,7 @@ class DeploymentsPollerLeaseTest {
      * one is not started again.
      */
     @Test
-    void aRegainedLeaseRunsAFreshConsumerOfTheSameEndpointAndHandler() throws Exception {
+    void aRegainedLeaseRunsAFreshConsumerOfTheSameEndpointAndEntry() throws Exception {
         leases.next(Answer.TRUE, Answer.FALSE, Answer.TRUE);
         deploy(shop("1.0.0", "1.0.0", "1.0.0"));
         firstTick(1);

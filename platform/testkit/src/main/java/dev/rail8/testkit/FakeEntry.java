@@ -33,8 +33,9 @@ import java.util.function.Function;
  * <p>It records every {@link Presented} it was handed and every envelope a handler it gave delivered. A handler it gave takes
  * one envelope of its flow, once: it fails with an {@link IllegalArgumentException} for another flow's and with an
  * {@link IllegalStateException} when applied again, counted in {@link #secondApplies()}. It removes from each delivered
- * envelope the headers the platform removes ({@link #REMOVED_HEADERS}, in any case), and cuts the platform's cookies
- * ({@link #PLATFORM_COOKIES}) out of its {@code cookie}, before the flow's handler sees it.
+ * envelope the headers that carry a caller's proof or choice ({@link #REMOVED_HEADERS}, in any case), and cuts the cookies of
+ * the node's UI ({@link #PLATFORM_COOKIES}) out of its {@code cookie}, before the flow's handler sees it. An adapter's
+ * test over it so sees no proof delivered, whatever the adapter passes on.
  *
  * @since 0.4
  */
@@ -43,11 +44,11 @@ public final class FakeEntry {
     /** The system a fresh fake admits every caller as. */
     public static final String SYSTEM = "contract";
 
-    /** The headers the platform removes from every entered envelope, whether they matched or not. */
+    /** The headers this fake removes from every envelope it delivers: those that carry a caller's proof or choice. */
     public static final Set<String> REMOVED_HEADERS = Set.of("authorization", "x-api-key", "apikey", "rail8-sender", "rail8-proxy-secret",
             "x-forwarded-client-cert");
 
-    /** The cookies of the node's UI, which the platform cuts out of an entered envelope's {@code cookie}. */
+    /** The cookies of the node's UI, which this fake cuts out of a delivered envelope's {@code cookie}. */
     public static final Set<String> PLATFORM_COOKIES = Set.of("rail8-session", "__Host-rail8-session", "rail8-device", "__Host-rail8-device");
 
     /** What the entry decides for one message: admit as a system, or refuse. */

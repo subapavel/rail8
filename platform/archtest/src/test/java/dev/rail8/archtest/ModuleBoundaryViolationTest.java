@@ -54,6 +54,7 @@ class ModuleBoundaryViolationTest {
     @Test void aVertxTypeBeyondTheAllowlistInAPublicSignatureIsCaughtAndInABodyIsNot() {
         assertDoesNotThrow(() -> Rules.signaturesNameOnlyTheAllowlist(dev.rail8.api.violation.ApiHidesAContext.class.getName()).check(fixtures));
         assertFails(Rules.signaturesNameOnlyTheAllowlist(dev.rail8.api.violation.ApiNamesAContext.class.getName()), "ApiNamesAContext.current()");
+        assertFails(Rules.signaturesNameOnlyTheAllowlist(dev.rail8.api.violation.ApiNamesAContext.class.getName()), "ApiNamesAContext.later()");   // in a type argument
     }
 
     @Test void apiUsingEveryAllowlistedVertxTypeIsAllowed() {

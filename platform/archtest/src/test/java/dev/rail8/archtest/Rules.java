@@ -121,7 +121,8 @@ final class Rules {
 
     /**
      * No public or protected member of the class {@code className} names a Vert.x type beyond the allowlist in its signature:
-     * its fields' types, its methods' return and parameter types, its constructors' parameter types.
+     * its fields' types, its methods' return and parameter types, its constructors' parameter types, and their type
+     * arguments.
      */
     static ArchRule signaturesNameOnlyTheAllowlist(String className) {
         return classes().that().haveFullyQualifiedName(className)
@@ -130,11 +131,11 @@ final class Rules {
                     public void check(JavaClass c, ConditionEvents events) {
                         for (JavaMember m : c.getMembers()) {
                             if (!m.getModifiers().contains(JavaModifier.PUBLIC) && !m.getModifiers().contains(JavaModifier.PROTECTED)) continue;
-                            List<JavaClass> named = new ArrayList<>();
-                            if (m instanceof JavaField f) named.add(f.getRawType());
+                            List<JavaClass> named = new ArrayList<>();   // every type a signature names, type arguments too
+                            if (m instanceof JavaField f) named.addAll(f.getType().getAllInvolvedRawTypes());
                             if (m instanceof JavaCodeUnit u) {
-                                named.add(u.getRawReturnType());
-                                named.addAll(u.getRawParameterTypes());
+                                named.addAll(u.getReturnType().getAllInvolvedRawTypes());
+                                u.getParameterTypes().forEach(t -> named.addAll(t.getAllInvolvedRawTypes()));
                             }
                             for (JavaClass t : named) {
                                 JavaClass base = t.isArray() ? t.getBaseComponentType() : t;
