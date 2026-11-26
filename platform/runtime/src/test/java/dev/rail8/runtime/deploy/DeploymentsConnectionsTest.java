@@ -367,6 +367,27 @@ class DeploymentsConnectionsTest {
     }
 
     /**
+     * A flow that retires, by a deploy that leaves it out or by an undeploy, and is deployed again before its drain ends takes
+     * its connections back: its sender polls its place again, no second sender of it.
+     */
+    @Test
+    void aRetiringFlowDeployedAgainPollsItsPlaceAgain() throws Exception {
+        adapter = new Polling(doors);
+        node();
+        serving();
+        PackageDraft orders = withFlow(erp(), "orders", "at-least-once", "acme/erp/inbox", "acme/erp/rest");
+        deploy(orders);
+        deploy(withSystem(PackageDraft.of("erp", "1.0.1"), "acme/erp", Doors.SCHEME, "inbox", "rest"));   // the flow retires
+        assertEquals(List.of("erp/orders"), within(pool.read(), "the pool").marked(), "fixture: the flow is marked");
+        deploy(orders);
+
+        OnVirtualThread.call(() -> deployments.undeploy("erp", TestActors.named("test")));
+        assertEquals(List.of("erp/orders"), within(pool.read(), "the pool").marked(), "fixture: the undeploy marks the flow");
+        deploy(orders);
+        assertEquals(DeployedFlow.State.RUNNING, deployments.flows().getFirst().state());
+    }
+
+    /**
      * A sender whose connection is stopped does not start and is listed RESTARTING, a deploy all the same; the activation that
      * starts it again restarts it at once, with no delay, and it runs on the connection's new values.
      */
