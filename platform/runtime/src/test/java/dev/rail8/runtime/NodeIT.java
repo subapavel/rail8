@@ -690,12 +690,14 @@ class NodeIT {
 
     /**
      * The demo files that are not part of invoice-sync: the async door, the SFTP inbox (its secrets are references only a stack node
-     * has), the jq order door and its fixture, the endpoints of the order-partner flow it calls, the greeting's door, its folder with
-     * the flow, its test, its mapping and the mapping's schemas, its fixtures, and the flows of them. The ITs that
+     * has), the billing system that sftp-invoice fetches from (its adapter, sftp, only a stack node has), the jq order door and its
+     * fixture, the endpoints of the order-partner flow it calls, the greeting's door, its folder with the flow, its test, its mapping
+     * and the mapping's schemas, its fixtures, and the flows of them. The ITs that
      * mean "the demo" mean its invoice-sync flow behind http-in, which is what {@link #demoFiles} keeps.
      */
     static boolean addedByP206(String path) {
         return path.equals("endpoints/http-in-async.yaml") || path.equals("endpoints/sftp-inbox.yaml")
+                || path.equals("systems/billing.yaml")
                 || path.equals("endpoints/http-in-order.yaml") || path.startsWith("flows/order-jq.") || path.equals("fixtures/sample-order.json")
                 || path.startsWith("endpoints/order-partner-") || path.startsWith("flows/order-partner.")
                 || path.startsWith("flows/invoice-async.") || path.startsWith("flows/sftp-invoice.") || path.startsWith("fixtures/inbox/")
