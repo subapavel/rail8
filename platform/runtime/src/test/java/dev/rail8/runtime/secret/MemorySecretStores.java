@@ -98,9 +98,14 @@ public final class MemorySecretStores {
 
     /** {@code store} creates the key pair {@code name}: the placeholder's private key, with no certificate. */
     public static void createKeyPair(SecretStore store, String name) {
+        done(keyPair(store, name));
+    }
+
+    /** {@code store} starts to create the key pair {@code name}, as {@link #createKeyPair} does, for a store of any backing. */
+    public static Future<?> keyPair(SecretStore store, String name) {
         String pem = "-----BEGIN PRIVATE KEY-----\n" + java.util.Base64.getMimeEncoder().encodeToString(SecretStore.placeholderKeyPair().privateKey().getEncoded())
                 + "\n-----END PRIVATE KEY-----\n";
-        done(store.create(ADMIN, new JsonObject().put("name", name).put("kind", "key-pair").put("privateKey", pem)));
+        return store.create(ADMIN, new JsonObject().put("name", name).put("kind", "key-pair").put("privateKey", pem));
     }
 
     /** {@code store} overwrites the credentials {@code name}. */
