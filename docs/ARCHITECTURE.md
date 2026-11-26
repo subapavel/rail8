@@ -49,7 +49,7 @@ documents:
 | **Interchange, Number sequence** | One EDI envelope; a counter for interchange numbers, in Postgres. |
 | **Draft, Activate** | A change saved but not yet in force; putting it in force. |
 | **Design, Configure, Monitor** | The three parts of the UI: what is in git, what an environment holds, and monitoring. |
-| **Connection administrator, Partner administrator, Message sender** | The three new roles (`docs/USERS-AND-ROLES.md` lists the five that exist). |
+| **Connection administrator, Partner administrator, Message sender** | The roles of the configuration of an environment and of the entry; the first two exist, the message sender is planned (`docs/USERS-AND-ROLES.md`). |
 
 From the words of SAP PO and SAP Integration Suite to these. Rail8 supports moving from both and is a copy of neither.
 
@@ -251,13 +251,13 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `messages`, `message_keys` | one record per step of each message (outcome, error, times, CPU, headers, props, keys, body hash and size, the lines the step's code logged), indexed by flow, step name and start for the search by step, by the start of each arrival for the list of recent messages, and the business keys for search |
 | `dlq` | parked messages, by reference |
 | `body_refs`, `journal_segments`, `journal_keys`, `journal_nodes`, `journal_losses` | where each durable body is, the journal files, their wrapped encryption keys, and losses an operator accepted |
-| `nodes` | node membership and leases |
+| `nodes` | node membership and leases, and what each node holds of the configuration of the environment: the generation and stamp it read, in which epoch, when, and the objects it left out; only the admin API's answers read those columns |
 | `deployments` | which commit of which repository each package runs, its content digest and the pins of its dependencies |
 | `node_packages` | what each node of the pool runs, written by that node alone as the epoch it joined with: each package's version, repository, commit, state and why it runs behind; nothing decides by it, and its loss loses no message |
 | `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
 | `users`, `role_assignments`, `sessions`, `tokens`, `devices`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions, named tokens and browsers' device credentials (by fingerprint), the longest a token lives, the failed logins of each name and device, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
-| `config_store`, `config_objects`, `config_history` | the configuration of the environment (`docs/ENVIRONMENT-CONFIGURATION.md`): each connection's values and each system's instance name, as a draft, the version in force bound under the secret store's key, the secret administrator's consent and a connection's stop, with the history of each object; no node reads it yet |
+| `config_store`, `config_objects`, `config_history` | the configuration of the environment (`docs/ENVIRONMENT-CONFIGURATION.md`): each connection's values and each system's instance name, as a draft, the version in force bound under the secret store's key, the secret administrator's consent and a connection's stop, with the history of each object; every node reads it whole at its start, then on each notice on `rail8_config` and every 5 s, and keeps what it read as an immutable snapshot |
 | `deployment_systems`, `deployment_connection_uses` | the systems a deployment defines and the connections its flows use; empty until a deploy writes them |
 
 Migrations run at node start (Flyway).
@@ -1374,7 +1374,8 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
   own at the start. `off` with a certificate, or any other value, refuses the start.
 
 - A user is a person or a technical account and holds roles: `administrator`, `developer`,
-  `operator`, `message-bodies` and `secret-administrator`. Every route is mounted with its action,
+  `operator`, `message-bodies`, `secret-administrator`, `connection-administrator` and
+  `partner-administrator`. Every route is mounted with its action,
   and a caller passes when a role it holds grants it; else 403 `{error, code, values, needs}`, `needs`
   the roles that would. A 401 is `{error, code, values}` and carries `WWW-Authenticate: Bearer`.
 - Every refusal carries `error`, its English text for logs and the command line, `code`, and
@@ -1443,6 +1444,8 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `POST /admin/users/{name}/roles`, `/block`, `/unblock`, `/password-reset`, `/sessions/end` | roles changed by difference, a block, a reset to a first password, the end of every session of a user |
 | `GET /admin/me/tokens`, `POST /admin/me/tokens`, `POST /admin/me/tokens/{id}/revoke` | the caller's own live tokens with the ceiling, a new one, a revoke |
 | `POST /admin/users/{name}/tokens`; `GET /admin/tokens?expiringWithin=…`, `POST /admin/tokens/{id}/revoke`, `POST /admin/tokens/ceiling` | a technical account's new token; every live token, those expiring soon, a revoke of any, the ceiling |
+| `GET /admin/config`, `POST /admin/config/-/mocks` | the configuration of the environment: its generation, whether it allows mocks, and what each live node holds; the switch of mocks (`docs/ENVIRONMENT-CONFIGURATION.md`) |
+| `GET /admin/config/connections`, `GET /admin/config/connections/{key}`, `POST …/{key}/-/save`, `/-/discard`, `/-/consent`, `/-/activate`, `/-/stop`, `/-/start`, `GET …/{key}/-/history` | the connections of the environment, each with its version in force, draft, consent, stop and history; the same routes under `/admin/config/systems` for the systems' instance names, without consent, stop and start |
 
 The list of recent messages reads Postgres only. `from` and `to` are ISO-8601 instants at most 31 days
 apart; it lists the messages whose arrival started at `from` or later and before `to`, each with its id,
@@ -1466,8 +1469,8 @@ given, of one flow, with the same status, and answer every status, 0 included:
 
 Configuration is by environment variables `RAIL8_*`; `RAIL8_ENV` is required, and any value other
 than `dev` or `ci` is a deployed environment with stricter rules (a deploy only of a commit
-reachable from `RAIL8_GIT_REF` and never one with no origin, no mock endpoints, and by default a
-synchronous Postgres standby).
+reachable from `RAIL8_GIT_REF` and never one with no origin, a connection mocked only where the
+environment's configuration allows mocks, and by default a synchronous Postgres standby).
 
 ### The node's secrets
 
@@ -1514,13 +1517,11 @@ repository `rail8`. The root `docker-compose.yml` is a smaller quickstart
 - Named tokens at the command line and in the UI, and device credentials for the login
   (`docs/USERS-AND-ROLES.md`). Then the bridge closes: the shared token and the open loopback API go.
   No teams.
-- Eight roles (`docs/USERS-AND-ROLES.md` lists them, five built): Connection administrator and
-  Partner administrator are added by the configuration of an environment
-  (`docs/ENVIRONMENT-CONFIGURATION.md`), Message sender, who sends a test message to a flow with a
-  personal token as the password of basic authentication, by the entry (`docs/WHO-MAY-SEND.md`).
-  The operator also stops and starts a connection.
-- The admin API of the configuration of an environment, and one documented, versioned text format of
-  one file per object for export and import. An export holds no secret value and no state; an import
+- An eighth role (`docs/USERS-AND-ROLES.md` lists them, seven built): Message sender, who sends a
+  test message to a flow with a personal token as the password of basic authentication, by the entry
+  (`docs/WHO-MAY-SEND.md`).
+- The export and import of the configuration of an environment: one documented, versioned text format of
+  one file per object. An export holds no secret value and no state; an import
   is a dry run, then drafts, and never deletes; a command of `rail8` does both from files
   (`docs/ENVIRONMENT-CONFIGURATION.md`).
 - Monitor has three views: Messages and Connections from the start, Interchanges with partner

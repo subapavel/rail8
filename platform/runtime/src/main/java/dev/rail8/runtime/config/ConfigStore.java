@@ -2,6 +2,7 @@ package dev.rail8.runtime.config;
 
 import io.vertx.core.json.JsonObject;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,8 +47,14 @@ public interface ConfigStore {
     /** What a node that holds {@code held} lacks: the objects in force it does not hold as they are, and those gone. */
     State state(Held held);
 
-    /** Records what node {@code node} in its epoch {@code epoch} holds: the generation and stamp it read, and what it left out. */
+    /**
+     * Records what node {@code node} in its epoch {@code epoch} holds: the generation and stamp it read, and what it left out,
+     * into its row of {@code nodes}, only while that row carries {@code epoch}; the time of the read is the database's.
+     */
     void holds(String node, long epoch, long generation, long stamp, Refused refused);
+
+    /** The environment: the store's generation, stamp and switch of mocks, and what each live node reported it holds. */
+    Overview overview();
 
     /** A page of the object's history, newest first: the rows before {@code after}, with the secret store's acts merged in. */
     Page<HistoryRow> history(Ref ref, OptionalLong after, int limit);
@@ -96,19 +103,28 @@ public interface ConfigStore {
 
     /**
      * A list's question: the objects of {@code kind} whose key starts with {@code prefix}, after the key {@code after}, at most
-     * {@code limit} (1 to {@value #MAX_PAGE}); with {@code needsConsent}, only the drafts that wait for the secret
-     * administrator's consent.
+     * {@code limit} (1 to {@value #MAX_PAGE}); with {@code needs}, only the objects whose draft waits for that.
      */
-    record Query(Ref.Kind kind, Optional<String> prefix, Optional<String> after, int limit, boolean needsConsent) {
+    record Query(Ref.Kind kind, Optional<String> prefix, Optional<String> after, int limit, Optional<Needs> needs) {
         public Query {
             Objects.requireNonNull(kind, "kind");
             Objects.requireNonNull(prefix, "prefix");
             Objects.requireNonNull(after, "after");
+            Objects.requireNonNull(needs, "needs");
         }
     }
 
-    /** What a node holds of one object: the activation in force it holds and whether it holds it stopped. */
-    record Holding(long activation, boolean stopped) { }
+    /** What a list may narrow to: the drafts that wait for the secret administrator's consent, or every draft that waits for its activation. */
+    enum Needs {
+        CONSENT, ACTIVATION
+    }
+
+    /** What a node holds of one object: the activation in force it holds, and who stopped it and when while it is stopped. */
+    record Holding(long activation, Optional<ConnectionState.Stop> stopped) {
+        public Holding {
+            Objects.requireNonNull(stopped, "stopped");
+        }
+    }
 
     /** What a node holds: the generation and stamp it read, and what it holds of each object. */
     record Held(long generation, long stamp, Map<Ref, Holding> objects) {
@@ -122,10 +138,11 @@ public interface ConfigStore {
         }
     }
 
-    /** One object in force as a node takes it: its activation, format, body and whether it is stopped. */
-    record InForce(Ref ref, long activation, int format, JsonObject body, boolean stopped) {
+    /** One object in force as a node takes it: its activation, format, body, and who stopped it and when while it is stopped. */
+    record InForce(Ref ref, long activation, int format, JsonObject body, Optional<ConnectionState.Stop> stopped) {
         public InForce {
             body = body.copy();
+            Objects.requireNonNull(stopped, "stopped");
         }
 
         @Override
@@ -161,6 +178,42 @@ public interface ConfigStore {
         /** Nothing left out. */
         public static Refused none() {
             return new Refused(List.of(), 0);
+        }
+    }
+
+    /** The store's generation, stamp and switch of mocks, and the reports of the nodes whose lease holds, by node. */
+    record Overview(long generation, long stamp, boolean mocksAllowed, List<NodeReport> nodes) {
+        public Overview {
+            nodes = List.copyOf(nodes);
+        }
+
+        /**
+         * Whether {@code report}'s node holds {@code ref} as it is in force: {@code yes} when it read in its epoch the store's
+         * generation and stamp and did not leave the object out, {@code unknown} when it left out more objects than it names,
+         * and {@code no} otherwise.
+         */
+        public String holds(NodeReport report, Ref ref) {
+            boolean current = report.configEpoch().isPresent() && report.configEpoch().getAsLong() == report.epoch()
+                    && report.generation().isPresent() && report.generation().getAsLong() == generation
+                    && report.stamp().isPresent() && report.stamp().getAsLong() == stamp;
+            if (!current || report.refused().contains(ref)) return "no";
+            return report.refusedCount() > report.refused().size() ? "unknown" : "yes";
+        }
+    }
+
+    /**
+     * What a node whose lease holds reported: its epoch, and, once it has read the store, the epoch it read in, the generation
+     * and stamp it read, when it last read, and the objects it left out, at most 100 named, with their count.
+     */
+    record NodeReport(String node, long epoch, OptionalLong configEpoch, OptionalLong generation, OptionalLong stamp, Optional<Instant> readAt,
+                      List<Ref> refused, int refusedCount) {
+        public NodeReport {
+            Objects.requireNonNull(node, "node");
+            Objects.requireNonNull(configEpoch, "configEpoch");
+            Objects.requireNonNull(generation, "generation");
+            Objects.requireNonNull(stamp, "stamp");
+            Objects.requireNonNull(readAt, "readAt");
+            refused = List.copyOf(refused);
         }
     }
 }

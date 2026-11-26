@@ -39,6 +39,10 @@ import dev.rail8.runtime.deploy.DeployedPackage;
 import dev.rail8.runtime.deploy.DeploymentStore;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.UndeployResult;
+import dev.rail8.runtime.config.Change;
+import dev.rail8.runtime.config.ConfigRefusal;
+import dev.rail8.runtime.config.ConfigStore;
+import dev.rail8.runtime.config.Ref;
 import dev.rail8.runtime.secret.SecretRefused;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.runtime.git.CredentialsCheck;
@@ -93,6 +97,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -289,6 +294,15 @@ public final class AdminServer {
     static final int LOGIN_BODY_MAX = 1024;
     /** The largest body of the routes of users and of the caller's own password, in bytes. */
     static final int USERS_BODY_MAX = 4 * 1024;
+    /** The largest body of a write of the configuration, in bytes: a save carries values of 64 KiB. */
+    static final int CONFIG_BODY_MAX = 128 * 1024;
+    /** The metadata of a route matched by a pattern: its path as the table of actions writes it, such as {@code /admin/config/connections/{key}}. */
+    static final String PATH = "rail8.path";
+    /**
+     * A key of the configuration in a path: its segments with their {@code /}, none of them {@code -}, which starts the verb. The
+     * key's rules are the parser's, which the route asks.
+     */
+    private static final String KEY = "(?<key>(?!-(?:/|$))[^/]*(?:/(?!-(?:/|$))[^/]*)*)";
     /**
      * The metadata of every route of {@code /admin}: {@value #ACTIONS} the list of actions its door lets through, or for the routes
      * mounted without one — the browser guard, the login and the authentication, and on a listener that refuses logins the
@@ -474,6 +488,7 @@ public final class AdminServer {
     private final Access access;
     private volatile Supplier<Future<Void>> undeploy = Future::succeededFuture;
     private volatile Router router;
+    private volatile Optional<Configuration> configuration = Optional.empty();
 
     /** The read API only: no deploy routes. */
     public AdminServer(Config config, MessageStore messages, Dlq dlq, BlobStore blobs, HealthProbe health) {
@@ -605,6 +620,25 @@ public final class AdminServer {
     }
 
     /**
+     * The configuration of the environment that {@code /admin/config} serves: its store; the read of it this node's environment
+     * makes, which a write awaits so that its change holds on this node when it is answered; and the secret store whose list says
+     * of each secret a connection names whether it is set, of which kind, and when and by whom it last changed.
+     */
+    public record Configuration(ConfigStore store, Supplier<Future<Void>> reread, Optional<SecretStore> secrets) {
+        public Configuration {
+            Objects.requireNonNull(store, "store");
+            Objects.requireNonNull(reread, "reread");
+            Objects.requireNonNull(secrets, "secrets");
+        }
+    }
+
+    /** Serves the routes of {@code /admin/config} from {@code configuration}; called before {@link #start}. */
+    public AdminServer configuration(Configuration configuration) {
+        this.configuration = Optional.of(Objects.requireNonNull(configuration, "configuration"));
+        return this;
+    }
+
+    /**
      * Deploys the listening verticle; completes with the bound port (the actual one when configured 0). Once it listens, it logs
      * a WARNING for {@code RAIL8_ADMIN_TLS=off}, and one for a listener that refuses logins, sessions and named tokens.
      */
@@ -733,6 +767,7 @@ public final class AdminServer {
                     return NO_CONTENT;
                 });
             });
+            configuration.ifPresent(c -> mountConfiguration(admin, c));
             work.ifPresent(q -> {
                 admin.get("/admin/work/held", Action.MESSAGE_READ, (c, who) -> held(c, q));
                 admin.get("/admin/work/stopped", Action.MESSAGE_READ, (c, who) -> stopped(c, q));
@@ -751,7 +786,7 @@ public final class AdminServer {
             // the door names the limit of its route's body; the login is the one route that reads a body without a door
             routes.errorHandler(413, ctx -> {
                 int max = Objects.requireNonNullElse(ctx.<Integer>get(BODY_MAX), LOGIN_BODY_MAX);
-                answer(ctx.response(), Json.of(413, error(RefusalCode.TOO_LARGE, "the request body is above " + max + " bytes", Map.of("max", max))));
+                refuse(ctx, Json.of(413, error(RefusalCode.TOO_LARGE, "the request body is above " + max + " bytes", Map.of("max", max))));
             });
             router = routes;
             HttpServerOptions plain = new HttpServerOptions().setHost(config.host()).setPort(config.port());
@@ -866,16 +901,30 @@ public final class AdminServer {
         }
 
         /**
-         * The door, then the route. A route that reads a body has the door on a route of its own just before it, as Vert.x runs a
-         * body handler only before the others of its route: the body is read into memory after the door, bounded, nothing
-         * written to disk.
+         * {@code method path}, where {@code path} holds {@code {key}}: a key of the configuration with its {@code /}, which the
+         * route reads as the path parameter {@code key}; for a caller allowed {@code action}, its body, at most {@code bodyMax}
+         * bytes and none when 0, read after the door. The route carries {@code path} as the metadata {@link #PATH}.
          */
+        void keyed(HttpMethod method, String path, Action action, int bodyMax, Route body) {
+            String regex = "^" + Pattern.quote(path).replace("{key}", "\\E" + KEY + "\\Q") + "$";
+            mount(() -> router.routeWithRegex(method, regex).putMetadata(PATH, path), List.of(action), bodyMax, body);
+        }
+
         private void mount(HttpMethod method, String path, List<Action> actions, int bodyMax, Route body) {
-            io.vertx.ext.web.Route route = router.route(method, path).putMetadata(ACTIONS, actions).handler(door(actions, bodyMax));
+            mount(() -> router.route(method, path), actions, bodyMax, body);
+        }
+
+        /**
+         * The door, then the route, each on a route {@code route} makes. A route that reads a body has the door on a route of its
+         * own just before it, as Vert.x runs a body handler only before the others of its route: the body is read into memory
+         * after the door, bounded, nothing written to disk.
+         */
+        private void mount(Supplier<io.vertx.ext.web.Route> route, List<Action> actions, int bodyMax, Route body) {
+            io.vertx.ext.web.Route mounted = route.get().putMetadata(ACTIONS, actions).handler(door(actions, bodyMax));
             if (bodyMax > 0) {
-                route = router.route(method, path).putMetadata(ACTIONS, actions).handler(BodyHandler.create(false).setBodyLimit(bodyMax));
+                mounted = route.get().putMetadata(ACTIONS, actions).handler(BodyHandler.create(false).setBodyLimit(bodyMax));
             }
-            route.handler(offload(context, body));
+            mounted.handler(offload(context, body));
         }
 
         /**
@@ -978,6 +1027,7 @@ public final class AdminServer {
         if (failure instanceof Refused refused) return Json.of(400, error(refused.code, "bad request: " + refused.getMessage(), Map.of()));
         if (failure instanceof AccessRefused refused) return refusal(refused, ctx.request().path().startsWith(MODULES));
         if (failure instanceof SecretRefused refused) return Json.of(refused.status(), refused.body());
+        if (failure instanceof ConfigRefusal refused) return Json.of(refused.status(), refused.body());
         if (PgTx.refusedByThePool(failure)) return busy();
         LOG.log(System.Logger.Level.WARNING, "admin request " + Access.redacted(ctx.request().path()) + " failed", failure);
         return Json.of(500, error(RefusalCode.INTERNAL_ERROR, "internal error", Map.of()));
@@ -1489,6 +1539,245 @@ public final class AdminServer {
     private static int limit(RoutingContext ctx) {
         String limit = ctx.request().getParam("limit");
         return limit == null ? DEFAULT_LIMIT : Integer.parseInt(limit);
+    }
+
+    // --- the configuration of the environment (on the request's virtual thread)
+
+    private static final String MOCKS_SHAPE = "the body is {\"expect\": true | false, \"allowed\": true | false, \"confirm\"?: \"<digest>\"}";
+    private static final String CONNECTION_SAVE_SHAPE = "the body is {\"expect\", \"adapter\", \"values\": {…}, \"mock\"?: {\"reply\","
+            + " \"delay\"?, \"fail\"?}}, {\"expect\", \"removed\": true} or {\"expect\", \"fromVersion\": <version>}";
+    private static final String SYSTEM_SAVE_SHAPE = "the body is {\"expect\", \"instanceName\"}, {\"expect\", \"removed\": true} or"
+            + " {\"expect\", \"fromVersion\": <version>}";
+    private static final String EXPECT_SHAPE = "the body is {\"expect\": \"<etag>\"}";
+    private static final String CONSENT_SHAPE = "the body is {\"expect\": \"<etag>\", \"digest\": \"<digest>\" | null}";
+    private static final String ACTIVATE_SHAPE = "the body is {\"expect\": \"<etag>\", \"confirm\"?: \"<digest>\", \"note\"?: \"<text>\"}";
+    private static final String RUN_SHAPE = "the body is {\"expect\": \"<run>\"}";
+
+    /**
+     * The routes of {@code /admin/config}: the environment and its switch of mocks, and for connections and systems the list,
+     * one object, its history and each verb, a route of its own behind its action. A write answers the object as this node reads
+     * it once its own environment has read the store again.
+     */
+    private static void mountConfiguration(Admin admin, Configuration config) {
+        admin.get("/admin/config", Action.CONFIG_READ, (c, who) -> Json.of(200, environment(config.store().overview())));
+        admin.post("/admin/config/-/mocks", Action.CONFIG_CONNECTIONS, CONFIG_BODY_MAX, (c, who) -> {
+            JsonObject o = object(c, MOCKS_SHAPE, Set.of("expect", "allowed"), Set.of("confirm"));
+            config.store().writeMocks(configActor(c, who, Action.CONFIG_CONNECTIONS), new Change.Mocks(flag(o, "expect", MOCKS_SHAPE),
+                    flag(o, "allowed", MOCKS_SHAPE), optionalText(o, "confirm", MOCKS_SHAPE)));
+            config.reread().get().await();
+            return Json.of(200, environment(config.store().overview()));
+        });
+        for (Ref.Kind kind : Ref.Kind.values()) {
+            String base = "/admin/config/" + kind.id() + "s";
+            boolean connection = kind == Ref.Kind.CONNECTION;
+            admin.get(base, Action.CONFIG_READ, (c, who) -> configList(c, config, kind));
+            admin.keyed(HttpMethod.GET, base + "/{key}", Action.CONFIG_READ, 0, (c, who) -> {
+                Ref ref = configRef(c, kind);
+                return Json.of(200, shown(config, config.store().read(ref)));
+            });
+            admin.keyed(HttpMethod.GET, base + "/{key}/-/history", Action.CONFIG_READ, 0, (c, who) -> configHistory(c, config, kind));
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/save", Action.CONFIG_CONNECTIONS, CONFIG_BODY_MAX,
+                    (c, who) -> configWrite(c, who, config, kind, Action.CONFIG_CONNECTIONS, () -> save(c, kind)));
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/discard", Action.CONFIG_CONNECTIONS, CONFIG_BODY_MAX,
+                    (c, who) -> configWrite(c, who, config, kind, Action.CONFIG_CONNECTIONS, () -> new Change.Discard(expect(c, EXPECT_SHAPE, Set.of()))));
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/activate", Action.CONFIG_CONNECTIONS, CONFIG_BODY_MAX, (c, who) ->
+                    configWrite(c, who, config, kind, Action.CONFIG_CONNECTIONS, () -> {
+                        JsonObject body = object(c, ACTIVATE_SHAPE, Set.of("expect"), Set.of("confirm", "note"));
+                        return new Change.Activate(text(body, "expect", ACTIVATE_SHAPE), optionalText(body, "confirm", ACTIVATE_SHAPE),
+                                optionalText(body, "note", ACTIVATE_SHAPE));
+                    }));
+            if (!connection) continue;
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/consent", Action.CONFIG_CONSENT, CONFIG_BODY_MAX, (c, who) ->
+                    configWrite(c, who, config, kind, Action.CONFIG_CONSENT, () -> {
+                        JsonObject body = object(c, CONSENT_SHAPE, Set.of("expect", "digest"), Set.of());
+                        Object digest = body.getValue("digest");
+                        if (digest != null && !(digest instanceof String)) throw new Refused(CONSENT_SHAPE);
+                        return new Change.Consent(text(body, "expect", CONSENT_SHAPE), Optional.ofNullable((String) digest));
+                    }));
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/stop", Action.CONFIG_RUN, CONFIG_BODY_MAX,
+                    (c, who) -> configWrite(c, who, config, kind, Action.CONFIG_RUN, () -> new Change.Stop(expect(c, RUN_SHAPE, Set.of()))));
+            admin.keyed(HttpMethod.POST, base + "/{key}/-/start", Action.CONFIG_RUN, CONFIG_BODY_MAX,
+                    (c, who) -> configWrite(c, who, config, kind, Action.CONFIG_RUN, () -> new Change.Start(expect(c, RUN_SHAPE, Set.of()))));
+        }
+    }
+
+    /**
+     * The key of the route's path as an object of {@code kind}, read through the one parser of keys: before any read of the store,
+     * a key the parser refuses is 400 {@code bad-request}, naming the rule it breaks.
+     */
+    private static Ref configRef(RoutingContext ctx, Ref.Kind kind) {
+        return refusable(() -> new Ref(kind, ctx.pathParam("key")));
+    }
+
+    /** The writer of a change by {@code action}: the audit's actor, and whether the caller also holds {@code config.consent}. */
+    private static dev.rail8.runtime.config.Actor configActor(RoutingContext ctx, Caller who, Action action) {
+        return new dev.rail8.runtime.config.Actor(who.acting(action, PackageRef.ANY, remote(ctx)), who.may(Action.CONFIG_CONSENT, PackageRef.ANY));
+    }
+
+    /**
+     * A write of one object: the key first, then the body as {@code change} reads it, then the store's write. It answers the object
+     * once this node's environment has read the store again, so a change in force holds on this node when it is answered.
+     */
+    private static Reply configWrite(RoutingContext ctx, Caller who, Configuration config, Ref.Kind kind, Action action,
+                                     Supplier<Change> change) {
+        Ref ref = configRef(ctx, kind);
+        Change asked = change.get();
+        config.store().write(configActor(ctx, who, action), ref, asked);
+        config.reread().get().await();
+        return Json.of(200, shown(config, config.store().read(ref)));
+    }
+
+    /** A save: of a connection its values, mock or removal, or a copy of a version; of a system its instance name, removal or copy. */
+    private static Change save(RoutingContext ctx, Ref.Kind kind) {
+        boolean connection = kind == Ref.Kind.CONNECTION;
+        String shape = connection ? CONNECTION_SAVE_SHAPE : SYSTEM_SAVE_SHAPE;
+        JsonObject o = object(ctx, shape, Set.of("expect"), connection ? Set.of("adapter", "values", "mock", "removed", "fromVersion")
+                : Set.of("instanceName", "removed", "fromVersion"));
+        String expect = text(o, "expect", shape);
+        Set<String> given = new java.util.TreeSet<>(o.fieldNames());
+        given.remove("expect");
+        if (given.equals(Set.of("removed"))) {
+            if (!Boolean.TRUE.equals(o.getValue("removed"))) throw new Refused(shape);
+            return new Change.Remove(expect);
+        }
+        if (given.equals(Set.of("fromVersion"))) {
+            if (!(o.getValue("fromVersion") instanceof Integer version)) throw new Refused(shape);
+            return new Change.GoBack(expect, version);
+        }
+        if (!connection) {
+            if (!given.equals(Set.of("instanceName"))) throw new Refused(shape);
+            return new Change.SaveSystem(expect, text(o, "instanceName", shape));
+        }
+        if (!given.equals(Set.of("adapter", "values")) && !given.equals(Set.of("adapter", "values", "mock"))) throw new Refused(shape);
+        if (!(o.getValue("values") instanceof JsonObject values)) throw new Refused(shape);
+        Optional<Change.Mock> mock = Optional.empty();
+        if (o.containsKey("mock")) {
+            if (!(o.getValue("mock") instanceof JsonObject m) || !m.fieldNames().contains("reply")
+                    || !Set.of("reply", "delay", "fail").containsAll(m.fieldNames())) {
+                throw new Refused(shape);
+            }
+            mock = Optional.of(new Change.Mock(text(m, "reply", shape), optionalText(m, "delay", shape), optionalText(m, "fail", shape)));
+        }
+        return new Change.Save(expect, text(o, "adapter", shape), values.getMap(), mock);
+    }
+
+    /** The {@code expect} of a body that holds it and the members of {@code optional} only; else a 400 saying {@code shape}. */
+    private static String expect(RoutingContext ctx, String shape, Set<String> optional) {
+        return text(object(ctx, shape, Set.of("expect"), optional), "expect", shape);
+    }
+
+    /** The boolean member {@code name} of {@code o}, else a 400 saying {@code shape}. */
+    private static boolean flag(JsonObject o, String name, String shape) {
+        if (o.getValue(name) instanceof Boolean flag) return flag;
+        throw new Refused(shape);
+    }
+
+    /** The string member {@code name} of {@code o} when it is there, else a 400 saying {@code shape} for another type. */
+    private static Optional<String> optionalText(JsonObject o, String name, String shape) {
+        return o.containsKey(name) ? Optional.of(text(o, name, shape)) : Optional.empty();
+    }
+
+    /**
+     * {@code GET /admin/config/<kind>s?prefix&needs&after&limit}: a page of objects by key, {@code {items, next}}, each its key,
+     * its state, its version, whether a draft waits, and the live nodes that do not hold it; a connection also its adapter and
+     * whether its draft waits for consent. {@code needs=consent} or {@code needs=activation} narrows the page to those drafts.
+     */
+    private static Reply configList(RoutingContext ctx, Configuration config, Ref.Kind kind) {
+        String needs = ctx.request().getParam("needs");
+        Optional<ConfigStore.Needs> narrowed = needs == null ? Optional.empty() : switch (needs) {
+            case "consent" -> Optional.of(ConfigStore.Needs.CONSENT);
+            case "activation" -> Optional.of(ConfigStore.Needs.ACTIVATION);
+            default -> throw new Refused("needs is consent or activation, was '" + needs + "'");
+        };
+        int limit = refusable(() -> limit(ctx));
+        ConfigStore.Page<ConfigStore.ObjectView> page = config.store().list(new ConfigStore.Query(kind,
+                Optional.ofNullable(ctx.request().getParam("prefix")), after(ctx), limit, narrowed));
+        JsonArray items = new JsonArray();
+        for (ConfigStore.ObjectView view : page.items()) items.add(listed(view.json()));
+        return Json.of(200, new JsonObject().put("items", items).put("next", page.next().orElse(null)));
+    }
+
+    /**
+     * One object of a list: its key; its state, {@code missing} with nothing in force, else {@code stopped}, {@code mocked} or
+     * {@code set}; its version; whether a draft waits; the live nodes that do not hold it.
+     */
+    private static JsonObject listed(JsonObject o) {
+        JsonObject inForce = o.getJsonObject("inForce");
+        JsonObject draft = o.getJsonObject("draft");
+        boolean connection = o.getString("kind").equals("connection");
+        String state = inForce == null || inForce.getBoolean("removed") ? "missing"
+                : connection && o.getValue("stopped") != null ? "stopped"
+                : connection && inForce.getValue("mock") != null ? "mocked" : "set";
+        JsonObject item = new JsonObject().put("key", o.getString("key"));
+        if (connection) item.put("adapter", o.getString("adapter"));
+        else item.put("instanceName", inForce == null ? null : inForce.getString("instanceName"));
+        item.put("state", state).put("version", o.getInteger("version")).put("draft", draft != null);
+        if (connection) {
+            JsonObject consent = draft == null ? null : draft.getJsonObject("consent");
+            item.put("needsConsent", consent != null && consent.getValue("given") == null);
+        }
+        JsonArray behind = new JsonArray();
+        for (Object n : o.getJsonArray("nodes")) {
+            JsonObject node = (JsonObject) n;
+            if (!node.getString("holds").equals("yes")) behind.add(node.getString("node"));
+        }
+        return item.put("nodesBehind", behind);
+    }
+
+    /**
+     * {@code GET /admin/config/<kind>s/{key}/-/history?after&limit}: the object's history, newest first, {@code {items, next}},
+     * {@value #DEFAULT_LIMIT} a page and at most 500, with the changes of its secrets merged in.
+     */
+    private static Reply configHistory(RoutingContext ctx, Configuration config, Ref.Kind kind) {
+        Ref ref = configRef(ctx, kind);
+        String raw = ctx.request().getParam("after");
+        OptionalLong after = raw == null ? OptionalLong.empty() : OptionalLong.of(refusable(() -> Long.parseLong(raw)));
+        int limit = refusable(() -> limit(ctx));
+        ConfigStore.Page<ConfigStore.HistoryRow> page = config.store().history(ref, after, limit);
+        JsonArray items = new JsonArray();
+        page.items().forEach(row -> items.add(row.json()));
+        return Json.of(200, new JsonObject().put("items", items).put("next", page.next().orElse(null)));
+    }
+
+    /**
+     * The object as the screen shows it, each secret its connection names with what the secret store's list says of it: whether
+     * it is set, and if so its kind, when and by whom it last changed, and whether this node can read it. Never a value.
+     */
+    private static JsonObject shown(Configuration config, ConfigStore.ObjectView view) {
+        JsonObject json = view.json();
+        JsonArray secrets = json.getJsonArray("secrets");
+        if (secrets == null || secrets.isEmpty()) return json;
+        Map<String, JsonObject> listed = new HashMap<>();
+        config.secrets().ifPresent(store -> store.list().await().getJsonArray("secrets")
+                .forEach(o -> listed.put(((JsonObject) o).getString("name"), (JsonObject) o)));
+        for (Object o : secrets) {
+            JsonObject secret = (JsonObject) o;
+            JsonObject entry = listed.get(secret.getString("name"));
+            secret.put("set", entry != null);
+            if (entry != null) {
+                secret.put("kind", entry.getString("kind")).put("changedAt", entry.getString("changedAt"))
+                        .put("changedBy", entry.getString("changedBy")).put("unreadable", entry.getBoolean("unreadable"));
+            }
+        }
+        return json;
+    }
+
+    /**
+     * {@code GET /admin/config}: the environment's generation and whether it allows mocks, and each live node with whether it
+     * holds the store as it is now, its generation, its last read and the objects it left out, which it names up to a hundred and counts.
+     */
+    private static JsonObject environment(ConfigStore.Overview overview) {
+        JsonArray nodes = new JsonArray();
+        for (ConfigStore.NodeReport n : overview.nodes()) {
+            boolean current = n.configEpoch().isPresent() && n.configEpoch().getAsLong() == n.epoch() && n.generation().isPresent()
+                    && n.generation().getAsLong() == overview.generation() && n.stamp().isPresent() && n.stamp().getAsLong() == overview.stamp();
+            JsonArray leftOut = new JsonArray();
+            n.refused().forEach(ref -> leftOut.add(new JsonObject().put("kind", ref.kind().id()).put("key", ref.key())));
+            nodes.add(new JsonObject().put("node", n.node()).put("current", current)
+                    .put("generation", n.generation().isPresent() ? n.generation().getAsLong() : null)
+                    .put("readAt", n.readAt().map(Instant::toString).orElse(null)).put("leftOut", leftOut).put("leftOutCount", n.refusedCount()));
+        }
+        return new JsonObject().put("generation", overview.generation()).put("mocksAllowed", overview.mocksAllowed()).put("nodes", nodes);
     }
 
     // --- the login, the caller's own and the users (on the request's virtual thread)

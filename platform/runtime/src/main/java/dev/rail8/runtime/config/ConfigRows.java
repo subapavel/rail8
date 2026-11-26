@@ -19,7 +19,7 @@ import java.util.function.Function;
  */
 interface ConfigRows {
 
-    /** {@code work} in a transaction of its own that takes no lock; its result. */
+    /** {@code work} in a repeatable-read transaction of its own that takes no lock, so all it reads is of one commit; its result. */
     <T> T read(Function<Tx, T> work);
 
     /**
@@ -34,7 +34,10 @@ interface ConfigRows {
      */
     <T> io.vertx.core.Future<T> within(SqlConnection tx, Function<Tx, T> work);
 
-    /** The reports of what each node holds, by node: kept in memory only until the nodes' columns exist. */
+    /**
+     * Writes what node {@code node} holds into its row of {@code nodes}, in a transaction of its own, only while the row carries
+     * {@code epoch}; the time of the read is the database's.
+     */
     void holds(String node, long epoch, long generation, long stamp, ConfigStore.Refused refused);
 
     /** One transaction's reads and writes. */
@@ -51,6 +54,9 @@ interface ConfigRows {
 
         /** Tells every node that the generation is now {@code generation}, at the commit. */
         void notifyGeneration(long generation);
+
+        /** The reports of the nodes whose lease holds, by node. */
+        List<ConfigStore.NodeReport> nodes();
 
         /** The object's row; {@code for update} when {@code lock}. */
         Optional<ObjectRow> row(Ref ref, boolean lock);

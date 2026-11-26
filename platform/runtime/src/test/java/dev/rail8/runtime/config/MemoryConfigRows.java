@@ -36,8 +36,20 @@ final class MemoryConfigRows implements ConfigRows {
         Map<String, Map<String, Set<Secret.Kind>>> secretUses = new TreeMap<>();
         List<JsonObject> audit = new ArrayList<>();
         List<Long> notices = new ArrayList<>();
-        Map<String, JsonObject> reports = new TreeMap<>();
+        /** The rows of {@code nodes}: each node's report by node, and the nodes whose lease no longer holds. */
+        Map<String, ConfigStore.NodeReport> nodes = new TreeMap<>();
+        Set<String> lapsed = new TreeSet<>();
+        /** The database's time, which a node's report takes as the time of its read. */
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
         boolean auditFails;
+        boolean holdsFails;
+
+        /** The row of {@code node} in its epoch {@code epoch}, its lease holding and nothing reported, as a node's start writes it. */
+        void lease(String node, long epoch) {
+            nodes.put(node, new ConfigStore.NodeReport(node, epoch, OptionalLong.empty(), OptionalLong.empty(), OptionalLong.empty(),
+                    Optional.empty(), List.of(), 0));
+            lapsed.remove(node);
+        }
 
         Db copy() {
             Db d = new Db();
@@ -50,8 +62,11 @@ final class MemoryConfigRows implements ConfigRows {
             d.secretUses = new TreeMap<>(secretUses);
             d.audit = new ArrayList<>(audit);
             d.notices = new ArrayList<>(notices);
-            d.reports = new TreeMap<>(reports);
+            d.nodes = new TreeMap<>(nodes);
+            d.lapsed = new TreeSet<>(lapsed);
+            d.now = now;
             d.auditFails = auditFails;
+            d.holdsFails = holdsFails;
             return d;
         }
 
@@ -65,7 +80,8 @@ final class MemoryConfigRows implements ConfigRows {
             secretUses = d.secretUses;
             audit = d.audit;
             notices = d.notices;
-            reports = d.reports;
+            nodes = d.nodes;
+            lapsed = d.lapsed;
         }
     }
 
@@ -130,8 +146,11 @@ final class MemoryConfigRows implements ConfigRows {
     @Override
     public void holds(String node, long epoch, long generation, long stamp, ConfigStore.Refused refused) {
         synchronized (db) {
-            db.reports.put(node, new JsonObject().put("epoch", epoch).put("generation", generation).put("stamp", stamp)
-                    .put("refused", refused.objects().stream().map(Ref::toString).toList()).put("refusedCount", refused.count()));
+            if (db.holdsFails) throw new IllegalStateException("the database is away");
+            ConfigStore.NodeReport row = db.nodes.get(node);
+            if (row == null || row.epoch() != epoch) return;
+            db.nodes.put(node, new ConfigStore.NodeReport(node, epoch, OptionalLong.of(epoch), OptionalLong.of(generation), OptionalLong.of(stamp),
+                    Optional.of(db.now), refused.objects(), refused.count()));
         }
     }
 
@@ -149,6 +168,10 @@ final class MemoryConfigRows implements ConfigRows {
         @Override public void head(Head head) { d.head = head; }
 
         @Override public void notifyGeneration(long generation) { d.notices.add(generation); }
+
+        @Override public List<ConfigStore.NodeReport> nodes() {
+            return d.nodes.values().stream().filter(n -> !d.lapsed.contains(n.node())).toList();
+        }
 
         @Override public Optional<ObjectRow> row(Ref ref, boolean lock) {
             ObjectRow r = d.objects.get(ref);

@@ -251,7 +251,7 @@ class PgConfigStoreIT extends ConfigStoreContract {
         assertEquals(1, run.configObjects());
         assertThrows(ConfigRefusal.class, () -> a.store.read(FILES), "the removed object is gone");
         ConfigStore.ObjectView back = write(a, CONNECTIONS, API, new Change.GoBack(etag(a, API), 1));
-        assertEquals(body(PLAIN), back.json().getJsonObject("draft").getJsonObject("body"));
+        assertEquals(body(PLAIN).getJsonObject("values"), back.json().getJsonObject("draft").getJsonObject("values"));
         for (int v = 3; v <= 102; v++) {
             sql("insert into config_history (kind, key, at, actor, via, change, revision, version, diff) values ('connection', 'acme/api', $1, 'x', 'session',"
                     + " 'activate', 1, $2, '[]')", START.atOffset(ZoneOffset.UTC), v);
@@ -263,10 +263,14 @@ class PgConfigStoreIT extends ConfigStoreContract {
         assertEquals(2, read(a, API).json().getInteger("version"), "the object itself stays");
     }
 
-    @Test
-    void holdsIsNotWrittenToPostgresYet() {
-        Node a = node("a");
-        assertThrows(UnsupportedOperationException.class, () -> a.store.holds("a", 1, 0, 1, ConfigStore.Refused.none()));
+    @Override
+    long epoch(String node) {
+        return sql("select epoch from nodes where node = $1", node).getFirst().getLong(0);
+    }
+
+    @Override
+    void lapse(String node) {
+        sql("update nodes set lease_until = now() - interval '1 minute' where node = $1", node);
     }
 
     @Test

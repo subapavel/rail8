@@ -15,9 +15,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.random.RandomGenerator;
 
-import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** The in-memory store passes the {@link ConfigStoreContract}: the nodes' stores share one {@link MemoryConfigRows.Db}. */
 class MemoryConfigStoreTest extends ConfigStoreContract {
@@ -27,6 +24,10 @@ class MemoryConfigStoreTest extends ConfigStoreContract {
 
     @Override
     SecretStore secretStore(String node, Map<String, String> env, FakeClock clock, FakeTimer timer) {
+        synchronized (db) {
+            ConfigStore.NodeReport before = db.nodes.get(node);
+            db.lease(node, before == null ? 1 : before.epoch() + 1);
+        }
         return secretStores.start(node, env, clock, timer);
     }
 
@@ -156,6 +157,8 @@ class MemoryConfigStoreTest extends ConfigStoreContract {
         synchronized (db) {
             MemoryConfigRows.Db back = ((MemoryConfigRows.Db) snapshot).copy();
             back.audit = db.audit;
+            back.nodes = db.nodes;
+            back.lapsed = db.lapsed;
             db.take(back);
         }
     }
@@ -167,20 +170,17 @@ class MemoryConfigStoreTest extends ConfigStoreContract {
         }
     }
 
-    @Test
-    void holdsRecordsWhatANodeHoldsAndWhatItLeftOut() {
-        Node a = node("a");
-        inForce(a, API, PLAIN);
-        ConfigStore.State state = a.store.state(ConfigStore.Held.nothing());
-        a.store.holds("a", 7, state.generation(), state.stamp(), new ConfigStore.Refused(List.of(FILES), 1));
-        JsonObject report;
+    @Override
+    long epoch(String node) {
         synchronized (db) {
-            report = db.reports.get("a");
+            return db.nodes.get(node).epoch();
         }
-        assertEquals(7L, report.getLong("epoch"));
-        assertEquals(state.generation(), report.getLong("generation"));
-        assertEquals(state.stamp(), report.getLong("stamp"));
-        assertEquals(List.of(FILES.toString()), report.getJsonArray("refused").getList());
-        assertEquals(1, report.getInteger("refusedCount"));
+    }
+
+    @Override
+    void lapse(String node) {
+        synchronized (db) {
+            db.lapsed.add(node);
+        }
     }
 }
