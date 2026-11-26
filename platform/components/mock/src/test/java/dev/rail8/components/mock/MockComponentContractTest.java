@@ -24,4 +24,9 @@ class MockComponentContractTest extends ComponentContract {
     @Override protected Inbound inbound() {
         return Uses.in("partner-domestic", FLOW, MAX_BYTES, Map.of("url", "http://localhost:8081/echo"));
     }
+
+    /** The cookies of the node's UI, which the consumer keeps out of a flow. */
+    @Override protected java.util.Set<String> platformCookies() {
+        return MockComponent.PLATFORM_COOKIES;
+    }
 }

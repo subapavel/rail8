@@ -155,7 +155,7 @@ class HttpComponentTest {
     }
 
     @Test
-    void acceptedIs202NacksAre503Or400AndAFailedHandlerIs500WithTheReason() {
+    void acceptedIs202NacksAre503Or400AndAFailedHandlerIs500WithAFixedTextAndItsReasonInTheLog() {
         HttpComponent.HttpConsumer c = listen(e -> switch (e.headers().get("x-case")) {
             case "accept" -> Future.succeededFuture(new Ack.Accepted(e.id()));
             case "busy" -> Future.succeededFuture(new Ack.Nack("admission: 3/2 requests", true));
@@ -173,12 +173,88 @@ class HttpComponentTest {
         Answer bad = post(portOf(c), "/http/in", Buffer.buffer("x"), Map.of("x-case", "bad"));
         assertEquals(400, bad.status());
         assertEquals("no invoice id", bad.body().toString());
-        Answer thrown = post(portOf(c), "/http/in", Buffer.buffer("x"), Map.of("x-case", "throw"));
-        assertEquals(500, thrown.status());
-        assertTrue(thrown.body().toString().contains("validation failed"), thrown.body().toString());
-        Answer failed = post(portOf(c), "/http/in", Buffer.buffer("x"), Map.of("x-case", "fail"));
-        assertEquals(500, failed.status());
-        assertTrue(failed.body().toString().contains("partner down"));
+        try (Logged logged = new Logged()) {
+            Answer thrown = post(portOf(c), "/http/in", Buffer.buffer("x"), Map.of("x-case", "throw"));
+            assertEquals(500, thrown.status());
+            assertEquals("the flow failed", thrown.body().toString());
+            assertTrue(logged.holds("validation failed at step 'validate'"), "the reason is in the log: " + logged.lines());
+            Answer failed = post(portOf(c), "/http/in", Buffer.buffer("x"), Map.of("x-case", "fail"));
+            assertEquals(500, failed.status());
+            assertEquals("the flow failed", failed.body().toString());
+            assertTrue(logged.holds("message " + failed.headers().get(HttpComponent.H_MESSAGE_ID) + " of flow invoice-sync answered 500: java.lang.IllegalStateException: partner down"),
+                    "the log names the message, its flow and the failure: " + logged.lines());
+        }
+    }
+
+    /** A store whose streaming writes fail: the disk under it is full. */
+    static final class FullStore implements dev.rail8.api.BlobStore {
+        final dev.rail8.api.BlobStore inner;
+        FullStore(dev.rail8.api.BlobStore inner) { this.inner = inner; }
+        @Override public long treeLimit() { return inner.treeLimit(); }
+        @Override public Future<dev.rail8.api.Body> write(dev.rail8.api.BlobKey key, Buffer whole, long maxSize) { return inner.write(key, whole, maxSize); }
+        @Override public Future<dev.rail8.api.Body> write(dev.rail8.api.BlobKey key, io.vertx.core.streams.ReadStream<Buffer> in, long maxSize) {
+            in.resume();
+            return Future.failedFuture(new java.io.IOException("no space left on /var/lib/rail8/blobs"));
+        }
+        @Override public io.vertx.core.streams.ReadStream<Buffer> open(dev.rail8.api.BlobKey key) { return inner.open(key); }
+        @Override public Future<Buffer> read(dev.rail8.api.BlobKey key) { return inner.read(key); }
+        @Override public Future<Void> persist(dev.rail8.api.BlobKey key) { return inner.persist(key); }
+    }
+
+    @Test
+    void aBodyTheStoreCannotTakeIsA500WithAFixedTextAndTheStoresFailureInTheLog() {
+        List<Envelope> seen = new CopyOnWriteArrayList<>();
+        HttpComponent full = new HttpComponent(vertx, new FullStore(rt.blobs()), rt.ids(), onVertx(), port);
+        HttpComponent.HttpConsumer c = (HttpComponent.HttpConsumer) full.consumer(Uses.in("invoice-sync", "/in", 4096), e -> { seen.add(e); return Future.succeededFuture(new Ack.Accepted(e.id())); });
+        c.start().await();
+        started.add(c);
+        try (Logged logged = new Logged()) {
+            Answer a = post(portOf(c), "/http/in", Buffer.buffer("<Invoice/>"), Map.of());
+            assertEquals(500, a.status());
+            assertEquals("the message could not be stored", a.body().toString(), "a fixed text, never the store's failure");
+            assertEquals("text/plain", a.headers().get("content-type"));
+            assertTrue(logged.lines().stream().anyMatch(line -> line.startsWith("WARNING message m-") && line.contains("of flow invoice-sync: its body could not be stored")
+                    && line.contains("no space left on /var/lib/rail8/blobs")), "the store's failure is in the log: " + logged.lines());
+        }
+        assertEquals(List.of(), seen, "nothing reached the handler");
+    }
+
+    /**
+     * The four cookies of the node's UI never reach a flow: they are cut from the request's {@code cookie}, so neither the
+     * envelope nor the partner the flow sends it to sees them, and a reply that sets one of them reaches the caller without
+     * that {@code set-cookie}. Any other cookie passes both ways.
+     */
+    @Test
+    void thePlatformsCookiesAreCutFromTheRequestAndFromTheReplyOtherCookiesPass() {
+        List<String> partnerSaw = new CopyOnWriteArrayList<>();
+        HttpServer partner = partner(req -> { req.body().onSuccess(b -> {
+            partnerSaw.add(String.valueOf(req.getHeader("cookie")));
+            req.response().putHeader("set-cookie", req.getHeader("x-set")).end("<PartnerAck/>");
+        }); return null; });
+        Producer toPartner = producerTo(partner, "/in", Map.of());
+        List<Envelope> seen = new CopyOnWriteArrayList<>();
+        HttpComponent.HttpConsumer c = listen(e -> {
+            seen.add(e);
+            if (e.header("x-direct").isPresent()) return Future.succeededFuture(new Ack.Reply(e.withHeader("Set-Cookie", e.headers().get("x-set"))));
+            return Future.succeededFuture(new Ack.Reply(toPartner.send(e, CALL).await()));
+        }, 4096);
+        String cookies = "rail8-session=s1; __Host-rail8-session=s2; rail8-device=d1; theme=dark; __Host-rail8-device=d2";
+        for (String name : List.of("rail8-session", "__Host-rail8-session", "rail8-device", "__Host-rail8-device", "theme")) {
+            String set = name + "=v; Path=/; HttpOnly";
+            for (Map<String, String> how : List.<Map<String, String>>of(Map.of(), Map.of("x-direct", "1"))) {
+                Map<String, String> headers = new java.util.HashMap<>(how);
+                headers.putAll(Map.of("Cookie", cookies, "x-set", set));
+                Answer a = post(portOf(c), "/http/in", Buffer.buffer("<Invoice/>"), headers);
+                assertEquals(200, a.status(), name + " " + how + ": " + a.body());
+                assertEquals("theme=dark", seen.getLast().headers().get("cookie"), "the envelope holds only the other cookie");
+                assertEquals(name.equals("theme") ? List.of(set) : List.of(), a.headers().getAll("set-cookie"),
+                        name + " " + how + ": a reply never sets one of the platform's cookies, and sets any other");
+            }
+        }
+        assertEquals(java.util.Collections.nCopies(5, "theme=dark"), partnerSaw, "the partner saw only the other cookie");
+        post(portOf(c), "/http/in", Buffer.buffer("<Invoice/>"), Map.of("Cookie", "__Host-rail8-session=s2;rail8-device=d1", "x-direct", "1", "x-set", "theme=v"));
+        assertFalse(seen.getLast().headers().asMap().containsKey("cookie"), "a cookie with only the platform's is removed: " + seen.getLast().headers());
+        toPartner.close().await();
     }
 
     /** The store as the http consumer sees it, counting the streaming writes it was asked for. */

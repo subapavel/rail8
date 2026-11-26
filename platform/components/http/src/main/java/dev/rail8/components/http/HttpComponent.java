@@ -45,6 +45,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -62,15 +63,19 @@ import java.util.function.Function;
  * port ({@link HttpIngress}) under the prefix {@value #PREFIX}, at {@code /http} followed by its {@code address}, such as
  * {@code /http/orders} ({@link HttpConsumer#url()}); the port's verticle owns the socket and the consumer never runs a pipeline
  * on its event loop. A request at the path is streamed into the {@link BlobStore} under the {@link Inbound#maxBodyBytes} of its
- * flow (413 above it),
+ * flow (413 above it; a store that fails otherwise is 500 with a fixed text, its failure logged at WARNING),
  * becomes the ingress envelope (new id, the request headers, {@link #METHOD} / {@link #PATH} props) and is handed to the handler
  * on its own virtual thread;
  * the answer follows the {@link Ack}: {@code Reply} → 200 with the reply's headers and its body streamed, {@code Accepted} →
  * 202 with {@code x-message-id}, a retryable {@code Nack} → 503 + {@code Retry-After}, a final one → 400. A failed handler (a
  * sync flow's error reaches the caller) is answered by the failure's {@link Fault.Kind}: {@code MALFORMED} 400,
  * {@code INVALID} 422, {@code DOWNSTREAM} 503 + {@code Retry-After} when retryable ({@link NackException},
- * {@link HttpStatusException}) else 502, {@code INTERNAL} and any failure that is no {@link Fault} 500 — the body is the
- * failure's message as {@code text/plain}. Other methods are 405. Its stop closes its mount: no request reaches it from then
+ * {@link HttpStatusException}) else 502, {@code INTERNAL} and any failure that is no {@link Fault} 500 — with
+ * {@code x-message-id} and, as {@code text/plain}, a fixed text per status that says what kind of
+ * fault it was and nothing of the failure. The failure itself is logged with the message's id and flow (INFO for a 4xx,
+ * WARNING with its stack for a 5xx) and is in the message's history. The platform's own cookies
+ * ({@link #PLATFORM_COOKIES}) are cut from the request's {@code cookie} before it becomes the envelope, and a reply's
+ * {@code set-cookie} of one of them is never sent; other cookies pass. Other methods are 405. Its stop closes its mount: no request reaches it from then
  * on, and the stop completes once the requests it took have answered their senders, or at the node's stop deadline.
  *
  * <p><b>Producer</b> (the connection's {@code url}, {@code timeoutMs} and {@code poolSize}; each call's {@code path} and
@@ -104,6 +109,16 @@ public final class HttpComponent implements Component {
     public static final Key<Integer> STATUS = new Key<>("http.status");
     /** The header carrying the message id on a 202, and on every request a producer sends ({@link Envelope#H_MESSAGE_ID}). */
     public static final String H_MESSAGE_ID = Envelope.H_MESSAGE_ID;
+    /**
+     * The names of the cookies of the node's own UI: its session and its device, each with and without {@code __Host-}. The UI
+     * can share a host with the node's HTTP port, and a browser sends a host's cookies to every port of it, so a consumer
+     * cuts these from a request's {@code cookie} and never sends a reply's {@code set-cookie} of one of them.
+     */
+    public static final Set<String> PLATFORM_COOKIES = Set.of("rail8-session", "__Host-rail8-session", "rail8-device", "__Host-rail8-device");
+    /** The text of the 500 a consumer answers when the request's body could not be stored. */
+    static final String NOT_STORED = "the message could not be stored";
+
+    private static final System.Logger LOG = System.getLogger(HttpComponent.class.getName());
 
     private static final Set<String> HOP_BY_HOP = Set.of("content-length", "transfer-encoding", "connection", "host", "keep-alive", "upgrade", "expect", "te", "trailer", "proxy-authorization", "proxy-authenticate");
     /** A URL without user info: no {@code @} between {@code //} and the path, query or fragment. */
@@ -240,6 +255,45 @@ public final class HttpComponent implements Component {
         return new Headers(m);
     }
 
+    /** {@code headers} with the {@link #PLATFORM_COOKIES} cut from {@code cookie}, the other cookies as written; a {@code cookie} left with none is removed. */
+    static Headers withoutPlatformCookies(Headers headers) {
+        String cookie = headers.get("cookie");
+        if (cookie == null) return headers;
+        List<String> pairs = List.of(cookie.split(";"));
+        List<String> kept = pairs.stream().filter(pair -> !PLATFORM_COOKIES.contains(cookieName(pair))).toList();
+        if (kept.size() == pairs.size()) return headers;
+        Map<String, String> m = new HashMap<>(headers.asMap());
+        String rest = String.join(";", kept).strip();
+        if (rest.isEmpty()) m.remove("cookie");
+        else m.put("cookie", rest);
+        return new Headers(m);
+    }
+
+    /** Whether the reply header {@code name}: {@code value} sets one of the {@link #PLATFORM_COOKIES}. */
+    static boolean setsAPlatformCookie(String name, String value) {
+        return "set-cookie".equalsIgnoreCase(name) && PLATFORM_COOKIES.contains(cookieName(value));
+    }
+
+    /** The name of a cookie in a {@code cookie} pair or a {@code set-cookie} value: what comes before its first {@code =}, trimmed. */
+    private static String cookieName(String cookie) {
+        int eq = cookie.indexOf('=');
+        return (eq < 0 ? cookie : cookie.substring(0, eq)).strip();
+    }
+
+    /**
+     * The text a failed handler's answer carries, by its {@link #status}: the kind of fault, never the failure's own message,
+     * which may name the flow's steps, its partners or its data.
+     */
+    static String failedText(int status) {
+        return switch (status) {
+            case 400 -> "the message cannot be read";
+            case 422 -> "the message is invalid";
+            case 502 -> "the receiver refused the message";
+            case 503 -> "the receiver cannot be reached now";
+            default -> "the flow failed";
+        };
+    }
+
     /**
      * The status the consumer answers its sender with, also {@code rail8 test}'s {@code expect.status}: a
      * handler that failed by its failure's {@link Fault.Kind} — {@code MALFORMED} 400, {@code INVALID} 422, {@code DOWNSTREAM}
@@ -316,14 +370,17 @@ public final class HttpComponent implements Component {
             if (declared != null && Long.parseLong(declared) > maxBodyBytes) { res.setStatusCode(413).end("body above " + maxBodyBytes + " bytes"); return; }
             String id = ids.next();
             Context ctx = vertx.getOrCreateContext();
-            Headers headers = headers(req.headers());
+            Headers headers = withoutPlatformCookies(headers(req.headers()));
             String method = req.method().name();
             String path = req.path();
             req.pause();   // nothing flows until the store attached its handlers (a store that attaches later resumes)
             blobs.write(BlobKey.body(id, 0), req, maxBodyBytes).onComplete(written -> {
                 if (written.failed()) {
                     if (written.cause() instanceof BodyTooLargeException) res.setStatusCode(413).end("body above " + maxBodyBytes + " bytes");
-                    else res.setStatusCode(500).end(String.valueOf(written.cause().getMessage()));
+                    else {
+                        LOG.log(System.Logger.Level.WARNING, "message " + id + " of flow " + flow + ": its body could not be stored", written.cause());
+                        res.setStatusCode(500).putHeader("content-type", "text/plain").end(NOT_STORED);
+                    }
                     return;
                 }
                 if (!running.containsKey(this)) {   // stopping (or not yet started): never handed to the handler
@@ -335,15 +392,18 @@ public final class HttpComponent implements Component {
                 // a handler that throws (a checked one too, sneakily: an interrupted await) or answers null fails the answer — Future.future
                 // catches either — and the request gets a 500, never a hang
                 Thread.ofVirtual().name("rail8-http-" + handled.incrementAndGet()).start(() -> Future.<Ack>future(p -> handler.apply(in).onComplete(p))
-                        .onComplete(done -> ctx.runOnContext(v -> answer(res, done.succeeded() ? done.result() : null, done.cause()))));
+                        .onComplete(done -> ctx.runOnContext(v -> answer(res, id, done.succeeded() ? done.result() : null, done.cause()))));
             });
         }
 
-        private void answer(HttpServerResponse res, Ack ack, Throwable failure) {
+        private void answer(HttpServerResponse res, String id, Ack ack, Throwable failure) {
             int status = status(ack, failure);
             if (failure != null) {
+                String what = "message " + id + " of flow " + flow + " answered " + status + ": " + failure;
+                if (status < 500) LOG.log(System.Logger.Level.INFO, what);
+                else LOG.log(System.Logger.Level.WARNING, what, failure);
                 if (status == 503) res.putHeader("retry-after", "1");
-                res.setStatusCode(status).putHeader("content-type", "text/plain").end(String.valueOf(failure.getMessage()));
+                res.setStatusCode(status).putHeader(H_MESSAGE_ID, id).putHeader("content-type", "text/plain").end(failedText(status));
                 return;
             }
             switch (ack) {
@@ -355,7 +415,7 @@ public final class HttpComponent implements Component {
                 case Ack.Reply r -> {
                     Envelope reply = r.reply();
                     res.setStatusCode(status);
-                    reply.headers().asMap().forEach((k, v) -> { if (!HOP_BY_HOP.contains(k)) res.putHeader(k, v); });
+                    reply.headers().asMap().forEach((k, v) -> { if (!HOP_BY_HOP.contains(k) && !setsAPlatformCookie(k, v)) res.putHeader(k, v); });
                     res.putHeader("content-length", String.valueOf(reply.body().size()));
                     reply.body().open().pipeTo(res);
                 }

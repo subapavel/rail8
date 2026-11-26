@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Timeout;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -31,8 +32,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * D-049: a failed handler future is answered by the failure's {@link Fault.Kind}; anything that is no fault is a 500 — a
- * checked exception a handler throws (sneakily, as an interrupted {@code await} does) included (D-056).
+ * A failed handler future is answered by the failure's {@link Fault.Kind}; anything that is no fault is a 500, a checked
+ * exception a handler throws (sneakily, as an interrupted {@code await} does) included. The answer carries a fixed text per
+ * status and the message's id; the failure's own message is in the log only.
  */
 @Timeout(30)
 class HttpConsumerStatusTest {
@@ -101,10 +103,22 @@ class HttpConsumerStatusTest {
         expected.put("no-fault", 500);
         expected.put("partner-5xx", 503);
         expected.put("partner-4xx", 502);
+        Map<Integer, String> texts = Map.of(400, "the message cannot be read", 422, "the message is invalid", 502, "the receiver refused the message",
+                503, "the receiver cannot be reached now", 500, "the flow failed");
         for (Map.Entry<String, Integer> c : expected.entrySet()) {
-            Answer a = post(c.getKey());
+            Answer a;
+            List<String> lines;
+            try (Logged logged = new Logged()) {
+                a = post(c.getKey());
+                lines = logged.lines();
+            }
             assertEquals(c.getValue(), a.status(), c.getKey() + ": " + a.body());
-            assertEquals(failures.get(c.getKey()).getMessage(), a.body(), c.getKey() + ": the body is the failure's message, not its toString()");
+            assertEquals(texts.get(c.getValue()), a.body(), c.getKey() + ": the body is the fixed text of its status, never the failure's message");
+            String id = a.headers().get(HttpComponent.H_MESSAGE_ID);
+            assertTrue(id != null && id.startsWith("m-"), c.getKey() + ": the answer names the message: " + id);
+            String detail = failures.get(c.getKey()).getMessage();
+            assertTrue(lines.stream().anyMatch(line -> line.contains("message " + id + " of flow orders answered " + c.getValue()) && line.contains(detail)),
+                    c.getKey() + ": the log names the message, its flow, the status and the failure: " + lines);
             String contentType = a.headers().get("content-type");
             assertTrue(contentType != null && contentType.startsWith("text/plain"), c.getKey() + ": content-type " + contentType);
             if (c.getValue() == 503) assertEquals("1", a.headers().get("retry-after"), c.getKey() + ": a retryable answer says when to retry");
@@ -137,7 +151,7 @@ class HttpConsumerStatusTest {
             assertTrue(answered.succeeded(), c.getKey() + ": a handler that throws a checked exception is answered, not left hanging: " + answered.cause());
             Answer a = answered.result();
             assertEquals(500, a.status(), c.getKey() + ": " + a.body());
-            assertEquals(c.getValue().getMessage(), a.body(), c.getKey() + ": the body is the failure's message");
+            assertEquals("the flow failed", a.body(), c.getKey() + ": the body is the fixed text, never the failure's message");
             String contentType = a.headers().get("content-type");
             assertTrue(contentType != null && contentType.startsWith("text/plain"), c.getKey() + ": content-type " + contentType);
             assertNull(a.headers().get("retry-after"), c.getKey() + ": a 500 carries no retry-after");

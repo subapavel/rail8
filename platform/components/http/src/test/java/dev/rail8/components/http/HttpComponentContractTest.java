@@ -55,4 +55,9 @@ class HttpComponentContractTest extends ComponentContract {
     @Override protected Outbound outbound(Consumer started) {
         return Uses.out(((HttpComponent.HttpConsumer) started).url().orElseThrow().toString());
     }
+
+    /** The cookies of the node's UI, which the consumer keeps out of a flow. */
+    @Override protected java.util.Set<String> platformCookies() {
+        return HttpComponent.PLATFORM_COOKIES;
+    }
 }
