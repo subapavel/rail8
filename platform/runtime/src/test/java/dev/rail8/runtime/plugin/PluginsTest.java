@@ -483,7 +483,7 @@ class PluginsTest {
 
     @Test
     void aModuleNamedAsACommandOfTheCommandLinesOwnBringsNoCommand() throws IOException {
-        assertEquals(List.of("validate", "test", "lock", "deploy", "user", "bootstrap", "key", "new-adapter", "help"), Plugins.CLI_COMMANDS);
+        assertEquals(List.of("validate", "test", "lock", "deploy", "config", "user", "bootstrap", "key", "new-adapter", "help"), Plugins.CLI_COMMANDS);
         try (URLClassLoader deploy = classPath(moduleJar("deploy.jar", PluginFixtures.CommandsAsDeploy.class))) {
             assertRefused("module deploy: its command is the CLI's own deploy", () -> Plugins.load(deploy, Optional.empty(), Map.of()).close());
         }
