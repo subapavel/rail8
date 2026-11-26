@@ -15,10 +15,14 @@ const MOVING = '.ant-modal, .ant-dropdown-menu-submenu-popup, .ant-dropdown, .an
  */
 export async function opened(locator: Locator) {
   await expect.element(locator).toBeInTheDocument();
+  // on a busy machine the opening has taken most of a second, the whole of a poll's default wait
   await expect
-    .poll(() => {
-      const moving = locator.element().closest(MOVING);
-      return moving !== null && moving.checkVisibility() && !OPENING.test(moving.className);
-    })
+    .poll(
+      () => {
+        const moving = locator.element().closest(MOVING);
+        return moving !== null && moving.checkVisibility() && !OPENING.test(moving.className);
+      },
+      { timeout: 5_000 },
+    )
     .toBe(true);
 }
