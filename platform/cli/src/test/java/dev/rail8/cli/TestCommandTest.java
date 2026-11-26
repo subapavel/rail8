@@ -55,8 +55,6 @@ class TestCommandTest {
 
     /** {@code bin/rail8 test examples/demo} — CI's step. */
     static final List<String> DEMO_REPORT = List.of(
-            "PASS greet: a person greeted (flow time 0ms)",
-            "PASS greet: a body that is no JSON (flow time 0ms)",
             "PASS invoice-async: domestic invoice (flow time 20ms)",
             "PASS invoice-async: partner down (flow time 2400ms)",
             "PASS invoice-sync: domestic invoice (flow time 20ms)",
@@ -65,6 +63,8 @@ class TestCommandTest {
             "PASS order-partner: order sent on (flow time 0ms)",
             "PASS sftp-invoice: invoice file (flow time 20ms)",
             "PASS sftp-invoice: partner down (flow time 2400ms)",
+            "PASS greet: a person greeted (flow time 0ms)",
+            "PASS greet: a body that is no JSON (flow time 0ms)",
             "10 cases: 10 passed, 0 failed");
 
     /** The {@code flowtest} fixture: test documents in path order (async-order before sync-order), cases in order. */
@@ -169,8 +169,6 @@ class TestCommandTest {
         Ran ran = run("test", pkg.toString());
 
         assertEquals(List.of(
-                "PASS greet: a person greeted (flow time 0ms)",
-                "PASS greet: a body that is no JSON (flow time 0ms)",
                 "PASS invoice-async: domestic invoice (flow time 20ms)",
                 "FAIL invoice-async: partner down (flow time 2400ms)",
                 "  expect.dlq: expected 0, was 1",
@@ -181,6 +179,8 @@ class TestCommandTest {
                 "PASS sftp-invoice: invoice file (flow time 20ms)",
                 "FAIL sftp-invoice: partner down (flow time 2400ms)",
                 "  expect.dlq: expected 0, was 1",
+                "PASS greet: a person greeted (flow time 0ms)",
+                "PASS greet: a body that is no JSON (flow time 0ms)",
                 "10 cases: 8 passed, 2 failed"), ran.outLines(), ran.toString());
         assertEquals(1, ran.exit(), ran.toString());
     }
