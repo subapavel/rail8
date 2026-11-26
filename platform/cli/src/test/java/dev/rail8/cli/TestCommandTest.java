@@ -185,6 +185,27 @@ class TestCommandTest {
         assertEquals(1, ran.exit(), ran.toString());
     }
 
+    /**
+     * A test of a flow of {@code schemaVersion: 2} checks the settings of each send through a connection: the demo's
+     * {@code sftp-invoice} expecting the path {@code /orders} where it sends to {@code /invoices} fails that case, naming the
+     * connection, the setting and both values.
+     */
+    @Test
+    @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    void theSettingsOfASendThroughAConnectionAreChecked() throws IOException {
+        Path pkg = CliRuns.copy(DEMO, tmp.resolve("demo-settings"));
+        CliRuns.rewrite(pkg.resolve("flows/sftp-invoice.test.yaml"), Map.of("settings: { path: /invoices }", "settings: { path: /orders }"));
+
+        Ran ran = run("test", pkg.toString());
+
+        List<String> lines = ran.outLines();
+        int at = lines.indexOf("FAIL sftp-invoice: invoice file (flow time 20ms)");
+        assertTrue(at >= 0, ran.toString());
+        assertEquals("  expect.sent.acme/erp/rest.settings.path: expected /orders, was /invoices", lines.get(at + 1), ran.toString());
+        assertEquals("10 cases: 9 passed, 1 failed", lines.getLast(), ran.toString());
+        assertEquals(1, ran.exit(), ran.toString());
+    }
+
     /** A sync and an at-least-once flow, a happy path and a partner down each: every expectation of the fixture holds. */
     @Test
     @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)

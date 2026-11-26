@@ -62,6 +62,7 @@ class MockComponentTest {
         assertEquals("application/xml", out.header(Envelope.H_CONTENT_TYPE).orElseThrow());
         assertEquals("r1", out.header("x-request-id").orElseThrow(), "headers carried over");
         assertEquals(List.of(in), http.sentTo("partner-domestic"));
+        assertEquals(List.of(CALL), http.callsTo("partner-domestic"), "each send's call, its settings among them");
         assertEquals(List.of(), http.sentTo("partner-foreign"));
         Envelope now = http.producer(out(foreign)).send(invoice(), CALL).await();
         assertTrue(now.body().whole().toString().contains("Ack"), "no delay: answered at once");

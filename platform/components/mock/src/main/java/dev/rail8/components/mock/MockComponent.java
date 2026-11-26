@@ -94,6 +94,7 @@ public final class MockComponent implements Component {
     private final Map<String, AtomicLong> sends = new ConcurrentHashMap<>();
     private final List<Envelope> sent = new CopyOnWriteArrayList<>();
     private final Map<String, List<Envelope>> sentTo = new ConcurrentHashMap<>();
+    private final Map<String, List<Call>> callsTo = new ConcurrentHashMap<>();
     private final Map<String, Running> handlers = new ConcurrentHashMap<>();   // by endpoint name: a consumer answers its own endpoint only
     private final Map<String, List<Envelope>> delivered = new ConcurrentHashMap<>();
     private final Set<String> down = ConcurrentHashMap.newKeySet();   // the endpoints whose partner is down
@@ -183,6 +184,9 @@ public final class MockComponent implements Component {
     public List<Envelope> sent() { return List.copyOf(sent); }
 
     public List<Envelope> sentTo(String endpoint) { return List.copyOf(sentTo.getOrDefault(endpoint, List.of())); }
+
+    /** The call of each send on {@code endpoint}, in the order of {@link #sentTo}: its settings among them. */
+    public List<Call> callsTo(String endpoint) { return List.copyOf(callsTo.getOrDefault(endpoint, List.of())); }
 
     /**
      * Hands {@code bytes} with {@code headers} to the consumer running on the endpoint named {@code endpoint} as that consumer
@@ -412,6 +416,7 @@ public final class MockComponent implements Component {
         Objects.requireNonNull(out, "out");
         String name = key(out.connection());
         List<Envelope> mine = sentTo.computeIfAbsent(name, k -> new CopyOnWriteArrayList<>());
+        List<Call> called = callsTo.computeIfAbsent(name, k -> new CopyOnWriteArrayList<>());
         AtomicLong count = sends.computeIfAbsent(name, k -> new AtomicLong());
         return new Producer() {
             @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
@@ -423,6 +428,7 @@ public final class MockComponent implements Component {
             @Override public Future<Envelope> send(Envelope e, Call call) {
                 Objects.requireNonNull(call, "call");
                 sent.add(e);
+                called.add(call);   // before the envelope: whoever finds the send finds its call
                 mine.add(e);
                 Behaviour b = behaviours.getOrDefault(name, Behaviour.ECHO);
                 long n = count.incrementAndGet();
