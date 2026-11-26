@@ -189,8 +189,8 @@ describe('the session gate', () => {
     expect(page.getByLabelText('Generated password').query()).toBeNull();
     // the first draw spells the name, which the node refuses, so another is drawn
     const spelled = [...'aNNa', ...'x'.repeat(16)].map((c) => GENERATED_ALPHABET.indexOf(c));
-    vi.spyOn(crypto, 'getRandomValues').mockImplementationOnce(<T extends ArrayBufferView | null>(into: T) => {
-      (into as unknown as Uint8Array).set(spelled);
+    vi.spyOn(crypto, 'getRandomValues').mockImplementationOnce((into) => {
+      new Uint8Array(into.buffer, into.byteOffset, into.byteLength).set(spelled);
       return into;
     });
     await button('Generate').click();
