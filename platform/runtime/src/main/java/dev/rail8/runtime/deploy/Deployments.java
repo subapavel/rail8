@@ -2,6 +2,7 @@ package dev.rail8.runtime.deploy;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
@@ -23,6 +24,7 @@ import dev.rail8.core.audit.Actor;
 import dev.rail8.core.cache.Caches;
 import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.dlq.Dlq;
+import dev.rail8.core.flow.AdapterUse;
 import dev.rail8.core.flow.Delivery;
 import dev.rail8.core.flow.EndpointUse;
 import dev.rail8.core.flow.FlowBuilder;
@@ -42,6 +44,8 @@ import dev.rail8.core.record.Meter;
 import dev.rail8.core.record.MessageStore;
 import dev.rail8.core.scope.MessageContext;
 import dev.rail8.ingress.SharedHttpPort;
+import dev.rail8.runtime.config.ConnectionState;
+import dev.rail8.runtime.config.Environment;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
 import dev.rail8.runtime.deploy.DeploymentStore.Listings;
 import dev.rail8.runtime.deploy.DeploymentStore.NodePackage;
@@ -421,6 +425,12 @@ public final class Deployments {
     private final Object follower = new Object();
     /** The next tick {@link #startFollowing} scheduled; null before the first. */
     private Timer.Cancellable nextTick;
+    /** The configuration of the environment this node holds: a deploy checks its flows' connections against it. */
+    private final Environment environment;
+    /** The producers of the connections the flows of {@code schemaVersion: 2} send through, over {@link #environment}. */
+    private final EnvironmentSends sends;
+    /** The snapshot the last activation handed, which the next one is compared with. */
+    private volatile Environment.Snapshot seen;
 
     /** Deployments whose records live in memory: dev, tests and the command line. */
     public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
@@ -548,6 +558,19 @@ public final class Deployments {
                        List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
                        Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
                        WorkSignals signals, Caches caches, long epoch) {
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, intake, leases, targets, fence,
+                workers, signals, caches, epoch, Environment.fixed(config.env(), Environment.Snapshot.empty()));
+    }
+
+    /**
+     * Deployments whose flows of {@code schemaVersion: 2} reach their connections through {@code environment}, the node's: a deploy
+     * checks them against it, each send reads it, and an activation that changes a polling sender's connection restarts its consumer.
+     * The other constructors give the deployments an environment that holds no connection.
+     */
+    public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
+                       List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
+                       Intake intake, PollerLeases leases, Targets targets, BooleanSupplier fence, Workers workers,
+                       WorkSignals signals, Caches caches, long epoch, Environment environment) {
         this.epoch = epoch;
         this.workers = Objects.requireNonNull(workers, "workers");
         this.signals = Objects.requireNonNull(signals, "signals");
@@ -586,6 +609,10 @@ public final class Deployments {
         this.fence = Objects.requireNonNull(fence, "fence");
         this.runs = new Runs(clock, timer, WorkerPolicy.DEFAULT.lease());
         this.caches = Objects.requireNonNull(caches, "caches");
+        this.environment = Objects.requireNonNull(environment, "environment");
+        this.sends = new EnvironmentSends(environment, this.components, config.secrets(), timer, named::add);
+        this.seen = environment.current();
+        environment.onActivation(this::activated);
     }
 
     /** Releases {@link #deploying}; once this thread no longer holds it, the values of its candidates leave the scrubber. */
@@ -702,7 +729,8 @@ public final class Deployments {
      */
     private record Checked(Map<String, String> schemes, Map<String, JsonObject> configs, Map<String, JsonObject> resolved,
                            Map<String, FlowDefinition> flows, Set<String> leaving, Map<String, InetSocketAddress> listening,
-                           Map<String, String> paths, Map<String, Calls.Links> calls, Resolved dependencies) {}
+                           Map<String, String> paths, Map<String, Calls.Links> calls, Resolved dependencies,
+                           DeploymentStore.Configuration configuration) {}
 
     /** Where {@code holder} — a flow and its in endpoint, or the node's admin API — listens. */
     private record Listener(String holder, InetSocketAddress at) {}
@@ -1156,6 +1184,12 @@ public final class Deployments {
                 if (listed == null) throw refused(Kind.NOT_FOUND, RefusalCode.PACKAGE_NOT_DEPLOYED, "no package '" + name + "' is deployed", Map.of("package", name));
                 String version = listed.pkg().version();
                 List<Flow> running = listed.flows().stream().filter(Flow::runs).toList();
+                NamedChecks.Pooled pooled = pooled();
+                List<String> used = NamedChecks.undeployProblems(name, pooled.systems(), pooled.uses());
+                if (!used.isEmpty()) {
+                    throw new DeployRefusedException(Kind.CONFLICT, RefusalCode.IN_USE, "package '" + name + "' defines systems that flows of other packages name: "
+                            + used.size() + " problem(s)", Map.of("package", name, "count", used.size()), used);
+                }
                 if (listed.record() != null) {   // a deploy with no origin wrote none
                     // the commit point: the record is deleted before anything stops; a delete that fails changes nothing else
                     PoolLock pool = poolLock;
@@ -1311,7 +1345,7 @@ public final class Deployments {
         List<Flow> built = new ArrayList<>();
         try {
             Package pkg = load(name, dir);
-            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>());
+            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>(), Optional.empty());
             return build(name, Optional.empty(), pkg.manifest().getString("version"), "validate", pkg, dir, checked, built);
         } catch (DeployRefusedException refused) {
             if (refused.kind() == Kind.BUSY) throw new IOException(refused.error(), refused);   // a pool refusal lists no problem: the node's failure
@@ -1358,7 +1392,7 @@ public final class Deployments {
             undrained.clear();
             Future<Void> stopped = stop(running, config.stopDeadline());   // every worker stopped first: no claim from here on
             Future<Void> drained = drain(running, stopped);                 // its bound runs from here, the start of the close
-            stopped.eventually(() -> close(running)).eventually(() -> drained).await();
+            stopped.eventually(() -> close(running)).eventually(() -> drained).eventually(sends::close).await();
         } finally {
             unlock();
         }
@@ -1863,7 +1897,9 @@ public final class Deployments {
                 Files.move(folder, dir, StandardCopyOption.ATOMIC_MOVE);
             }
             Package pkg = load(name, dir);
-            Checked checked = check(name, pkg, dir, before, List.of(), commits, written);
+            // only a deploy checks the environment, against the pool's committed systems; a restore and a follow install what it checked
+            Optional<NamedChecks.Pooled> pooled = restoring == null ? Optional.of(pooled()) : Optional.empty();
+            Checked checked = check(name, pkg, dir, before, List.of(), commits, written, pooled);
             if (fetching != null) fetching.close();   // every pin is read: the fetches' deadline ends before a flow starts
             String version = pkg.manifest().getString("version");
             Optional<String> commit = origin.map(Origin::commit);
@@ -1942,11 +1978,15 @@ public final class Deployments {
                         new JsonObject().put("expect", from.expect()).put("outcome", "deployed").put("package", name).put("version", version)
                                 .put("replaces", from.replaces()));
                 Map<String, Map<String, Set<Secret.Kind>>> uses = uses(now);
-                Future<Long> saved = bounded(Future.future(done -> pool.save(saving, uses, from.by(), audited).onComplete(done)), "the write of the deploy record");
+                DeploymentStore.Configuration configuration = checked.configuration();
+                Future<Long> saved = bounded(Future.future(done -> pool.save(saving, uses, configuration, from.by(), audited).onComplete(done)),
+                        "the write of the deploy record");
                 saved.otherwiseEmpty().await();
-                if (saved.failed() && saved.cause() instanceof SecretUsesRefused changed) {   // checked again in the record's transaction
-                    if (running == null) throw invalid(name, changed.problems());
-                    throw rollBack(Kind.INVALID, RefusalCode.ROLLED_BACK_UNRECORDED, version, "was not recorded", changed.problems(), running, retiring, started, packageDir, built, again);
+                List<String> changed = saved.failed() && saved.cause() instanceof SecretUsesRefused refused ? refused.problems()
+                        : saved.failed() && saved.cause() instanceof DeploymentStore.ConfigurationChanged moved ? moved.problems() : null;
+                if (changed != null) {   // checked again in the record's transaction
+                    if (running == null) throw invalid(name, changed);
+                    throw rollBack(Kind.INVALID, RefusalCode.ROLLED_BACK_UNRECORDED, version, "was not recorded", changed, running, retiring, started, packageDir, built, again);
                 }
                 if (saved.failed()) {
                     // the generation this node applied stays behind: its next tick installs whatever the pool holds
@@ -2219,8 +2259,8 @@ public final class Deployments {
      * and no cycle of calls ({@link Calls#check}, against {@link #others}). {@code held} holds the versions an off-node validate
      * holds, empty otherwise; {@code commits} and {@code written} are as {@link #dependencies} takes them.
      */
-    private Checked check(String name, Package pkg, Path dir, List<Flow> running, List<Held> held, Commits commits, List<Path> written)
-            throws DeployRefusedException, IOException {
+    private Checked check(String name, Package pkg, Path dir, List<Flow> running, List<Held> held, Commits commits, List<Path> written,
+                          Optional<NamedChecks.Pooled> pooled) throws DeployRefusedException, IOException {
         List<String> problems = new ArrayList<>(pkg.problems());
         JsonObject manifest = pkg.manifest();
         if (!name.equals(manifest.getValue("name"))) problems.add("package.yaml names the package '" + manifest.getValue("name") + "', the deploy '" + name + "'");
@@ -2262,6 +2302,7 @@ public final class Deployments {
             }
         });
         Map<String, FlowDefinition> flows = new LinkedHashMap<>();
+        Map<String, FlowDefinition> named = new LinkedHashMap<>();   // the flows of schemaVersion 2, which name connections
         Map<String, List<String>> feeds = new LinkedHashMap<>();
         pkg.flows().forEach((id, flow) -> {
             if (!Schemas.FLOW.validate(flow).valid()) return;
@@ -2274,6 +2315,16 @@ public final class Deployments {
             }
             flows.put(id, def);
             problems.addAll(optionProblems(id, def.steps()));
+            def.sender().ifPresent(sender -> {   // its sender stands as an in endpoint of its own, named after the flow
+                named.put(id, def);
+                problems.addAll(NamedChecks.flow(id, def, components));
+                JsonObject settings = (JsonObject) json(sender.settings());
+                schemes.put(def.fromEndpoint(), sender.adapter());
+                configs.put(def.fromEndpoint(), settings);
+                resolved.put(def.fromEndpoint(), settings.copy());
+                Component component = components.get(sender.adapter());
+                if (component != null && component.forms().serves(Direction.IN)) ins.add(def.fromEndpoint());
+            });
             feeds.computeIfAbsent(def.fromEndpoint(), endpoint -> new ArrayList<>()).add(id);
             if (outs.contains(def.fromEndpoint())) {
                 problems.add("flow '" + id + "' consumes from endpoint '" + def.fromEndpoint() + "', whose direction is out: a flow's from is an in endpoint");
@@ -2310,9 +2361,10 @@ public final class Deployments {
         for (Flow f : running) {
             if (AT_LEAST_ONCE.equals(f.flow().delivery()) && !stayQueued.contains(f.id()) && !unread.contains(local(f.flow()))) leaving.add(f.id());
         }
+        DeploymentStore.Configuration configuration = NamedChecks.check(name, pkg.systems(), named, components, config.secrets(), pooled, problems);
         if (!problems.isEmpty()) throw invalid(name, problems);
         return new Checked(schemes, configs, resolved, flows, Set.copyOf(leaving), Map.copyOf(listening), Map.copyOf(paths), Map.copyOf(calls),
-                dependencies);
+                dependencies, configuration);
     }
 
     /**
@@ -2621,6 +2673,45 @@ public final class Deployments {
     }
 
     /**
+     * The systems the pool's records define, sorted by key, each with its package, partner, name and description, and its
+     * connections, sorted by name, each with its key, adapter and description, its state in this node's environment ({@code set},
+     * {@code mocked}, {@code stopped} or {@code missing}, never a value), and the flows that can reach it, each with its step
+     * ({@code from} for the sender). Blocking: on a virtual thread.
+     *
+     * @throws IllegalStateException the pool's records could not be read: the message names the read
+     */
+    public JsonObject systems() {
+        Future<List<DeploymentStore.DeployedSystem>> systems = bounded(records.systems(), "the read of the pool's systems");
+        Future<List<DeploymentStore.ConnectionUse>> uses = bounded(records.connectionUses(), "the read of the pool's connection uses");
+        Future.join(systems, uses).otherwiseEmpty().await();
+        Throwable failed = systems.failed() ? systems.cause() : uses.cause();
+        if (failed != null) throw new IllegalStateException("the pool's systems could not be read: " + reason(failed), failed);
+        Environment.Snapshot snapshot = environment.current();
+        Map<String, JsonArray> reaching = new TreeMap<>();   // by connection key: the flows that can reach it
+        uses.result().stream().sorted(Comparator.comparing(DeploymentStore.ConnectionUse::flow).thenComparing(DeploymentStore.ConnectionUse::step))
+                .forEach(u -> reaching.computeIfAbsent(u.connection(), k -> new JsonArray()).add(new JsonObject().put("flow", u.flow()).put("step", u.step())));
+        JsonArray items = new JsonArray();
+        for (DeploymentStore.DeployedSystem sys : systems.result().stream().sorted(Comparator.comparing(DeploymentStore.DeployedSystem::key)).toList()) {
+            JsonObject def = sys.definition();
+            JsonArray connections = new JsonArray();
+            JsonObject defined = def.getJsonObject("connections", new JsonObject());
+            for (String connection : new TreeSet<>(defined.fieldNames())) {
+                JsonObject c = defined.getJsonObject(connection);
+                String key = sys.key() + "/" + connection;
+                String state = snapshot.connection(key).map(held -> held.stopped().isPresent() ? "stopped"
+                        : held instanceof ConnectionState.Mocked ? "mocked" : "set").orElse("missing");
+                connections.add(new JsonObject().put("name", connection).put("key", key).put("adapter", c.getString("adapter"))
+                        .put("description", c.getString("description")).put("state", state)
+                        .put("flows", reaching.getOrDefault(key, new JsonArray())));
+            }
+            items.add(new JsonObject().put("key", sys.key()).put("package", sys.deployment()).put("partner", def.getString("partner"))
+                    .put("name", def.getString("name")).put("description", def.getString("description"))
+                    .put("instanceName", snapshot.instanceName(sys.key()).orElse(null)).put("connections", connections));
+        }
+        return new JsonObject().put("environment", environment.name()).put("systems", items);
+    }
+
+    /**
      * Whether a running flow of a package deployed here takes requests at {@code path} of the node's HTTP port, as its check
      * answered it, whether or not its consumer has mounted it at the moment (a redeploy swaps it, it restarts, it stops). A
      * FAILED flow does not. Reads the listing as it is, without the deploy lock: called on an event loop for every request no mount
@@ -2655,10 +2746,32 @@ public final class Deployments {
         Map<String, Calls.Links> links = new TreeMap<>();
         flows.forEach((id, def) -> {
             Optional<Calls.Address> serves = Optional.ofNullable(asked.get(id)).flatMap(serving);
-            List<Calls.Address> calls = def.referencedEndpoints().stream().map(callable::get).filter(Objects::nonNull).map(calling).flatMap(Optional::stream).toList();
+            List<Calls.Address> calls = new ArrayList<>(def.referencedEndpoints().stream().map(callable::get).filter(Objects::nonNull).map(calling)
+                    .flatMap(Optional::stream).toList());
+            for (AdapterUse send : def.sends()) sendAddress(id, send, problems).filter(a -> !calls.contains(a)).ifPresent(calls::add);
             links.put(id, new Calls.Links(serves, calls));
         });
         return links;
+    }
+
+    /**
+     * The node-local address the send step {@code send} of the flow {@code flow} of {@code schemaVersion: 2} calls, as its adapter
+     * answers from its settings with the flow form's defaults filled in; none when its adapter is not on the node, or names none.
+     * A throw or a null is a line in {@code problems}.
+     */
+    private Optional<Calls.Address> sendAddress(String flow, AdapterUse send, List<String> problems) {
+        Component component = components.get(send.adapter());
+        if (component == null || !component.forms().serves(Direction.OUT)) return Optional.empty();   // its own line says why
+        try {
+            Map<String, Object> settings = new LinkedHashMap<>(component.forms().flow().defaults(Direction.OUT));
+            settings.putAll(send.settings());
+            Optional<String> answer = Objects.requireNonNull(component.internalAddress(Direction.OUT, settings), "internalAddress answered null");
+            return answer.map(value -> new Calls.Address(send.adapter(), value));
+        } catch (RuntimeException thrown) {
+            problems.add("flow '" + flow + "' " + send.label() + " (adapter '" + send.adapter() + "'): its adapter cannot say which node-local "
+                    + "address it calls: " + reason(thrown));
+            return Optional.empty();
+        }
     }
 
     /**
@@ -2942,7 +3055,7 @@ public final class Deployments {
         commit.ifPresent(c -> versions.put("commit", c));
         return new FlowBuilder(runtime, steps, languages, endpoints).recording(messages, meter).dlq(dlq).queue(queue).intake(intake).versions(versions)
                 .stepEvents(config.cpuSampling().isPresent()).targets(targets).fence(fence).workers(workers).signals(signals).retries(config.retries())
-                .runs(runs).caches(stepType -> caches.scope(MessageContext.DEFAULT_TENANT, name, stepType));
+                .runs(runs).caches(stepType -> caches.scope(MessageContext.DEFAULT_TENANT, name, stepType)).connections(sends);
     }
 
     /**
@@ -3099,13 +3212,23 @@ public final class Deployments {
             EndpointConfig from = f.from();
             FlowDefinition def = f.recipe().def();
             Component component = components.get(from.scheme());
+            Optional<AdapterUse> sender = def.sender().filter(use -> use.connection().isPresent());
             try {
-                Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes(), f.secrets().endpoints());
-                boolean polls = Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null").isPresent();
-                Consumer consumer = component.consumer(in, handler);
-                Supplier<Consumer> build = () -> component.consumer(in, handler);
+                Supplier<Consumer> build;
+                Consumer consumer;
+                boolean polls;
+                if (sender.isPresent()) {   // each build reads the environment as it is then: a start fails while its connection cannot serve
+                    polls = NamedChecks.polled(component, def, sender.get()).isPresent();
+                    build = () -> component.consumer(inbound(def, sender.get(), component), handler);
+                    consumer = null;
+                } else {
+                    Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes(), f.secrets().endpoints());
+                    polls = Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null").isPresent();
+                    consumer = component.consumer(in, handler);
+                    build = () -> component.consumer(in, handler);
+                }
                 String key = f.id() + "/from";
-                Consumer first = polls ? leased(key, consumer, build) : consumer;
+                Consumer first = consumer == null ? null : polls ? leased(key, consumer, build) : consumer;
                 Supplier<Consumer> fresh = polls ? () -> leased(key, build.get(), build) : build;
                 with.add(f.with(new RestartingConsumer(f.id(), first, fresh, polls, config.stopDeadline(), timer, clock, t -> scrubber().failure(t))));
             } catch (RuntimeException refused) {
@@ -3113,6 +3236,68 @@ public final class Deployments {
             }
         }
         return with;
+    }
+
+    /**
+     * What the sender {@code sender} of the flow {@code def}, through {@code component}, gets from the connection it names as the
+     * environment holds it now: the connection's values, each secret field a live handle, and the sender's settings with the
+     * flow form's defaults.
+     *
+     * @throws CannotServe the connection cannot serve the sender: its message names the connection and why, never a value
+     */
+    private Inbound inbound(FlowDefinition def, AdapterUse sender, Component component) {
+        String key = sender.connection().orElseThrow();
+        Environment.Snapshot snapshot = environment.current();
+        Optional<String> problem = Serving.problem(snapshot, key, sender.adapter(), Direction.IN, components, config.secrets(), true);
+        if (problem.isPresent()) throw new CannotServe("connection '" + key + "' cannot serve the sender: " + problem.get());
+        ConnectionState.Values values = (ConnectionState.Values) snapshot.connection(key).orElseThrow();
+        Connection connection = Serving.connection(key, sender.adapter(), component.forms(), Direction.IN, values.values(), config.secrets(), named::add);
+        Map<String, Object> settings = new LinkedHashMap<>(component.forms().flow().defaults(Direction.IN));
+        settings.putAll(sender.settings());
+        return new Inbound(def.id(), Optional.of(connection), settings, def.maxBodyBytes());
+    }
+
+    /** A sender's connection cannot serve it: its start fails, and is tried again by the restart's rule, at a deploy too. */
+    private static final class CannotServe extends IllegalStateException {
+        CannotServe(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * What a deploy reads, under the pool's lock, of the pool's committed records and of the environment: the systems every
+     * record defines and the connections every deployed and retiring flow reaches, and the snapshot this node holds.
+     *
+     * @throws DeployRefusedException {@link Kind#BUSY} when the store does not answer within the stop deadline
+     */
+    private NamedChecks.Pooled pooled() throws DeployRefusedException {
+        Future<List<DeploymentStore.DeployedSystem>> systems = bounded(records.systems(), "the read of the pool's systems");
+        Future<List<DeploymentStore.ConnectionUse>> uses = bounded(records.connectionUses(), "the read of the pool's connection uses");
+        Future.join(systems, uses).otherwiseEmpty().await();
+        Throwable failed = systems.failed() ? systems.cause() : uses.cause();
+        if (failed != null) throw refused(Kind.BUSY, RefusalCode.POOL_BUSY, "the pool's systems could not be read: " + reason(failed), Map.of());
+        return new NamedChecks.Pooled(environment.name(), environment.current(), systems.result(), uses.result());
+    }
+
+    /**
+     * An activation: the consumer of each running flow whose sender names a connection that {@code snapshot} holds otherwise than
+     * the snapshot before (set or not, its version, stopped or not) starts again at once ({@link RestartingConsumer#restart}).
+     */
+    private void activated(Environment.Snapshot snapshot) {
+        Environment.Snapshot before = seen;
+        seen = snapshot;
+        for (Deployed d : deployed.values()) {
+            for (Flow f : d.flows()) {
+                Optional<String> key = f.recipe() == null ? Optional.empty() : f.recipe().def().sender().flatMap(AdapterUse::connection);
+                if (key.isEmpty() || f.consumer() == null || !f.runs()) continue;
+                if (!state(before, key.get()).equals(state(snapshot, key.get()))) f.consumer().restart();
+            }
+        }
+    }
+
+    /** What of the connection {@code key} in {@code snapshot} a sender's restart follows: its version and its stop; empty when absent. */
+    private static Optional<DeploymentStore.Reached> state(Environment.Snapshot snapshot, String key) {
+        return snapshot.connection(key).map(c -> new DeploymentStore.Reached(c.version(), c.stopped().isPresent()));
     }
 
     /**
@@ -3157,7 +3342,8 @@ public final class Deployments {
             // the worker starts inside the flow's start future: a throw fails it, the flow's failed start, where a
             // listener's throw would be lost
             started.add(call.transform(consumer -> {
-                if (consumer.failed() && !retry) return Future.failedFuture(consumer.cause());
+                boolean again = retry || consumer.failed() && consumer.cause() instanceof CannotServe;
+                if (consumer.failed() && !again) return Future.failedFuture(consumer.cause());
                 if (consumer.failed()) f.consumer().retry(consumer.cause());
                 if (f.worker() != null) f.worker().start();
                 return Future.succeededFuture();
@@ -3167,7 +3353,8 @@ public final class Deployments {
         List<Start> outcome = new ArrayList<>(flows.size());
         for (int i = 0; i < flows.size(); i++) {
             Future<Void> call = calls.get(i);
-            outcome.add(new Start(flows.get(i), started.get(i).cause(), retry && call.failed() ? call.cause() : null));
+            boolean again = retry || call.cause() instanceof CannotServe;
+            outcome.add(new Start(flows.get(i), started.get(i).cause(), again && call.failed() ? call.cause() : null));
         }
         return outcome;
     }

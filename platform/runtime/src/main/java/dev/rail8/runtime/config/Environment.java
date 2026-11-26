@@ -25,6 +25,28 @@ public interface Environment {
      */
     void onActivation(Consumer<Snapshot> listener);
 
+    /** The environment {@code name} that holds {@code snapshot} and never activates another: a node or a tool without a store. */
+    static Environment fixed(String name, Snapshot snapshot) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(snapshot, "snapshot");
+        return new Environment() {
+            @Override
+            public String name() {
+                return name;
+            }
+
+            @Override
+            public Snapshot current() {
+                return snapshot;
+            }
+
+            @Override
+            public void onActivation(Consumer<Snapshot> listener) {
+                Objects.requireNonNull(listener, "listener");
+            }
+        };
+    }
+
     /**
      * One immutable state of the configuration.
      *

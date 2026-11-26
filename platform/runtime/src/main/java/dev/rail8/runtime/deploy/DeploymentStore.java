@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
@@ -94,8 +95,103 @@ public interface DeploymentStore {
      */
     int LISTINGS_MAX = 10_000;
 
+    /**
+     * A system a deployed package defines, as the pool records it with the package's record.
+     *
+     * @param deployment the package that defines it
+     * @param key        the system's key, {@code <name>} or {@code <partner>/<name>}
+     * @param definition its file as the deploy read it, without {@code schemaVersion} and {@code kind}: its partner, name,
+     *                   description and connections, each with its adapter and description
+     * @since 0.4
+     */
+    record DeployedSystem(String deployment, String key, JsonObject definition) {
+        public DeployedSystem {
+            definition = definition.copy();
+        }
+
+        /** The adapter of the connection {@code name} of this system, when it defines one. */
+        public Optional<String> adapter(String name) {
+            return definition.getValue("connections") instanceof JsonObject connections && connections.getValue(name) instanceof JsonObject c
+                    ? Optional.ofNullable(c.getString("adapter")) : Optional.empty();
+        }
+    }
+
+    /**
+     * A deployed flow's use of a connection, as the pool records it with the package's record.
+     *
+     * @param deployment the package; for a flow that retires, its qualified id until its drain ends
+     * @param flow       the flow's qualified id, {@code <package>/<flow>}
+     * @param step       the send step's name, or {@code from} for the sender
+     * @param connection the connection's key
+     * @param adapter    the adapter of the use
+     * @param direction  {@code in} for the sender, {@code out} for a send step
+     * @param address    whether the use goes through an address field
+     * @param polled     a polling sender's place within the connection
+     * @since 0.4
+     */
+    record ConnectionUse(String deployment, String flow, String step, String connection, String adapter, String direction, boolean address,
+                         Optional<String> polled) {
+        public ConnectionUse {
+            Objects.requireNonNull(polled, "polled");
+        }
+    }
+
+    /**
+     * What a deploy checked of the configuration of the environment, written in its record's transaction: the generation it
+     * checked against, the systems its package defines, the connections its flows reach, and the state it read of each
+     * connection and system they reach, which the write compares again when the generation moved.
+     *
+     * @param generation  the generation of the snapshot the deploy checked
+     * @param systems     every system the package defines
+     * @param uses        every connection its flows reach
+     * @param connections the version of each reached connection in that snapshot, and whether it was stopped
+     * @param named       each system of a reached connection, with whether it had an instance name
+     * @since 0.4
+     */
+    record Configuration(long generation, List<DeployedSystem> systems, List<ConnectionUse> uses, Map<String, Reached> connections,
+                         Map<String, Boolean> named) {
+        public Configuration {
+            systems = List.copyOf(systems);
+            uses = List.copyOf(uses);
+            connections = Map.copyOf(connections);
+            named = Map.copyOf(named);
+        }
+    }
+
+    /** A reached connection as the deploy's snapshot held it: its version, and whether it was stopped. */
+    record Reached(long version, boolean stopped) { }
+
+    /**
+     * The configuration changed between a deploy's check and its record's write so that a connection or a system its flows reach
+     * is no longer what the check read; nothing is written. Each line names the connection or the system, never a value.
+     *
+     * @since 0.4
+     */
+    final class ConfigurationChanged extends RuntimeException {
+        private final List<String> problems;
+
+        public ConfigurationChanged(List<String> problems) {
+            super(String.join("; ", problems), null, true, false);
+            this.problems = List.copyOf(problems);
+        }
+
+        public List<String> problems() {
+            return problems;
+        }
+    }
+
     /** The pool's generation, every record and every mark, read in one snapshot. */
     Future<Snapshot> read();
+
+    /** Every system the pool's records define, by key. A store that keeps none answers none. */
+    default Future<List<DeployedSystem>> systems() {
+        return Future.succeededFuture(List.of());
+    }
+
+    /** Every connection the pool's deployed and retiring flows reach. A store that keeps none answers none. */
+    default Future<List<ConnectionUse>> connectionUses() {
+        return Future.succeededFuture(List.of());
+    }
 
     /**
      * Replaces the rows of what {@code node} runs with {@code packages}, whole, in one transaction, and only while the node's
@@ -178,6 +274,20 @@ public interface DeploymentStore {
          */
         default Future<Long> save(DeploymentRecord record, Map<String, Map<String, Set<Secret.Kind>>> uses, Actor by, JsonObject detail) {
             return save(record, by, detail);
+        }
+
+        /**
+         * As {@link #save(DeploymentRecord, Map, Actor, JsonObject)}, and in the same transaction the package's systems and
+         * connection uses replaced with those of {@code configuration} and its generation written on the record, under the lock
+         * every activation of the configuration takes. The uses of each flow the save marks to retire stay, under the flow's
+         * qualified id, until its mark ends. When the configuration's generation is not the one checked, each reached connection
+         * and system is compared again with what the check read.
+         *
+         * @throws ConfigurationChanged (as the future's failure) a reached connection or system changed: nothing is written
+         */
+        default Future<Long> save(DeploymentRecord record, Map<String, Map<String, Set<Secret.Kind>>> uses, Configuration configuration, Actor by,
+                                  JsonObject detail) {
+            return save(record, uses, by, detail);
         }
 
         /**
