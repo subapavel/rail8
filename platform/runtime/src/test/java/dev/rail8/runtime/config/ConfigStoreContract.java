@@ -1014,6 +1014,7 @@ abstract class ConfigStoreContract {
         inForce(a, FILES, PLAIN);
         ConfigStore.Held held = holding(b.store.state(ConfigStore.Held.nothing()));
         assertEquals(2, held.objects().size());
+        String keyId = read(b, API).json().getJsonObject("inForce").getString("keyId");
         tamperBody(API, body(with(PLAIN, "url", "https://forged.example/api")));
         unbind(FILES);
         assertEquals("fails", read(b, API).json().getJsonObject("inForce").getString("binding"));
@@ -1022,6 +1023,7 @@ abstract class ConfigStoreContract {
         assertTrue(fresh.changed().isEmpty(), "no node takes them");
         assertEquals(Set.of(API, FILES), Set.copyOf(fresh.refused().objects()));
         assertEquals(2, fresh.refused().count());
+        assertEquals(Map.of(API, keyId, FILES, "none"), fresh.refusedKeys(), "each with the key it is bound under, none when unbound");
         Ref later = Ref.connection("acme/later");
         inForce(a, later, PLAIN);
         ConfigStore.State state = b.store.state(held);

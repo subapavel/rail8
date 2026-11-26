@@ -154,13 +154,16 @@ public interface ConfigStore {
     /**
      * What a node lacks: the store's generation, stamp and switch of mocks; the objects in force whose binding verifies that
      * it does not hold as they are; the objects it holds that are no longer in force or whose binding no longer verifies; and
-     * the objects whose binding fails, at most 100 of them, with their count.
+     * the objects whose binding fails, at most 100 of them, with their count, and the id of the key each named one is bound
+     * under, in hex, or {@code none} when it is unbound.
      */
-    record State(long generation, long stamp, boolean mocksAllowed, List<InForce> changed, Set<Ref> gone, Refused refused) {
+    record State(long generation, long stamp, boolean mocksAllowed, List<InForce> changed, Set<Ref> gone, Refused refused,
+                 Map<Ref, String> refusedKeys) {
         public State {
             changed = List.copyOf(changed);
             gone = Set.copyOf(gone);
             Objects.requireNonNull(refused, "refused");
+            refusedKeys = Map.copyOf(refusedKeys);
         }
 
         /** Whether the node holds the store as it is. */

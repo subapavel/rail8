@@ -186,16 +186,20 @@ public final class ConfigObjects implements ConfigStore {
         return rows.read(tx -> {
             ConfigRows.Head head = tx.head(false);
             if (held.generation() == head.generation() && held.stamp() == head.stamp()) {
-                return new State(head.generation(), head.stamp(), head.mocksAllowed(), List.of(), Set.of(), Refused.none());
+                return new State(head.generation(), head.stamp(), head.mocksAllowed(), List.of(), Set.of(), Refused.none(), Map.of());
             }
             List<InForce> changed = new ArrayList<>();
             Set<Ref> verified = new HashSet<>();
             List<Ref> refused = new ArrayList<>();
+            Map<Ref, String> refusedKeys = new HashMap<>();
             int count = 0;
             for (ConfigRows.ObjectRow r : tx.inForce()) {
                 if (!verifies(r)) {
                     count++;
-                    if (refused.size() < MAX_REFUSED) refused.add(r.ref);
+                    if (refused.size() < MAX_REFUSED) {
+                        refused.add(r.ref);
+                        refusedKeys.put(r.ref, r.keyId == null ? "none" : HEX.formatHex(r.keyId));
+                    }
                     continue;
                 }
                 verified.add(r.ref);
@@ -209,7 +213,7 @@ public final class ConfigObjects implements ConfigStore {
             Set<Ref> gone = new HashSet<>(held.objects().keySet());
             gone.removeAll(verified);
             changed.sort(Comparator.comparing((InForce f) -> f.ref().kind()).thenComparing(f -> f.ref().key()));
-            return new State(head.generation(), head.stamp(), head.mocksAllowed(), changed, gone, new Refused(refused, count));
+            return new State(head.generation(), head.stamp(), head.mocksAllowed(), changed, gone, new Refused(refused, count), refusedKeys);
         });
     }
 

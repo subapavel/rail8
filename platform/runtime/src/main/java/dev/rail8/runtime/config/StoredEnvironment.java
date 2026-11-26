@@ -69,7 +69,8 @@ public final class StoredEnvironment implements Environment {
     /** What the node holds of the store, touched only by the one read that runs. */
     private ConfigStore.Held holding = ConfigStore.Held.nothing();
     private final Map<Ref, ConfigStore.InForce> bodies = new HashMap<>();
-    private Report reported;
+    /** The objects refused for a binding that does not verify, each with the key id its WARNING named. */
+    private Map<Ref, String> warned = Map.of();
     private boolean failing;
 
     private Promise<Void> queued;
@@ -77,9 +78,6 @@ public final class StoredEnvironment implements Environment {
     private boolean closed;
     private Timer.Cancellable tick;
     private volatile Future<Void> ticked = Future.succeededFuture();
-
-    /** What the node wrote into its row of {@code nodes}. */
-    private record Report(long epoch, long generation, long stamp, ConfigStore.Refused refused) { }
 
     /**
      * The environment {@code name} of node {@code node} over {@code store}; {@code epoch} gives the node's epoch at each report.
@@ -125,13 +123,16 @@ public final class StoredEnvironment implements Environment {
         synchronized (lock) {
             reading = true;
         }
+        boolean more;
         try {
             once();
         } finally {
             synchronized (lock) {
-                reading = false;
+                more = queued != null;   // a notice during this read: it runs one more
+                reading = more;
             }
         }
+        if (more) Thread.ofVirtual().name("rail8-config-read").start(this::drain);
         arm();
     }
 
@@ -145,7 +146,7 @@ public final class StoredEnvironment implements Environment {
 
     /**
      * A change may have happened: a notice, or a {@code LISTEN} acknowledged. Completes once a read that started after this call
-     * has ended, failed or not; a writer awaits it so that its change holds on this node when it answers.
+     * has ended, and fails when that read failed; a writer awaits it so that its change holds on this node when it answers.
      */
     public Future<Void> notice() {
         Promise<Void> mine;
@@ -230,7 +231,7 @@ public final class StoredEnvironment implements Environment {
         lastGood = clock.instant();
         boolean same = state.generation() == holding.generation() && state.stamp() == holding.stamp();
         if (!same) {
-            if (holding.generation() >= 0 && (state.generation() < holding.generation() || state.generation() == holding.generation())) {
+            if (holding.generation() >= 0 && state.generation() <= holding.generation()) {
                 warn.accept("the configuration store went back to an earlier state: generation " + state.generation() + ", where this node held "
                         + holding.generation() + "; the node holds what it read now");
             }
@@ -260,6 +261,7 @@ public final class StoredEnvironment implements Environment {
             if (leftOut.size() < MAX_NAMED) leftOut.put(f.ref(), reason.get());
         }
         unverified = state.refused().count();
+        warnUnverified(state);
         Snapshot next = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, leftOut, count);
         held = next;
         for (Consumer<Snapshot> listener : listeners) {
@@ -314,15 +316,29 @@ public final class StoredEnvironment implements Environment {
         return new ConnectionState.MockBehaviour(reply, delay, fail);
     }
 
-    /** Writes what the node holds into its row when it differs from what it last wrote; a failure is a WARNING, tried again at the next read. */
+    /** A WARNING once for each object newly refused for a binding that does not verify, naming its key and the key's id. */
+    private void warnUnverified(ConfigStore.State state) {
+        Map<Ref, String> now = new HashMap<>();
+        for (Ref ref : state.refused().objects()) {
+            String keyId = state.refusedKeys().getOrDefault(ref, "none");
+            now.put(ref, keyId);
+            if (!keyId.equals(warned.get(ref))) {
+                warn.accept("the version in force of " + ref + ", bound under the key " + keyId + ", does not verify: this node leaves it"
+                        + " out; save and activate it again");
+            }
+        }
+        warned = now;
+    }
+
+    /**
+     * Writes what the node holds into its row after each read that succeeded, so the row says when the node last read the store;
+     * a failure is a WARNING, tried again at the next read.
+     */
     private void report() {
         Snapshot now = held;
-        Report next = new Report(epoch.getAsLong(), holding.generation(), holding.stamp(),
-                new ConfigStore.Refused(List.copyOf(now.leftOut().keySet()), now.leftOutCount()));
-        if (next.equals(reported)) return;
         try {
-            store.holds(node, next.epoch(), next.generation(), next.stamp(), next.refused());
-            reported = next;
+            store.holds(node, epoch.getAsLong(), holding.generation(), holding.stamp(),
+                    new ConfigStore.Refused(List.copyOf(now.leftOut().keySet()), now.leftOutCount()));
         } catch (RuntimeException failure) {
             warn.accept("what this node holds of the configuration could not be written to its row: the next read writes it again; "
                     + failure.getClass().getName());
