@@ -276,7 +276,7 @@ public final class StoredEnvironment implements Environment {
     /** Takes {@code f} into the snapshot's maps; the reason it is left out when it is. */
     private static Optional<String> take(ConfigStore.InForce f, boolean mocksAllowed, Map<String, ConnectionState> connections,
                                          Map<String, String> instanceNames) {
-        if (f.format() != ConfigObjects.FORMAT) return Optional.of("its format " + f.format() + " is not one this node reads");
+        if (f.format() != ConfigFiles.STANDARD.newest(f.ref().kind())) return Optional.of("its format " + f.format() + " is not one this node reads");
         JsonObject body = f.body();
         if (f.ref().kind() == Ref.Kind.SYSTEM) {
             instanceNames.put(f.ref().key(), body.getString("instanceName"));

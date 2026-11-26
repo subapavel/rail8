@@ -104,8 +104,8 @@ class PgConfigStoreIT extends ConfigStoreContract {
 
     @Override
     ConfigObjects configStore(SecretStore secrets, Function<String, Optional<ConfigObjects.Adapter>> adapters, Clock clock, RandomGenerator random,
-                              Consumer<String> warn) {
-        return new ConfigObjects(new PgConfigRows(pool, secrets, PgConfigRows.LOCK_WAIT), secrets, adapters, clock, random, warn);
+                              Consumer<String> warn, ConfigFiles files) {
+        return new ConfigObjects(new PgConfigRows(pool, secrets, PgConfigRows.LOCK_WAIT), secrets, adapters, clock, random, warn, files);
     }
 
     @Override

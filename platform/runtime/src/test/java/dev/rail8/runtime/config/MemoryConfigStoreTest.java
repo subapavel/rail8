@@ -33,8 +33,8 @@ class MemoryConfigStoreTest extends ConfigStoreContract {
 
     @Override
     ConfigObjects configStore(SecretStore secrets, Function<String, Optional<ConfigObjects.Adapter>> adapters, Clock clock, RandomGenerator random,
-                              Consumer<String> warn) {
-        return new ConfigObjects(new MemoryConfigRows(db, secrets), secrets, adapters, clock, random, warn);
+                              Consumer<String> warn, ConfigFiles files) {
+        return new ConfigObjects(new MemoryConfigRows(db, secrets), secrets, adapters, clock, random, warn, files);
     }
 
     @Override

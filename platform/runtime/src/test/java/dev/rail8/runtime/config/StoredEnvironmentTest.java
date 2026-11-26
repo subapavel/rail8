@@ -120,7 +120,7 @@ class StoredEnvironmentTest {
     }
 
     static ConfigStore.InForce connection(Ref ref, long activation, JsonObject body, Optional<ConnectionState.Stop> stopped) {
-        return new ConfigStore.InForce(ref, activation, ConfigObjects.FORMAT, body, stopped);
+        return new ConfigStore.InForce(ref, activation, ConfigFiles.STANDARD.newest(ref.kind()), body, stopped);
     }
 
     static JsonObject web(String url) {
@@ -149,7 +149,7 @@ class StoredEnvironmentTest {
         store.put(connection(API, 11, web("https://acme.example"), Optional.empty()));
         store.put(connection(MOCKED, 12, new JsonObject().put("adapter", "web").put("values", new JsonObject())
                 .put("mock", new JsonObject().put("reply", "empty").put("delay", "250ms").put("fail", "retryable")), Optional.empty()));
-        store.put(new ConfigStore.InForce(ACME, 13, ConfigObjects.FORMAT, new JsonObject().put("instanceName", "Acme Corp"), Optional.empty()));
+        store.put(new ConfigStore.InForce(ACME, 13, ConfigFiles.STANDARD.newest(Ref.Kind.SYSTEM), new JsonObject().put("instanceName", "Acme Corp"), Optional.empty()));
         env.start();
 
         Environment.Snapshot s = env.current();
@@ -175,7 +175,7 @@ class StoredEnvironmentTest {
 
     @Test
     void aBodyThatDoesNotVerifyOrOfAFormatThisNodeDoesNotReadIsLeftOutAndTheNodeIsDegradedWhileOneDoesNotVerify() {
-        store.put(new ConfigStore.InForce(API, 11, ConfigObjects.FORMAT + 1, web("https://acme.example"), Optional.empty()));
+        store.put(new ConfigStore.InForce(API, 11, ConfigFiles.STANDARD.newest(Ref.Kind.CONNECTION) + 1, web("https://acme.example"), Optional.empty()));
         store.refused = new ConfigStore.Refused(List.of(Ref.connection("acme/forged")), 1);
         store.refusedKeys = Map.of(Ref.connection("acme/forged"), "00112233aabbccdd");
         env.start();
