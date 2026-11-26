@@ -408,7 +408,8 @@ class DeploymentsConnectionsTest {
     /**
      * A send through a connection that cannot serve is an ordinary send error: at-least-once, it is retried by
      * {@code delivery.retries}, goes through once the connection serves again, and is parked once the retries are spent; sync,
-     * its caller gets the retryable failure, which the http door answers 503. Both name the connection and the reason.
+     * its caller gets the retryable failure, which the http door answers 503 with its fixed text. The parked failure and the
+     * caller's failure name the connection and the reason.
      */
     @Test
     void aSendThroughAConnectionThatCannotServeIsRetriedThenParked() throws Exception {
