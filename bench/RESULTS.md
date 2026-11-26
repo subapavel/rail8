@@ -1,5 +1,65 @@
 # Bench results — Phase 2 (P2-08), Phase 1 (gate P1-10, P1-01, P1-02) and Phase 0 (gate, spikes, baselines)
 
+## The Messages screen with a million messages in the hour — cloud VM, 4 vCPU @ 2.30 GHz (before a change)
+
+Date 2026-11-26. How long each read of the Messages screen takes when the time range holds a million messages: the list's
+pages, the counts by status, the filters by flow and by status, the searches by key and by step, and a message's detail,
+each warm and cold. The node's code is that of main at fd995ee.
+
+Machine: a session's cloud VM, KVM, 4 vCPU Intel Xeon @ 2.30 GHz, 15 GB, no swap, kernel 6.18.44-fc-v880. The quickstart's
+stack in Docker (`docker compose up`): Postgres 18.6 with the image's own settings (shared_buffers 128 MB, work_mem 4 MB),
+one node, its sessions with jit off. The demo package with one line added to the flow `greet` after its mapping, so that every
+message carries a key of its own: `- {type: extractKey, name: nameKey, key: name, xpath: /Greeting/Name}`; each message
+records three rows (ingress, greeting, nameKey).
+
+Commands, from the repository root, once the quickstart's First run has deployed that demo and its `deploy` account holds the
+operator role:
+
+```sh
+python3 bench/greet_load.py --n 1000000 --c 32 --prefix p            # names p-0 … p-999999
+RAIL8_TOKEN=$(cat ~/.rail8-deploy-token) python3 bench/messages_screen.py --from <before the load> --to <an hour later> \
+  --cold-command 'docker restart rail8-postgres > /dev/null && sync && echo 3 > /proc/sys/vm/drop_caches && sleep 2'
+```
+
+The load: 1 000 000 accepted over 32 connections in 1 307.6 s, 765 a second, latency median / 95 % / 99 % 5.2 / 11.2 /
+17.9 ms; 641 359 requests sent again after a 503, none refused for good, none broken. With 46 001 messages of a warm-up
+before it, 1 046 001 messages were recorded, every one, within 23 minutes: 3 138 003 rows in `messages`, 1.4 GB of heap,
+2.4 GB with its indexes.
+
+The reads, range 01:45 to 02:45 UTC, which holds every message. Warm is the median of 3 after one read untimed; cold is one
+read after Postgres was restarted and the page cache dropped.
+
+| read | warm ms | cold ms | answered |
+| --- | --- | --- | --- |
+| first page, every flow | 5.6 | 21.0 | 50 and a next page |
+| page 2 / 10 / 100 | 5.0 / 7.2 / 5.0 | 28.4 / 32.9 / 30.5 | 50 each |
+| counts | 9 116.7 | 10 753.2 | completed 1 046 001, failed, running and cancelled 0 |
+| counts of the flow `demo/greet` | 8 424.7 | 10 725.9 | the same |
+| filter by flow | 4.8 | 27.0 | 50 |
+| status completed | 3.9 | 35.1 | 50 |
+| status failed / running / cancelled | 7 737.7 / 8 736.9 / 7 899.2 | 21 801.5 / 19 827.9 / 20 486.7 | none |
+| key `name:p-500000` in the range | 3.3 | 12.6 | 1 |
+| step `nameKey` in the range / and the flow | 4.3 / 3.9 | 27.6 / 34.3 | 50 |
+| search by key at any time / by flow and step | 1.9 / 2.3 | 18.1 / 23.7 | 1 / 50 |
+| a message's detail | 2.1 | 12.1 | 3 steps |
+
+Where the counts' time goes (`explain (analyze, buffers)` of the statement `PgMessageList` builds): a sequential scan of
+`messages`, 3.1 M rows read and 2.1 M of them thrown away by `step = 0 and attempt = 1`, and for each of the 1 046 001
+arrivals the probe for a failed step of its latest attempt, an index scan of `messages_pkey` by id that reads the message's
+three rows from the heap: 5.4 M buffers, about 90 % of the time. `dlq`, `work` and the cancels in `audit` are hashed once. A
+list narrowed to a status no message has reads `messages_arrivals` backwards with the same probes until it has 51 rows, so
+it reads every arrival of the range.
+
+What the alternatives cost on the same rows, each statement written by hand in psql, warm: an index-only count of the range's
+arrivals 125 ms (202 ms on its first run, 94 000 heap fetches before a vacuum); the same of one flow with today's indexes,
+324 ms (a parallel sequential scan); with an index `(flow, started_at, id) where step = 0 and attempt = 1`, 172 ms before a
+vacuum and 73 ms after; a million arrivals from that index without parallel workers, 136 ms (0.13 µs an entry); the parked,
+running, cancelled and failed messages looked up from their own tables since `from`, 258 ms with the failed rows found by a
+sequential scan and 0.07 ms with a partial index `where outcome = 'failed'`, none of them being there; counters per flow and
+minute of arrival, summed over the range, 0.2 ms. A synthetic week of 30 M arrivals of 20 flows in a table of their own,
+vacuumed: an index-only count of the seven days 1 158 ms for every flow and 89 ms for one; counters per flow and minute
+(201 600 rows) 15 ms for every flow and 1.3 ms for one.
+
 ## The platform's speed by delivery mode — cloud VM, 4 vCPU @ 2.10 GHz (a direction, not a target)
 
 Date 2026-11-18. What each delivery mode gives: messages per second, the time until the sender has its answer, and what a
