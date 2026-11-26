@@ -180,6 +180,13 @@ class ComponentContractSelfTest {
         /** {@link #forms} answers {@code forms} on every call. */
         static Variant formed(Forms forms) { Variant v = correct(); v.forms = () -> forms; return v; }
 
+        /** A correct one of {@code scheme} with {@code forms}. */
+        static Variant named(String scheme, Forms forms) {
+            Variant v = new Variant(scheme, false, false, false, false, e -> e, e -> e);
+            v.forms = () -> forms;
+            return v;
+        }
+
         /** {@link #target} answers {@code targetOf}. */
         static Variant targeting(Function<Outbound, java.util.Optional<String>> targetOf) { Variant v = correct(); v.targetOf = targetOf; return v; }
 
@@ -490,6 +497,20 @@ class ComponentContractSelfTest {
 
     static final String SAME_FORMS = "theFormsAreTheSameOnEveryCallAndServeBothDirections";
     static final String USES = "theUsesPassTheForms";
+
+    static final String RECORDED = "theConnectionFormOnlyAddsToTheRecordedOne";
+
+    @Test
+    void aConnectionFormThatDoesNotOnlyAddToTheRecordedOneFailsOnlyItsCase() {
+        Map<Direction, Forms.Reach> both = Map.of(Direction.IN, Forms.Reach.CONNECTION, Direction.OUT, Forms.Reach.CONNECTION);
+        current = Variant.named("partner", new Forms(RecordedFormTest.partner(false, 22), Settings.NONE, both));
+        assertEquals(Set.of(), failing(ConnectedContractTest.class), "described as forms/partner.json records it");
+        current = Variant.named("partner", new Forms(RecordedFormTest.partner(false, 2222), Settings.NONE, both));
+        assertEquals(Set.of(RECORDED), failing(ConnectedContractTest.class), "the port's default changed");
+        current = Variant.named("loopback", new Forms(RecordedFormTest.partner(false, 22), Settings.NONE, both));
+        assertEquals(Set.of(RECORDED), failing(ConnectedContractTest.class), "described, and no form recorded for its scheme");
+        current = Variant.correct();
+    }
 
     @Test
     void formsThatAreWrongFailOnlyTheirCase() {

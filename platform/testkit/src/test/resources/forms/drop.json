@@ -1,0 +1,101 @@
+{
+  "format" : 2,
+  "reach" : {
+    "in" : "connection"
+  },
+  "described" : {
+    "connection" : true,
+    "flow" : false
+  },
+  "tabs" : [ {
+    "id" : "general",
+    "label" : "General",
+    "labelKey" : "rail8.tab.general",
+    "common" : true
+  }, {
+    "id" : "retry",
+    "label" : "Retry",
+    "labelKey" : "rail8.tab.retry",
+    "common" : true
+  }, {
+    "id" : "recording",
+    "label" : "Recording",
+    "labelKey" : "rail8.tab.recording",
+    "common" : true
+  }, {
+    "id" : "security",
+    "label" : "Security",
+    "labelKey" : "rail8.tab.security",
+    "common" : true
+  } ],
+  "connection" : [ {
+    "name" : "host",
+    "type" : "text",
+    "label" : "Host",
+    "labelKey" : "drop.field.host.label",
+    "help" : "The server.",
+    "helpKey" : "drop.field.host.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "in" ],
+    "server" : true
+  }, {
+    "name" : "port",
+    "type" : "integer",
+    "label" : "Port",
+    "labelKey" : "drop.field.port.label",
+    "help" : "The port.",
+    "helpKey" : "drop.field.port.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in" ],
+    "default" : 22,
+    "min" : 1,
+    "max" : 65535,
+    "server" : true
+  }, {
+    "name" : "mode",
+    "type" : "choice",
+    "label" : "Mode",
+    "labelKey" : "drop.field.mode.label",
+    "help" : "How.",
+    "helpKey" : "drop.field.mode.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in" ],
+    "default" : "binary",
+    "choices" : [ {
+      "value" : "binary",
+      "label" : "Binary",
+      "labelKey" : "drop.field.mode.choice.binary"
+    }, {
+      "value" : "ascii",
+      "label" : "ASCII",
+      "labelKey" : "drop.field.mode.choice.ascii"
+    } ]
+  }, {
+    "name" : "user",
+    "type" : "text",
+    "label" : "User",
+    "labelKey" : "drop.field.user.label",
+    "help" : "Who.",
+    "helpKey" : "drop.field.user.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in" ],
+    "pattern" : "[a-z]+"
+  }, {
+    "name" : "password",
+    "type" : "secret",
+    "label" : "Password",
+    "labelKey" : "drop.field.password.label",
+    "help" : "The password.",
+    "helpKey" : "drop.field.password.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in" ],
+    "kinds" : [ "value" ]
+  } ],
+  "flow" : [ ],
+  "rules" : [ ]
+}

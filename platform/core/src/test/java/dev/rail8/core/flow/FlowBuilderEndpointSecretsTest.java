@@ -57,7 +57,7 @@ class FlowBuilderEndpointSecretsTest {
         @Override public String scheme() { return "login"; }
 
         @Override public Forms forms() {
-            return new Forms(Settings.of(Field.text("user", "User", "The login.").out(),
+            return new Forms(Settings.of(Field.text("host", "Host", "The server.").out().server(), Field.text("user", "User", "The login.").out(),
                     Field.secret("password", "Password", "The password.", Secret.Kind.VALUE, Secret.Kind.CREDENTIALS).out()),
                     Settings.NONE, Map.of(Direction.OUT, Forms.Reach.CONNECTION));
         }

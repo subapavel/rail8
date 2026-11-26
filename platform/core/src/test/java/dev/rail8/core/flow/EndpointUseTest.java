@@ -32,7 +32,7 @@ class EndpointUseTest {
     /** An adapter like {@code http}: in takes requests at an address and reaches no connection; out sends to a connection. */
     static final Forms HTTP_LIKE = new Forms(
             Settings.of(
-                    Field.text("url", "Address", "Scheme, host, port and a path prefix.").required().pattern("[^@]*").out(),
+                    Field.text("url", "Address", "Scheme, host, port and a path prefix.").required().pattern("[^@]*").out().server(),
                     Field.integer("timeoutMs", "Timeout", "How long a send may take.").byDefault(30_000).range(1, 600_000).out(),
                     Field.secret("password", "Password", "The partner's password.").out()),
             Settings.of(
@@ -96,6 +96,7 @@ class EndpointUseTest {
     /** An adapter with a login of a password or credentials, and a key of text or a key pair, as SFTP's. */
     static final Forms TYPED = new Forms(
             Settings.of(
+                    Field.text("host", "Host", "The server.").server(),
                     Field.secret("password", "Password", "The password.", Secret.Kind.VALUE, Secret.Kind.CREDENTIALS),
                     Field.secret("key", "Key", "The key.", Secret.Kind.KEY_PAIR, Secret.Kind.VALUE)),
             Settings.NONE,

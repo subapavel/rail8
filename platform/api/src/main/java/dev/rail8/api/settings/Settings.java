@@ -200,6 +200,15 @@ public final class Settings {
     }
 
     /**
+     * The names of the fields that name the server the connection connects to ({@link Field#server}), in declaration order.
+     *
+     * @since 0.4
+     */
+    public List<String> servers() {
+        return fields.stream().filter(Field::isServer).map(Field::name).toList();
+    }
+
+    /**
      * The kinds the secret field {@code name} takes, in the order it names them ({@link Field#kinds}); empty when the form has
      * no secret field of that name.
      *
@@ -283,7 +292,8 @@ public final class Settings {
      * ({@code text}, {@code secret}, {@code integer}, {@code boolean} or {@code choice}), {@code label}, {@code help},
      * {@code tab} (an id), {@code required} and {@code directions} ({@code in}, {@code out} or both), and only what it sets
      * of {@code pattern}, {@code default}, {@code min}, {@code max}, {@code choices} (each {@code value} and {@code label}),
-     * {@code expression} (its escape in lower case) and {@code visibleWhen} ({@code field} and {@code values}); a secret field
+     * {@code expression} (its escape in lower case), {@code visibleWhen} ({@code field} and {@code values}) and
+     * {@code server} ({@code true}, on a field marked {@link Field#server}); a secret field
      * always has {@code kinds}, the ids of the kinds it takes in the order it names them ({@code ["value"]} for
      * {@link Field#secret(String, String, String)}). A rule is
      * {@code {"kind": "exactlyOne", "fields": [...]}}. {@link Forms#toJson} carries two of them with their text keys.

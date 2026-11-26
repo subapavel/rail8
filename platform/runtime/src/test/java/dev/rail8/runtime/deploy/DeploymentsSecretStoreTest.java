@@ -147,7 +147,7 @@ class DeploymentsSecretStoreTest {
 
     /** One node: its own data directory and Doors, the pool's records, and its store over the shared secret database. */
     /** The connection form of this test's Doors: {@code token} and {@code refuse} secret fields, the rest text. */
-    static final Settings DESCRIBED = Settings.of(Field.text("path", "Path", "Where it listens.").in(), Field.text("url", "URL", "Where it sends."),
+    static final Settings DESCRIBED = Settings.of(Field.text("path", "Path", "Where it listens.").in(), Field.text("url", "URL", "Where it sends.").server(),
             Field.secret("token", "Token", "What it presents."), Field.secret("refuse", "Refusal", "A text its consumer's build throws with."),
             Field.secret("login", "Login", "A password or credentials.", Secret.Kind.VALUE, Secret.Kind.CREDENTIALS));
 

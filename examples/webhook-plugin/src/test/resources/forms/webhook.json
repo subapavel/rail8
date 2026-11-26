@@ -1,0 +1,70 @@
+{
+  "format" : 2,
+  "reach" : {
+    "in" : "none",
+    "out" : "connection"
+  },
+  "described" : {
+    "connection" : true,
+    "flow" : true
+  },
+  "tabs" : [ {
+    "id" : "general",
+    "label" : "General",
+    "labelKey" : "rail8.tab.general",
+    "common" : true
+  }, {
+    "id" : "retry",
+    "label" : "Retry",
+    "labelKey" : "rail8.tab.retry",
+    "common" : true
+  }, {
+    "id" : "recording",
+    "label" : "Recording",
+    "labelKey" : "rail8.tab.recording",
+    "common" : true
+  }, {
+    "id" : "security",
+    "label" : "Security",
+    "labelKey" : "rail8.tab.security",
+    "common" : true
+  } ],
+  "connection" : [ {
+    "name" : "url",
+    "type" : "text",
+    "label" : "URL",
+    "labelKey" : "webhook.field.url.label",
+    "help" : "The URL each message is posted to, such as https://partner.example/hook. No user name or password in it.",
+    "helpKey" : "webhook.field.url.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "out" ],
+    "pattern" : "[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]+([/?#].*)?",
+    "server" : true
+  }, {
+    "name" : "timeoutMs",
+    "type" : "integer",
+    "label" : "Timeout (ms)",
+    "labelKey" : "webhook.field.timeoutMs.label",
+    "help" : "How long a request may take, in milliseconds.",
+    "helpKey" : "webhook.field.timeoutMs.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "out" ],
+    "default" : 30000,
+    "min" : 1
+  } ],
+  "flow" : [ {
+    "name" : "address",
+    "type" : "text",
+    "label" : "Address",
+    "labelKey" : "webhook.field.address.label",
+    "help" : "The path under the adapter's prefix on the node's HTTP port that senders call, such as /orders; matched exactly.",
+    "helpKey" : "webhook.field.address.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "in" ],
+    "pattern" : "^(?=.{2,256}$)(/(?!\\.\\.?(/|$))[A-Za-z0-9._~-]+)+$"
+  } ],
+  "rules" : [ ]
+}

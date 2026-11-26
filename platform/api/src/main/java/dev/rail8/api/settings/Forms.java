@@ -23,7 +23,9 @@ import java.util.Set;
  *
  * <p>The constructor refuses, naming the field, and so the adapter does not load: a field name used in both forms; a
  * {@link Field#secret} in the flow form; an {@link Field#expression} in the connection form or on a field serving the in
- * direction; a field named {@code flow}, {@code maxBodyBytes}, {@code maxReplyBytes} or {@code allowedHosts}, which are
+ * direction; a {@link Field#server} in the flow form, on a secret field or on a field that is neither text nor an integer;
+ * a connection form that holds a secret field and no {@link Field#server} field, since a secret is sent to a server; a
+ * field named {@code flow}, {@code maxBodyBytes}, {@code maxReplyBytes} or {@code allowedHosts}, which are
  * the platform's; a direction that reaches a connection with no field of the connection form serving it, or one that does
  * not with such a field; a field of either form serving a direction the adapter does not serve; and no direction served
  * at all. A {@link Field#visibleWhen} or an {@link Settings#exactlyOne} names fields of its own form only, since
@@ -69,9 +71,19 @@ public record Forms(Settings connection, Settings flow, Map<Direction, Reach> re
             if (connection.field(f.name()) != null) throw refused(f, "is in both forms");
             if (f.isSecret()) throw refused(f, "a secret belongs to the connection form");
             if (f.escape().isPresent() && f.serves(Direction.IN)) throw refused(f, "an expression serves the out direction only");
+            if (f.isServer()) throw refused(f, "the server belongs to the connection form");
         }
         for (Field f : connection.fields()) {
             if (f.escape().isPresent()) throw refused(f, "an expression belongs to the flow form");
+            if (f.isServer() && f.isSecret()) throw refused(f, "a secret names no server");
+            if (f.isServer() && f.type() != Field.Type.TEXT && f.type() != Field.Type.INTEGER) {
+                throw refused(f, "a server is named by a text or an integer field");
+            }
+        }
+        List<String> secrets = connection.secrets();
+        if (!secrets.isEmpty() && connection.fields().stream().noneMatch(Field::isServer)) {
+            throw new IllegalArgumentException("field '" + secrets.getFirst() + "': a secret goes to a server, but no field of the "
+                    + "connection form names one (Field.server())");
         }
         for (Settings form : List.of(connection, flow)) {
             for (Field f : form.fields()) {

@@ -60,7 +60,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * and supplies the component, the {@link Inbound} its consumer is built for and, where the defaults do not fit, the
  * {@link Outbound} and {@link Call} that reach a started consumer. Every case asserts an observable: the scheme (named,
  * never {@link Forms#PLATFORM}); the forms (the same on every call, serving both directions, every field, choice and tab
- * labelled and every field with a help text, their text keys in {@link Forms#toJson}); the uses passing the forms (a
+ * labelled and every field with a help text, their text keys in {@link Forms#toJson}, the connection form only adding to
+ * the one recorded in the test resources' {@code forms/<scheme>.json}); the uses passing the forms (a
  * connection handed over exactly where a direction reaches one); no secret handle read while a consumer or a producer is
  * built; delivery to the running consumer's handler with the body intact (the receiver mints its own message id — a
  * transport carries bytes and headers); two calls at once through one producer each reaching their own receiver and
@@ -198,6 +199,17 @@ public abstract class ComponentContract {
     public void everyFieldChoiceAndTabHasALabelAndItsTextKeys() {
         Component component = component();
         assertLabelled(component.scheme(), component.forms());
+    }
+
+    /**
+     * The connection form only adds to the one recorded in the test resources, {@code forms/<scheme>.json}: no field gone,
+     * retyped, marked or unmarked {@code server()}, with its default changed, become required or narrowed, and no new field
+     * required. A connection form that describes nothing needs no recorded form.
+     */
+    @Test
+    public void theConnectionFormOnlyAddsToTheRecordedOne() {
+        Component component = component();
+        RecordedForm.assertOnlyAdds(getClass(), component.scheme(), component.forms());
     }
 
     @Test

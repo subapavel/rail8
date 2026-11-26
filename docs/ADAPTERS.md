@@ -47,6 +47,7 @@ sample under the new names:
 | `src/test/java/…/AcmeComponentContractTest.java` | the component against the contract suite |
 | `src/test/java/…/AcmeMockContractTest.java` | the adapter's mock against the same suite |
 | `src/test/java/…/AcmeComponentTest.java` | what the suite leaves to the component: its own answers and refusals |
+| `src/test/resources/forms/acme.json` | the forms as the adapter first served them, which its connection form only adds to |
 | `package/` | a package that uses the adapter: an in endpoint, an out endpoint, a flow, a test case and a fixture |
 | `.gitattributes`, `.gitignore` | `* -text`, so git keeps every file's bytes as written, and the build's `target/` left out |
 
@@ -91,7 +92,19 @@ port, as in the sample, keeps the default.
 A field is built with `Field.text`, `Field.integer`, `Field.bool`, `Field.secret` or `Field.choice` (its values made with
 `Choice.of(value, label)`), each with a name, a short English label and a help text, then narrowed with `.in()` or
 `.out()`, `.required()`, `.byDefault(..)`, `.min(..)`, `.max(..)`, `.range(..)`, `.pattern(..)`, `.tab(..)` and
-`.visibleWhen(..)`. The node sets `flow` and `maxBodyBytes` itself, so no form has a field of those names. On a connecting
+`.visibleWhen(..)`. The node sets `flow` and `maxBodyBytes` itself, so no form has a field of those names.
+
+`.server()` marks the fields of the connection form that name the server the adapter connects to: a URL, a host, a port,
+each a text or an integer field. They say where the connection's secrets go: a secret goes to a server no earlier version
+of its connection sent it to only with the secret administrator's consent. No other field counts, so a change of a
+path, a time limit or a proxy needs no consent. A connection form that holds a secret field and no `.server()` field is
+refused, and the adapter does not load. The template marks its `url`.
+
+The connection form only adds. Stored connection values, exports and consents outlive a release, so a connection field
+keeps its name, its type, its `.server()` mark and its default, is never made required or narrowed (its range, its
+pattern, its choices), and a new field is optional or has a default. The contract suites check this against the forms
+recorded in `src/test/resources/forms/<scheme>.json`; a test with no such file fails and prints what to write in it. Write
+the file once, for a new adapter; a change the rule refuses is a new adapter, with a new scheme. On a connecting
 out endpoint `maxBodyBytes` is the reply's limit, which the node hands in each call.
 
 What the node hands the adapter:

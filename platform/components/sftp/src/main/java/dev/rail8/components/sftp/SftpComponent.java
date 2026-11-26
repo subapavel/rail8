@@ -123,8 +123,8 @@ public final class SftpComponent implements Component {
      */
     static final Forms FORMS = new Forms(
             Settings.of(
-                    Field.text("host", "Host", "The server's name or address.").required().in(),
-                    Field.integer("port", "Port", "The server's port.").range(1, 65535).byDefault(DEFAULT_PORT).in(),
+                    Field.text("host", "Host", "The server's name or address.").required().in().server(),
+                    Field.integer("port", "Port", "The server's port.").range(1, 65535).byDefault(DEFAULT_PORT).in().server(),
                     Field.text("user", "User", "The user to log in as; none when the password is credentials, which name it.").tab(Tab.SECURITY).in(),
                     Field.secret("password", "Password", "The user's password, or credentials of the user and the password; or set privateKey.",
                             Secret.Kind.VALUE, Secret.Kind.CREDENTIALS).tab(Tab.SECURITY).in(),

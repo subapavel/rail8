@@ -1,0 +1,91 @@
+{
+  "format" : 2,
+  "reach" : {
+    "in" : "connection",
+    "out" : "connection"
+  },
+  "described" : {
+    "connection" : true,
+    "flow" : false
+  },
+  "tabs" : [ {
+    "id" : "general",
+    "label" : "General",
+    "labelKey" : "rail8.tab.general",
+    "common" : true
+  }, {
+    "id" : "retry",
+    "label" : "Retry",
+    "labelKey" : "rail8.tab.retry",
+    "common" : true
+  }, {
+    "id" : "recording",
+    "label" : "Recording",
+    "labelKey" : "rail8.tab.recording",
+    "common" : true
+  }, {
+    "id" : "security",
+    "label" : "Security",
+    "labelKey" : "rail8.tab.security",
+    "common" : true
+  } ],
+  "connection" : [ {
+    "name" : "host",
+    "type" : "text",
+    "label" : "Host",
+    "labelKey" : "partner.field.host.label",
+    "help" : "The server.",
+    "helpKey" : "partner.field.host.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in", "out" ],
+    "server" : true
+  }, {
+    "name" : "port",
+    "type" : "integer",
+    "label" : "Port",
+    "labelKey" : "partner.field.port.label",
+    "help" : "The port.",
+    "helpKey" : "partner.field.port.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in", "out" ],
+    "default" : 22,
+    "server" : true
+  }, {
+    "name" : "password",
+    "type" : "secret",
+    "label" : "Password",
+    "labelKey" : "partner.field.password.label",
+    "help" : "The password.",
+    "helpKey" : "partner.field.password.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in", "out" ],
+    "kinds" : [ "value" ]
+  }, {
+    "name" : "login",
+    "type" : "secret",
+    "label" : "Login",
+    "labelKey" : "partner.field.login.label",
+    "help" : "The credentials.",
+    "helpKey" : "partner.field.login.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in", "out" ],
+    "kinds" : [ "credentials" ]
+  }, {
+    "name" : "key",
+    "type" : "secret",
+    "label" : "Key",
+    "labelKey" : "partner.field.key.label",
+    "help" : "The key pair.",
+    "helpKey" : "partner.field.key.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "in", "out" ],
+    "kinds" : [ "key-pair" ]
+  } ],
+  "flow" : [ ],
+  "rules" : [ ]
+}
