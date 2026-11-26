@@ -100,7 +100,7 @@
   "refusal.package-tree-refused": "Soubory repozitáře {repository} na commitu {commit} jsou odmítnuty.",
   "refusal.package-unreadable": "Balíček repozitáře {repository} na commitu {commit} nelze načíst.",
   "refusal.password-change-required": "Před akcí {action} změňte své první heslo.",
-  "refusal.password-contains-name": "Heslo nesmí obsahovat jméno uživatele.",
+  "refusal.password-contains-name": "Heslo nesmí obsahovat vaše jméno.",
   "refusal.password-length": "Heslo má {min} až {max} znaků.",
   "refusal.password-needs-session": "Heslo se mění v relaci.",
   "refusal.password-needs-user": "Heslo má jen uživatel.",
@@ -152,5 +152,5 @@
   "refusal.version-required": "Uložení musí uvádět verzi, kterou mění.",
   "refusal.working-folder-busy": "Pracovní složka je zaneprázdněná; nic se nezapsalo. Zkuste to znovu.",
   "refusal.written-unread": "Změna je zapsaná, ale tento uzel ji nedokázal přečíst zpět: brzy začne platit. Neposílejte ji znovu.",
-  "refusal.wrong-password": "Heslo je špatně."
+  "refusal.wrong-password": "Toto není heslo, kterým se přihlašujete."
 }

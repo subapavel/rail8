@@ -118,6 +118,8 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 const client = sessionClient({
   send: async (input, init) => {
     if (String(input) === '/session' && init?.method === 'POST') return json(401, { error: 'the login is refused', code: 'login-refused' });
+    // the first password's change is refused, as for a password that is not the one logged in with
+    if (String(input) === '/admin/me/password') return json(403, { error: 'the current password is wrong', code: 'wrong-password' });
     if (String(input) === '/session') {
       if (scene === 'out') return json(401, { code: 'no-credential' });
       if (scene === 'failed') return json(503, { error: 'the node at 127.0.0.1:8081 is busy', code: 'busy' });

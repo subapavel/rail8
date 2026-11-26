@@ -216,7 +216,7 @@ describe('uiFetch', () => {
 
     const wrong = w.client.changePassword('nope', 'a new long password');
     await w.answer('/admin/me/password', json(403, { error: 'the current password is wrong', code: 'wrong-password' }));
-    await expect(wrong).rejects.toEqual(new PasswordRefused('wrong-password', 'The password is wrong.'));
+    await expect(wrong).rejects.toEqual(new PasswordRefused('wrong-password', 'This is not the password you log in with.'));
     expect(w.client.state()).toMatchObject({ kind: 'asking' });
 
     const change = w.client.changePassword('first', 'a new long password');

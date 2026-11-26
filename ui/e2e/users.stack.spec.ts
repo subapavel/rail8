@@ -34,7 +34,7 @@ async function logIn(page: Page, name: string, password: string) {
 
 async function changeFirstPassword(page: Page, first: string, chosen: string) {
   await expect(page.getByRole('heading', { name: 'Change the first password' })).toBeVisible();
-  await page.getByLabel('Current password', { exact: true }).fill(first);
+  await page.getByLabel('The password you logged in with', { exact: true }).fill(first);
   await page.getByLabel('New password', { exact: true }).fill(chosen);
   await page.getByLabel('Repeat the new password', { exact: true }).fill(chosen);
   await page.getByRole('button', { name: 'Change the password', exact: true }).click();

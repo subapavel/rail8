@@ -107,20 +107,23 @@ describe('the My tokens screen', () => {
     const state = render('my-tokens');
     await button('New token').click();
     await expect.element(dialog().getByLabelText('Valid for')).toHaveValue('90');
+    await expect
+      .element(dialog().getByText('It confirms that it is you: the token outlives your session. The token itself is made by Rail8 and shown once after Issue.'))
+      .toBeVisible();
     await dialog().getByLabelText('Name').fill('Build');
-    await dialog().getByLabelText('Your password').fill(PASSWORD);
+    await dialog().getByLabelText('The password you log in with').fill(PASSWORD);
     await expect.element(issue()).toBeDisabled();
     await dialog().getByLabelText('Name').fill('build');
-    await dialog().getByLabelText('Your password').fill('');
+    await dialog().getByLabelText('The password you log in with').fill('');
     await expect.element(issue()).toBeDisabled();
 
-    await dialog().getByLabelText('Your password').fill('not it');
+    await dialog().getByLabelText('The password you log in with').fill('not it');
     await issue().click();
     await expect.element(dialog().getByText('The token was not issued')).toBeVisible();
-    await expect.element(dialog().getByText('The password is wrong.')).toBeVisible();
+    await expect.element(dialog().getByText('This is not the password you log in with.')).toBeVisible();
     expect(state.users[0]!.tokens).toHaveLength(1);
 
-    await dialog().getByLabelText('Your password').fill(PASSWORD);
+    await dialog().getByLabelText('The password you log in with').fill(PASSWORD);
     await dialog().getByLabelText('Valid for').fill('10');
     await issue().click();
     await expect.element(dialog().getByText('The token build, valid until Dec 4, 2026, 10:00 UTC:')).toBeVisible();

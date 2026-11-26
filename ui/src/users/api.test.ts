@@ -153,7 +153,7 @@ describe('httpTokensApi', () => {
   it('rejects with the status and the text of a refusal', async () => {
     const { send } = fakeFetch(json(403, { error: 'the password is wrong', code: 'wrong-password', needs: [] }), json(404, { error: 'no token abc' }));
     const api = httpTokensApi(send);
-    await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'The password is wrong.'));
+    await expect(api.issueMine('laptop', 90, 'not it')).rejects.toEqual(new UsersError(403, 'This is not the password you log in with.'));
     await expect(api.revoke('abc')).rejects.toEqual(new UsersError(404, 'no token abc'));
   });
 });

@@ -1,6 +1,6 @@
-import { LockOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons';
+import { LockOutlined, LogoutOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginForm, ProFormText } from '@ant-design/pro-components';
-import { Alert, Button, Flex, Modal, Tooltip, Typography } from 'antd';
+import { Alert, Button, Flex, Form, Modal, theme, Tooltip, Typography } from 'antd';
 import {
   cloneElement,
   createContext,
@@ -15,6 +15,7 @@ import {
 import { ReadSpinner } from './ReadSpinner';
 import { LanguageSwitch } from './LanguageSwitch';
 import { say, useText, type Texts } from './language';
+import { generatePassword } from './password';
 import { pageSession, PasswordRefused, reasonOf, type Me, type Refused, type SessionClient, type SessionState } from './session';
 import { Rail8Theme } from './theme';
 
@@ -124,7 +125,7 @@ export function SessionPrompt() {
   return (
     <Modal open title={t(state.me.firstPassword ? 'frame.password.first' : 'frame.login.again')} footer={null} closable={false} destroyOnHidden>
       {state.me.firstPassword ? (
-        <PasswordChange client={client} />
+        <PasswordChange client={client} name={state.me.name} />
       ) : (
         <>
           <Typography.Paragraph type="secondary">{t('frame.login.waiting', { name: state.me.name })}</Typography.Paragraph>
@@ -168,12 +169,33 @@ function Login({ client, name, refusal }: { client: SessionClient; name?: string
   );
 }
 
-function PasswordChange({ client }: { client: SessionClient }) {
+/** The rules the node sets for a new password: its length in characters after NFC normalisation. */
+const MIN_PASSWORD = 12;
+const MAX_PASSWORD = 128;
+
+/**
+ * The change of the first password of `name`: the password logged in with, the new one with its rules stated before the
+ * first attempt, and its repeat. Generate fills both with a strong password and shows it to copy while it is the one
+ * typed; nothing keeps it. A refusal says which rule the new password breaks, or that the first one is not the password
+ * logged in with.
+ */
+function PasswordChange({ client, name }: { client: SessionClient; name: string }) {
   const texts = useText();
   const { t } = texts;
+  const [form] = Form.useForm<{ current: string; next: string; repeat: string }>();
+  const next = Form.useWatch('next', form);
+  const [generated, setGenerated] = useState<string | null>(null);
   const [refused, setRefused] = useState<string | null>(null);
+  const { token } = theme.useToken();
+  const generate = () => {
+    const password = generatePassword(name);
+    setGenerated(password);
+    form.setFieldsValue({ next: password, repeat: password });
+    void form.validateFields(['next', 'repeat']);
+  };
   return (
     <LoginForm<{ current: string; next: string; repeat: string }>
+      form={form}
       title={false}
       subTitle={false}
       containerStyle={{ padding: 0 }}
@@ -191,19 +213,48 @@ function PasswordChange({ client }: { client: SessionClient }) {
         return true;
       }}
     >
-      <Typography.Paragraph type="secondary">{t('frame.password.why', { min: 12, max: 128 })}</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">{t('frame.password.why')}</Typography.Paragraph>
       <ProFormText.Password
         name="current"
         label={t('frame.password.current')}
+        extra={t('frame.password.current.help')}
         fieldProps={{ autoComplete: 'current-password' }}
         rules={[{ required: true, message: t('frame.password.current.required') }]}
       />
       <ProFormText.Password
         name="next"
         label={t('frame.password.new')}
+        extra={t('frame.password.rules', { min: MIN_PASSWORD, max: MAX_PASSWORD, name })}
         fieldProps={{ autoComplete: 'new-password' }}
-        rules={[{ required: true, message: t('frame.password.new.required') }, { min: 12, max: 128, message: t('frame.password.length', { min: 12, max: 128 }) }]}
+        rules={[
+          { required: true, message: t('frame.password.new.required') },
+          {
+            validator: (_, value: string | undefined) => {
+              const count = [...(value ?? '').normalize('NFC')].length;
+              return count === 0 || (count >= MIN_PASSWORD && count <= MAX_PASSWORD)
+                ? Promise.resolve()
+                : Promise.reject(new Error(t('frame.password.length', { min: MIN_PASSWORD, max: MAX_PASSWORD, count })));
+            },
+          },
+        ]}
       />
+      <Flex vertical gap="small" style={{ marginBottom: token.marginLG }}>
+        <Button icon={<ThunderboltOutlined aria-hidden />} onClick={generate} style={{ alignSelf: 'flex-start' }}>
+          {t('frame.password.generate')}
+        </Button>
+        {generated !== null && generated === next && (
+          <Alert
+            type="info"
+            showIcon
+            title={t('frame.password.generated.once')}
+            description={
+              <Typography.Text code copyable aria-label={t('frame.password.generated')}>
+                {generated}
+              </Typography.Text>
+            }
+          />
+        )}
+      </Flex>
       <ProFormText.Password
         name="repeat"
         label={t('frame.password.repeat')}
@@ -310,7 +361,7 @@ function FirstPassword({ client, me }: { client: SessionClient; me: Me }) {
     <GatePage>
       <Flex vertical gap="middle">
         <Typography.Title level={2}>{t('frame.password.first')}</Typography.Title>
-        <PasswordChange client={client} />
+        <PasswordChange client={client} name={me.name} />
         <Button type="link" icon={<LogoutOutlined aria-hidden />} onClick={() => void client.logout()}>
           {t('frame.logout.named', { name: me.name })}
         </Button>

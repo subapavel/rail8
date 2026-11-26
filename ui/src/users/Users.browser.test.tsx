@@ -326,7 +326,7 @@ describe('the Users screen', () => {
     await rowOf('ci-deploy').getByRole('button', { name: 'New token…' }).click();
     await expect.element(dialog().getByText('New token of ci-deploy')).toBeVisible();
     await expect.element(dialog().getByLabelText('Valid for')).toHaveValue('30');
-    expect(dialog().getByLabelText('Your password').query()).toBeNull();
+    expect(dialog().getByLabelText('The password you log in with').query()).toBeNull();
     await dialog().getByLabelText('Name').fill('ci');
     await issue().click();
     await expect.element(dialog().getByText('The token was not issued')).toBeVisible();
