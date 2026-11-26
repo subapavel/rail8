@@ -43,7 +43,7 @@ const expand = (table, text) => (page) =>
 const press = (name) => (page) => page.getByRole('button', { name, exact: true }).click();
 /** Collapses the side menu to its icons. */
 const collapse = (page) => page.getByRole('button', { name: 'Collapse menu' }).click();
-/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first, in, none, admin or failed). */
+/** Opens the page again behind the session's gate, with `scene` as its `session` (out, first, in, none, admin, developer, secrets or failed). */
 const visit = (scene) => (page) => page.goto(`${page.url().split('?')[0]}?session=${scene}`);
 /** Types `text` into the field labelled `label`. */
 const fill = (label, text) => (page) => page.getByLabel(label, { exact: true }).fill(text);
@@ -74,6 +74,18 @@ const quick = (text) => async (page) => {
   // the dialog's one field, named in the language shown
   await page.getByRole('dialog').getByRole('textbox').fill(text);
 };
+/** Presses `action` in the row of the secret `name` on the Secrets screen. */
+const secret = (name, action) => (page) =>
+  shown(page).getByRole('table', { name: 'Secrets' }).getByRole('row').filter({ hasText: name }).first().getByRole('button', { name: action, exact: true }).click();
+/** Chooses the kind `kind` in the open dialog. */
+const kind = (kind) => (page) => page.getByRole('dialog').getByRole('radiogroup').getByText(kind, { exact: true }).click();
+/** Scrolls the shown tab until the heading `name` is in view. */
+const reveal = (name) => (page) => shown(page).getByRole('heading', { name, exact: true }).scrollIntoViewIfNeeded();
+/** A private key and a certificate as a person pastes them: their PEM form only, no real key. */
+const PEM_KEY = '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIPictureOnlyNotAKey0000000000000000000\n-----END PRIVATE KEY-----';
+const PEM_CERTIFICATE = '-----BEGIN CERTIFICATE-----\nMIIBszCCAWWgAwIBAgIUPictureOnlyNotACertificate000000000000\n-----END CERTIFICATE-----';
+/** Opens the Secrets screen as a secret administrator. */
+const secrets = [visit('secrets'), menu('Secrets')];
 /** Opens the mapping order-id-copy of the folder mappings, which is no package, in its studio. */
 const studio = [menu('Packages'), folder('mappings'), artifact('order-id-copy')];
 /** Opens the flow orders of the package orders. */
@@ -171,6 +183,13 @@ const SCENES = {
   'canvas-de': [...studio, tab('Definition'), target('OrderId'), speak('Deutsch')],
   'canvas-cs': [...studio, tab('Definition'), target('OrderId'), speak('Čeština')],
   'canvas-ru': [...studio, tab('Definition'), target('OrderId'), speak('Русский')],
+  secrets: [visit('developer'), menu('Secrets'), expand('Secrets', 'partner.sftp')],
+  'secrets-key': [visit('developer'), menu('Secrets'), reveal("The store's key")],
+  'secrets-new-value': [...secrets, press('New secret'), fill('Name', 'billing.api'), fill('Value', 'picture only')],
+  'secrets-new-credentials': [...secrets, press('New secret'), fill('Name', 'crm.login'), kind('Credentials'), fill('User', 'rail8-integration'), fill('Password', 'picture only')],
+  'secrets-new-key-pair': [...secrets, press('New secret'), fill('Name', 'bank.tls'), kind('Key pair'), fill('Private key', PEM_KEY), fill('Certificates', PEM_CERTIFICATE)],
+  'secrets-delete': [...secrets, secret('erp.token', 'Delete…'), fill('Type erp.token to delete it.', 'erp.token')],
+  'secrets-cs': [visit('secrets'), menu('Secrets'), speak('Čeština')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
 };

@@ -12,10 +12,12 @@ import { screenList, type Screen } from '../../src/screens';
 import { sessionClient, type Me } from '../../src/session';
 import { SessionGate } from '../../src/SessionGate';
 import { Shell } from '../../src/Shell';
+import { secretsScreen } from '../../src/secrets/screen';
 import { auditScreen, myTokensScreen, tokensScreen, usersScreen } from '../../src/users/screen';
 import { pictureAudit } from './audit';
 import { pictureEndpoints, pictureFlows } from './flows';
 import { pictureMessages } from './messages';
+import { pictureSecrets } from './secrets';
 import { pictureUsers } from './users';
 import { NOW, pictureWorld } from './world';
 
@@ -36,12 +38,14 @@ const fakes: Record<string, Screen> = {
   tokens: tokensScreen(people.tokens),
   audit: auditScreen(pictureAudit()),
   'my-tokens': myTokensScreen(people.tokens),
+  secrets: secretsScreen(pictureSecrets(() => NOW)),
 };
 const screens = screenList(home, modules).map((screen) => fakes[screen.id] ?? screen);
 
-// With ?session=out, first, in, none, admin or failed, the frame stands behind the session's gate over a fake UI server:
-// nobody logged in, an operator with a first password, an operator logged in, who may not open a mapping nor read a body, a
-// person with no role, an administrator on a node that holds the emergency key, or a UI server that answers 503. `start`
+// With ?session=out, first, in, none, admin, developer, secrets or failed, the frame stands behind the session's gate over a
+// fake UI server: nobody logged in, an operator with a first password, an operator logged in, who may not open a mapping nor
+// read a body, a person with no role, an administrator on a node that holds the emergency key, a developer, a secret
+// administrator, or a UI server that answers 503. `start`
 // names the screen open at first. `window.endSession()` ends the session, so the login shows over the open tabs.
 const OPERATOR: Me = {
   name: 'anna',
@@ -85,6 +89,28 @@ const ADMINISTRATOR: Me = {
   },
   emergencyKey: true,
 };
+const DEVELOPER: Me = {
+  ...OPERATOR,
+  name: 'dana',
+  roles: ['developer'],
+  actions: ['self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue', 'deployment.read', 'module.call', 'package.deploy', 'secret.list'],
+  refused: {
+    'message.read': { code: 'not-allowed', needs: ['operator'] },
+    'secret.write': { code: 'not-allowed', needs: ['secret-administrator'] },
+    'secret.delete': { code: 'not-allowed', needs: ['secret-administrator'] },
+  },
+};
+const SECRET_ADMINISTRATOR: Me = {
+  ...OPERATOR,
+  name: 'sam',
+  roles: ['secret-administrator'],
+  actions: ['self.read', 'self.password', 'self.logout', 'self.tokens', 'self.token-issue', 'secret.list', 'secret.write', 'secret.delete'],
+  refused: {
+    'message.read': { code: 'not-allowed', needs: ['operator'] },
+    'deployment.read': { code: 'not-allowed', needs: ['developer', 'operator'] },
+  },
+};
+const SESSIONS: Record<string, Me> = { none: NOBODY, admin: ADMINISTRATOR, developer: DEVELOPER, secrets: SECRET_ADMINISTRATOR };
 const query = new URLSearchParams(location.search);
 const scene = query.get('session');
 let ended = false;
@@ -95,7 +121,7 @@ const client = sessionClient({
     if (String(input) === '/session') {
       if (scene === 'out') return json(401, { code: 'no-credential' });
       if (scene === 'failed') return json(503, { error: 'the node at 127.0.0.1:8081 is busy', code: 'busy' });
-      return json(200, scene === 'none' ? NOBODY : scene === 'admin' ? ADMINISTRATOR : { ...OPERATOR, firstPassword: scene === 'first' });
+      return json(200, (scene !== null && SESSIONS[scene]) || { ...OPERATOR, firstPassword: scene === 'first' });
     }
     return ended ? json(401, { code: 'session-ended' }) : json(200, {});
   },
