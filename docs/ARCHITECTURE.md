@@ -379,7 +379,9 @@ whole value is `secret://<name>` is a secret. A node reads it from its secret st
 any option, once, when the flow builds. Tests and validation use a placeholder. A step's option is a secret in
 the same way; its code takes it through the API for custom code (part 5). The store
 (`docs/SECRET-STORE.md`) keeps each secret sealed in Postgres under a key the nodes hold and Postgres
-never does; a change reaches every node without a restart. No flow is built again for a secret: a flow
+never does; a change reaches every node without a restart. A key pair whose leaf certificate ends
+within 30 days, or has ended, is a WARNING in each node's log once a day and a warning on Home and on
+the Secrets screen. No flow is built again for a secret: a flow
 of endpoint files takes a changed value at its next deploy, restore or the node's restart, and a
 deploy or restore keeps a running flow only when its files and the values its endpoints resolved are
 unchanged.

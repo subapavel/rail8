@@ -194,6 +194,18 @@ const SCENES = {
   'secrets-cs': [visit('secrets'), menu('Secrets'), speak('Čeština')],
   'git-refused-home': [],
   'git-refused-packages': [menu('Packages')],
+  'certificates-home': [],
+};
+
+/** What the node lists of its secrets in the scenes whose name starts with `certificates`: a key pair whose certificate ends soon, and one whose certificate has ended. */
+const CERTIFICATES = {
+  secrets: [
+    { name: 'bank.tls', kind: 'key-pair', keyPair: { algorithm: 'EC', size: 256, fingerprint: '7d2e', notAfter: '2026-12-09T00:00:00Z', certificate: 'ending' } },
+    { name: 'old-partner.tls', kind: 'key-pair', keyPair: { algorithm: 'RSA', size: 2048, fingerprint: 'c18f', notAfter: '2026-11-18T00:00:00Z', certificate: 'ended' } },
+  ],
+  missing: [],
+  key: { nodes: [], common: null, rowsUnderAnotherKey: 0, previousSet: false },
+  node: 'node-a',
 };
 
 /** What the node answers for its check of the git credentials in the scenes whose name starts with `git-refused`. */
@@ -231,6 +243,7 @@ async function application(browser, base, scenes, out) {
       for (const theme of THEMES) {
         const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, colorScheme: theme });
         if (scene.startsWith('git-refused')) await context.route('**/admin/git', (route) => route.fulfill({ json: REFUSED }));
+        if (scene.startsWith('certificates')) await context.route('**/admin/secrets', (route) => route.fulfill({ json: CERTIFICATES }));
         const page = await context.newPage();
         await page.goto(`${base}scripts/pictures/index.html`);
         await settled(page);

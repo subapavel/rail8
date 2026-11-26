@@ -20,7 +20,8 @@ const entry = (name: string, kind: SecretEntry['kind'], changedAt: string, chang
 /**
  * The secret store of the pictures, written by sam at `now`, in the middle of a key's roll: both nodes hold the new key and
  * still the old one, and two rows are not yet sealed again. A plain value two flows use, the credentials of a connection and
- * of the platform's git, a key pair with its certificate, an unused value under the old key, and a name a flow uses that the
+ * of the platform's git, a key pair with its certificate, one whose certificate ends within 30 days and one whose certificate
+ * has ended, an unused value under the old key, and a name a flow uses that the
  * store does not hold.
  */
 export function pictureSecrets(now: () => Date) {
@@ -42,6 +43,34 @@ export function pictureSecrets(now: () => Date) {
         }),
         value: { kind: 'key-pair', privateKey: 'picture', certificates: [] },
       },
+      {
+        entry: entry('bank.tls', 'key-pair', '2025-12-08T11:20:00Z', 'sam', {
+          keyPair: {
+            algorithm: 'EC',
+            size: 256,
+            fingerprint: '7d2e4a91c3b05f68e1a9d4c7b2f03e5a8c6d1b9f4e7a2c0d5b8e3f6a1c4d7b90',
+            subject: 'CN=rail8.acme.example,O=Acme',
+            issuer: 'CN=Bank Partner CA,O=Bank',
+            notAfter: '2026-12-09T00:00:00Z',
+            certificate: 'ending',
+          },
+        }),
+        value: { kind: 'key-pair', privateKey: 'picture', certificates: [] },
+      },
+      {
+        entry: entry('old-partner.tls', 'key-pair', '2025-11-18T09:00:00Z', 'ops', {
+          keyPair: {
+            algorithm: 'RSA',
+            size: 2048,
+            fingerprint: 'c18f3b6e0a2d9475e3b1f8c6a4d2e07b9f5c3a1e8d6b4f2a0c9e7d5b3a1f8e6c',
+            subject: 'CN=rail8.acme.example,O=Acme',
+            issuer: 'CN=Old Partner CA,O=Old Partner',
+            notAfter: '2026-11-18T00:00:00Z',
+            certificate: 'ended',
+          },
+        }),
+        value: { kind: 'key-pair', privateKey: 'picture', certificates: [] },
+      },
       { entry: entry('rail8.git', 'credentials', '2026-11-19T08:00:00Z', 'import'), value: { kind: 'credentials', user: 'picture', password: 'picture' } },
       { entry: entry('legacy.token', 'value', '2026-10-02T16:45:00Z', 'ops', { keyId: OLD }), value: { kind: 'value', value: 'picture' } },
     ],
@@ -52,6 +81,7 @@ export function pictureSecrets(now: () => Date) {
       ],
       'erp.login': [{ kind: 'connection', id: 'erp', kinds: ['credentials'] }],
       'partner.sftp': [{ kind: 'connection', id: 'partner-sftp', kinds: ['key-pair'] }],
+      'bank.tls': [{ kind: 'connection', id: 'bank', kinds: ['key-pair'] }],
       'rail8.git': [{ kind: 'platform', id: 'git', kinds: ['credentials'] }],
       'billing.api': [{ kind: 'flow', id: 'billing/invoice-out', kinds: ['value'] }],
     },

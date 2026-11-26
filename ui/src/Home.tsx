@@ -1,6 +1,7 @@
 import { HomeOutlined, LockOutlined } from '@ant-design/icons';
 import { Button, Card, Flex, Typography } from 'antd';
 import { useContext } from 'react';
+import { CertificateAlert } from './CertificateAlert';
 import { GitCredentialsAlert } from './GitCredentialsAlert';
 import { msg, say, useText } from './language';
 import { Page } from './Page';
@@ -8,7 +9,8 @@ import { groupedScreens, RegisteredScreens, type Screen } from './screens';
 import { useAccess } from './SessionGate';
 
 /**
- * The first page: the warning while the node's git credentials are refused, then a card for each group of screens, each screen
+ * The first page: the warning while the node's git credentials are refused, the warning of key pairs whose certificate
+ * ends within 30 days or has ended, then a card for each group of screens, each screen
  * with its name, which opens it, and what it is for. A screen the caller may not open is disabled, and says why.
  */
 function Home({ open }: { open: (screen: Screen) => void }) {
@@ -19,6 +21,7 @@ function Home({ open }: { open: (screen: Screen) => void }) {
     <Page title={texts.t('frame.home')} content={texts.t('frame.home.content')}>
       <Flex vertical gap="large">
         <GitCredentialsAlert />
+        <CertificateAlert />
         {Array.from(groupedScreens(screens), ([key, { group, entries }]) => (
           <Card key={key} title={<h2>{say(texts, group)}</h2>}>
             {entries.map((screen) => {

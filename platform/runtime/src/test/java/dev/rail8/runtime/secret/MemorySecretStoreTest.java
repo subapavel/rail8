@@ -173,4 +173,111 @@ class MemorySecretStoreTest extends SecretStoreContract {
         long total = db.rows().values().stream().mapToLong(r -> r.sealed().length).sum();
         assertEquals(true, total <= SecretStore.MAX_SEALED_BYTES && total + big.length() > SecretStore.MAX_SEALED_BYTES, "refused at the limit: " + total);
     }
+
+    // ------------------------------------------------------------------------------------------------- the end of a certificate
+
+    /** When the placeholder's certificate ends. */
+    static final java.time.Instant END = SecretStore.placeholderKeyPair().certificates().getFirst().getNotAfter().toInstant();
+
+    /** {@code n} creates the key pair {@code name}: the placeholder's private key and certificate. */
+    void createPair(Node n, String name) throws Exception {
+        Secret.KeyPair placeholder = SecretStore.placeholderKeyPair();
+        java.util.Base64.Encoder mime = java.util.Base64.getMimeEncoder();
+        written.add(java.util.Base64.getEncoder().encodeToString(placeholder.privateKey().getEncoded()));
+        create(n, new JsonObject().put("name", name).put("kind", "key-pair")
+                .put("privateKey", "-----BEGIN PRIVATE KEY-----\n" + mime.encodeToString(placeholder.privateKey().getEncoded()) + "\n-----END PRIVATE KEY-----\n")
+                .put("certificates", new io.vertx.core.json.JsonArray().add("-----BEGIN CERTIFICATE-----\n"
+                        + mime.encodeToString(placeholder.certificates().getFirst().getEncoded()) + "\n-----END CERTIFICATE-----\n")));
+    }
+
+    /** {@code n}'s clock set to {@code at}, and the tick that fires there done. */
+    static void at(Node n, java.time.Instant at) {
+        n.clock.set(at);
+        await(n.store.ticked());
+    }
+
+    /** The warnings of {@code n} about the end of a certificate. */
+    static List<String> certificateWarnings(Node n) {
+        return n.warnings.stream().filter(w -> w.contains("certificate")).toList();
+    }
+
+    /** What the list marks of the key pair {@code name}'s certificate: {@code ending}, {@code ended}, or null. */
+    String mark(Node n, String name) {
+        for (Object o : list(n).getJsonArray("secrets")) {
+            JsonObject e = (JsonObject) o;
+            if (name.equals(e.getString("name"))) return e.getJsonObject("keyPair").getString("certificate");
+        }
+        throw new AssertionError("no secret " + name);
+    }
+
+    @Test
+    void aCertificateThatEndsInThirtyOneDaysIsNoWarning() throws Exception {
+        Node a = start("a", K1);
+        createPair(a, "tls");
+        at(a, END.minus(java.time.Duration.ofDays(31)));
+        a.tick();
+        assertEquals(List.of(), certificateWarnings(a));
+        assertEquals(null, mark(a, "tls"));
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aCertificateThatEndsInThirtyDaysIsOneWarningADayNamingTheSecretAndTheDate() throws Exception {
+        Node a = start("a", K1);
+        createPair(a, "tls");
+        at(a, END.minus(java.time.Duration.ofDays(30)));
+        assertEquals(List.of("the certificate of the key pair 'tls' ends at " + END + ", in 30 days: enter a new certificate before then"),
+                certificateWarnings(a));
+        a.tick();
+        a.tick();
+        assertEquals(1, certificateWarnings(a).size(), "one warning a day, not one a tick");
+        assertEquals("ending", mark(a, "tls"));
+        at(a, END.minus(java.time.Duration.ofDays(29)));
+        assertEquals(2, certificateWarnings(a).size(), "the next day warns again");
+        assertTrue(certificateWarnings(a).getLast().contains("in 29 days"), certificateWarnings(a).getLast());
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aCertificateThatEndsTodayIsAWarning() throws Exception {
+        Node a = start("a", K1);
+        createPair(a, "tls");
+        at(a, END.minus(java.time.Duration.ofDays(1)));
+        assertEquals("the certificate of the key pair 'tls' ends at " + END + ", in 1 day: enter a new certificate before then", certificateWarnings(a).getLast());
+        at(a, END.minus(java.time.Duration.ofHours(1)));
+        assertEquals("the certificate of the key pair 'tls' ends at " + END + ", today: enter a new certificate before then", certificateWarnings(a).getLast());
+        assertEquals(2, certificateWarnings(a).size());
+        assertEquals("ending", mark(a, "tls"));
+    }
+
+    @Test
+    void anEndedCertificateStaysStoredAndItsWarningSaysItHasEnded() throws Exception {
+        Node a = start("a", K1);
+        createPair(a, "tls");
+        at(a, END.plus(java.time.Duration.ofDays(3)));
+        assertEquals(List.of("the certificate of the key pair 'tls' ended at " + END + ": a connection that presents it fails; enter a new certificate"),
+                certificateWarnings(a));
+        assertEquals("ended", mark(a, "tls"));
+        assertTrue(a.store.held("tls").orElseThrow().readable(), "it stays stored");
+        a.tick();
+        assertEquals(1, certificateWarnings(a).size(), "one warning a day");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aRestartWarnsAgainAndADeletedKeyPairNoMore() throws Exception {
+        Node a = start("a", K1);
+        createPair(a, "tls");
+        createPair(a, "gone");
+        at(a, END.minus(java.time.Duration.ofDays(10)));
+        assertEquals(2, certificateWarnings(a).size(), "one for each key pair");
+        await(a.store.delete(ALICE, "gone", java.util.Optional.of("gone")));
+        a.tick();
+        assertEquals(2, certificateWarnings(a).size());
+        a.store.close();
+        Node again = start("a", K1);
+        at(again, END.minus(java.time.Duration.ofDays(10)).plusSeconds(1));
+        assertEquals(List.of("the certificate of the key pair 'tls' ends at " + END + ", in 10 days: enter a new certificate before then"),
+                certificateWarnings(again), "a restart may log it again; the deleted pair is no warning");
+    }
 }
