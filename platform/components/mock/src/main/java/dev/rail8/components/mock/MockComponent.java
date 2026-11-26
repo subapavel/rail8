@@ -225,20 +225,24 @@ public final class MockComponent implements Component {
     }
 
     /**
-     * What an http mock's consumer hands its handler: {@code e} with the {@link #PLATFORM_COOKIES} cut from {@code cookie}, the
-     * other cookies as written, a {@code cookie} left with none removed. Any other scheme's: {@code e} as it is.
+     * What an http mock's consumer hands its handler: {@code e} with the {@link #PLATFORM_COOKIES} cut from {@code cookie} in any
+     * case, the other cookies as written, a {@code cookie} left with none removed. Any other scheme's: {@code e} as it is.
      */
     private Envelope entering(Envelope e) {
-        String cookie = e.headers().get("cookie");
-        if (!"http".equals(scheme) || cookie == null) return e;
-        List<String> pairs = List.of(cookie.split(";"));
-        List<String> kept = pairs.stream().filter(pair -> !PLATFORM_COOKIES.contains(cookieName(pair))).toList();
-        if (kept.size() == pairs.size()) return e;
+        if (!"http".equals(scheme)) return e;
         Map<String, String> m = new java.util.HashMap<>(e.headers().asMap());
-        String rest = String.join(";", kept).strip();
-        if (rest.isEmpty()) m.remove("cookie");
-        else m.put("cookie", rest);
-        return withHeaders(e, m);
+        boolean cut = false;
+        for (Map.Entry<String, String> h : e.headers().asMap().entrySet()) {
+            if (!"cookie".equalsIgnoreCase(h.getKey())) continue;
+            List<String> pairs = List.of(h.getValue().split(";"));
+            List<String> kept = pairs.stream().filter(pair -> !PLATFORM_COOKIES.contains(cookieName(pair))).toList();
+            if (kept.size() == pairs.size()) continue;
+            cut = true;
+            String rest = String.join(";", kept).strip();
+            if (rest.isEmpty()) m.remove(h.getKey());
+            else m.put(h.getKey(), rest);
+        }
+        return cut ? withHeaders(e, m) : e;
     }
 
     /** What an http mock's consumer answers with: a reply without a {@code set-cookie}, in any case, of the {@link #PLATFORM_COOKIES}. */
