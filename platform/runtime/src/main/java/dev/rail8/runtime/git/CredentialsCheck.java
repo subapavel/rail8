@@ -193,7 +193,10 @@ public final class CredentialsCheck implements AutoCloseable {
             probe.check(name);
             outcome = new Outcome(State.WORKING, name, "", clock.instant());
         } catch (GitFailure failure) {
-            State state = failure.reason() == Reason.CREDENTIALS_REFUSED || failure.reason() == Reason.NOT_FOUND ? State.REFUSED : State.UNREACHABLE;
+            State state = switch (failure.reason()) {
+                case CREDENTIALS_REFUSED, CREDENTIALS_UNREADABLE, NOT_FOUND -> State.REFUSED;
+                default -> State.UNREACHABLE;
+            };
             // the formatter's timeout names the deploy's setting; the check has a timeout of its own
             String reason = failure.reason() == Reason.TIMED_OUT
                     ? failure.repository() + " at " + failure.target() + ": timed out (RAIL8_GIT_CHECK_TIMEOUT)" : failure.getMessage();

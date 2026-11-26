@@ -165,7 +165,7 @@ public final class GitCache {
      * of it, so a deploy never waits for it. A host that lists the refs answers, whether or not they hold the pool's ref.
      *
      * @param repository the repository's name under the base
-     * @throws GitFailure as a fetch fails: credentials refused, not found, timed out, or the transport failed
+     * @throws GitFailure as a fetch fails: credentials refused, the secret store's rail8.git unreadable, not found, timed out, or the transport failed
      */
     public void check(String repository) throws GitFailure {
         Requests.repository(repository);
