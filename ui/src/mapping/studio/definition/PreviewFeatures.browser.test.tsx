@@ -271,7 +271,9 @@ describe('value mapping and lookups, preview functions', () => {
     await dialog.getByRole('button', { name: 'Apply' }).click();
     await expect.element(node(/^Node function Value mapping/)).toMatchTextContent(/vmdefault unknown/);
     // its input is its own and the target's is taken: nowhere to connect; a preview node is no box to copy
-    await node(/^Node function Value mapping/).click({ button: 'right' });
+    // (on its name: the node's centre is its Preview badge, and with the pointer left there once the menu closes, the badge's
+    // tooltip opens over the node above, the next one clicked)
+    await node(/^Node function Value mapping/).getByText('Value mapping', { exact: true }).click({ button: 'right' });
     await expect.element(menuItem('Properties')).toBeVisible();
     await expect.element(flyoutItem('Connect to')).not.toBeInTheDocument();
     await expect.element(menuItem('Copy')).not.toBeInTheDocument();
