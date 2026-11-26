@@ -1,0 +1,9 @@
+# Our billing system, which drops invoice files on its SFTP server for sftp-invoice to fetch. The server, its user and the
+# references to its password and host key are values of the environment's connection billing/sftp; the quickstart's is in
+# deploy/quickstart/config/.
+schemaVersion: 1
+kind: system
+name: billing
+description: Our billing system, which drops each invoice as a file on its SFTP server.
+connections:
+  sftp: { adapter: sftp, description: "Its outbox: the folder /inbox of the stack's SFTP server." }

@@ -1,0 +1,7 @@
+# The quickstart's billing outbox: the stack's SFTP server, service sftp, user demo. The password and the host key's fingerprint
+# are references to the two secrets the node's first start imports from RAIL8_SECRET_SFTP_PASSWORD and RAIL8_SECRET_SFTP_HOST_KEY.
+schemaVersion: 1
+kind: environment.connection
+key: billing/sftp
+adapter: sftp
+values: { host: sftp, port: 22, user: demo, password: "secret://sftp-password", hostKey: "secret://sftp-host-key" }

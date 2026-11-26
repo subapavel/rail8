@@ -12,8 +12,10 @@ export RAIL8_ADMIN_TOKEN=$(../../bin/rail8 key new)    # the node's emergency ke
 [ -s ~/.rail8-stack-secrets-key ] || { t=$(mktemp ~/.rail8-stack-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-stack-secrets-key; rm -f "$t"; }
 export RAIL8_SECRETS_KEY=$(cat ~/.rail8-stack-secrets-key)   # the secret store's key, made once and kept: required, as the token
 docker compose up -d --build                           # returns once the node is healthy
-../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token   # prints the administrator's password, once
+../../bin/rail8 bootstrap --admin admin --deploy-account deploy --token-file ~/.rail8-stack-token \
+  --role connection-administrator --role secret-administrator   # prints the administrator's password, once
 export RAIL8_TOKEN=$(cat ~/.rail8-stack-token)         # the deploy account's token: it deploys, and reads the deployed packages
+../quickstart/configure                                # the environment: the connections and instance names of the demo's systems
 docker compose run --rm deploy                         # exits 0 after the demo is deployed
 curl -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages
 curl -X POST --data-binary @../../examples/demo/fixtures/sample-invoice.xml localhost:8080/http/in   # flow invoice-sync: the reply is the ACK

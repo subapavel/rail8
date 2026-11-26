@@ -1,6 +1,7 @@
 package dev.rail8.cli;
 
 import dev.rail8.cli.CliRuns.Ran;
+import dev.rail8.runtime.access.Role;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import org.junit.jupiter.api.AfterEach;
@@ -13,10 +14,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import static dev.rail8.cli.CliRuns.run;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code rail8 bootstrap --admin <name> --deploy-account <name> --token-file <path>} against a {@link StubAdmin}: the six
+ * {@code rail8 bootstrap --admin <name> --deploy-account <name> --token-file <path> [--role <role>]...} against a {@link StubAdmin}: the six
  * requests in their order, each with its body and bearer; the generated password printed once; the token written to the file,
  * its owner's alone; a refused step stops it with exit 1; a usage error sends nothing.
  */
@@ -170,6 +174,52 @@ class BootstrapCommandTest {
             assertEquals(2, ran.exit(), args + ": " + ran);
         }
         assertEquals(List.of(), admin.requests(), "nothing sent");
+    }
+
+    /** Each {@code --role} is given to the deploy account beside {@code developer}, in its creation, in the order given. */
+    @Test
+    void eachRoleGoesToTheDeployAccountBesideDeveloper() throws Exception {
+        StubAdmin admin = stub();
+
+        Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", KEY, "RAIL8_ADMIN", admin.url()), "bootstrap", "--admin", "alice", "--deploy-account", "ci-deploy",
+                "--role", "connection-administrator", "--token-file", work.resolve("t").toString(), "--role", "secret-administrator");
+
+        assertEquals(0, ran.exit(), ran.toString());
+        assertEquals(new JsonObject().put("name", "ci-deploy").put("kind", "technical")
+                        .put("roles", new JsonArray().add("developer").add("connection-administrator").add("secret-administrator")),
+                body(admin.requests().get(3)));
+        assertEquals(new JsonObject().put("name", "alice").put("kind", "person").put("roles", new JsonArray().add("administrator")),
+                body(admin.requests().get(0)), "the administrator's roles do not change");
+    }
+
+    /** A role the node does not know, the administrator's, developer or one given twice: a usage error that says so, nothing sent. */
+    @Test
+    void aRoleTheDeployAccountCannotTakeIsAUsageError() throws Exception {
+        StubAdmin admin = stub();
+        Map<String, String> env = Map.of("RAIL8_ADMIN_TOKEN", KEY, "RAIL8_ADMIN", admin.url());
+        String file = work.resolve("t").toString();
+        Map<List<String>, String> wrong = Map.of(
+                List.of("--role", "root"), "--role root is no role",
+                List.of("--role", "administrator"), "never holds the administrator role",
+                List.of("--role", "developer"), "holds developer always",
+                List.of("--role", "operator", "--role", "operator"), "--role operator is given twice",
+                List.of("--role"), "--role needs a value");
+        wrong.forEach((roles, named) -> {
+            List<String> args = new ArrayList<>(List.of("bootstrap", "--admin", "alice", "--deploy-account", "ci-deploy", "--token-file", file));
+            args.addAll(roles);
+            Ran ran = run(env, args.toArray(String[]::new));
+            assertEquals(2, ran.exit(), args + ": " + ran);
+            assertTrue(ran.err().contains(named), args + ": " + ran);
+        });
+        assertEquals(List.of(), admin.requests(), "nothing sent");
+    }
+
+    /** The roles {@code --role} takes are the node's, without the two the deploy account cannot be given by it. */
+    @Test
+    void theRolesItTakesAreTheNodesOwn() {
+        Set<String> node = Arrays.stream(Role.values()).map(Role::id).collect(Collectors.toSet());
+        node.removeAll(Set.of("administrator", "developer"));
+        assertEquals(node, Set.copyOf(Bootstrap.ROLES));
     }
 
     /** A generated password never contains the name, which the node would refuse. */

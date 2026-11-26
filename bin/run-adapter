@@ -131,20 +131,12 @@ until curl -sf "http://127.0.0.1:$admin_port/health" > /dev/null 2>&1; do
 done
 
 admin="http://127.0.0.1:$admin_port"
-password=$(RAIL8_ADMIN_TOKEN=$key RAIL8_ADMIN=$admin "$root/bin/rail8" bootstrap --admin admin --deploy-account deploy --token-file "$run/token") \
+# deploy gets the roles that read the messages and their bodies beside its developer role; the administrator's password is
+# not kept
+RAIL8_ADMIN_TOKEN=$key RAIL8_ADMIN=$admin "$root/bin/rail8" bootstrap --admin admin --deploy-account deploy --token-file "$run/token" \
+  --role operator --role message-bodies > /dev/null \
   || fail "the node's first users were not made; its log: $run/node.log"
 token=$(cat "$run/token")
-# the administrator's session gives deploy the roles that read the messages, then ends
-session=$(P=$password node -e 'process.stdout.write(JSON.stringify({name: "admin", password: process.env.P}))' \
-  | curl -sf -X POST -H 'Content-Type: application/json' --data-binary @- "$admin/admin/sessions" \
-  | node -e 'let s = ""; process.stdin.on("data", (c) => (s += c)).on("end", () => process.stdout.write(JSON.parse(s).session))') \
-  || fail "the administrator could not log in; its log: $run/node.log"
-# the session's header goes to curl on its standard input, not on its command line
-printf 'Authorization: Bearer %s\n' "$session" | curl -sf -o /dev/null -X POST -H @- -H 'Content-Type: application/json' \
-  -d '{"add":["operator","message-bodies"],"remove":[]}' "$admin/admin/users/deploy/roles" \
-  || fail "deploy was not given the roles operator and message-bodies; the node's log: $run/node.log"
-printf 'Authorization: Bearer %s\n' "$session" | curl -sf -o /dev/null -X POST -H @- "$admin/admin/me/logout" || true
-unset password session
 
 echo "run-adapter: deploying $dir/package as committed at HEAD ($(git -C "$dir" rev-parse --short HEAD))"
 if [ -n "$(git -C "$dir" status --porcelain -- package)" ]; then

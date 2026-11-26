@@ -1,0 +1,6 @@
+# The quickstart's foreign partner: the stack's partner echo, which answers every path with the body it was sent.
+schemaVersion: 1
+kind: environment.connection
+key: globex/erp/rest
+adapter: http
+values: { url: "http://localhost:8090" }

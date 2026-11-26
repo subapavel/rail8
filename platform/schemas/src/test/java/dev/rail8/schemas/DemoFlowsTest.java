@@ -139,7 +139,10 @@ class DemoFlowsTest {
     @Test
     void sftpInvoiceReadsTheSftpInboxAtLeastOnceAndSendsTheTransformedInvoiceToThePartner() throws IOException {
         JsonObject flow = flow("sftp-invoice");
-        assertEquals("sftp-inbox", flow.getJsonObject("from").getString("endpoint"));
+        assertEquals(2, flow.getInteger("schemaVersion"), "it names systems' connections");
+        assertEquals(new JsonObject().put("adapter", "sftp").put("connection", "billing/sftp")
+                .put("settings", new JsonObject().put("dir", "/inbox").put("afterSuccess", "delete")), flow.getJsonObject("from"),
+                "the inbox the compose server creates (atmoz/sftp chroots demo to /home/demo, so the session sees /inbox); the server is the connection's");
         assertEquals("at-least-once", flow.getJsonObject("delivery").getString("mode"));
         assertEquals("postgres", flow.getJsonObject("delivery").getString("queue"));
         assertEquals(List.of("xsd", "extractKey", "xslt", "to"), stepTypes(flow), "validate, key, map, send");
@@ -148,7 +151,9 @@ class DemoFlowsTest {
         assertEquals("/Invoice/Id", steps.getJsonObject(1).getString("xpath"));
         assertEquals(flow("invoice-sync").getJsonArray("steps").getJsonObject(3).getString("stylesheet"),
                 steps.getJsonObject(2).getString("stylesheet"), "the same stylesheet as the http flows");
-        assertEquals("partner-domestic", steps.getJsonObject(3).getString("endpoint"));
+        assertEquals("http", steps.getJsonObject(3).getString("adapter"));
+        assertEquals("acme/erp/rest", steps.getJsonObject(3).getString("connection"));
+        assertEquals(new JsonObject().put("path", "/invoices"), steps.getJsonObject(3).getJsonObject("settings"));
         assertTrue(steps.getJsonObject(3).getBoolean("retryable", false), "the send is retried");
         assertTrue(flow.getJsonObject("limits").getLong("maxBodyBytes") > 0, "a finite body limit");
     }
@@ -221,7 +226,8 @@ class DemoFlowsTest {
     }
 
     private static boolean partnerDown(JsonObject c) {
-        return c.getJsonObject("mocks", new JsonObject()).getJsonObject("partner-domestic", new JsonObject()).getInteger("fail", 0) == 503;
+        JsonObject mocks = c.getJsonObject("mocks", new JsonObject());
+        return Stream.of("partner-domestic", "acme/erp/rest").anyMatch(k -> mocks.getJsonObject(k, new JsonObject()).getInteger("fail", 0) == 503);
     }
 
     @Test
@@ -249,7 +255,8 @@ class DemoFlowsTest {
         assertEquals("sftp-invoice", doc.getString("flow"));
         assertEquals(2, doc.getJsonArray("cases").size(), "a file and a partner down");
         // fed by the sftp mock: files under fixtures/, no send, no status (an sftp door has no answer)
-        String files = doc.getJsonObject("mocks").getJsonObject("sftp-inbox").getString("files");
+        assertEquals(2, doc.getInteger("schemaVersion"), "keyed by connection, as its flow names them");
+        String files = doc.getJsonObject("mocks").getJsonObject("billing/sftp").getString("files");
         assertTrue(files != null && files.startsWith("fixtures/"), "an SFTP fixture file under fixtures/: " + files);
         java.nio.file.PathMatcher glob = DEMO.getFileSystem().getPathMatcher("glob:" + files);
         try (Stream<Path> all = Files.walk(DEMO.resolve("fixtures"))) {
@@ -257,8 +264,9 @@ class DemoFlowsTest {
         }
         JsonObject happy = caseWith(doc, c -> !partnerDown(c), "with the partner up");
         assertFalse(happy.containsKey("send"), "the file is fed by the mock, not sent");
-        JsonObject sent = happy.getJsonObject("expect").getJsonObject("sent").getJsonObject("partner-domestic");
+        JsonObject sent = happy.getJsonObject("expect").getJsonObject("sent").getJsonObject("acme/erp/rest");
         assertEquals(1, sent.getInteger("count"), "sent once");
+        assertEquals(new JsonObject().put("path", "/invoices"), sent.getJsonObject("settings"), "at the path the flow's step sets");
         assertEquals("/PartnerInvoice/@number", sent.getString("xpath"), "the transformed body, not the file");
         assertEquals("4711", sent.getString("equals"));
         JsonObject down = caseWith(doc, DemoFlowsTest::partnerDown, "with the partner failing 503");

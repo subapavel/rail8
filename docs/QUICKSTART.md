@@ -12,7 +12,7 @@ repository root.
 | Maven | none | the repository's `./mvnw` wrapper fetches the Maven it needs (3.9.11) and builds everything |
 | Node.js | 22.19 or newer | with npm |
 | Docker | Compose v2 | Docker Engine on Linux, Docker Desktop on macOS and Windows |
-| `curl`, `git`, `openssl` | `git` 2.30 or newer | `git` with your name and email set (`git config --global user.name`, `user.email`): you commit what you deploy |
+| `curl`, `git`, `jq`, `openssl` | `git` 2.30 or newer | `git` with your name and email set (`git config --global user.name`, `user.email`): you commit what you deploy |
 
 The scripts are shell scripts. On Windows run everything inside WSL 2, with Docker Desktop's WSL integration on and the
 repository cloned inside the WSL file system.
@@ -33,8 +33,10 @@ export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)      # the node's emergency key: i
 export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)   # the secret store's key: made once, kept
 docker compose up -d --build                       # the node, its Postgres and the partner echo
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
-bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
-export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)   # the token of the account `deploy`, which holds the developer role
+bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token \
+  --role connection-administrator --role secret-administrator   # prints owner's password, once: keep it
+export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)   # the token of the account `deploy`: developer, connection and secret administrator
+deploy/quickstart/configure                       # the environment: the connections and instance names of the demo's systems
 bin/rail8 deploy demo HEAD --expect none          # the demo's last commit, deployed to a node that runs no demo yet
 ```
 
@@ -43,6 +45,19 @@ account: it has a token, no password. The token file holds the token alone and o
 days, then an administrator issues `deploy` a new one in **Users** (New token…). Nothing here is a fixed value: the key
 is new each time you start the node, and the password and the token are made by the node. `bootstrap` makes the two
 accounts once: a second run is refused (`the name owner is taken`).
+
+The demo's systems are in `examples/demo/systems/`: the partners' ERPs `acme/erp` and `globex/erp`, and our `billing`, each
+with its connections. A flow of `schemaVersion: 2`, such as `sftp-invoice`, names a connection by its key, such as
+`acme/erp/rest`, and the environment the node runs in holds where that connection is and how it logs in. The deploy
+refuses a flow whose connection the environment does not set, so `deploy/quickstart/configure` sets the quickstart's first:
+it imports `deploy/quickstart/config/`, a file per connection and per system (the partners at the echo,
+`http://localhost:8090`; `billing/sftp` at the stack's SFTP server, its password and host key as `secret://` references to
+the two secrets below; the instance names `ACME-ERP-DEV`, `GLOBEX-ERP-DEV` and `BILLING-DEV`), and puts each in force. A
+second run puts nothing in force that is already. To change the quickstart's environment, change a file there and run the
+script again, or use `bin/rail8 config` (`bin/rail8 help`). `--role connection-administrator --role secret-administrator`
+gives `deploy` the two roles the script needs, so that each activation also consents to where a connection sends its
+secrets. That is the quickstart's shortcut: outside it, an administrator gives these roles to an account on purpose, in
+**Users**, and only to an account that should change the environment.
 
 The secret store's key is the one value you keep. The node seals every secret it holds in Postgres under it, and refuses
 to start without it. The first of the two key lines writes 256 random bits to `~/.rail8-secrets-key` once, readable only by
@@ -187,6 +202,25 @@ Do not run `bootstrap` again: the database keeps the accounts, and the key only 
 database from the first run, such as after `docker compose down -v`, start from "First run". The first of the two key
 lines makes the file only on the morning it is missing; every other morning it leaves the file as it is.
 
+### Systems and connections, once
+
+An installation from before the demo's systems runs its demo with endpoints alone. The database, its messages and the
+deployed packages stay; these commands, run once at the repository root after the morning's ones, give the account
+`deploy` the two roles the environment's script needs, put the quickstart's environment in force and deploy the demo
+with its systems. First, in the UI logged in as `owner`, open **Users**, choose Roles… on `deploy` and give it
+`connection-administrator` and `secret-administrator`. Then copy the demo's five new and changed files into your working
+copy, which the quickstart copied once, and commit them there:
+
+```sh
+deployed=$(git -C ~/rail8-workspace/demo rev-parse HEAD)   # the commit the node runs
+mkdir -p ~/rail8-workspace/demo/systems
+cp examples/demo/systems/acme-erp.yaml examples/demo/systems/globex-erp.yaml examples/demo/systems/billing.yaml ~/rail8-workspace/demo/systems/
+cp examples/demo/flows/sftp-invoice.yaml examples/demo/flows/sftp-invoice.test.yaml ~/rail8-workspace/demo/flows/
+git -C ~/rail8-workspace/demo add -A && git -C ~/rail8-workspace/demo commit -qm 'The demo names its systems'
+deploy/quickstart/configure                                   # the connections and instance names of the demo's systems
+bin/rail8 deploy demo HEAD --expect "$deployed"
+```
+
 ### Moving from the shared token, once
 
 Until now the quickstart exported a fixed string as `RAIL8_ADMIN_TOKEN`, one shared token for everything. A node started with a
@@ -199,7 +233,8 @@ export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)
 export RAIL8_SECRETS_KEY=$(cat ~/.rail8-secrets-key)
 docker compose up -d --force-recreate
 until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
-bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once: keep it
+bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token \
+  --role connection-administrator --role secret-administrator   # prints owner's password, once: keep it
 export RAIL8_TOKEN=$(cat ~/.rail8-deploy-token)
 ```
 

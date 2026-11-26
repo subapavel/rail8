@@ -77,10 +77,12 @@ public final class Cli {
                   ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
                   print the first password it answers, once; the person chooses a password of their own at the first login
                   (url as for deploy; bearer token: $RAIL8_ADMIN_TOKEN only, the emergency key)
-              bootstrap --admin <name> --deploy-account <name> --token-file <path>
+              bootstrap --admin <name> --deploy-account <name> --token-file <path> [--role <role>]...
                   make the first users of a stack that starts itself: create the administrator <name> with the emergency
                   key, log in with the first password, set a new generated password and print it, once; in that session
-                  create the technical account with the developer role and write its token to <path>, then log out
+                  create the technical account with the developer role and each --role (operator, message-bodies,
+                  secret-administrator, connection-administrator, partner-administrator) and write its token to <path>,
+                  then log out
                   (url: $RAIL8_ADMIN, else http://localhost:8081, otherwise as for deploy; bearer token of the first
                   step: $RAIL8_ADMIN_TOKEN only, the emergency key)
               key new

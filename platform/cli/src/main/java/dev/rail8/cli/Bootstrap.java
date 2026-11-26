@@ -15,13 +15,15 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.random.RandomGenerator;
 
 /**
- * {@code rail8 bootstrap --admin <name> --deploy-account <name> --token-file <path>}: makes the first users of a stack that starts
+ * {@code rail8 bootstrap --admin <name> --deploy-account <name> --token-file <path> [--role <role>]...}: makes the first users of a stack that starts
  * itself, through the admin API alone, at RAIL8_ADMIN, else {@code http://localhost:8081}, reached through {@link AdminApi}:
  * <ol>
  *   <li>{@code POST /admin/users} of the person {@code --admin} with the role {@code administrator}, with
@@ -30,7 +32,7 @@ import java.util.random.RandomGenerator;
  *   <li>{@code POST /admin/me/password} in that session, to a password generated here (32 characters of lowercase base32,
  *       160 random bits, never containing the name), which is then printed, alone on its line, once;</li>
  *   <li>in that session, {@code POST /admin/users} of the technical account {@code --deploy-account} with the role
- *       {@code developer}, and {@code POST /admin/users/<account>/tokens} of its token {@value #TOKEN_NAME}, for the node's
+ *       {@code developer} and each {@code --role} after it, in the order given, and {@code POST /admin/users/<account>/tokens} of its token {@value #TOKEN_NAME}, for the node's
  *       default days;</li>
  *   <li>the token written alone, without a line break, to {@code --token-file}: through a file of its own in the same folder,
  *       readable and writable by its owner only where the file system has POSIX permissions, moved over the path;</li>
@@ -50,6 +52,12 @@ final class Bootstrap {
     /** The most passwords drawn before one is found that does not contain the name; a name has at least two characters. */
     private static final int DRAWS_MAX = 100;
 
+    /**
+     * The roles {@code --role} gives the deploy account beside {@code developer}: every role of the node but the administrator's,
+     * which a technical account never holds, and the developer's, which it always holds.
+     */
+    static final List<String> ROLES = List.of("operator", "message-bodies", "secret-administrator", "connection-administrator", "partner-administrator");
+
     private Bootstrap() {}
 
     /**
@@ -58,21 +66,34 @@ final class Bootstrap {
      * @param admin         the administrator's name, as the node judges it
      * @param deployAccount the technical account's name, as the node judges it
      * @param tokenFile     where the technical account's token is written
+     * @param roles         the roles the technical account holds beside {@code developer}, each of {@link #ROLES}, in the order given
      */
-    record Arguments(String admin, String deployAccount, Path tokenFile) {}
+    record Arguments(String admin, String deployAccount, Path tokenFile, List<String> roles) {
+        Arguments {
+            roles = List.copyOf(roles);
+        }
+    }
 
-    /** The arguments {@code args} give after {@code bootstrap}; a {@link Cli.Usage} unless each of the three options is given once. */
+    /**
+     * The arguments {@code args} give after {@code bootstrap}; a {@link Cli.Usage} unless each of the three options is given once
+     * and each {@code --role} names one of {@link #ROLES}, once.
+     */
     static Arguments arguments(String[] args) {
         String admin = null;
         String account = null;
         String file = null;
+        List<String> roles = new ArrayList<>();
         for (int i = 1; i < args.length; i++) {
             String arg = args[i];
-            if (!arg.equals("--admin") && !arg.equals("--deploy-account") && !arg.equals("--token-file")) {
-                throw new Cli.Usage("bootstrap: unknown argument " + arg + "; it takes --admin, --deploy-account and --token-file");
+            if (!arg.equals("--admin") && !arg.equals("--deploy-account") && !arg.equals("--token-file") && !arg.equals("--role")) {
+                throw new Cli.Usage("bootstrap: unknown argument " + arg + "; it takes --admin, --deploy-account, --token-file and --role");
             }
             if (i + 1 == args.length || args[i + 1].isBlank() || args[i + 1].startsWith("--")) throw new Cli.Usage("bootstrap: " + arg + " needs a value");
             String value = args[++i];
+            if (arg.equals("--role")) {
+                roles.add(role(value, roles));
+                continue;
+            }
             String before = switch (arg) {
                 case "--admin" -> admin;
                 case "--deploy-account" -> account;
@@ -93,7 +114,16 @@ final class Bootstrap {
         } catch (InvalidPathException notAPath) {
             throw new Cli.Usage("bootstrap: --token-file is not a path: " + file);
         }
-        return new Arguments(admin, account, path);
+        return new Arguments(admin, account, path, roles);
+    }
+
+    /** {@code value} as a role of {@code --role}, not among {@code before}; a {@link Cli.Usage} naming it otherwise. */
+    private static String role(String value, List<String> before) {
+        if (value.equals("developer")) throw new Cli.Usage("bootstrap: --role developer: the deploy account holds developer always");
+        if (value.equals("administrator")) throw new Cli.Usage("bootstrap: --role administrator: a technical account never holds the administrator role");
+        if (!ROLES.contains(value)) throw new Cli.Usage("bootstrap: --role " + value + " is no role; it takes " + String.join(", ", ROLES));
+        if (before.contains(value)) throw new Cli.Usage("bootstrap: --role " + value + " is given twice");
+        return value;
     }
 
     static int run(Arguments arguments, Map<String, String> env, PrintStream out, PrintStream err) {
@@ -113,7 +143,7 @@ final class Bootstrap {
             call(admin, "the password change", "/admin/me/password", 204, session, new JsonObject().put("current", first).put("next", password));
             out.println(password);
             call(admin, "the deploy account's creation", "/admin/users", 201, session, new JsonObject()
-                    .put("name", arguments.deployAccount()).put("kind", "technical").put("roles", new JsonArray().add("developer")));
+                    .put("name", arguments.deployAccount()).put("kind", "technical").put("roles", new JsonArray().add("developer").addAll(new JsonArray(arguments.roles()))));
             JsonObject issued = call(admin, "the deploy account's token", "/admin/users/" + arguments.deployAccount() + "/tokens", 201, session,
                     new JsonObject().put("name", TOKEN_NAME));
             write(arguments.tokenFile(), member(issued, "token", "the deploy account's token"));

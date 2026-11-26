@@ -1,0 +1,42 @@
+#!/bin/sh
+# configure: puts the quickstart's environment in force on the node: the connections and the instance names of the demo's
+# systems, one file each in deploy/quickstart/config (connection/<key>.yaml, system/<key>.yaml). In order, through bin/rail8:
+#   1. `rail8 config import <folder> --check`: the dry run, whose answer names each object's change and the expect;
+#   2. `rail8 config import <folder> --expect <expect>`: a draft of each object whose file differs from what is in force;
+#   3. `rail8 config activate <kind> <key> --expect <etag>` of each object not in force, which puts its draft in force.
+# A second run activates nothing that is in force. The node is at RAIL8_ADMIN, else http://localhost:8081, and the token is
+# RAIL8_TOKEN's: an account with the roles connection-administrator and secret-administrator, so that each activation
+# consents by the same act to where a connection sends its secrets. The quickstart's `rail8 bootstrap --role
+# connection-administrator --role secret-administrator` gives its technical account both; elsewhere an administrator gives
+# them to an account on purpose.
+#
+#   deploy/quickstart/configure
+#
+# Needs the command line built (bin/rail8) and jq. Exits 1 when a step fails, naming it, 2 without RAIL8_TOKEN.
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+config="$root/deploy/quickstart/config"
+rail8="$root/bin/rail8"
+
+fail() { echo "configure: $1" >&2; exit "${2:-1}"; }
+
+[ -n "${RAIL8_TOKEN:-}" ] || fail "set RAIL8_TOKEN to the token of an account with the roles connection-administrator and secret-administrator" 2
+command -v jq > /dev/null || fail "jq is needed to read the node's answers" 2
+
+plan=$("$rail8" config import "$config" --check) || fail "the dry run of the import of $config was refused"
+expect=$(printf '%s' "$plan" | jq -r .expect)
+written=$("$rail8" config import "$config" --expect "$expect" --note "deploy/quickstart/configure") \
+  || fail "the import of $config was refused"
+pending=$(printf '%s' "$written" | jq -r '.objects[] | select(.inForce | not) | "\(.kind) \(.key) \(.etag)"')
+activated=0
+while read -r kind key etag; do
+  [ -n "$kind" ] || continue
+  "$rail8" config activate "$kind" "$key" --expect "$etag" --note "deploy/quickstart/configure" > /dev/null \
+    || fail "the activation of $kind $key was refused"
+  echo "configure: $kind $key is in force"
+  activated=$((activated + 1))
+done <<EOF
+$pending
+EOF
+echo "configure: $activated activated; every object of $config is in force"
