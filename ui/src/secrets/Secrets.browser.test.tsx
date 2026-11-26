@@ -165,6 +165,21 @@ describe('the Secrets screen', () => {
     expect(document.body.textContent).not.toContain('erp-token-value');
   });
 
+  test('marks beside its name a key pair whose certificate ends within 30 days, and one whose certificate has ended', async () => {
+    const state = seed();
+    const facts = { algorithm: 'EC', size: 256, fingerprint: '00', subject: 'CN=x', issuer: 'CN=x' };
+    state.secrets.push(
+      { entry: entry('bank.tls', 'key-pair', { keyPair: { ...facts, notAfter: '2026-12-05T00:00:00Z', certificate: 'ending' } }), value: { kind: 'key-pair', privateKey: 'p', certificates: [] } },
+      { entry: entry('old.partner', 'key-pair', { keyPair: { ...facts, notAfter: '2026-11-20T12:00:00Z', certificate: 'ended' } }), value: { kind: 'key-pair', privateKey: 'p', certificates: [] } },
+    );
+    render(state, DEVELOPER);
+    await expect.element(rowOf('bank.tls')).toMatchTextContent(/bank\.tlsCertificate ends Dec 5, 2026, 00:00 UTC/);
+    await expect.element(rowOf('old.partner')).toMatchTextContent(/old\.partnerCertificate ended Nov 20, 2026, 12:00 UTC/);
+    expect(rowOf('partner.sftp').element().textContent).not.toContain('Certificate');
+    expect(rowOf('bank.tls').element().querySelector('.ant-badge-status-warning')).not.toBeNull();
+    expect(rowOf('old.partner').element().querySelector('.ant-badge-status-error')).not.toBeNull();
+  });
+
   test('lets a secret administrator create a secret of each kind, overwrite one and delete one with the confirmation', async () => {
     const { state } = render();
     await create('erp.api', 'Plain value', { Value: 'api-value-1' });

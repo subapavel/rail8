@@ -17,7 +17,7 @@ export interface SecretUser {
   kinds: SecretKind[];
 }
 
-/** What the store knows of a key pair, never its private key: the leaf's subject, issuer and end only with a certificate. */
+/** What the store knows of a key pair, never its private key: the leaf's subject, issuer and end, and its mark, only with a certificate. */
 export interface KeyPairFacts {
   algorithm: string;
   size: number;
@@ -26,6 +26,8 @@ export interface KeyPairFacts {
   subject?: string;
   issuer?: string;
   notAfter?: string;
+  /** `ending` while the leaf ends within 30 days of the node's clock, `ended` once it has ended; absent otherwise. */
+  certificate?: 'ending' | 'ended';
 }
 
 /** A secret the store holds, as `GET /admin/secrets` lists it: never its value. */

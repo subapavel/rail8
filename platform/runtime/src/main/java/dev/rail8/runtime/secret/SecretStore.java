@@ -21,6 +21,8 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -103,6 +105,8 @@ public final class SecretStore {
     static final int BATCH = 100;
     static final long TICK_SECONDS = 5;
     static final Duration TICK = Duration.ofSeconds(TICK_SECONDS);
+    /** The days before a key pair's leaf certificate ends from which it is a WARNING once a day and marked in the list. */
+    static final long CERTIFICATE_DAYS = 30;
 
     private static final Pattern NAME = Pattern.compile("[a-z0-9][a-z0-9._-]*");
     private static final String VARIABLE = "RAIL8_SECRET_";
@@ -185,6 +189,8 @@ public final class SecretStore {
     /** The previous key was dropped while its variable is still set. */
     private volatile boolean previousSet;
     private final Set<String> warned = ConcurrentHashMap.newKeySet();
+    /** The key pairs whose certificate's end was logged, each with the date in UTC it was logged on. */
+    private final Map<String, LocalDate> certificatesWarned = new ConcurrentHashMap<>();
     private final List<Consumer<Set<String>>> listeners = new CopyOnWriteArrayList<>();
     private final List<BoundRows> bound = new CopyOnWriteArrayList<>();
     private final AtomicBoolean maintaining = new AtomicBoolean();
@@ -554,6 +560,7 @@ public final class SecretStore {
 
     private void tick() {
         arm();
+        watchCertificates();
         Future<Void> looked = look();
         if (!maintaining.compareAndSet(false, true)) {
             ticked = looked;
@@ -569,6 +576,28 @@ public final class SecretStore {
             }
         });
         ticked = Future.join(looked, maintained).mapEmpty();
+    }
+
+    /**
+     * Logs one WARNING a day, by the date in UTC, for each key pair this node holds whose leaf certificate ends within
+     * {@value #CERTIFICATE_DAYS} days or has ended, naming the secret and the end, never a value. A restart may log it again.
+     */
+    private void watchCertificates() {
+        Instant now = clock.instant();
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+        Map<String, Opened> held = state.held();
+        for (String name : new TreeSet<>(held.keySet())) {
+            if (!(held.get(name).value() instanceof SecretValue.Pair pair)) continue;
+            Optional<String> certificate = pair.certificate(now, CERTIFICATE_DAYS);
+            if (certificate.isEmpty()) continue;
+            if (today.equals(certificatesWarned.put(name, today))) continue;
+            Instant end = pair.end().orElseThrow();
+            long days = pair.daysLeft(now);
+            warn.accept(certificate.get().equals(SecretValue.Pair.ENDED)
+                    ? "the certificate of the key pair '" + name + "' ended at " + end + ": a connection that presents it fails; enter a new certificate"
+                    : "the certificate of the key pair '" + name + "' ends at " + end + ", " + (days == 0 ? "today" : "in " + days + (days == 1 ? " day" : " days"))
+                            + ": enter a new certificate before then");
+        }
     }
 
     /** The work of the last tick: tests wait on it after they move the clock. */
@@ -1043,6 +1072,7 @@ public final class SecretStore {
         Map<String, List<SecretRows.Use>> uses = new TreeMap<>();
         l.uses().forEach(u -> uses.computeIfAbsent(u.name(), n -> new ArrayList<>()).add(u));
         State held = state;
+        Instant now = clock.instant();
         Set<String> stored = new HashSet<>();
 
         JsonArray secrets = new JsonArray();
@@ -1054,7 +1084,11 @@ public final class SecretStore {
                     .put("changedAt", m.changedAt().toString()).put("changedBy", m.changedBy())
                     .put("usedBy", users(uses.get(m.name()))).put("users", uses.getOrDefault(m.name(), List.of()).size())
                     .put("unreadable", !readable).put("keyId", HEX.formatHex(m.keyId()));
-            if (readable && o.value() instanceof SecretValue.Pair pair) e.put("keyPair", pair.facts());
+            if (readable && o.value() instanceof SecretValue.Pair pair) {
+                JsonObject facts = pair.facts();
+                pair.certificate(now, CERTIFICATE_DAYS).ifPresent(c -> facts.put("certificate", c));
+                e.put("keyPair", facts);
+            }
             secrets.add(e);
         }
         JsonArray missing = new JsonArray();

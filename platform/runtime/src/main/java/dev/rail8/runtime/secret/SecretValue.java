@@ -10,10 +10,15 @@ import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECKey;
 import java.security.interfaces.RSAKey;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * A secret's value as a node holds it opened: a plain value, credentials, or a key pair with the encodings it is stored in.
@@ -83,6 +88,32 @@ sealed interface SecretValue {
                         .put("notAfter", leaf.getNotAfter().toInstant().toString());
             }
             return facts;
+        }
+
+        /** The list's mark of a leaf certificate that ends within the days watched. */
+        static final String ENDING = "ending";
+        /** The list's mark of a leaf certificate that has ended. */
+        static final String ENDED = "ended";
+
+        /**
+         * The mark of the leaf certificate at {@code now}: {@link #ENDED} after its end, {@link #ENDING} until then from {@code days}
+         * days before the date it ends, by the dates in UTC; empty when it ends later or the pair has no certificate.
+         */
+        Optional<String> certificate(Instant now, long days) {
+            Optional<Instant> end = end();
+            if (end.isEmpty()) return Optional.empty();
+            if (now.isAfter(end.get())) return Optional.of(ENDED);
+            return daysLeft(now) <= days ? Optional.of(ENDING) : Optional.empty();
+        }
+
+        /** The days from the date of {@code now} to the date the leaf certificate ends, in UTC, for a pair with a certificate. */
+        long daysLeft(Instant now) {
+            return ChronoUnit.DAYS.between(LocalDate.ofInstant(now, ZoneOffset.UTC), LocalDate.ofInstant(end().orElseThrow(), ZoneOffset.UTC));
+        }
+
+        /** When the leaf certificate ends; empty without a certificate. */
+        Optional<Instant> end() {
+            return keyPair.certificates().isEmpty() ? Optional.empty() : Optional.of(keyPair.certificates().getFirst().getNotAfter().toInstant());
         }
 
         private String algorithm() {

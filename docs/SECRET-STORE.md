@@ -460,7 +460,9 @@ The list answers, for each secret:
 - `changedAt` and `changedBy`;
 - `usedBy`, typed;
 - `unreadable`;
-- for a key pair, its algorithm and size, the leaf's subject, issuer and end, and the SHA-256 fingerprint of its public key.
+- for a key pair, its algorithm and size, the leaf's subject, issuer and end, and the SHA-256 fingerprint of its public key,
+  and `certificate`: `ending` while the leaf ends within 30 days of the answering node's clock, `ended` once it has ended
+  (below).
 
 It also answers:
 - the names that a use names and the store does not hold, with their users;
@@ -488,6 +490,16 @@ The refusals and their codes:
 - `secret.list` holds no value. The developer, the secret administrator, and the roles that edit an installation's
   configuration (the connection administrator and the partner administrator) hold it, so that a connection's form can
   pick a secret by name and kind. The configuration's design adds the grant with those roles.
+
+## The end of a certificate
+
+A key pair whose leaf certificate ends within 30 days, by the dates in UTC on the node's clock, or has ended, is watched:
+- each node logs one WARNING a day for it, at its first tick of the day, naming the secret and the end, never a value;
+  a restart may log it again;
+- the list marks it `ending` or `ended`, and Home and the Secrets screen show the warning to whoever holds `secret.list`.
+
+An ended certificate stays stored. A key pair without a certificate is not watched. Partners' trusted certificates, when
+they come, join the same watch.
 
 ## Audit
 

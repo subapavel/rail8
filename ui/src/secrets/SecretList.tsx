@@ -26,7 +26,8 @@ const kindsOf = (missing: MissingSecret): SecretKind[] => {
 
 /**
  * The Secrets screen: every secret of the store by its name, with its kind, its users, whether this node can read it, and
- * who changed it last and when; a key pair's row opens to its algorithm and size, its leaf certificate's subject, issuer and
+ * who changed it last and when, and beside the name of a key pair whose leaf certificate ends within 30 days or has ended,
+ * its end; a key pair's row opens to its algorithm and size, its leaf certificate's subject, issuer and
  * end, and its fingerprint. Beside it the names that uses name and the store does not hold, the state of the store's key
  * on each live node, and the node that answered. No value is ever shown. A secret administrator creates a secret of each
  * kind, overwrites one with a value of its kind and deletes one, confirming with its name when it has a use; what the
@@ -92,7 +93,17 @@ export function SecretList({ api }: { api: SecretsApi }) {
           ]}
           expandable={{ rowExpandable: (entry) => entry.keyPair !== undefined, expandedRowRender: (entry) => <KeyPairFacts entry={entry} /> }}
           columns={[
-            { title: t('secrets.name'), dataIndex: 'name', width: 220, render: (_, entry) => <Typography.Text code>{entry.name}</Typography.Text> },
+            {
+              title: t('secrets.name'),
+              dataIndex: 'name',
+              width: 220,
+              render: (_, entry) => (
+                <Flex vertical gap="small" align="flex-start">
+                  <Typography.Text code>{entry.name}</Typography.Text>
+                  <CertificateEnd entry={entry} />
+                </Flex>
+              ),
+            },
             { title: t('secrets.kind'), dataIndex: 'kind', width: 150, render: (_, entry) => kindWords(texts, entry.kind) },
             { title: t('secrets.scope'), dataIndex: 'scope', width: 110, render: (_, entry) => (entry.scope === 'installation' ? t('secrets.scope.installation') : entry.scope) },
             { title: t('secrets.usedBy'), key: 'usedBy', render: (_, entry) => <UsedBy usedBy={entry.usedBy} users={entry.users} /> },
@@ -185,6 +196,19 @@ export function SecretList({ api }: { api: SecretsApi }) {
         <DeleteSecretDialog api={api} entry={dialog.entry} onClose={(deleted) => closed(deleted ? t('secrets.deleted', { name: dialog.entry.name }) : null)} />
       )}
     </Page>
+  );
+}
+
+/** The mark of a key pair whose leaf certificate ends within 30 days, or has ended, with its end; nothing otherwise. */
+function CertificateEnd({ entry }: { entry: SecretEntry }) {
+  const texts = useText();
+  const facts = entry.keyPair;
+  if (facts?.certificate === undefined || facts.notAfter === undefined) return null;
+  const at = instant(texts, facts.notAfter);
+  return facts.certificate === 'ended' ? (
+    <Badge status="error" text={texts.t('secrets.certificate.ended', { at })} />
+  ) : (
+    <Badge status="warning" text={texts.t('secrets.certificate.ending', { at })} />
   );
 }
 
