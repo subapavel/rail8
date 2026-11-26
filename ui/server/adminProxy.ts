@@ -22,6 +22,14 @@ export interface AdminProxyOptions {
 /** The most bytes of a POST's body the proxy passes on. */
 export const PROXY_BODY_MAX_BYTES = 64 * 1024;
 
+/** The most bytes of the body of an import of the configuration, `POST /admin/config/import`: its files, as JSON. */
+export const IMPORT_BODY_MAX_BYTES = 4 * 1024 * 1024;
+
+/** The most bytes of the body of a POST to `url`: {@link IMPORT_BODY_MAX_BYTES} for the import, else {@link PROXY_BODY_MAX_BYTES}. */
+function bodyMax(url: string): number {
+  return url.split('?')[0] === '/admin/config/import' ? IMPORT_BODY_MAX_BYTES : PROXY_BODY_MAX_BYTES;
+}
+
 /** The most bytes RAIL8_ADMIN_CA may hold. */
 export const CA_MAX_BYTES = 64 * 1024;
 
@@ -162,13 +170,13 @@ function refuse(res: ServerResponse, status: number, code: string, error: string
   res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(refusalBody(code, error, values)));
 }
 
-/** The body of a POST: none, or JSON of at most {@link PROXY_BODY_MAX_BYTES} bytes, counted while it is read. */
-async function bodyOf(req: IncomingMessage): Promise<{ body: Buffer | undefined } | { status: number; code: string; error: string; values?: RefusalValues }> {
+/** The body of a POST: none, or JSON of at most `max` bytes, counted while it is read. */
+async function bodyOf(req: IncomingMessage, max: number): Promise<{ body: Buffer | undefined } | { status: number; code: string; error: string; values?: RefusalValues }> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > PROXY_BODY_MAX_BYTES) return { status: 413, code: 'too-large', error: `this server passes bodies of at most ${PROXY_BODY_MAX_BYTES} bytes on to the admin API`, values: { max: PROXY_BODY_MAX_BYTES } };
+    if (size > max) return { status: 413, code: 'too-large', error: `this server passes bodies of at most ${max} bytes on to the admin API`, values: { max } };
     chunks.push(chunk);
   }
   if (size === 0) return { body: undefined };
@@ -180,7 +188,8 @@ async function bodyOf(req: IncomingMessage): Promise<{ body: Buffer | undefined 
  * A development-server middleware that sends `/admin` requests from the UI's own pages on to the node, as the node
  * answers no browser. It is mounted after the session gate, whose credential every call carries. It takes GET and POST
  * (405 otherwise) and refuses what {@link forward} refuses. A POST's body is passed on when it is JSON of at most
- * {@link PROXY_BODY_MAX_BYTES} bytes (415, 413 otherwise, before anything is sent), and a POST without one goes on
+ * {@link PROXY_BODY_MAX_BYTES} bytes, {@link IMPORT_BODY_MAX_BYTES} for an import of the configuration (415, 413
+ * otherwise, before anything is sent), and a POST without one goes on
  * without one. It passes back the status, `Content-Type`, `Content-Length`, `WWW-Authenticate` and `Retry-After`. The
  * session's refusal by the node is answered as the gate answers it; a node that cannot be reached, or that redirects,
  * is 502. Every other path goes to `next`.
@@ -207,7 +216,7 @@ export function adminProxy(options: AdminProxyOptions) {
       const node = nodeFor(req, options.target, options.send);
       let body: Buffer | undefined;
       if (req.method === 'POST') {
-        const read = await bodyOf(req);
+        const read = await bodyOf(req, bodyMax(url));
         if ('status' in read) return refuse(res, read.status, read.code, read.error, read.values);
         body = read.body;
       }

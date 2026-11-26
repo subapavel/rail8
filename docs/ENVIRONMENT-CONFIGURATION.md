@@ -622,7 +622,7 @@ instanceName: ACME-ERP-TEST
 
 ## The command `rail8 config`
 
-It sends `RAIL8_TOKEN` to `RAIL8_ADMIN_URL`, as `rail8 deploy` does. Exit 0 when done, 1 for a refusal or problems, 2
+It sends `RAIL8_TOKEN` to `--admin`, else `RAIL8_ADMIN`, as `rail8 deploy` does. Exit 0 when done, 1 for a refusal or problems, 2
 for a usage error. It never fills in an expected state, a confirmation or a digest for its caller.
 
 | Command | Calls |

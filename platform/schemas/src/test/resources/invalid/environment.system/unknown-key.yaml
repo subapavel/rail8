@@ -1,0 +1,6 @@
+# expect: /version
+schemaVersion: 1
+kind: environment.system
+key: acme/erp
+instanceName: ACME-ERP-TEST
+version: 4

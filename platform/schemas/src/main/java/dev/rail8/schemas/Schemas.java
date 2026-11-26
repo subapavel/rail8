@@ -17,15 +17,16 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The six published JSON Schemas (draft 2020-12) of the v1 file model — flow, package, endpoint, test,
- * {@code folder.yaml} and {@code package.lock} — loaded from {@code schemas/<kind>.schema.json} on the classpath, each stamped
- * {@code schemaVersion: 1} and {@code draft — review at hand-over}.
+ * The published JSON Schemas (draft 2020-12) of the v1 file model — flow, package, endpoint, test, {@code folder.yaml} and
+ * {@code package.lock} — and of the files of an environment's configuration, a connection and a system, loaded from
+ * {@code schemas/<kind>.schema.json} on the classpath, each stamped {@code schemaVersion: 1}.
  * Validation is pure: no I/O, no Vert.x instance.
  *
  * @since 0.1
  */
 public enum Schemas {
-    FLOW("flow"), PACKAGE("package"), ENDPOINT("endpoint"), TEST("test"), FOLDER("folder"), LOCK("lock");
+    FLOW("flow"), PACKAGE("package"), ENDPOINT("endpoint"), TEST("test"), FOLDER("folder"), LOCK("lock"),
+    ENVIRONMENT_CONNECTION("environment.connection"), ENVIRONMENT_SYSTEM("environment.system");
 
     private final String kind;
     private final JsonObject json;
@@ -59,7 +60,7 @@ public enum Schemas {
 
     public static Schemas forKind(String kind) {
         for (Schemas s : values()) if (s.kind.equals(kind)) return s;
-        throw new IllegalArgumentException("no schema for kind '" + kind + "' (one of flow, package, endpoint, test, folder, lock)");
+        throw new IllegalArgumentException("no schema for kind '" + kind + "' (one of flow, package, endpoint, test, folder, lock, environment.connection, environment.system)");
     }
 
     public Report validate(JsonObject document) {

@@ -64,8 +64,9 @@ needs a person logged in, and whether the emergency key may do it. A test compar
 
 The configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`) has `config.read`, `config.connections`,
 `config.run`, `config.consent` and `config.import`, and grants `secret.list` to the connection administrator and the
-partner administrator too, so a form picks a secret by name and kind. `config.import` is the import's door; its routes come
-with the import. An activation by a caller that also holds `config.consent` consents by the same act.
+partner administrator too, so a form picks a secret by name and kind. `config.import` is the import's door: a dry run of
+files and their write. The import writes a kind's objects only for a caller who also holds its write, `config.connections`,
+so a partner administrator's import is refused until the partner profiles come. An activation by a caller that also holds `config.consent` consents by the same act.
 
 The entry of a message (`docs/WHO-MAY-SEND.md`) adds `message.send`, granted by the message sender: a token may do it,
 the emergency key may not. It joins this table, and the enum, when it is built.
@@ -98,11 +99,11 @@ the emergency key may not. It joins this table, and the enum, when it is built.
 | `secret.list` | `GET /admin/secrets`, `GET /admin/secrets/{name}`: names, never a value | developer, secret-administrator, connection-administrator, partner-administrator |
 | `secret.write` | `POST /admin/secrets`, `POST /admin/secrets/{name}`: the create and the overwrite | secret-administrator |
 | `secret.delete` | `DELETE /admin/secrets/{name}` | secret-administrator |
-| `config.read` | `GET /admin/config`, `/admin/config/connections`, `/admin/config/connections/{key}`, `/admin/config/connections/{key}/-/history`, `/admin/config/systems`, `/admin/config/systems/{key}`, `/admin/config/systems/{key}/-/history` | developer, operator, connection-administrator, partner-administrator, secret-administrator |
+| `config.read` | `GET /admin/config`, `/admin/config/connections`, `/admin/config/connections/{key}`, `/admin/config/connections/{key}/-/history`, `/admin/config/systems`, `/admin/config/systems/{key}`, `/admin/config/systems/{key}/-/history`, `/admin/config/export` | developer, operator, connection-administrator, partner-administrator, secret-administrator |
 | `config.connections` | `POST /admin/config/-/mocks`, `/admin/config/connections/{key}/-/save`, `/admin/config/connections/{key}/-/discard`, `/admin/config/connections/{key}/-/activate`, `/admin/config/systems/{key}/-/save`, `/admin/config/systems/{key}/-/discard`, `/admin/config/systems/{key}/-/activate` | connection-administrator |
 | `config.run` | `POST /admin/config/connections/{key}/-/stop`, `/admin/config/connections/{key}/-/start` | operator, connection-administrator |
 | `config.consent` | `POST /admin/config/connections/{key}/-/consent`: a consent and its withdrawal | secret-administrator |
-| `config.import` | the import's door, with no route yet | connection-administrator, partner-administrator |
+| `config.import` | `POST /admin/config/import` | connection-administrator, partner-administrator |
 | `self.read` | `GET /admin/me` | every caller, the key included |
 | `self.password` | `POST /admin/me/password` | a person logged in |
 | `self.logout` | `POST /admin/me/logout` | a session |

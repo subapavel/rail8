@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rail8:schema:environment.connection:1",
+  "title": "Rail8 connection of an environment, schemaVersion 1 (draft — review at hand-over)",
+  "description": "One connection of an environment's configuration, as its export writes it and its import reads it, in a folder that is not a package, at connection/<key>.yaml. It holds references to secrets, never a value, and no state: no stop, revision, version, token, date, author, draft or consent. values are the fields of the adapter's connection form, a secret field as secret://<name>, and the platform's allowedHosts; the adapter's form checks them, not this schema. While mock is present the connection is mocked and its values are kept. secrets is written by the export for the reader: each secret the values name, with its kind and, for a key pair, its public facts; an import decides nothing from it.",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "key", "adapter", "values"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "environment.connection" },
+    "key": { "type": "string", "minLength": 1, "maxLength": 194 },
+    "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9]*$", "maxLength": 64 },
+    "mock": {
+      "type": "object",
+      "required": ["reply"],
+      "additionalProperties": false,
+      "properties": {
+        "reply": { "enum": ["echo", "empty"] },
+        "delay": { "type": "string", "pattern": "^[0-9]{1,5}(ms|s)$" },
+        "fail": { "enum": ["retryable", "invalid"] }
+      }
+    },
+    "values": { "type": "object" },
+    "secrets": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["value", "credentials", "key-pair"] },
+          "algorithm": { "type": "string" },
+          "subject": { "type": "string" },
+          "notAfter": { "type": "string" },
+          "fingerprint": { "type": "string" }
+        }
+      }
+    }
+  }
+}

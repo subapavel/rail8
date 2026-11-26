@@ -1,0 +1,5 @@
+# expect: /instanceName
+schemaVersion: 1
+kind: environment.system
+key: acme/erp
+instanceName: ""

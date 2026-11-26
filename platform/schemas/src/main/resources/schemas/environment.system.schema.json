@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rail8:schema:environment.system:1",
+  "title": "Rail8 system of an environment, schemaVersion 1 (draft — review at hand-over)",
+  "description": "One system of an environment's configuration, as its export writes it and its import reads it, in a folder that is not a package, at system/<key>.yaml: the system's instance name in that environment, 1 to 128 printable characters. It holds no state: no revision, version, token, date, author or draft.",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "key", "instanceName"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "environment.system" },
+    "key": { "type": "string", "minLength": 1, "maxLength": 129 },
+    "instanceName": { "type": "string", "minLength": 1, "maxLength": 128 }
+  }
+}

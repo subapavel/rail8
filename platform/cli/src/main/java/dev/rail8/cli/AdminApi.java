@@ -148,8 +148,21 @@ final class AdminApi {
      * @throws NoAnswer the node could not be reached or did not answer in time, or the TLS handshake failed
      */
     HttpResponse<String> post(String pathAndQuery, byte[] json, Optional<String> bearer, Duration answer) throws NoAnswer {
-        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(url + pathAndQuery)).timeout(answer)
-                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json));
+        return send(HttpRequest.newBuilder(URI.create(url + pathAndQuery)).timeout(answer)
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(json)), bearer);
+    }
+
+    /**
+     * {@code GET <url><pathAndQuery>} with {@code Authorization: Bearer <bearer>} when {@code bearer} is present, waiting at most
+     * {@code answer} for the answer.
+     *
+     * @throws NoAnswer the node could not be reached or did not answer in time, or the TLS handshake failed
+     */
+    HttpResponse<String> get(String pathAndQuery, Optional<String> bearer, Duration answer) throws NoAnswer {
+        return send(HttpRequest.newBuilder(URI.create(url + pathAndQuery)).timeout(answer).GET(), bearer);
+    }
+
+    private HttpResponse<String> send(HttpRequest.Builder request, Optional<String> bearer) throws NoAnswer {
         bearer.ifPresent(t -> request.header("Authorization", "Bearer " + t));
         HttpClient.Builder client = HttpClient.newBuilder().connectTimeout(CONNECT).followRedirects(HttpClient.Redirect.NEVER);
         trust.ifPresent(client::sslContext);

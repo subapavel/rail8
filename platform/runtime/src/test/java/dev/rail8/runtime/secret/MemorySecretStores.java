@@ -73,6 +73,14 @@ public final class MemorySecretStores {
                 .put("subject", a.subject()).put("detail", a.detail())).toList();
     }
 
+    /** Flips a bit of the sealed value of {@code name}, as a writer of the database other than the store would. */
+    public void tamper(String name) {
+        SecretRows.Stored row = db.rows().get(name);
+        byte[] sealed = row.sealed().clone();
+        sealed[0] ^= 1;
+        db.put(new SecretRows.Stored(row.meta(), sealed));
+    }
+
     /** Whether every audit row fails from now on. */
     public void auditFails(boolean fails) {
         db.auditFails(fails);

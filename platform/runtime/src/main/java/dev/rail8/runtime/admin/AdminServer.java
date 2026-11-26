@@ -1552,6 +1552,10 @@ public final class AdminServer {
     private static final String CONSENT_SHAPE = "the body is {\"expect\": \"<etag>\", \"digest\": \"<digest>\" | null}";
     private static final String ACTIVATE_SHAPE = "the body is {\"expect\": \"<etag>\", \"confirm\"?: \"<digest>\", \"note\"?: \"<text>\"}";
     private static final String RUN_SHAPE = "the body is {\"expect\": \"<run>\"}";
+    private static final String IMPORT_SHAPE = "the body is {\"scope\": {\"kind\"?: \"connection\" | \"system\", \"prefix\"?: \"<text>\"},"
+            + " \"files\": [{\"path\", \"text\"}, …], \"expect\"?: \"<digest>\", \"note\"?: \"<text>\"}, with expect unless check=true";
+    /** The most bytes the body of an import takes: the files of one call, as JSON. */
+    static final int IMPORT_BODY_MAX = 4 * 1024 * 1024;
 
     /**
      * The routes of {@code /admin/config}: the environment and its switch of mocks, and for connections and systems the list,
@@ -1567,6 +1571,16 @@ public final class AdminServer {
             config.reread().get().otherwiseEmpty().await();   // a read that failed leaves the answer's nodes saying so
             return Json.of(200, environment(config.store().overview()));
         });
+        admin.get("/admin/config/export", Action.CONFIG_READ, (c, who) -> {
+            ConfigStore.Scope scope = scope(c.request().getParam("kind"), c.request().getParam("prefix"));
+            ConfigStore.Export export = config.store().export(scope);
+            JsonArray files = new JsonArray();
+            export.files().forEach(f -> files.add(new JsonObject().put("path", f.path()).put("text", f.text())));
+            JsonArray refused = new JsonArray();
+            export.refused().forEach(ref -> refused.add(new JsonObject().put("kind", ref.kind().id()).put("key", ref.key())));
+            return Json.of(200, new JsonObject().put("files", files).put("refused", refused));
+        });
+        admin.post("/admin/config/import", Action.CONFIG_IMPORT, IMPORT_BODY_MAX, (c, who) -> configImport(c, who, config));
         for (Ref.Kind kind : Ref.Kind.values()) {
             String base = "/admin/config/" + kind.id() + "s";
             boolean connection = kind == Ref.Kind.CONNECTION;
@@ -1599,6 +1613,46 @@ public final class AdminServer {
             admin.keyed(HttpMethod.POST, base + "/{key}/-/start", Action.CONFIG_RUN, CONFIG_BODY_MAX,
                     (c, who) -> configWrite(c, who, config, kind, Action.CONFIG_RUN, () -> new Change.Start(expect(c, RUN_SHAPE, Set.of()))));
         }
+    }
+
+    /**
+     * {@code POST /admin/config/import?check}: with {@code check=true} the dry run of the body's files over its scope, else their
+     * write, all or none, given the {@code expect} of a dry run. The caller writes the kinds whose write it holds:
+     * {@code config.connections} for both.
+     */
+    private static Reply configImport(RoutingContext ctx, Caller who, Configuration config) {
+        String check = ctx.request().getParam("check");
+        if (check != null && !check.equals("true") && !check.equals("false")) throw new Refused("check is true or false, was '" + check + "'");
+        boolean dryRun = "true".equals(check);
+        JsonObject o = object(ctx, IMPORT_SHAPE, Set.of("scope", "files"), Set.of("expect", "note"));
+        if (!(o.getValue("scope") instanceof JsonObject s) || !Set.of("kind", "prefix").containsAll(s.fieldNames())) throw new Refused(IMPORT_SHAPE);
+        if (s.containsKey("kind") && !(s.getValue("kind") instanceof String) || s.containsKey("prefix") && !(s.getValue("prefix") instanceof String)) {
+            throw new Refused(IMPORT_SHAPE);
+        }
+        ConfigStore.Scope scope = scope(s.getString("kind"), s.getString("prefix"));
+        if (!(o.getValue("files") instanceof JsonArray given)) throw new Refused(IMPORT_SHAPE);
+        List<ConfigStore.File> files = new ArrayList<>();
+        for (Object f : given) {
+            if (!(f instanceof JsonObject file) || !file.fieldNames().equals(Set.of("path", "text"))) throw new Refused(IMPORT_SHAPE);
+            files.add(new ConfigStore.File(text(file, "path", IMPORT_SHAPE), text(file, "text", IMPORT_SHAPE)));
+        }
+        Set<Ref.Kind> writes = who.may(Action.CONFIG_CONNECTIONS, PackageRef.ANY) ? EnumSet.allOf(Ref.Kind.class) : EnumSet.noneOf(Ref.Kind.class);
+        if (dryRun) return Json.of(200, config.store().importCheck(writes, scope, files).json());
+        if (!o.containsKey("expect")) throw new Refused(IMPORT_SHAPE);
+        ConfigStore.Plan written = config.store().importWrite(configActor(ctx, who, Action.CONFIG_IMPORT), writes, scope, files,
+                text(o, "expect", IMPORT_SHAPE), optionalText(o, "note", IMPORT_SHAPE));
+        config.reread().get().otherwiseEmpty().await();   // a read that failed leaves the answer's nodes saying so
+        return Json.of(200, written.json());
+    }
+
+    /** The scope of an export or an import: {@code kind}, {@code connection} or {@code system}, and {@code prefix}, each when given. */
+    private static ConfigStore.Scope scope(String kind, String prefix) {
+        Optional<Ref.Kind> k = kind == null ? Optional.empty() : Optional.of(switch (kind) {
+            case "connection" -> Ref.Kind.CONNECTION;
+            case "system" -> Ref.Kind.SYSTEM;
+            default -> throw new Refused("kind is connection or system, was '" + kind + "'");
+        });
+        return new ConfigStore.Scope(k, Optional.ofNullable(prefix));
     }
 
     /**

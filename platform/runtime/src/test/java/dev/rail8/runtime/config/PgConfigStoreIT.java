@@ -178,6 +178,11 @@ class PgConfigStoreIT extends ConfigStoreContract {
     }
 
     @Override
+    void tamperSecret(String name) {
+        sql("update secrets set sealed = set_byte(sealed, 0, get_byte(sealed, 0) # 1) where name = $1", name);
+    }
+
+    @Override
     void deleteRow(Ref ref) {
         sql("delete from config_history where kind = $1 and key = $2", ref.kind().id(), ref.key());
         sql("delete from config_objects where kind = $1 and key = $2", ref.kind().id(), ref.key());

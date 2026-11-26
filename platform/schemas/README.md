@@ -9,6 +9,8 @@ Published JSON Schemas (draft 2020-12) for the v1 file model, each carrying `sch
 | `endpoint` | `endpoints/<id>.yaml` | `src/main/resources/schemas/endpoint.schema.json` |
 | `flow` | `flows/<id>.yaml` | `src/main/resources/schemas/flow.schema.json` |
 | `test` | `flows/<id>.test.yaml` | `src/main/resources/schemas/test.schema.json` |
+| `environment.connection` | `connection/<key>.yaml` of an environment's configuration | `src/main/resources/schemas/environment.connection.schema.json` |
+| `environment.system` | `system/<key>.yaml` of an environment's configuration | `src/main/resources/schemas/environment.system.schema.json` |
 
 The jar packages them under `schemas/`; `dev.rail8.schemas.Schemas` validates a document
 (`Schemas.forKind(doc.getString("kind")).validate(doc)` → `Report` with JSON-pointer paths),
