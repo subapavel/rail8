@@ -70,7 +70,7 @@ Every task issue carries one class label (an `owner-question` issue carries none
 | --- | --- | --- | --- | --- |
 | `class:A` mechanical | docs, CI scripts, fixtures, mock behaviour, compose files | Sonnet 5.5, medium | Opus 5.5, medium | no |
 | `class:B` standard | a component with its mock or a step behind an agreed contract, a fix in existing code, the admin API, the CLI | Opus 5.5, high | Opus 5.5, high | no |
-| `class:C` hard | a new contract, public types in `rail8-api`, JSON Schemas, storage format, security, batcher, admission, `BlobStore`, concurrency, leases | design: Opus 5.5, xhigh; build: Opus 5.5, high | Opus 5.5, xhigh | yes, `design-it-twice` |
+| `class:C` hard | a new contract, public types in `rail8-api`, JSON Schemas, storage format, security, batcher, admission, `BlobStore`, concurrency, leases | design: Fable 5.2, xhigh; build: Opus 5.5, high | Opus 5.5, xhigh | yes, `design-it-twice` |
 
 Whoever opens the issue sets the class; when it is unclear, the owner-proxy decides. When a task
 turns out harder than its class, raise the label and say why in the issue. Never lower it mid-task.

@@ -59,9 +59,9 @@ issues, on an issue that touches a different part of the code than the worker al
    - `title`: `dispatcher-worker: #N <stream> <issue title>`
    - `tags`: `["dispatcher-worker", "stream:<stream>"]`
    - `model` and `effort` from the class: `class:A` `claude-sonnet-5-5`, medium; `class:B`
-     `claude-opus-5-5`, high; `class:C` `claude-opus-5-5`, xhigh while the issue has
-     no label `design-agreed` (the session designs and stops), and high once it has it (the
-     session builds from the agreed design).
+     `claude-opus-5-5`, high; `class:C` `claude-fable-5-2`, xhigh while the issue has
+     no label `design-agreed` (the session designs and stops), and `claude-opus-5-5`, high once
+     it has it (the session builds from the agreed design).
    - `prompt` (replace N):
 
      > Solve issue #N in subapavel/rail8 following AGENTS.md on main. The owner is away: do not
