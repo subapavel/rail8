@@ -56,7 +56,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * The cases every component passes, real or mock: both must pass the same suite. A component's test extends this class
@@ -149,7 +148,7 @@ public abstract class ComponentContract {
     /**
      * The cookies of the node's UI that the consumer under test keeps out of a flow: cut from a delivery's {@code cookie}
      * before its handler sees it, and never sent back from a reply's {@code set-cookie}. None by default, and the case that
-     * checks them is skipped: a consumer that takes requests where the UI's cookies can arrive, such as {@code http}, and the
+     * checks them has nothing to check: a consumer that takes requests where the UI's cookies can arrive, such as {@code http}, and the
      * mock that stands in for it name them.
      */
     protected Set<String> platformCookies() { return Set.of(); }
@@ -572,7 +571,7 @@ public abstract class ComponentContract {
     @Test
     public void thePlatformsCookiesNeitherReachTheHandlerNorLeaveInAReplyAndOtherCookiesPass() {
         List<String> names = platformCookies().stream().sorted().toList();
-        assumeFalse(names.isEmpty(), "the consumer keeps no cookies out of a flow");
+        if (names.isEmpty()) return;   // the consumer keeps no cookies out of a flow: nothing to check
         Component component = component();
         List<Envelope> seen = new CopyOnWriteArrayList<>();
         Consumer consumer = component.consumer(inbound(), e -> {
