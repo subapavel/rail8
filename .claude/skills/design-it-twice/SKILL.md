@@ -63,16 +63,16 @@ cloud environment over this repository, read-only.
 2. Tell the owner at once. The daily overview lists every issue that still waits with `codex-wanted`.
 3. The owner pastes the prompt into Codex. Codex posts its answer as a comment on the issue; when
    it does not, the owner pastes the answer instead.
-4. Read the answer. Take each objection, or turn it down with a reason in the issue. Remove the
-   label and go on.
-5. The wait ends at the second morning's daily overview (08:00 Prague time) after the prompt was
-   posted, so the owner has seen the prompt in one overview and had a whole day for it. When no
-   answer has come by then, an agent on a different Claude model than yours argues against the
-   recommendation instead. Say so in the issue, remove the label and go on. An answer that
-   arrives later but before the merge is still handled as in step 4.
-6. A design of security, of a storage format or of a public contract is never merged without the
-   answer from Codex, and its build does not start before it. The other Claude model may argue
-   earlier, so that the design is ready; the label stays and the merge waits for the owner.
+4. Read the answer. Take each objection, or turn it down with a reason in the issue.
+5. When the answer had any objection, revise the design, let the owner-proxy judge the revision,
+   and post a new prompt as in step 1. That prompt asks Codex to check that each of its earlier
+   findings is resolved, to look for what is still wrong, and to open its answer with
+   `No objections` or `Revise`. Repeat until an answer opens with `No objections`; then remove
+   the label and go on.
+6. A design is agreed, merged and built only after an answer from Codex without objections. No
+   deadline ends the wait. While you wait, an agent on a different Claude model than yours may
+   argue against the recommendation, so that the design is ready sooner; the label stays, and
+   the daily overview lists the issue until the owner has run the prompt.
 7. The review of a design of security is not published. Its prompt ends with `Do not post your
    review anywhere; give it as your answer.` in place of the line about the comment, and has no
    sentence that allows one. The owner hands the answer to the control session, which keeps it
