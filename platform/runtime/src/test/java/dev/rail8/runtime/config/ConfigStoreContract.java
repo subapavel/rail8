@@ -61,9 +61,9 @@ abstract class ConfigStoreContract {
     /** The started secret store of node {@code node} with the key variables {@code env}, over the test's database. */
     abstract SecretStore secretStore(String node, Map<String, String> env, FakeClock clock, FakeTimer timer);
 
-    /** The configuration store of a node over the test's database. */
+    /** The configuration store of a node over the test's database, whose files and stored bodies are those of {@code files}. */
     abstract ConfigObjects configStore(SecretStore secrets, Function<String, Optional<ConfigObjects.Adapter>> adapters, Clock clock,
-                                       RandomGenerator random, Consumer<String> warn);
+                                       RandomGenerator random, Consumer<String> warn, ConfigFiles files);
 
     /** Records the deployed definition of system {@code system}, as a deploy writes it. */
     abstract void deploySystem(String system, JsonObject definition);
@@ -184,6 +184,8 @@ abstract class ConfigStoreContract {
         final FakeTimer timer = new FakeTimer(clock);
         final Scripted random;
         final List<String> warnings = new CopyOnWriteArrayList<>();
+        /** The kinds and formats of the files this node reads and writes. */
+        ConfigFiles files = ConfigFiles.STANDARD;
         SecretStore secrets;
         ConfigObjects store;
         StoredEnvironment env;
@@ -231,6 +233,15 @@ abstract class ConfigStoreContract {
         return node(id, K1, null);
     }
 
+    /** A node whose files and stored bodies are those of {@code files}. */
+    Node node(String id, ConfigFiles files) {
+        Node n = new Node(id, id.hashCode() * 7919L + nodes.size());
+        n.files = files;
+        start(n, K1, null);
+        nodes.add(n);
+        return n;
+    }
+
     void start(Node n, byte[] key, byte[] previous) {
         Map<String, String> env = new HashMap<>();
         env.put(StoreKey.VARIABLE, Base64.getEncoder().encodeToString(key));
@@ -239,7 +250,7 @@ abstract class ConfigStoreContract {
         n.store = configStore(n.secrets, name -> Optional.ofNullable(ADAPTERS.get(name)), n.clock, n.random, text -> {
             n.warnings.add(text);
             captured.add(text);
-        });
+        }, n.files);
     }
 
     /** Starts {@code n} again with {@code key} and {@code previous}, as a node restarted with new variables. */
@@ -1714,5 +1725,80 @@ abstract class ConfigStoreContract {
         assertEquals("https://partner.example/api", read(a, API).json().getJsonObject("inForce").getJsonObject("values").getString("url"));
         activate(a, FILES);
         assertEquals("unchanged", object(dryRun(a, EVERYTHING, exported(a, EVERYTHING).files()), FILES).getString("change"));
+    }
+
+    @Test
+    void anImportRunTwiceAroundAConsentLeavesTheConsentedDraftAsItIsAndItsActivationGoesThrough() {
+        Node a = node("a");
+        partnerSecrets(a);
+        inForce(a, FILES, PLAIN);
+        List<ConfigStore.File> files = List.of(
+                file(API, "adapter: web\nvalues:\n  url: https://partner.example/api\n  token: secret://partner.token\n  pin: secret://partner.pin\n  inbox: /in\n"),
+                plainFile(FILES));
+        JsonObject first = imported(a, EVERYTHING, files, Optional.empty());
+        assertEquals("created", object(first, API).getString("change"));
+        assertFalse(object(first, API).getBoolean("inForce"));
+        assertEquals("unchanged", object(first, FILES).getString("change"));
+        assertTrue(object(first, FILES).getBoolean("inForce"), "an object in force as its file has it is left out of the activations");
+        refused(409, "consent-needed", () -> activate(a, API));
+
+        String consented = consent(a, SECRETS, API).etag();
+        JsonObject second = imported(a, EVERYTHING, files, Optional.empty());
+        assertEquals("unchanged", object(second, API).getString("change"));
+        assertFalse(object(second, API).getBoolean("inForce"), "the consented draft still waits to be activated");
+        assertEquals(consented, object(second, API).getString("etag"), "the second run does not touch the consented draft");
+        assertTrue(object(second, FILES).getBoolean("inForce"));
+        activate(a, API);
+        assertEquals("https://partner.example/api", read(a, API).json().getJsonObject("inForce").getJsonObject("values").getString("url"));
+        JsonObject third = dryRun(a, EVERYTHING, files);
+        assertTrue(object(third, API).getBoolean("inForce") && object(third, FILES).getBoolean("inForce"));
+    }
+
+    /** Format 2 of a connection keeps every value of format 1 and puts {@code /v2} before its path. */
+    static final FormatUpgrade PATH_V2 = new FormatUpgrade() {
+        @Override
+        public int from() {
+            return 1;
+        }
+
+        @Override
+        public com.fasterxml.jackson.databind.JsonNode apply(com.fasterxml.jackson.databind.JsonNode body) {
+            com.fasterxml.jackson.databind.node.ObjectNode copy = body.deepCopy();
+            com.fasterxml.jackson.databind.node.ObjectNode values = (com.fasterxml.jackson.databind.node.ObjectNode) copy.get("values");
+            values.put("path", "/v2" + values.path("path").asText(""));
+            return copy;
+        }
+    };
+
+    /** The standard files with a connection of formats 1 and 2. */
+    static final ConfigFiles TWO_FORMATS = new ConfigFiles(List.of(
+            new ConfigFiles.FileKind("environment.connection", Ref.Kind.CONNECTION,
+                    Map.of(1, dev.rail8.schemas.Schemas.ENVIRONMENT_CONNECTION::validate, 2, document -> new dev.rail8.schemas.Schemas.Report(true, List.of())),
+                    List.of(PATH_V2)),
+            new ConfigFiles.FileKind("environment.system", Ref.Kind.SYSTEM, Map.of(1, dev.rail8.schemas.Schemas.ENVIRONMENT_SYSTEM::validate), List.of())));
+
+    @Test
+    void aBodyStoredInAnOlderFormatIsReadThroughTheChainAndOneInANewerFormatIsLeftAsItIs() {
+        Node a = node("a");
+        inForce(a, API, with(PLAIN, "path", "/old"));
+        Node b = node("b", TWO_FORMATS);
+
+        ConfigStore.InForce held = b.store.state(ConfigStore.Held.nothing()).changed().getFirst();
+        assertEquals(2, held.format());
+        assertEquals("/v2/old", held.body().getJsonObject("values").getString("path"));
+        assertEquals("/v2/old", read(b, API).json().getJsonObject("inForce").getJsonObject("values").getString("path"));
+        List<ConfigStore.File> files = exported(b, EVERYTHING).files();
+        assertTrue(files.getFirst().text().startsWith("schemaVersion: 2\n"), files.getFirst().text());
+        assertTrue(files.getFirst().text().contains("path: /v2/old"), files.getFirst().text());
+        assertEquals("unchanged", object(dryRun(b, EVERYTHING, files), API).getString("change"));
+
+        save(b, API, with(PLAIN, "path", "/v2/new"));
+        activate(b, API);
+        ConfigStore.InForce newer = a.store.state(ConfigStore.Held.nothing()).changed().getFirst();
+        assertEquals(2, newer.format(), "a node that reads format 1 passes a newer one on as it is, for its environment to leave out");
+        assertEquals("/v2/new", newer.body().getJsonObject("values").getString("path"));
+        ConfigStore.Export e = exported(a, EVERYTHING);
+        assertEquals(List.of(), e.files());
+        assertEquals(List.of(API), e.refused());
     }
 }

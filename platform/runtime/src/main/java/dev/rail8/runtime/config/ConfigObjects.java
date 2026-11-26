@@ -72,8 +72,6 @@ public final class ConfigObjects implements ConfigStore {
         }
     }
 
-    /** The format of every body this store writes. */
-    static final int FORMAT = 1;
     /** The channel every node listens on; the payload is the new generation. */
     public static final String CHANNEL = "rail8_config";
 
@@ -91,8 +89,6 @@ public final class ConfigObjects implements ConfigStore {
     /** The rows a batch of binding again binds at most. */
     static final int BATCH = 100;
 
-    /** The files of export and import. */
-    private static final ConfigFiles FILES = ConfigFiles.STANDARD;
     private static final String REFERENCE = "secret://";
     private static final String ALLOWED_HOSTS = "allowedHosts";
     private static final Pattern SECRET_NAME = Pattern.compile("[a-z0-9][a-z0-9._-]{0,127}");
@@ -109,6 +105,8 @@ public final class ConfigObjects implements ConfigStore {
     private final Clock clock;
     private final RandomGenerator random;
     private final Consumer<String> warn;
+    /** The kinds of the files of export and import, and the formats of the bodies this node reads and writes. */
+    private final ConfigFiles files;
     private volatile Limits limits = new Limits(MAX_CONNECTIONS, MAX_SYSTEMS, MAX_HISTORY, KEPT_ACTIVATIONS);
 
     /** The limits of the objects' counts and of each object's history, lower in a test than in production. */
@@ -116,6 +114,13 @@ public final class ConfigObjects implements ConfigStore {
 
     ConfigObjects(ConfigRows rows, SecretStore secrets, Function<String, Optional<Adapter>> adapters, Clock clock, RandomGenerator random,
                   Consumer<String> warn) {
+        this(rows, secrets, adapters, clock, random, warn, ConfigFiles.STANDARD);
+    }
+
+    /** The store whose bodies and files are of the kinds and formats of {@code files}. */
+    ConfigObjects(ConfigRows rows, SecretStore secrets, Function<String, Optional<Adapter>> adapters, Clock clock, RandomGenerator random,
+                  Consumer<String> warn, ConfigFiles files) {
+        this.files = Objects.requireNonNull(files, "files");
         this.rows = Objects.requireNonNull(rows, "rows");
         this.secrets = Objects.requireNonNull(secrets, "secrets");
         this.adapters = Objects.requireNonNull(adapters, "adapters");
@@ -209,9 +214,8 @@ public final class ConfigObjects implements ConfigStore {
                 Optional<ConnectionState.Stop> stopped = r.stoppedAt == null ? Optional.empty()
                         : Optional.of(new ConnectionState.Stop(r.stoppedBy, r.stoppedAt));
                 if (holding == null || holding.activation() != r.activation || !holding.stopped().equals(stopped)) {
-                    boolean upgraded = r.body != null && !r.body.getBoolean("removed", false);
-                    changed.add(new InForce(r.ref, r.activation, upgraded ? FILES.newest(r.ref.kind()) : r.format,
-                            upgraded ? FILES.upgrade(r.ref.kind(), r.format, r.body) : r.body, stopped));
+                    boolean read = r.format == null || r.format <= files.newest(r.ref.kind());   // a newer format is passed on, for the environment to leave out
+                    changed.add(new InForce(r.ref, r.activation, read ? files.newest(r.ref.kind()) : r.format, bodyOf(r), stopped));
                 }
             }
             Set<Ref> gone = new HashSet<>(held.objects().keySet());
@@ -252,8 +256,8 @@ public final class ConfigObjects implements ConfigStore {
             }
             Optional<Instant> from = more ? Optional.of(page.getLast().at) : Optional.empty();
             Set<String> names = new TreeSet<>();
-            for (ConfigRows.History h : tx.activations(ref)) names.addAll(secretNames(h.body));
-            tx.row(ref, false).ifPresent(r -> names.addAll(secretNames(r.body)));
+            for (ConfigRows.History h : tx.activations(ref)) names.addAll(secretNames(current(h.ref, h.format, h.body)));
+            tx.row(ref, false).ifPresent(r -> names.addAll(secretNames(bodyOf(r))));
             List<ConfigRows.SecretAct> acts = names.isEmpty() ? List.of() : tx.secretActs(names, from, until);
             List<HistoryRow> items = new ArrayList<>();
             int a = 0;
@@ -331,16 +335,16 @@ public final class ConfigObjects implements ConfigStore {
             } else {
                 r = row.get().copy();
             }
-            JsonObject from = r.draft != null ? r.draft : inForceBody(r);
+            JsonObject from = r.draft != null ? draftOf(r) : inForceBody(r);
             if (sameAsInForce(r, draft)) {
                 r.dropDraft();
             } else {
                 if (r.draft == null) {
                     r.draftId = draw(tx, drawn);
-                } else if (!pairs(r.ref, r.draft).equals(pairs(r.ref, draft))) {
+                } else if (!pairs(r.ref, draftOf(r)).equals(pairs(r.ref, draft))) {
                     r.dropConsent();
                 }
-                r.draftFormat = FORMAT;
+                r.draftFormat = files.newest(ref.kind());
                 r.draft = draft.copy();
                 r.draftAt = now;
                 r.draftBy = actor.who().name();
@@ -358,7 +362,8 @@ public final class ConfigObjects implements ConfigStore {
                 RefusalCode.NOT_FOUND, "version " + g.fromVersion() + " of " + ref + " is not kept in its history",
                 values(ref).put("version", g.fromVersion())));
         if (kept.body == null) return draft(actor, ref, g.expect(), null, "save");
-        JsonObject body = ref.kind() == Ref.Kind.CONNECTION ? connectionBody(kept.body) : systemBody(kept.body.getString("instanceName"));
+        JsonObject read = current(ref, kept.format, kept.body);
+        JsonObject body = ref.kind() == Ref.Kind.CONNECTION ? connectionBody(read) : systemBody(read.getString("instanceName"));
         return draft(actor, ref, g.expect(), body, "save");
     }
 
@@ -370,7 +375,7 @@ public final class ConfigObjects implements ConfigStore {
             expect(tx, ref, row, expect);
             if (row.isEmpty() || row.get().draft == null) throw noDraft(ref);
             ConfigRows.ObjectRow r = row.get().copy();
-            JsonObject from = r.draft;
+            JsonObject from = draftOf(r);
             r.dropDraft();
             r.revision++;
             tx.put(r);
@@ -438,7 +443,7 @@ public final class ConfigObjects implements ConfigStore {
         Instant now = now();
         return rows.write(tx -> {
             Optional<ConfigRows.ObjectRow> peeked = tx.row(ref, false);
-            Map<String, Set<Secret.Kind>> uses = peeked.map(r -> secretUses(r.draft)).orElse(Map.of());
+            Map<String, Set<Secret.Kind>> uses = peeked.map(r -> secretUses(draftOf(r))).orElse(Map.of());
             List<String> problems = ref.kind() == Ref.Kind.CONNECTION && peeked.isPresent() ? tx.replaceUses(ref, uses) : List.of();
             SecretStore.Binder binder = binder(tx);
             ConfigRows.Head head = tx.head(true);
@@ -463,6 +468,7 @@ public final class ConfigObjects implements ConfigStore {
             }
             JsonObject from = inForceBody(r);
             JsonObject body = removal ? null : r.draft.copy();
+            Integer format = removal ? null : r.draftFormat;
             if (body != null) {
                 long bytes = Jcs.bytes(body).length;
                 if (tx.bodyBytes(ref) + bytes > MAX_BODIES_BYTES) {
@@ -473,7 +479,7 @@ public final class ConfigObjects implements ConfigStore {
             Set<Long> drawn = new HashSet<>();
             r.version++;
             r.activation = draw(tx, drawn);
-            r.format = body == null ? null : FORMAT;
+            r.format = format;
             r.body = body;
             SecretStore.Binding binding = bind(binder, Jcs.bytes(bodyArray(r.ref, r.incarnation, r.version, r.activation, r.format, r.body)));
             r.keyId = binding.keyId();
@@ -511,7 +517,7 @@ public final class ConfigObjects implements ConfigStore {
             confirm(ref, used.stream().map(u -> new Unserved(u, List.of(new JsonObject().put("lacks", "removed")))).toList(), confirm);
             return;
         }
-        Body body = Body.of(r.draft);
+        Body body = Body.of(draftOf(r));
         adapterDiffers(tx, ref, body.adapter());
         Adapter adapter = adapter(body.adapter());
         if (body.mock() != null) {
@@ -663,13 +669,13 @@ public final class ConfigObjects implements ConfigStore {
             List<Ref> refused = new ArrayList<>();
             for (ConfigRows.ObjectRow r : inScope(tx, scope)) {
                 if (r.version == 0 || r.body == null) continue;
-                if (!verifies(r)) {
+                if (!verifies(r) || r.format > this.files.newest(r.ref.kind())) {
                     refused.add(r.ref);
                     continue;
                 }
-                JsonObject body = FILES.upgrade(r.ref.kind(), r.format, r.body);
+                JsonObject body = bodyOf(r);
                 Optional<Settings> form = form(r.ref, body);
-                files.add(new File(ConfigFiles.path(r.ref), FILES.text(r.ref, body, form, secretsBlock(form, body, listed))));
+                files.add(new File(ConfigFiles.path(r.ref), this.files.text(r.ref, body, form, secretsBlock(form, body, listed))));
             }
             return new Export(files, refused);
         });
@@ -726,7 +732,7 @@ public final class ConfigObjects implements ConfigStore {
                     }
                     JsonObject from = inForceBody(r);
                     r.draftId = draw(tx, drawn);
-                    r.draftFormat = FORMAT;
+                    r.draftFormat = this.files.newest(n.ref.kind());
                     r.draft = n.body.copy();
                     r.draftAt = now;
                     r.draftBy = actor.who().name();
@@ -791,7 +797,7 @@ public final class ConfigObjects implements ConfigStore {
         TreeMap<Ref, Named> named = new TreeMap<>(BY_KIND_AND_KEY);
         for (File f : files) {
             digests.add(Map.of("path", f.path(), "sha256", HEX.formatHex(sha256(f.text()))));
-            ConfigFiles.Read read = FILES.read(f.path(), f.text());
+            ConfigFiles.Read read = this.files.read(f.path(), f.text());
             read.problems().forEach(problems::add);
             if (read.ref().isEmpty()) continue;
             Ref ref = read.ref().get();
@@ -828,8 +834,8 @@ public final class ConfigObjects implements ConfigStore {
             }
             if (n.body == null) continue;
             JsonObject mine = normal(n.ref, n.body);
-            JsonObject draft = r == null || r.draft == null ? null : normal(n.ref, stored(r.ref, r.draftFormat, r.draft));
-            JsonObject inForce = r == null || r.body == null ? null : normal(n.ref, stored(r.ref, r.format, r.body));
+            JsonObject draft = r == null || r.draft == null ? null : normal(n.ref, draftOf(r));
+            JsonObject inForce = r == null || r.body == null ? null : normal(n.ref, bodyOf(r));
             JsonObject base = draft != null ? draft : inForce;
             n.change = base == null ? "created" : same(base, mine) ? "unchanged" : "changed";
             n.inForce = inForce != null && same(inForce, mine);
@@ -948,9 +954,24 @@ public final class ConfigObjects implements ConfigStore {
         return form(ref, body).map(f -> ConfigFiles.withoutDefaults(body, f)).orElse(body);
     }
 
-    /** A stored body of {@code format}, a draft's or one in force, in the newest format. */
-    private static JsonObject stored(Ref ref, int format, JsonObject body) {
-        return body.getBoolean("removed", false) ? body : FILES.upgrade(ref.kind(), format, body);
+    /**
+     * {@code body}, stored in {@code format}, in the newest format this node reads: every reading of a stored body goes through the
+     * chain of upgrades, but the checks of its binding, which read its stored bytes. A removal, or a format newer than the node
+     * reads, as it is.
+     */
+    private JsonObject current(Ref ref, Integer format, JsonObject body) {
+        if (body == null || body.getBoolean("removed", false) || format == null || format > files.newest(ref.kind())) return body;
+        return files.upgrade(ref.kind(), format, body);
+    }
+
+    /** The body in force of {@code r} in the newest format, null when none is. */
+    private JsonObject bodyOf(ConfigRows.ObjectRow r) {
+        return current(r.ref, r.format, r.body);
+    }
+
+    /** The draft of {@code r} in the newest format, null when none waits. */
+    private JsonObject draftOf(ConfigRows.ObjectRow r) {
+        return current(r.ref, r.draftFormat, r.draft);
     }
 
     private static boolean same(JsonObject a, JsonObject b) {
@@ -1324,15 +1345,15 @@ public final class ConfigObjects implements ConfigStore {
     /** Every pair that a verified version of the connection sent: the version in force and each activation of its history. */
     private Set<Send> consented(ConfigRows.Tx tx, ConfigRows.ObjectRow r) {
         Set<Send> consented = new HashSet<>();
-        if (verifies(r)) consented.addAll(pairs(r.ref, r.body));
-        for (ConfigRows.History h : tx.activations(r.ref)) if (verifies(h)) consented.addAll(pairs(h.ref, h.body));
+        if (verifies(r)) consented.addAll(pairs(r.ref, bodyOf(r)));
+        for (ConfigRows.History h : tx.activations(r.ref)) if (verifies(h)) consented.addAll(pairs(h.ref, current(h.ref, h.format, h.body)));
         return consented;
     }
 
     /** The pairs the draft of {@code r} needs consent for, with their digest; empty when it needs none. */
     private Optional<Needed> needed(ConfigRows.Tx tx, ConfigRows.ObjectRow r) {
         if (r.ref.kind() != Ref.Kind.CONNECTION || r.draft == null) return Optional.empty();
-        return Servers.needs(new Sends(new TreeSet<>(), pairs(r.ref, r.draft)), consented(tx, r));
+        return Servers.needs(new Sends(new TreeSet<>(), pairs(r.ref, draftOf(r))), consented(tx, r));
     }
 
     /** Whether the row's draft waits for {@code needs}: any draft for its activation, one whose consent is not given for its consent. */
@@ -1456,7 +1477,7 @@ public final class ConfigObjects implements ConfigStore {
             json.put("system", ref.key().substring(0, ref.key().lastIndexOf('/')));
             deployed.ifPresent(a -> json.put("deployedAdapter", a));
         }
-        Optional<String> adapterName = connection ? row.flatMap(r -> Optional.ofNullable(r.body).or(() -> Optional.ofNullable(r.draft)))
+        Optional<String> adapterName = connection ? row.flatMap(r -> Optional.ofNullable(bodyOf(r)).or(() -> Optional.ofNullable(draftOf(r))))
                 .flatMap(b -> Optional.ofNullable(b.getString("adapter"))).or(() -> deployed) : Optional.empty();
         adapterName.ifPresent(a -> json.put("adapter", a));
         Optional<Adapter> adapter = adapterName.flatMap(adapters);
@@ -1471,7 +1492,7 @@ public final class ConfigObjects implements ConfigStore {
             if (connection) {
                 json.put("run", run(r));
                 json.put("stopped", r.stoppedAt == null ? null : new JsonObject().put("at", r.stoppedAt.toString()).put("by", r.stoppedBy));
-                json.put("secrets", secretsView(adapter, r.draft != null ? r.draft : r.body));
+                json.put("secrets", secretsView(adapter, r.draft != null ? draftOf(r) : bodyOf(r)));
             }
         }
         JsonArray nodes = new JsonArray();
@@ -1501,7 +1522,7 @@ public final class ConfigObjects implements ConfigStore {
     /** The version in force as the screen shows it: a connection's adapter, values and mock, or a system's instance name. */
     private JsonObject inForceView(ConfigRows.Tx tx, ConfigRows.ObjectRow r) {
         JsonObject inForce = new JsonObject().put("version", r.version).put("removed", r.body == null);
-        if (r.body != null) bodyView(r.ref, r.body, inForce);
+        if (r.body != null) bodyView(r.ref, bodyOf(r), inForce);
         inForce.put("activatedAt", r.activatedAt.toString()).put("activatedBy", r.activatedBy)
                 .put("generation", tx.version(r.ref, r.version).map(h -> h.generation).orElse(null))
                 .put("binding", r.keyId != null && verifies(r) ? "ok" : "fails");
@@ -1513,17 +1534,17 @@ public final class ConfigObjects implements ConfigStore {
     private JsonObject draftView(ConfigRows.Tx tx, ConfigRows.ObjectRow r, Optional<Adapter> adapter) {
         boolean removed = r.draft.getBoolean("removed", false);
         JsonObject draft = new JsonObject().put("removed", removed);
-        if (!removed) bodyView(r.ref, r.draft, draft);
-        draft.put("savedAt", r.draftAt.toString()).put("savedBy", r.draftBy).put("changes", diff(inForceBody(r), r.draft));
+        if (!removed) bodyView(r.ref, draftOf(r), draft);
+        draft.put("savedAt", r.draftAt.toString()).put("savedBy", r.draftBy).put("changes", diff(inForceBody(r), draftOf(r)));
         if (r.ref.kind() != Ref.Kind.CONNECTION) return draft;
         JsonArray problems = new JsonArray();
         if (!removed && !r.draft.containsKey("mock") && adapter.isPresent()) {
-            Body body = Body.of(r.draft);
-            Map<String, Secret.Kind> kinds = tx.kinds(secretUses(r.draft).keySet());
+            Body body = Body.of(draftOf(r));
+            Map<String, Secret.Kind> kinds = tx.kinds(secretUses(draftOf(r)).keySet());
             lines(adapter.get(), body, kinds).values().forEach(l -> l.forEach(problems::add));
         }
         draft.put("problems", problems);
-        draft.put("sends", sends(pairs(r.ref, r.draft)));
+        draft.put("sends", sends(pairs(r.ref, draftOf(r))));
         Optional<Needed> needed = needed(tx, r);
         draft.put("consent", needed.map(n -> {
             boolean given = r.consent != null && n.hex().equals(HEX.formatHex(r.consent)) && consentVerifies(r);
@@ -1644,12 +1665,12 @@ public final class ConfigObjects implements ConfigStore {
 
     private JsonObject inForceBody(ConfigRows.ObjectRow r) {
         if (r.version == 0 || r.body == null) return r.version == 0 ? new JsonObject() : new JsonObject().put("removed", true);
-        return r.body;
+        return bodyOf(r);
     }
 
-    private static boolean sameAsInForce(ConfigRows.ObjectRow r, JsonObject draft) {
+    private boolean sameAsInForce(ConfigRows.ObjectRow r, JsonObject draft) {
         if (draft.getBoolean("removed", false)) return r.body == null;
-        return r.body != null && Jcs.write(r.body).equals(Jcs.write(draft));
+        return r.body != null && Jcs.write(bodyOf(r)).equals(Jcs.write(draft));
     }
 
     /** The fields that differ between two bodies, each {@code {field, from, to}}: a connection's values one by one. */
