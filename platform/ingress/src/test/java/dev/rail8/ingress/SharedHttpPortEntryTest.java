@@ -53,7 +53,7 @@ class SharedHttpPortEntryTest {
         port.mount("http", new Inbound("orders", Optional.empty(), Map.of("address", "/orders"), 1024), req -> {
             connections.add(req.connection());
             read.set(port.presented(req));
-            if (refusing.get() != null) refusing.get().answer(req);
+            if (refusing.get() != null) port.refuse(req, refusing.get());
             else req.end().onComplete(ended -> req.response().end("taken"));
         }).await();
     }
@@ -165,10 +165,28 @@ class SharedHttpPortEntryTest {
     }
 
     @Test
+    void eachReasonIsAnsweredWithItsStatusAndCode() {
+        Map<Refused.Reason, String> expected = Map.of(
+                Refused.Reason.UNKNOWN, "401 unknown-caller", Refused.Reason.NOT_ALLOWED, "403 not-allowed",
+                Refused.Reason.SENDER_NEEDED, "400 sender-needed", Refused.Reason.TOO_MANY, "429 too-many",
+                Refused.Reason.BUSY, "503 busy", Refused.Reason.TLS_REQUIRED, "403 tls-required");
+        for (Refused.Reason reason : Refused.Reason.values()) {
+            boolean waits = reason == Refused.Reason.TOO_MANY || reason == Refused.Reason.BUSY;
+            Refused r = new Refused(reason, waits ? Optional.of(Duration.ofSeconds(4)) : Optional.empty());
+            refusing.set(r);
+            String answer = send(null);
+            assertEquals(expected.get(reason), answer.substring(0, answer.indexOf(' ')) + " " + r.code(), answer);
+            assertTrue(answer.endsWith("{\"code\":\"" + r.code() + "\",\"error\":\"" + r.getMessage() + "\"}"), answer);
+            assertEquals(waits, answer.contains("retry-after=4"), answer);
+            assertEquals(reason == Refused.Reason.UNKNOWN, !answer.contains("www-authenticate=null"), answer);
+        }
+    }
+
+    @Test
     void aRefusalOfAnAnswerAlreadyBegunLeavesItAlone() {
         port.mount("http", new Inbound("begun", Optional.empty(), Map.of("address", "/begun"), 1024), req -> {
             req.response().setChunked(true).write("begun");
-            new Refused(Refused.Reason.NOT_ALLOWED, Optional.empty()).answer(req);
+            port.refuse(req, new Refused(Refused.Reason.NOT_ALLOWED, Optional.empty()));
             req.response().end(" and ended");
         }).await();
         Future<String> answer = client.request(HttpMethod.POST, port.port(), "127.0.0.1", "/http/begun")

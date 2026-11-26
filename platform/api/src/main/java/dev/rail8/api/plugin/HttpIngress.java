@@ -4,6 +4,7 @@ import dev.rail8.api.Component;
 import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Inbound;
 import dev.rail8.api.Presented;
+import dev.rail8.api.Refused;
 import dev.rail8.api.settings.Field;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -88,6 +89,20 @@ public interface HttpIngress {
      */
     default Presented presented(HttpServerRequest request) {
         return new Presented.Nothing(Presented.Via.of("", false));
+    }
+
+    /**
+     * Ends a request this port handed to a mount with the whole HTTP answer to {@code refused}: its status (401 with
+     * {@code WWW-Authenticate: Basic} for an unknown caller, 403, 400, 429 or 503), {@code Retry-After} in whole seconds when
+     * it waits, and the body {@code {"code": …, "error": …}} with the fixed text of its code. A request with a body has its
+     * connection closed, or its HTTP/2 stream reset, so the refused body is never read. A request whose answer was already
+     * begun is left as it is. The node's port overrides it; the default throws an {@link IllegalStateException}, since a
+     * port that is no node's hands no request to a mount.
+     *
+     * @since 0.4
+     */
+    default void refuse(HttpServerRequest request, Refused refused) {
+        throw new IllegalStateException("this HTTP port answers no refusal: it hands no request to a mount");
     }
 
     /**

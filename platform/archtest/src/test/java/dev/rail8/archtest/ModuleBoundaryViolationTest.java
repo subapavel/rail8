@@ -8,6 +8,8 @@ import dev.rail8.cli.violation.CliNamesTheMockAndTheHttpComponent;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.util.Set;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,6 +39,22 @@ class ModuleBoundaryViolationTest {
 
     @Test void apiDependingOnCoreIsCaught() { assertFails(Rules.API_DEPENDS_ON_NO_OTHER_MODULE, "ApiDependsOnCore"); }
     @Test void apiUsingVertxBeyondTheAllowlistIsCaught() { assertFails(Rules.API_SURFACE, "ApiUsesVertxBeyondTheAllowlist"); }
+
+    @Test void anotherApiClassNamingTheContextIsCaught() { assertFails(Rules.API_SURFACE, "ApiNamesAContext"); }
+
+    /** The rule of one class that names more of Vert.x: what it names passes, and one type more is caught. */
+    @Test void aClassThatNamesMoreOfVertxNamesOnlyWhatItsRuleGivesIt() {
+        String fixture = dev.rail8.api.violation.ApiNamesAContext.class.getName();
+        assertDoesNotThrow(() -> Rules.namesOnly(fixture, Rules.ENTRY_VERTX).check(fixtures), "the context and the node's Vert.x");
+        assertFails(Rules.namesOnly(fixture, Set.of("io.vertx.core.Vertx")), "ApiNamesAContext");
+        assertThrows(AssertionError.class, () -> Rules.namesOnly("dev.rail8.api.violation.NoSuchClass", Set.of()).check(fixtures), "a rule of no class is no rule");
+    }
+
+    /** The signature rule: a context named in a method's body passes, one in a public signature is caught. */
+    @Test void aVertxTypeBeyondTheAllowlistInAPublicSignatureIsCaughtAndInABodyIsNot() {
+        assertDoesNotThrow(() -> Rules.signaturesNameOnlyTheAllowlist(dev.rail8.api.violation.ApiHidesAContext.class.getName()).check(fixtures));
+        assertFails(Rules.signaturesNameOnlyTheAllowlist(dev.rail8.api.violation.ApiNamesAContext.class.getName()), "ApiNamesAContext.current()");
+    }
 
     @Test void apiUsingEveryAllowlistedVertxTypeIsAllowed() {
         JavaClasses allowedOnly = new ClassFileImporter()

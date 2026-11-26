@@ -261,7 +261,7 @@ public final class WebhookComponent implements Component {
             req.pause();   // nothing flows until the entry decided and the blob store reads the body
             entry.enter(http.presented(req)).onComplete(entered -> {
                 if (entered.succeeded()) take(req, entered.result());
-                else if (entered.cause() instanceof Refused refused) refused.answer(req);   // HTTP: another protocol answers in its own
+                else if (entered.cause() instanceof Refused refused) http.refuse(req, refused);   // HTTP: another protocol answers in its own, from refused.reason()
                 else reason(req.response(), 500, "the entry failed");
             });
         }

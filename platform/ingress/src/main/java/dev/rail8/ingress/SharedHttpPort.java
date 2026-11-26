@@ -3,6 +3,7 @@ package dev.rail8.ingress;
 import dev.rail8.api.Component;
 import dev.rail8.api.Inbound;
 import dev.rail8.api.Presented;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Settings;
@@ -15,6 +16,7 @@ import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.net.SocketAddress;
 
 import javax.net.ssl.SSLPeerUnverifiedException;
@@ -273,6 +275,43 @@ public final class SharedHttpPort implements HttpIngress {
             }
         }
         return new Presented.Nothing(via);
+    }
+
+    /** The one place that writes a refusal's answer on the node's HTTP port. */
+    @Override
+    public void refuse(HttpServerRequest request, Refused refused) {
+        HttpServerResponse response = request.response();
+        if (response.headWritten() || response.closed()) return;
+        boolean body = hasBody(request);
+        response.setStatusCode(status(refused.reason())).putHeader("content-type", "application/json");
+        if (refused.reason() == Refused.Reason.UNKNOWN) response.putHeader("www-authenticate", "Basic realm=\"rail8\", charset=\"UTF-8\"");
+        refused.retryAfter().ifPresent(wait -> response.putHeader("retry-after", Long.toString(Math.max(1, (wait.toMillis() + 999) / 1000))));
+        boolean http2 = request.version() == HttpVersion.HTTP_2;
+        if (body && !http2) response.putHeader("connection", "close");
+        response.end("{\"code\":\"" + refused.code() + "\",\"error\":\"" + refused.getMessage() + "\"}").onComplete(sent -> {
+            if (!body) return;
+            if (http2) response.reset(0);
+            else request.connection().close();
+        });
+    }
+
+    /** The HTTP status of a refusal for {@code reason}: 401, 403, 400, 429 or 503. */
+    static int status(Refused.Reason reason) {
+        return switch (reason) {
+            case UNKNOWN -> 401;
+            case NOT_ALLOWED, TLS_REQUIRED -> 403;
+            case SENDER_NEEDED -> 400;
+            case TOO_MANY -> 429;
+            case BUSY -> 503;
+        };
+    }
+
+    /** Whether {@code request} carries a body: a {@code content-length} other than 0, a {@code transfer-encoding}, or an HTTP/2 stream not ended. */
+    private static boolean hasBody(HttpServerRequest request) {
+        String length = request.getHeader("content-length");
+        if (length != null) return !"0".equals(length.strip());
+        return request.getHeader("transfer-encoding") != null
+                || request.version() == HttpVersion.HTTP_2 && !request.isEnded();
     }
 
     /** One {@code Authorization} value as what it presents. */
