@@ -483,6 +483,26 @@ abstract class SecretStoreContract {
     }
 
     @Test
+    void theGitVariablesOnAWrittenStoreAreNotReadAndNamedInTheWarning() {
+        Node a = start("a", K1);
+        written.addAll(List.of("late-git-user", "late-git-token", "stored-git-user", "stored-git-token"));
+        Node b = start("b", withK1(Map.of("RAIL8_GIT_USER", "late-git-user", "RAIL8_GIT_TOKEN", "late-git-token")));
+        assertEquals(Optional.empty(), b.store.platform(SecretStore.GIT), "never read on a written store");
+        assertEquals(1, b.warnings.size(), b.warnings.toString());
+        assertTrue(b.warnings.getFirst().contains("[RAIL8_GIT_TOKEN, RAIL8_GIT_USER] not read: the git cache sends the store's rail8.git, which is not set"),
+                b.warnings.getFirst());
+
+        create(a, credentials(SecretStore.GIT, "stored-git-user", "stored-git-token"));
+        Node c = start("c", withK1(Map.of("RAIL8_GIT_USER", "late-git-user", "RAIL8_GIT_TOKEN_FILE", files.resolve("no-such-file").toString())));
+        assertEquals(new Secret.Credentials("stored-git-user", "stored-git-token"), c.store.platform(SecretStore.GIT).orElseThrow().value(),
+                "the store's pair, not the variables'");
+        assertEquals(1, c.warnings.size(), c.warnings.toString());
+        assertTrue(c.warnings.getFirst().contains("[RAIL8_GIT_TOKEN_FILE, RAIL8_GIT_USER] not read: the git cache sends the store's rail8.git; remove the variables"),
+                c.warnings.getFirst());
+        assertNoValueCaptured();
+    }
+
+    @Test
     void eachRefusalOfTheImportRefusesTheStartLeavesGenerationZeroAndWritesNoRow() {
         use("used-as-login", "flow", "pkg/orders", Set.of(Secret.Kind.CREDENTIALS));
         String big = "b".repeat(SecretStore.MAX_VALUE_BYTES + 1);

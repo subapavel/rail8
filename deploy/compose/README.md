@@ -82,6 +82,10 @@ journal's key. What the store holds is sealed in Postgres under that key, and Po
   variables, each as `<name>` in lower case with `_` as `-`, and `RAIL8_GIT_USER` with `RAIL8_GIT_TOKEN` as `rail8.git`.
   After that no variable is read: a value changed later is entered in the store (`/admin/secrets`), or the stack starts
   again after `docker compose down -v`. A node that finds such a variable set logs one WARNING naming it.
+- **The git token is `rail8.git`.** The git cache reads the pool's git credentials from the store only, for each fetch,
+  and sends them to an `https://` base only. A new token is entered as `rail8.git` (`POST /admin/secrets/rail8.git` with
+  `{"kind": "credentials", "user": ..., "password": ...}`), and every node fetches with it without a restart;
+  `docs/DEPLOY-FROM-GIT.md` says how. `GET /admin/secrets` shows whether `rail8.git` is set.
 
 - **A lost key loses every secret.** Back the key up apart from the database and its backups: a backup of the database
   without the key holds nothing that can be read.

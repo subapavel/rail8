@@ -25,8 +25,8 @@ end).
 - Every problem of a deploy is answered before anything stops.
 - The bytes that count are git's: a package's content digest is computed over the files its commit
   holds, as committed.
-- Git's credentials live in the node's environment only: never in git, in Postgres, in a URI, in a log
-  or in an answer.
+- Git's credentials are sealed in the secret store as `rail8.git`, imported once from the node's
+  environment: never in git, in a URI, in a log or in an answer.
 - The git cache on a node is not state. Deleting it loses nothing; the node fetches again.
 
 ## Package repositories
@@ -48,7 +48,7 @@ same name from another repository is refused until the first is undeployed.
 | `RAIL8_GIT_BASE` | The URI the pool's repositories live under, such as `https://gitlab.example.com/integration/`. `https://` in a deployed environment; `file://` also in `dev` and `ci`. A URI with user information (`https://user:token@host/…`) is refused at the node's start, and the refusal does not repeat the URI. Without this setting the node refuses every deploy and lists every recorded package `FAILED`. |
 | `RAIL8_GIT_PATH` | The package's folder in each repository, relative, with no `..`; the root by default. |
 | `RAIL8_GIT_REF` | A branch or tag name, such as `refs/heads/release`, the same in every repository. Required in a deployed environment that sets a base, optional in `dev` and `ci`. When it is set, every commit a deploy fetches must be reachable from it in its repository. |
-| `RAIL8_GIT_USER`, `RAIL8_GIT_TOKEN` | The user name and a read-only access token for every repository under an `https://` base; both or neither. |
+| `RAIL8_GIT_USER`, `RAIL8_GIT_TOKEN` | The user name and a read-only access token for every repository under an `https://` base; both or neither, each also as a file (`_FILE`). They are read once, by the import into a secret store that was never written, as the credentials secret `rail8.git`, and never again. `rail8.git` is sent to an `https://` base only; on a `file://` base it is ignored with one WARNING. |
 | `RAIL8_GIT_TIMEOUT` | The longest the fetches of one deploy, or of one package's restore, may take together; 60 s by default, 1 s to 10 min. It runs on the node's injected timer. |
 | `RAIL8_GIT_MAX_BYTES` | The largest the node's git cache may grow; 1 GiB by default, 1 MiB to 64 GiB. |
 | `RAIL8_GIT_CHECK_EVERY` | The least time between the end of one check of the credentials and the start of the next; 15 min by default, 1 min to 24 h. It runs on the node's injected timer. |
@@ -73,13 +73,24 @@ its history.
 
 ### The token rules
 
-- `RAIL8_GIT_BASE` carries no user information. The token is held in memory and sent only as the
-  `https` credentials of the base's host; it is never written into the cache's configuration.
+- `RAIL8_GIT_BASE` carries no user information. The user and the token are the secret store's
+  `rail8.git`, which the node holds in memory. It is sent only as the `https` credentials of the base's
+  host, and never written into the cache's configuration. The base stays in the node's environment, so
+  whoever may change `rail8.git` cannot point the node at another host.
+- The git cache reads `rail8.git` once for each git operation (a fetch, a check), at its first request
+  the host asks credentials for, after the check of that request's scheme, host and port. Each operation
+  has a transport of its own, and nothing shared between two operations holds the pair. So an
+  overwritten token is sent from the next operation on, without a restart, and a long fetch keeps its
+  token to its end. Without `rail8.git` the cache sends no credentials; an unreadable `rail8.git` sends
+  none and fails the operation as `the secret store's rail8.git is unreadable`. The variables never take
+  over.
+- The read-only scope of the token is enforced at the git host.
 - A redirect is followed only to the same scheme and host. A redirect anywhere else is refused, and the
   credentials are never sent there.
 - Every git failure passes through one formatter. It names the repository by its name, the commit or
   ref, and one reason from a fixed list: not found, not reachable from the pool's ref, history
-  incomplete, credentials refused, timed out, cache full, the transport failed. It never passes on the
+  incomplete, credentials refused, `rail8.git` unreadable, timed out, cache full, the transport failed.
+  A deploy refused for `rail8.git` unreadable carries the code `git-credentials-refused`. It never passes on the
   transport's own message or its causes. Answers, logs, audit rows and the listing of a `FAILED`
   package carry only the formatter's text.
 - Every fetch has the finite timeout, and the cache the finite size, above.
@@ -113,6 +124,40 @@ checks its credentials on its own:
   says what stops working: a deploy, and a node that restarts with an empty git cache.
 - One repository is checked. A token scoped per repository that lost another one is seen at a deploy
   of that one.
+- A change of `rail8.git` (an overwrite, a create or a delete) brings one extra check on every node, at
+  the later of now and 1 minute after the node's last check ended. Changes before that check starts are
+  coalesced into it, and a check that runs is not interrupted. The regular checks go on
+  `RAIL8_GIT_CHECK_EVERY` after the end of the last one. So overwrites in a loop cannot make the nodes
+  hammer the git host.
+
+### Entering the token
+
+The secret administrator enters the pool's git credentials in the secret store as the credentials
+secret `rail8.git`, through `/admin/secrets`, here with the token of an account that holds the secret
+administrator's role (`secret.write`):
+
+```sh
+auth="Authorization: Bearer $RAIL8_TOKEN"
+# the first time
+curl -X POST localhost:8081/admin/secrets -H "$auth" -H 'Content-Type: application/json' \
+  -d '{"name": "rail8.git", "kind": "credentials", "user": "rail8-reader", "password": "<the token>"}'
+# a new token: every node fetches with it from its next git operation on, without a restart
+curl -X POST localhost:8081/admin/secrets/rail8.git -H "$auth" -H 'Content-Type: application/json' \
+  -d '{"kind": "credentials", "user": "rail8-reader", "password": "<the new token>"}'
+```
+
+A token typed on a command line stays in the shell's history: give it from a file
+(`-d @rail8-git.json`) where that matters.
+
+- A blank user or token is refused as 422 `invalid`, naming the field and never the value.
+- `RAIL8_GIT_USER` and `RAIL8_GIT_TOKEN` are read only once: by the first node that joins a secret store
+  that was never written, which imports them as `rail8.git`. Set later, they are not read, and the node
+  logs one WARNING naming them, never their values.
+- `GET /admin/secrets` lists `rail8.git` with its platform use when it is set. When it is not set, it is
+  among the names that a use names and the store does not hold.
+- Its delete needs the confirmation (`DELETE /admin/secrets/rail8.git?confirm=rail8.git`). After it the
+  node sends no credentials; the variables do not take over, and the token is entered again in the
+  store.
 
 ## What a commit holds
 
@@ -549,8 +594,8 @@ The owner chose:
 - A commit even for the local run.
 - A command that names the commit; a node that follows its ref by itself may come later as a timer
   calling the same deploy.
-- The token in the node's environment now; the secret store (`docs/SECRET-STORE.md`) takes it later as the
-  credentials secret `rail8.git`, imported once from the variables, which no node reads after.
+- The token in the secret store (`docs/SECRET-STORE.md`) as the credentials secret `rail8.git`, imported
+  once from the variables, which no node reads after. Done.
 - Every deploy names the state it expects, from the UI, the command line and CI alike, and is refused when the pool holds
   another: on a shared server one author's deploy must never replace another's, or CI's, unseen. Overwriting blind takes a
   switch the caller writes out, and the audit row records it. A pipeline reads the state first and sends it.

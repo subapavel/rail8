@@ -12,7 +12,8 @@ import java.util.TreeMap;
  * The file form of the platform's own secret variables: for each variable {@code X} of {@link #NAMED}, {@code X_FILE} may give
  * the absolute path of a file that holds the value instead, read by {@link SecretFile#read}. The journal's
  * {@code RAIL8_JOURNAL_KEY_FILE} is not handled here: its key source reads that file itself. Nor are the file forms of the
- * {@code RAIL8_SECRET_<NAME>} variables and of {@code RAIL8_GIT_USER}: the import of a store of generation 0 alone reads those.
+ * {@code RAIL8_SECRET_<NAME>} variables, of {@code RAIL8_GIT_USER} and of {@code RAIL8_GIT_TOKEN}: the import of a store of
+ * generation 0 alone reads those.
  *
  * <p>A variable set to the empty string counts as not set, either form. The file is read once, when the node's configuration
  * is read: replacing it takes a restart. No refusal shows a value or a file's content; each names the variable, and the path
@@ -23,7 +24,7 @@ import java.util.TreeMap;
 final class SecretFiles {
 
     /** The secret variables that have a file form read here. */
-    static final Set<String> NAMED = Set.of("RAIL8_PG_PASSWORD", "RAIL8_ADMIN_TOKEN", "RAIL8_GIT_TOKEN", "RAIL8_VALKEY_URI",
+    static final Set<String> NAMED = Set.of("RAIL8_PG_PASSWORD", "RAIL8_ADMIN_TOKEN", "RAIL8_VALKEY_URI",
             "RAIL8_SECRETS_KEY", "RAIL8_SECRETS_KEY_PREVIOUS");
     /** The most bytes a secret file may hold. */
     static final long MAX_BYTES = SecretFile.MAX_BYTES;

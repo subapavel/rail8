@@ -18,8 +18,11 @@ import java.util.function.Supplier;
  * formatter's text and the time of the check.
  *
  * <p>The first check runs at {@link #start()}, each next one {@code every} after the one before ended, on the node's timer, so two
- * checks are never closer than {@code every} and never run at once. A check runs on {@code runner}; it never fails: a failure it did
- * not expect is kept as {@link State#UNREACHABLE}. When the node runs no package from git, a check asks nothing and keeps the
+ * checks never run at once. A change of the credentials ({@link #changed()}) brings the next check forward to the later of now and
+ * {@link #AFTER_CHANGE} after the last one ended; further changes before it runs add no other check, and a check that runs is not
+ * interrupted: a change while it runs brings the next one to {@link #AFTER_CHANGE} after it ends. So no two checks are closer than
+ * {@link #AFTER_CHANGE}, and without a change none closer than {@code every}. A check runs on {@code runner}; it never fails: a
+ * failure it did not expect is kept as {@link State#UNREACHABLE}. When the node runs no package from git, a check asks nothing and keeps the
  * outcome it had. A change of state is logged once, with the formatter's text only: a WARNING when the credentials are refused or
  * the host is not reached, INFO when they work again.
  *
@@ -28,6 +31,9 @@ import java.util.function.Supplier;
 public final class CredentialsCheck implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(CredentialsCheck.class.getName());
+
+    /** The least time between the end of a check and the extra check a change of the credentials brings. */
+    public static final Duration AFTER_CHANGE = Duration.ofMinutes(1);
 
     /** What the last check found. */
     public enum State {
@@ -73,8 +79,17 @@ public final class CredentialsCheck implements AutoCloseable {
     private final Timer timer;
     private final Executor runner;
     private volatile Outcome last;
-    private boolean closed;   // guarded by this
-    private Timer.Cancellable next;   // guarded by this
+    // guarded by this
+    private boolean closed;
+    private boolean started;
+    private boolean running;
+    /** A change came after the last check started, and no check has started since. */
+    private boolean changed;
+    /** When the last check ended. */
+    private Instant ended;
+    private Timer.Cancellable next;
+    /** Counts the scheduled checks: one the timer fires runs only while it is still the latest. */
+    private long scheduled;
 
     /**
      * @param probe asks the git host, such as {@link GitCache#check}
@@ -96,6 +111,34 @@ public final class CredentialsCheck implements AutoCloseable {
 
     /** Runs the first check now, on the runner, and schedules each next one {@code every} after the one before ended. */
     public void start() {
+        synchronized (this) {
+            if (closed || started) return;
+            started = true;
+            running = true;
+        }
+        runner.execute(this::run);
+    }
+
+    /**
+     * The credentials changed: the next check comes at the later of now and {@link #AFTER_CHANGE} after the last one ended, or
+     * {@link #AFTER_CHANGE} after the one that runs now ends. Changes before that check starts are coalesced into it. Before
+     * {@link #start()} and after {@link #close()} it does nothing: the first check reads the credentials set at its start.
+     */
+    public void changed() {
+        synchronized (this) {
+            if (closed || !started || changed) return;
+            changed = true;
+            if (running) return;   // its end schedules the next check
+            Instant at = ended.plus(AFTER_CHANGE);
+            Instant now = clock.instant();
+            if (at.isAfter(now)) {
+                schedule(Duration.between(now, at));
+                return;
+            }
+            if (next != null) next.cancel();
+            scheduled++;
+            begin();
+        }
         runner.execute(this::run);
     }
 
@@ -118,8 +161,30 @@ public final class CredentialsCheck implements AutoCloseable {
             LOG.log(System.Logger.Level.WARNING, "the check of the git credentials failed; the next one tries again", unexpected);
         }
         synchronized (this) {
-            if (!closed) next = timer.schedule(every, () -> runner.execute(this::run));
+            running = false;
+            ended = clock.instant();
+            if (!closed) schedule(changed ? AFTER_CHANGE : every);
         }
+    }
+
+    /** Schedules the next check {@code delay} from now, in place of the one scheduled. Called holding this. */
+    private void schedule(Duration delay) {
+        if (next != null) next.cancel();
+        long mine = ++scheduled;
+        next = timer.schedule(delay, () -> {
+            synchronized (this) {
+                // a check the timer fired while it was being replaced, or after the close, does not run
+                if (closed || mine != scheduled || running) return;
+                begin();
+            }
+            runner.execute(this::run);
+        });
+    }
+
+    /** A check starts: a change from now on brings another one after it. Called holding this. */
+    private void begin() {
+        running = true;
+        changed = false;
     }
 
     private void check(String name) {
@@ -143,7 +208,7 @@ public final class CredentialsCheck implements AutoCloseable {
                 LOG.log(System.Logger.Level.INFO, "the git credentials work again: " + name + " answered the pool's ref");
             } else if (outcome.state() == State.REFUSED) {
                 LOG.log(System.Logger.Level.WARNING, "the git credentials are refused (" + outcome.reason() + "): a deploy, and a node that restarts"
-                        + " with an empty git cache, cannot fetch until RAIL8_GIT_USER and RAIL8_GIT_TOKEN work again");
+                        + " with an empty git cache, cannot fetch until the secret store's rail8.git works again");
             } else {
                 LOG.log(System.Logger.Level.WARNING, "the check of the git credentials did not reach the git host (" + outcome.reason() + "): a deploy,"
                         + " and a node that restarts with an empty git cache, cannot fetch while it is not reached");

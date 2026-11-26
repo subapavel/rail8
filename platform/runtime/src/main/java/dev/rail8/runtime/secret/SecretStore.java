@@ -375,19 +375,28 @@ public final class SecretStore {
         }).mapEmpty();
     }
 
-    /** The WARNING of the variables a store already written does not read, in two lists: their names held, and not held. */
+    /**
+     * The WARNING of the variables a store already written does not read, in lists: the {@code RAIL8_SECRET_*} variables whose
+     * names it holds, those whose names it does not hold, and the git variables, which only {@code rail8.git} replaces.
+     */
     private void unread(Import imports) {
         Map<String, Opened> held = state.held();
         List<String> heldNames = new ArrayList<>();
         List<String> notHeld = new ArrayList<>();
+        List<String> git = new ArrayList<>();
         for (Import.Given g : imports.given()) {
-            if (g.name().equals(GIT)) continue;   // the git cache reads its variables until it reads rail8.git
-            (held.containsKey(g.name()) ? heldNames : notHeld).add(g.variable());
+            if (g.name().equals(GIT)) git.add(g.variable());
+            else (held.containsKey(g.name()) ? heldNames : notHeld).add(g.variable());
         }
-        if (heldNames.isEmpty() && notHeld.isEmpty()) return;
-        warn.accept("the secret store is the only source of a secret, and this node's variables are not read: "
-                + (heldNames.isEmpty() ? "" : heldNames + " not read: remove the variable" + (notHeld.isEmpty() ? "" : "; "))
-                + (notHeld.isEmpty() ? "" : notHeld + " not read: enter it in the store, or a flow that names it fails"));
+        List<String> clauses = new ArrayList<>();
+        if (!heldNames.isEmpty()) clauses.add(heldNames + " not read: remove the variable");
+        if (!notHeld.isEmpty()) clauses.add(notHeld + " not read: enter it in the store, or a flow that names it fails");
+        if (!git.isEmpty()) {
+            clauses.add(git + " not read: the git cache sends the store's " + GIT + (held.containsKey(GIT) ? "; remove the variables"
+                    : ", which is not set: enter it in the store, or no git credentials are sent"));
+        }
+        if (clauses.isEmpty()) return;
+        warn.accept("the secret store is the only source of a secret, and this node's variables are not read: " + String.join("; ", clauses));
     }
 
     /**

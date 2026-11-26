@@ -24,8 +24,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A node's own secret variables can each be given as a file, {@code X_FILE} beside {@code X}: read once into {@code X}, one
- * trailing line end dropped. The file forms of {@code RAIL8_SECRET_<NAME>} and {@code RAIL8_GIT_USER} are left as given: the
- * import of a secret store never written alone reads them. Both forms at once, a path that is not absolute, a file that is missing, unreadable, empty, too large or not
+ * trailing line end dropped. The file forms of {@code RAIL8_SECRET_<NAME>}, {@code RAIL8_GIT_USER} and {@code RAIL8_GIT_TOKEN}
+ * are left as given: the import of a secret store never written alone reads them. Both forms at once, a path that is not absolute, a file that is missing, unreadable, empty, too large or not
  * UTF-8 text refuse the configuration, naming the variable and never the value.
  */
 class SecretFilesTest {
@@ -58,7 +58,7 @@ class SecretFilesTest {
         env.put("RAIL8_ADMIN_TOKEN_FILE", file("admin", "admin-token\n").toString());
         env.put("RAIL8_GIT_BASE", "https://git.example.com/");
         env.put("RAIL8_GIT_USER", "rail8");
-        env.put("RAIL8_GIT_TOKEN_FILE", file("git", "git-token").toString());
+        env.put("RAIL8_GIT_TOKEN_FILE", dir.resolve("git-not-read").toString());
         env.put("RAIL8_VALKEY_URI_FILE", file("valkey", "redis://user:pw@valkey:6379\n").toString());
         env.put("RAIL8_SECRET_PARTNER_TOKEN_FILE", dir.resolve("partner-not-read").toString());
 
@@ -67,16 +67,15 @@ class SecretFilesTest {
         assertAll(
                 () -> assertEquals("pg-pass", c.pg().password()),
                 () -> assertEquals(Optional.of("admin-token"), c.admin().token()),
-                () -> assertEquals("git-token", c.git().orElseThrow().credentials().orElseThrow().token()),
                 () -> assertEquals(Optional.of(URI.create("redis://user:pw@valkey:6379")), c.leases().valkey()),
-                () -> assertEquals(List.of("RAIL8_GIT_TOKEN", "RAIL8_GIT_USER", "RAIL8_SECRET_PARTNER_TOKEN_FILE"), c.secrets().imports().names(),
-                        "the import is given the secret's file form as set, and the git token as read"),
+                () -> assertEquals(List.of("RAIL8_GIT_TOKEN_FILE", "RAIL8_GIT_USER", "RAIL8_SECRET_PARTNER_TOKEN_FILE"), c.secrets().imports().names(),
+                        "the import is given the file forms of a secret and of the git token as set"),
                 () -> assertEquals(Optional.empty(), c.secrets().resolve("secret://partner-token"), "no variable is a secret's value"));
     }
 
     /**
      * Both git variables given as files, with no base: the node starts, has no git cache, and its first join imports the files'
-     * contents as the credentials {@code rail8.git}, the token as the configuration read it.
+     * contents as the credentials {@code rail8.git}.
      */
     @Test
     void bothGitVariablesAsFilesWithNoBaseImportTheGitCredentials() throws IOException {
@@ -87,7 +86,7 @@ class SecretFilesTest {
         NodeConfig c = NodeConfig.from(env);
 
         assertEquals(Optional.empty(), c.git(), "no base, no git cache");
-        assertEquals(List.of("RAIL8_GIT_TOKEN", "RAIL8_GIT_USER_FILE"), c.secrets().imports().names());
+        assertEquals(List.of("RAIL8_GIT_TOKEN_FILE", "RAIL8_GIT_USER_FILE"), c.secrets().imports().names());
         dev.rail8.testkit.FakeRuntime rt = dev.rail8.testkit.FakeRuntime.create();
         dev.rail8.runtime.secret.SecretStore store = new dev.rail8.runtime.secret.MemorySecretStores().start("node-1", c.secrets(), rt.clock(), rt.timer());
         assertEquals(new dev.rail8.api.Secret.Credentials("rail8", "git-token"),
@@ -156,15 +155,15 @@ class SecretFilesTest {
     @Test
     void aMissingFileIsRefused() {
         Path missing = dir.resolve("absent");
-        IllegalArgumentException refused = refused("RAIL8_GIT_TOKEN_FILE", missing.toString());
-        assertEquals("RAIL8_GIT_TOKEN_FILE names a file that does not exist: " + missing, refused.getMessage());
+        IllegalArgumentException refused = refused("RAIL8_ADMIN_TOKEN_FILE", missing.toString());
+        assertEquals("RAIL8_ADMIN_TOKEN_FILE names a file that does not exist: " + missing, refused.getMessage());
     }
 
     /** A path that cannot be read as a file, a directory here, is refused, naming the variable and the path. */
     @Test
     void anUnreadableFileIsRefused() {
-        IllegalArgumentException refused = refused("RAIL8_GIT_TOKEN_FILE", dir.toString());
-        assertEquals("RAIL8_GIT_TOKEN_FILE names a file that cannot be read: " + dir, refused.getMessage());
+        IllegalArgumentException refused = refused("RAIL8_ADMIN_TOKEN_FILE", dir.toString());
+        assertEquals("RAIL8_ADMIN_TOKEN_FILE names a file that cannot be read: " + dir, refused.getMessage());
     }
 
     /** An empty file, or one that holds only a line end, is refused. */
@@ -221,7 +220,7 @@ class SecretFilesTest {
 
     /**
      * Only the listed variables have a file form here: {@code RAIL8_JOURNAL_KEY_FILE} stays for the journal's key source, and
-     * every other {@code _FILE} variable, a secret's and the git user's among them, is kept as it is.
+     * every other {@code _FILE} variable, a secret's and the git user's and token's among them, is kept as it is.
      */
     @Test
     void onlyTheNodesOwnSecretsHaveAFileFormHere() {
@@ -230,6 +229,7 @@ class SecretFilesTest {
                 "RAIL8_SECRET_FILE", "the value of secret://file",
                 "RAIL8_PG_USER_FILE", "/run/secrets/pg-user",
                 "RAIL8_GIT_USER_FILE", "/run/secrets/git-user",
+                "RAIL8_GIT_TOKEN_FILE", "/run/secrets/git-token",
                 "RAIL8_SECRET_DB_FILE_FILE", "/run/secrets/db-file");
 
         assertEquals(env, SecretFiles.resolve(env));

@@ -1,7 +1,9 @@
 package dev.rail8.runtime.git;
 
+import dev.rail8.api.Secret;
 import dev.rail8.api.Timer;
 import dev.rail8.runtime.git.GitFailure.Reason;
+import dev.rail8.runtime.secret.SecretStore;
 import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.errors.NoRemoteRepositoryException;
@@ -51,7 +53,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -70,9 +74,14 @@ import java.util.function.Supplier;
  *   <li>The cache's size is checked before a fetch and while it receives. When it would pass {@code RAIL8_GIT_MAX_BYTES}, the
  *       cached repositories that {@code named} does not name are deleted, except those the same deploy has read; a fetch that
  *       would still pass the limit stops.</li>
- *   <li>The token is held in memory and given only to the base's scheme and host; nothing is written into a repository's
- *       configuration. Over https a redirect stays on the base's scheme and host, and the timer stops a fetch that waits on a
- *       silent server.</li>
+ *   <li>The credentials are the secret store's {@code rail8.git}, read from the node's memory once for each git operation (the
+ *       fetch of one repository, or a check), at its first request the host asks credentials for, after the check that the
+ *       request goes to the base's scheme, host and port. Every operation opens a transport of its own, which alone holds the
+ *       pair it read, so a changed {@code rail8.git} is sent from the next operation on, and a deleted one is not sent. They
+ *       are given only to the base's host; nothing is written into a repository's configuration. Without {@code rail8.git} the
+ *       cache sends no credentials; an unreadable one sends none and fails the operation as
+ *       {@link Reason#CREDENTIALS_UNREADABLE}. A {@code file://} base never reads them. Over https a redirect stays on the base's
+ *       scheme and host, and the timer stops a fetch that waits on a silent server.</li>
  * </ul>
  *
  * One fetch, write or deletion runs at a time. Blocking: called on a virtual thread.
@@ -82,6 +91,7 @@ import java.util.function.Supplier;
 public final class GitCache {
 
     private static final String KEPT = "refs/rail8/kept/";
+    private static final System.Logger LOG = System.getLogger(GitCache.class.getName());
 
     private final GitSettings settings;
     private final Path dir;
@@ -90,6 +100,8 @@ public final class GitCache {
     private final Timer timer;
     private final Supplier<Set<String>> named;
     private final SSLSocketFactory tls;
+    private final Supplier<Optional<SecretStore.Held>> credentials;
+    private final AtomicBoolean ignoredWarned = new AtomicBoolean();
     private final ReentrantLock lock = new ReentrantLock();
 
     /**
@@ -99,14 +111,17 @@ public final class GitCache {
      * @param deployed whether the node runs in a deployed environment, where a deploy names a commit by its id only
      * @param timer the node's timer, on which the fetches' {@code RAIL8_GIT_TIMEOUT} runs
      * @param named the repositories that a record or a pin names; asked when the cache is full
+     * @param credentials the secret store's platform read of {@code rail8.git}, from the node's memory: empty when the store
+     *                    holds none
      */
-    public GitCache(GitSettings settings, Path dir, long maxPackageBytes, boolean deployed, Timer timer, Supplier<Set<String>> named) {
-        this(settings, dir, maxPackageBytes, deployed, timer, named, HttpsURLConnection.getDefaultSSLSocketFactory());
+    public GitCache(GitSettings settings, Path dir, long maxPackageBytes, boolean deployed, Timer timer, Supplier<Set<String>> named,
+                    Supplier<Optional<SecretStore.Held>> credentials) {
+        this(settings, dir, maxPackageBytes, deployed, timer, named, credentials, HttpsURLConnection.getDefaultSSLSocketFactory());
     }
 
     /** As the public constructor, with the TLS sockets an https fetch uses: the tests' own trust. */
     GitCache(GitSettings settings, Path dir, long maxPackageBytes, boolean deployed, Timer timer, Supplier<Set<String>> named,
-             SSLSocketFactory tls) {
+             Supplier<Optional<SecretStore.Held>> credentials, SSLSocketFactory tls) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.dir = Objects.requireNonNull(dir, "dir");
         if (maxPackageBytes <= 0) throw new IllegalArgumentException("maxPackageBytes must be positive, was " + maxPackageBytes);
@@ -114,7 +129,21 @@ public final class GitCache {
         this.deployed = deployed;
         this.timer = Objects.requireNonNull(timer, "timer");
         this.named = Objects.requireNonNull(named, "named");
+        this.credentials = Objects.requireNonNull(credentials, "credentials");
         this.tls = Objects.requireNonNull(tls, "tls");
+    }
+
+    /**
+     * Told at the node's start and at each change of {@code rail8.git}: on a {@code file://} base, which never sends credentials,
+     * a {@code rail8.git} the store holds is ignored with one WARNING for the node's life, naming neither the base nor the
+     * token. On an {@code https://} base it does nothing.
+     */
+    public void credentialsChanged() {
+        if (!settings.local() || ignoredWarned.get() || credentials.get().isEmpty()) return;
+        if (ignoredWarned.compareAndSet(false, true)) {
+            LOG.log(System.Logger.Level.WARNING, "the secret store holds " + SecretStore.GIT + ", and this node's RAIL8_GIT_BASE is a file:// base,"
+                    + " which takes no credentials: the git cache never reads or sends them");
+        }
     }
 
     /** The repositories for one deploy or one package's restore: its fetches take at most {@code RAIL8_GIT_TIMEOUT} together. */
@@ -461,14 +490,15 @@ public final class GitCache {
             private RuntimeException local;
             private Path incoming;
             private long received;
+            private volatile boolean unreadable;
 
             Fetch(String repository) {
                 this.objects = repositoryDir(repository).resolve("objects");
             }
 
             void configure(Transport transport) {
-                transport.setCredentialsProvider(new Credentials());
                 if (transport instanceof TransportHttp http) {
+                    transport.setCredentialsProvider(new Credentials(this));
                     GuardedHttps connections = new GuardedHttps(settings.base(), tls, bytes -> {
                         received = bytes;
                         if (over()) throw new IOException("the git cache is full");
@@ -542,9 +572,19 @@ public final class GitCache {
                 if (connections != null) connections.abort();
             }
 
+            /** {@code rail8.git} as the store holds it now: read once, by this operation's transport. */
+            Optional<Secret.Credentials> credentials() {
+                Optional<SecretStore.Held> held = credentials.get();
+                if (held.isEmpty()) return Optional.empty();
+                if (held.get().value() instanceof Secret.Credentials pair) return Optional.of(pair);
+                unreadable = true;
+                return Optional.empty();
+            }
+
             /** The one reason of the formatter's list this failure is, from what the fetch saw, never from the exception's text. */
             Reason reason(Exception e) {
                 if (expired) return Reason.TIMED_OUT;
+                if (unreadable) return Reason.CREDENTIALS_UNREADABLE;
                 if (full) return Reason.CACHE_FULL;
                 if (https != null && https.refused()) return Reason.TRANSPORT_FAILED;
                 int status = https == null ? 0 : https.status();
@@ -575,8 +615,18 @@ public final class GitCache {
         }
     }
 
-    /** The user and the token, for the base's scheme and host only. */
+    /**
+     * The user and the token of one operation, for the base's scheme and host only: read from the store at the first request the
+     * host asks credentials for, after the check of its origin, and held by this operation's transport alone.
+     */
     private final class Credentials extends CredentialsProvider {
+
+        private final Session.Fetch fetch;
+        private Optional<Secret.Credentials> pair;   // null until read
+
+        Credentials(Session.Fetch fetch) {
+            this.fetch = fetch;
+        }
 
         @Override
         public boolean isInteractive() {
@@ -592,14 +642,13 @@ public final class GitCache {
         }
 
         @Override
-        public boolean get(URIish uri, CredentialItem... items) {
-            if (settings.credentials().isEmpty() || !GuardedHttps.sameOrigin(settings.base(), uri.getScheme(), uri.getHost(), uri.getPort())) {
-                return false;
-            }
-            GitSettings.Credentials credentials = settings.credentials().get();
+        public synchronized boolean get(URIish uri, CredentialItem... items) {
+            if (!GuardedHttps.sameOrigin(settings.base(), uri.getScheme(), uri.getHost(), uri.getPort())) return false;
+            if (pair == null) pair = fetch.credentials();
+            if (pair.isEmpty()) return false;
             for (CredentialItem item : items) {
-                if (item instanceof CredentialItem.Username user) user.setValue(credentials.user());
-                else if (item instanceof CredentialItem.Password password) password.setValue(credentials.token().toCharArray());
+                if (item instanceof CredentialItem.Username user) user.setValue(pair.get().user());
+                else if (item instanceof CredentialItem.Password password) password.setValue(pair.get().password().toCharArray());
                 else return false;
             }
             return true;

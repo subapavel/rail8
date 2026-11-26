@@ -256,7 +256,7 @@ public enum RefusalCode {
     GIT_NOT_REACHABLE("git-not-reachable"),
     /** 422: the history of the commit is incomplete. */
     GIT_HISTORY_INCOMPLETE("git-history-incomplete"),
-    /** 500: the git host refused the node's credentials. */
+    /** 500: the git host refused the node's credentials, or the secret store's {@code rail8.git} does not open on the node. */
     GIT_CREDENTIALS_REFUSED("git-credentials-refused"),
     /** 500: git did not answer in time. */
     GIT_TIMED_OUT("git-timed-out"),

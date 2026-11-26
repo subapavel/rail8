@@ -565,11 +565,22 @@ public final class Deployments {
         this.intake = Objects.requireNonNull(intake, "intake");
         this.meter = Objects.requireNonNull(meter, "meter");
         this.records = Objects.requireNonNull(records, "records");
+        Optional<SecretStore> store = config.secrets().store();
         this.git = config.git().map(settings -> new GitCache(settings, config.dataDir().resolve("git"), config.maxPackageBytes(), config.deployed(),
-                timer, this::named));
+                timer, this::named, () -> store.flatMap(s -> s.platform(SecretStore.GIT))));
         this.credentials = git.map(cache -> new CredentialsCheck(cache::check,
                 () -> packages().stream().flatMap(p -> p.repository().stream()).findFirst(), config.git().orElseThrow().checkEvery(), clock,
                 timer, task -> Thread.ofVirtual().name("rail8-git-check").start(task)));
+        // a change of rail8.git brings one extra check of the credentials, coalesced, at least a minute after the last one
+        git.ifPresent(cache -> store.ifPresent(s -> {
+            CredentialsCheck check = credentials.orElseThrow();
+            s.onChange(names -> {
+                if (!names.contains(SecretStore.GIT)) return;
+                cache.credentialsChanged();
+                check.changed();
+            });
+            cache.credentialsChanged();
+        }));
         this.leases = Objects.requireNonNull(leases, "leases");
         this.targets = Objects.requireNonNull(targets, "targets");
         this.fence = Objects.requireNonNull(fence, "fence");
@@ -1027,24 +1038,24 @@ public final class Deployments {
 
     /**
      * The refusal of a git failure, its one line after {@code of}: a commit or ref not found, not reachable from the pool's ref or
-     * with an incomplete history is the deploy's {@link Kind#INVALID}; credentials refused, a timeout, a full cache or a failed
-     * transport are the node's {@link Kind#FAILED}.
+     * with an incomplete history is the deploy's {@link Kind#INVALID}; credentials refused or unreadable, a timeout, a full cache
+     * or a failed transport are the node's {@link Kind#FAILED}.
      */
     private static DeployRefusedException refused(GitFailure failed, String of) {
         Kind kind = switch (failed.reason()) {
             case NOT_FOUND, NOT_REACHABLE, HISTORY_INCOMPLETE -> Kind.INVALID;
-            case CREDENTIALS_REFUSED, TIMED_OUT, CACHE_FULL, TRANSPORT_FAILED -> Kind.FAILED;
+            case CREDENTIALS_REFUSED, CREDENTIALS_UNREADABLE, TIMED_OUT, CACHE_FULL, TRANSPORT_FAILED -> Kind.FAILED;
         };
         return refused(kind, code(failed), of + failed.getMessage(), Map.of());
     }
 
-    /** The code of a git failure: one for each of its reasons. */
+    /** The code of a git failure: one for each of its reasons, the credentials refused and unreadable sharing theirs. */
     private static RefusalCode code(GitFailure failed) {
         return switch (failed.reason()) {
             case NOT_FOUND -> RefusalCode.GIT_NOT_FOUND;
             case NOT_REACHABLE -> RefusalCode.GIT_NOT_REACHABLE;
             case HISTORY_INCOMPLETE -> RefusalCode.GIT_HISTORY_INCOMPLETE;
-            case CREDENTIALS_REFUSED -> RefusalCode.GIT_CREDENTIALS_REFUSED;
+            case CREDENTIALS_REFUSED, CREDENTIALS_UNREADABLE -> RefusalCode.GIT_CREDENTIALS_REFUSED;
             case TIMED_OUT -> RefusalCode.GIT_TIMED_OUT;
             case CACHE_FULL -> RefusalCode.GIT_CACHE_FULL;
             case TRANSPORT_FAILED -> RefusalCode.GIT_TRANSPORT_FAILED;
