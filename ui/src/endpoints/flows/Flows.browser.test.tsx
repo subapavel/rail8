@@ -546,6 +546,7 @@ describe('Editing a flow', () => {
     await expect.element(page.getByLabelText('schema', { exact: false })).toHaveValue('flows/other.xsd');
 
     await button('Cancel').click();
+    await opened(button('Discard changes'));
     await button('Discard changes').click();
     working!.reload(['demo/flows/invoice.yaml']);
     await expect.element(nodeOf('check')).toBeVisible();
