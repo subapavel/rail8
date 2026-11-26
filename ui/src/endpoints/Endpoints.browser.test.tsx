@@ -11,6 +11,7 @@ import { filesScreen } from './fake/files';
 import { endpointTab } from './screen';
 import { HTTP_FORMS, SFTP_FORMS } from './fake/forms';
 import type { ComponentForms } from './settings';
+import { opened } from '../motion-test';
 
 const drop: ComponentForms = {
   format: 2,
@@ -291,10 +292,11 @@ describe('Endpoints', () => {
     await button('Edit').click();
     await field('Host').fill('other');
     await button('Cancel').click();
+    await opened(button('Keep editing'));
     await button('Keep editing').click();
     await expect.element(field('Host')).toHaveValue('other');
     await button('Close inbox').click();
-    await expect.element(page.getByRole('dialog', { name: 'Save changes to inbox?' })).toBeVisible();
+    await opened(page.getByRole('dialog', { name: 'Save changes to inbox?' }));
     await button('Close without saving').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).not.toBeInTheDocument();
     expect(api.save).not.toHaveBeenCalled();

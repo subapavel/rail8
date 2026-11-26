@@ -12,6 +12,7 @@ import { emptyFunctions, newFunction, type FunctionsState } from '../mock/functi
 import { functionsKey } from '../mock/functions-preview';
 import { Studio, studioStore } from '../Studio';
 import { StudioFrame } from '../StudioFrame';
+import { opened } from '../../../motion-test';
 
 const MAPPING = 'mappings/order-id-copy';
 const UNMAPPED = 'mappings/order-unmapped';
@@ -165,6 +166,7 @@ describe('the Functions tab, a preview kept in the browser', () => {
     await button('Save').click();
     await expect.element(page.getByRole('heading', { name: /Internal error/ })).toBeVisible();
     await button('Save').click();
+    await opened(page.getByRole('dialog', { name: 'Save conflict' }));
     await page.getByRole('dialog', { name: 'Save conflict' }).getByRole('button', { name: 'Keep editing' }).click();
 
     await expect.element(button('Save')).toBeEnabled();
@@ -179,6 +181,7 @@ describe('the Functions tab, a preview kept in the browser', () => {
     await functionActions().getByRole('button', { name: 'Insert row' }).click();
 
     await button('Save').click();
+    await opened(page.getByRole('dialog', { name: 'Save conflict' }));
     await page.getByRole('dialog', { name: 'Save conflict' }).getByRole('button', { name: 'Reload' }).click();
 
     await expect.element(button('Select function calculate1')).not.toBeInTheDocument();
@@ -507,6 +510,7 @@ describe('import instructions and archives', () => {
 
     await page.getByRole('button', { name: 'Choose archive name 1' }).click();
     const catalogue = page.getByRole('dialog', { name: 'Choose Imported Archive' });
+    await opened(catalogue);
     await expect.element(catalogue.getByRole('button', { name: 'Apply' })).toBeDisabled();
     await catalogue.getByRole('textbox', { name: 'Search catalog' }).fill('example');
     await catalogue.getByRole('button', { name: 'Go' }).click();

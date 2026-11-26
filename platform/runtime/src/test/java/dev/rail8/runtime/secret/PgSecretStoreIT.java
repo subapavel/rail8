@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -93,11 +94,16 @@ class PgSecretStoreIT extends SecretStoreContract {
         listen.query("LISTEN " + SecretStore.CHANNEL).execute().await();
     }
 
+    /**
+     * Closes every connection the test opened at once, within the contract's wait: a connection's close waits for its query, and
+     * a query that waits on a lock another of them holds ends once that one is closed; a test that failed with a lock held still
+     * ends, with its own failure.
+     */
     @AfterEach
     void close() {
-        opened.forEach(c -> c.close().await());
+        await(Future.all(opened.stream().map(SqlConnection::close).toList()));
         hearing.forEach(SecretStore::close);
-        listen.close().await();
+        await(listen.close());
     }
 
     static List<Row> sql(String sql, Object... args) {
@@ -199,6 +205,7 @@ class PgSecretStoreIT extends SecretStoreContract {
     @Test
     void aJoinThatRacesAWriteSeesTheRow() {
         SqlConnection writer = pool.getConnection().await();
+        opened.add(writer);
         Transaction tx = writer.begin().await();
         writer.query("select generation from secret_store for update").execute().await();
         byte[] nonce = new byte[12];
@@ -208,7 +215,6 @@ class PgSecretStoreIT extends SecretStoreContract {
         java.util.concurrent.CompletableFuture<IllegalStateException> refused =
                 java.util.concurrent.CompletableFuture.supplyAsync(() -> refusedStart("c", K1, null));
         tx.commit().await();
-        writer.close().await();
         assertTrue(refused.join().getMessage().contains(id(K9)), "the join waits on the store's lock and sees the row");
     }
 
@@ -280,6 +286,7 @@ class PgSecretStoreIT extends SecretStoreContract {
         Node a = start("a", K1);
         create(a, value("db", "the-value"));
         SqlConnection deleter = pool.getConnection().await();
+        opened.add(deleter);
         Transaction tx = deleter.begin().await();
         int key = deleter.query("select hashtext('installation' || chr(31) || 'db')").execute().await().iterator().next().getInteger(0);
         deleter.query("select pg_advisory_xact_lock(297, " + key + ")").execute().await();
@@ -287,7 +294,6 @@ class PgSecretStoreIT extends SecretStoreContract {
         Open deploy = replace(a.store, "pkg/orders", Map.of("db", Set.of(Secret.Kind.VALUE)));
         assertFalse(deploy.problems().isComplete(), "the deploy waits on the name's lock");
         tx.commit().await();
-        deleter.close().await();
         List<String> problems = await(deploy.problems());
         assertEquals(1, problems.size());
         assertTrue(problems.getFirst().contains("secret://db") && problems.getFirst().contains("not set"), problems.getFirst());
@@ -307,17 +313,27 @@ class PgSecretStoreIT extends SecretStoreContract {
         for (String name : List.of(p, q, r)) create(a, value(name, "value-of-" + name));
         int rKey = sql("select hashtext('installation' || chr(31) || $1)", r).getFirst().getInteger(0);
 
-        SqlConnection holder = pool.getConnection().await();
+        SqlConnection holder = PgConnection.connect(vertx, connect).await();   // a session of its own: its close frees the session's lock
+        opened.add(holder);
         holder.query("select pg_advisory_lock(297, " + rKey + ")").execute().await();
         Open one = replace(a.store, "pkg/one", Map.of(p, Set.of(Secret.Kind.VALUE), r, Set.of(Secret.Kind.VALUE)));
+        waitingForLocks(1);   // Postgres grants a lock in the order it was asked for: one before two
         Open two = replace(a.store, "pkg/two", Map.of(q, Set.of(Secret.Kind.VALUE), r, Set.of(Secret.Kind.VALUE)));
+        waitingForLocks(2);
         holder.query("select pg_advisory_unlock(297, " + rKey + ")").execute().await();
-        holder.close().await();
         assertEquals(List.of(), await(one.problems()));
         end(one);
         assertEquals(List.of(), await(two.problems()), "the second waited and went on: no deadlock");
         end(two);
         assertEquals(4L, sql("select count(*) from secret_uses where user_kind = 'flow'").getFirst().getLong(0));
+    }
+
+    /** Returns once {@code n} sessions wait for an advisory lock, within the contract's wait. */
+    static void waitingForLocks(long n) {
+        long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (sql("select count(*) from pg_locks where locktype = 'advisory' and not granted").getFirst().getLong(0) < n) {
+            if (System.nanoTime() > end) throw new AssertionError(n + " sessions do not wait for an advisory lock");
+        }
     }
 
     @Test

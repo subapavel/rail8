@@ -1211,7 +1211,11 @@ public final class Deployments {
     private void lockForChange() throws DeployRefusedException {
         if (deploying.tryLock()) return;
         Future<Void> tick = ticking;
-        if (tick == null) throw busy();
+        if (tick == null) {
+            // a tick frees the lock before it clears ticking: one that held it at the try may have ended since
+            if (deploying.tryLock()) return;
+            throw busy();
+        }
         Future<Void> ended = bounded(tick, "the tick that follows the pool's records");
         ended.otherwiseEmpty().await();
         if (ended.failed()) throw refused(Kind.BUSY, RefusalCode.POOL_FOLLOWING, "this node is following the pool's records: try again once it is done", Map.of());
