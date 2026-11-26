@@ -14,11 +14,15 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -476,6 +480,34 @@ public final class Package {
         return List.copyOf(keys);
     }
 
+    /**
+     * What a test of the flow document {@code flow} of {@code schemaVersion: 2} may mock and expect sends to: what it may mock
+     * ({@link #mockable}), and what each flow of this package that it calls, at the address that flow's sender serves, may,
+     * through every call: a call runs for real inside the case, its sends the case's.
+     */
+    private Set<String> throughCalls(JsonObject flow) {
+        Map<String, JsonObject> served = new HashMap<>();   // by address: the flow of this package fed by calls to it
+        for (JsonObject f : flows.values()) {
+            if (schemaVersion(f) == 2 && f.getValue("from") instanceof JsonObject from && DIRECT.equals(from.getValue("adapter"))
+                    && from.getValue("settings") instanceof JsonObject settings && settings.getValue("address") instanceof String address) {
+                served.putIfAbsent(address, f);
+            }
+        }
+        Set<String> keys = new LinkedHashSet<>();
+        Deque<JsonObject> reached = new ArrayDeque<>(List.of(flow));
+        Set<JsonObject> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        while (!reached.isEmpty()) {
+            JsonObject f = reached.pop();
+            if (!seen.add(f)) continue;
+            for (String key : mockable(f)) {
+                keys.add(key);
+                JsonObject called = key.startsWith(DIRECT + ":") ? served.get(key.substring(DIRECT.length() + 1)) : null;
+                if (called != null) reached.push(called);
+            }
+        }
+        return Set.copyOf(keys);
+    }
+
     /** {@code key}'s value when it is a string, else empty. */
     private static Optional<String> text(JsonObject document, String key) {
         return document.getValue(key) instanceof String s ? Optional.of(s) : Optional.empty();
@@ -778,7 +810,7 @@ public final class Package {
             problems.add(relative(file) + ": a test of schemaVersion " + version + " tests a flow of schemaVersion " + version + "; flow '" + flow
                     + "' is of schemaVersion " + schemaVersion(tested));
         }
-        Mocked mocked = new Mocked(version, flow, tested == null || schemaVersion(tested) != 2 ? null : Set.copyOf(mockable(tested)));
+        Mocked mocked = new Mocked(version, flow, tested == null || schemaVersion(tested) != 2 ? null : throughCalls(tested));
         Optional<String> from = Optional.ofNullable(tested).map(f -> f.getValue("from")).filter(JsonObject.class::isInstance)
                 .map(f -> ((JsonObject) f).getValue(version == 2 ? "connection" : "endpoint")).filter(String.class::isInstance).map(String.class::cast);
         JsonObject mocks = test.getJsonObject("mocks", new JsonObject());

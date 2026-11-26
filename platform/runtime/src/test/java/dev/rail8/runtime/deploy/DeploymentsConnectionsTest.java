@@ -1,6 +1,7 @@
 package dev.rail8.runtime.deploy;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.NackException;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Envelope;
@@ -17,6 +18,8 @@ import dev.rail8.api.settings.Settings;
 import dev.rail8.core.admission.Targets;
 import dev.rail8.core.cache.InMemoryCache;
 import dev.rail8.core.dlq.InMemoryDlq;
+import dev.rail8.core.dlq.Parked;
+import dev.rail8.core.record.Page;
 import dev.rail8.core.flow.SequentialIntake;
 import dev.rail8.core.flow.WorkSignals;
 import dev.rail8.core.flow.Workers;
@@ -42,6 +45,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -77,6 +82,8 @@ class DeploymentsConnectionsTest {
     Component adapter = doors;
     Deployments deployments;
     SecretStore store;
+    InMemoryDlq dlq;
+    CountingQueue queue;
 
     @AfterEach
     void close() throws Exception {
@@ -89,21 +96,27 @@ class DeploymentsConnectionsTest {
 
     /** The node of this test, over {@link #env} and a secret store of its own. */
     Deployments node() {
+        return node("node-1");
+    }
+
+    /** The node {@code id} of this test, over {@link #env}, the repositories and the pool of the test, and a secret store of its own. */
+    Deployments node(String id) {
         repos = new GitRepos(tmp.resolve("repos"));
         Map<String, String> variables = new HashMap<>(DeploymentsSecretStoreTest.KEY);
         variables.put("RAIL8_ENV", "dev");
-        variables.put("RAIL8_NODE_ID", "node-1");
-        variables.put("RAIL8_DATA_DIR", tmp.resolve("node-1").toString());
+        variables.put("RAIL8_NODE_ID", id);
+        variables.put("RAIL8_DATA_DIR", tmp.resolve(id).toString());
         variables.put("RAIL8_GIT_BASE", repos.base().toString());
-        store = stores.start("node-1", variables, rt.clock(), rt.timer());
+        store = stores.start(id, variables, rt.clock(), rt.timer());
         NodeConfig config = NodeConfig.from(variables);
         config = config.withSecrets(config.secrets().withStore(store));
         Map<String, Component> components = Map.of(Doors.SCHEME, adapter);
         Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), components);
         InMemoryMessageStore messages = new InMemoryMessageStore();
-        CountingQueue queue = new CountingQueue(rt.clock());
+        queue = new CountingQueue(rt.clock());
+        dlq = new InMemoryDlq();
         Workers workers = new Workers();
-        deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages, new InMemoryDlq(), queue,
+        deployments = new Deployments(config, runtime, components, rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq, queue,
                 () -> 0L, pool, new SequentialIntake(messages, queue, workers, "node-1"), new InMemoryPollerLeases(rt.clock()),
                 new Targets(config.targets().defaults(), config.targets().overrides(), rt.timer()), () -> true, workers, WorkSignals.NONE,
                 new InMemoryCache(rt.clock(), InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES), 0, env);
@@ -138,9 +151,14 @@ class DeploymentsConnectionsTest {
 
     /** A flow {@code id} of {@code schemaVersion: 2}: from {@code from}, delivery {@code mode}, one send step to {@code to}. */
     static PackageDraft withFlow(PackageDraft p, String id, String mode, String from, String to) {
+        return withFlow(p, id, new JsonObject().put("mode", mode), from, to);
+    }
+
+    /** A flow {@code id} of {@code schemaVersion: 2} as {@link #withFlow(PackageDraft, String, String, String, String)}, of {@code delivery}. */
+    static PackageDraft withFlow(PackageDraft p, String id, JsonObject delivery, String from, String to) {
         JsonObject doc = new JsonObject().put("schemaVersion", 2).put("kind", "flow").put("id", id).put("version", "1.0.0")
                 .put("from", new JsonObject().put("adapter", Doors.SCHEME).put("connection", from))
-                .put("delivery", new JsonObject().put("mode", mode)).put("limits", new JsonObject().put("maxBodyBytes", 4096))
+                .put("delivery", delivery).put("limits", new JsonObject().put("maxBodyBytes", 4096))
                 .put("steps", new JsonArray().add(new JsonObject().put("type", "to").put("name", "send").put("adapter", Doors.SCHEME)
                         .put("connection", to).put("settings", new JsonObject().put("level", "high"))));
         return p.file("flows/" + id + ".yaml", doc.encodePrettily());
@@ -385,6 +403,124 @@ class DeploymentsConnectionsTest {
         assertEquals(List.of("erp/orders"), within(pool.read(), "the pool").marked(), "fixture: the undeploy marks the flow");
         deploy(orders);
         assertEquals(DeployedFlow.State.RUNNING, deployments.flows().getFirst().state());
+    }
+
+    /**
+     * A send through a connection that cannot serve is an ordinary send error: at-least-once, it is retried by
+     * {@code delivery.retries}, goes through once the connection serves again, and is parked once the retries are spent; sync,
+     * its caller gets the retryable failure, which the http door answers 503. Both name the connection and the reason.
+     */
+    @Test
+    void aSendThroughAConnectionThatCannotServeIsRetriedThenParked() throws Exception {
+        node();
+        serving();
+        JsonObject retried = new JsonObject().put("mode", "at-least-once").put("retries", new JsonObject().put("count", 1).put("interval", "1s"));
+        deploy(withFlow(withFlow(erp(), "orders", retried, "acme/erp/inbox", "acme/erp/rest"), "check", "sync", "acme/erp/inbox", "acme/erp/rest"));
+        ConnectionState.Stop stop = new ConnectionState.Stop("ops", Instant.parse("2026-11-26T10:00:00Z"));
+        env.connection("acme/erp/rest", new ConnectionState.Values(Doors.SCHEME, 3, Map.of("url", "rec://rest"), Optional.of(stop)));
+
+        Envelope first = rt.ingress("erp/orders", Headers.empty(), Buffer.buffer("<order/>"));
+        assertEquals(new Ack.Accepted(first.id()), within(doors.door("erp/orders").deliver(first), "the answer"));
+        DeploymentsRetriesTest.until(() -> queue.deferredAt().size() == 1, () -> "the first failure deferred: " + parked());
+        assertEquals(List.of(), doors.partner().sent(), "nothing sent through the stopped connection");
+        env.connection("acme/erp/rest", values(4, "rec://rest"));   // started again
+        advancedUntil(() -> doors.partner().sent().size() == 1, () -> "the retry went through: " + parked());
+        assertEquals(first.id(), doors.partner().sent().getFirst().id());
+
+        env.remove("acme/erp/rest");
+        Envelope second = rt.ingress("erp/orders", Headers.empty(), Buffer.buffer("<order/>"));
+        assertEquals(new Ack.Accepted(second.id()), within(doors.door("erp/orders").deliver(second), "the answer"));
+        DeploymentsRetriesTest.until(() -> queue.deferredAt().size() == 2, () -> "the second message's failure deferred: " + parked());
+        advancedUntil(() -> !parked().isEmpty(), () -> "parked once its retries are spent");
+        assertEquals(List.of(second.id()), parked().stream().map(Parked::messageId).toList());
+        assertTrue(parked().getFirst().error().contains("connection 'acme/erp/rest' cannot serve the send: not set"), parked().getFirst().error());
+        assertEquals(1, doors.partner().sent().size(), "nothing more sent");
+
+        Envelope call = rt.ingress("erp/check", Headers.empty(), Buffer.buffer("<order/>"));
+        Future<Ack> answer = doors.door("erp/check").deliver(call);
+        answer.otherwiseEmpty().await();
+        NackException refused = assertInstanceOf(NackException.class, answer.cause(), "the sync caller's answer: " + answer);
+        assertTrue(refused.retryable(), "retryable: the http door answers 503");
+        assertEquals("connection 'acme/erp/rest' cannot serve the send: not set", refused.reason());
+    }
+
+    /**
+     * The fake clock moved a second at a time, each step once the node's work settled, until {@code condition} holds; at most two
+     * minutes of it: a retry's wake, armed as its run ends, fires on a later step.
+     */
+    void advancedUntil(BooleanSupplier condition, Supplier<String> what) {
+        for (int s = 0; s < 120 && !condition.getAsBoolean(); s++) {
+            DeploymentsRetriesTest.until(queue::claimsSettled, () -> "the claims settled: " + queue.claims());
+            rt.clock().advance(Duration.ofSeconds(1));
+        }
+        DeploymentsRetriesTest.until(condition, what);
+    }
+
+    List<Parked> parked() {
+        return dlq.list(Optional.empty(), Page.MAX_LIMIT).await().items();
+    }
+
+    /**
+     * A restore installs what the deploy checked, the systems and connections of the pool and of the environment unchecked: a
+     * connection the environment no longer sets fails the sends through it, not the node's start.
+     */
+    @Test
+    void aRestoreInstallsWhatTheDeployCheckedWhateverTheEnvironmentHoldsNow() throws Exception {
+        node();
+        serving();
+        deploy(withFlow(erp(), "orders", "sync", "acme/erp/inbox", "acme/erp/rest"));
+        OnVirtualThread.call(() -> {
+            deployments.close();
+            return null;
+        });
+        env.remove("acme/erp/rest");
+        assertTrue(refusedHere(withFlow(erp(), "orders", "sync", "acme/erp/inbox", "acme/erp/rest")).getMessage().contains("not set"),
+                "fixture: a deploy now is refused");
+
+        Deployments restarted = node("node-2");
+        OnVirtualThread.call(() -> {
+            restarted.restore();
+            return null;
+        });
+        assertEquals(List.of("erp/orders RUNNING"), restarted.flows().stream().map(f -> f.id() + " " + f.state()).toList());
+    }
+
+    /** {@code p} deployed on a node of its own over this test's pool and environment, which is closed after: what it refused. */
+    DeployRefusedException refusedHere(PackageDraft p) throws Exception {
+        node("node-check");
+        try {
+            return refused(p);
+        } finally {
+            OnVirtualThread.call(() -> {
+                deployments.close();
+                return null;
+            });
+        }
+    }
+
+    /**
+     * A flow that drains polls nothing: a new flow of its package, or a flow of another package, may poll the place it polled
+     * while it drains, and a deploy of the package again while it drains is no second sender either.
+     */
+    @Test
+    void aDrainingFlowPollsNothing() throws Exception {
+        adapter = new Polling(doors);
+        node();
+        serving();
+        deploy(withSystem(PackageDraft.of("acme", "1.0.0"), "acme/erp", Doors.SCHEME, "inbox", "rest"));
+        deploy(withFlow(PackageDraft.of("erp", "1.0.0"), "orders", "at-least-once", "acme/erp/inbox", "acme/erp/rest"));
+        PackageDraft renamed = withFlow(PackageDraft.of("erp", "1.0.1"), "orders2", "at-least-once", "acme/erp/inbox", "acme/erp/rest");
+        deploy(renamed);   // orders2 takes the place orders polled
+        assertEquals(List.of("erp/orders"), within(pool.read(), "the pool").marked(), "fixture: the flow orders drains");
+        renamed.manifest().put("version", "1.0.2");
+        deploy(renamed);
+        assertEquals(List.of("erp/orders2"), deployments.flows().stream().map(DeployedFlow::id).toList());
+
+        OnVirtualThread.call(() -> deployments.undeploy("erp", TestActors.named("test")));
+        deploy(withFlow(PackageDraft.of("shop", "1.0.0"), "orders", "at-least-once", "acme/erp/inbox", "acme/erp/rest"));
+        assertEquals(List.of("erp/orders", "erp/orders2"), within(pool.read(), "the pool").marked(), "fixture: both of erp's flows drain");
+        assertEquals(List.of(DeployedFlow.State.RUNNING), deployments.flows().stream().map(DeployedFlow::state).toList(),
+                "another package's flow polls the place of erp's draining flows");
     }
 
     /**

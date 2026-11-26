@@ -1,0 +1,8 @@
+# `rail8 test` of flows of schemaVersion 2: order (sync) takes the order over http, with no connection, and calls check (sync,
+# direct /check), which sends it through the connection acme/erp/rest and answers with the partner's reply.
+schemaVersion: 1
+kind: package
+name: calls-v2
+version: 0.1.0
+description: An order flow that calls a check flow, which sends through a connection.
+dependencies: []

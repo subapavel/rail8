@@ -113,9 +113,12 @@ public final class PgDeploymentStore implements DeploymentStore {
     private static final String CHECKED = "update deployments set config_generation = $2 where package = $1";
     /** The uses kept under the qualified ids of the flows in $1, which a new row runs at-least-once again. */
     private static final String USES_REVIVED = "delete from deployment_connection_uses where deployment = any($1::text[])";
-    /** The uses of package $1's flows marked to retire move under each flow's qualified id, until its mark ends. */
-    private static final String USES_RETIRE = "update deployment_connection_uses set deployment = flow"
-            + " where deployment = $1 and flow in (select flow from retiring where package = $1)";
+    /**
+     * The uses of each flow package $1's row runs at-least-once that is not in $2 move under the flow's qualified id, until its
+     * mark ends; read before the row is replaced or deleted.
+     */
+    private static final String USES_RETIRE = "update deployment_connection_uses set deployment = flow where deployment = $1 and flow in "
+            + "(select f from deployments d cross join unnest(d.at_least_once) as u(f) where d.package = $1 and not (f = any($2::text[])))";
     private static final String USES_DELETE = "delete from deployment_connection_uses where deployment = $1";
     private static final String USE = "insert into deployment_connection_uses (deployment, flow, step, connection, adapter, direction, address, polled)"
             + " values ($1, $2, $3, $4, $5, $6, $7, $8)";
@@ -350,9 +353,12 @@ public final class PgDeploymentStore implements DeploymentStore {
                         .put("commit", p.commit()));
             }
             String[] runs = r.atLeastOnce().toArray(String[]::new);
-            return write(List.of(Map.entry(MARK, Tuple.of(r.name(), (Object) runs)), Map.entry(REVIVE, Tuple.of((Object) runs)),
+            List<Map.Entry<String, Tuple>> statements = new ArrayList<>(List.of(Map.entry(MARK, Tuple.of(r.name(), (Object) runs))));
+            if (configuration != null) statements.add(Map.entry(USES_RETIRE, Tuple.of(r.name(), (Object) runs)));   // a save without one keeps the uses
+            statements.addAll(List.of(Map.entry(REVIVE, Tuple.of((Object) runs)),
                     Map.entry(SAVE, Tuple.of(r.name(), r.version(), r.repository(), r.commit(), r.content(), r.deployedAt().atOffset(ZoneOffset.UTC), pins, runs)),
-                    Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))),
+                    Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))));
+            return write(statements,
                     conn -> {
                         Future<Void> written = configuration == null ? Future.succeededFuture() : configuration(conn, r, configuration);
                         return secrets == null || uses == null ? written : written.compose(done -> knownUses(conn, r.name(), uses));
@@ -370,7 +376,6 @@ public final class PgDeploymentStore implements DeploymentStore {
                 return now == c.generation() ? Future.<Void>succeededFuture() : compared(conn, c);
             }).compose(same -> conn.preparedQuery(CHECKED).execute(Tuple.of(r.name(), c.generation())))
                     .compose(done -> conn.preparedQuery(USES_REVIVED).execute(Tuple.of((Object) runs)))
-                    .compose(done -> conn.preparedQuery(USES_RETIRE).execute(Tuple.of(r.name())))
                     .compose(done -> conn.preparedQuery(USES_DELETE).execute(Tuple.of(r.name())))
                     .compose(done -> conn.preparedQuery(SYSTEMS_DELETE).execute(Tuple.of(r.name())))
                     .compose(done -> c.systems().isEmpty() ? Future.<Void>succeededFuture() : conn.preparedQuery(SYSTEM).executeBatch(c.systems().stream()
@@ -403,8 +408,9 @@ public final class PgDeploymentStore implements DeploymentStore {
 
         @Override
         public Future<Long> delete(String name, Actor by, JsonObject detail) {
-            return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name)),
-                    Map.entry(USES_RETIRE, Tuple.of(name)), Map.entry(USES_DELETE, Tuple.of(name)), Map.entry(SYSTEMS_DELETE, Tuple.of(name)),
+            String[] none = new String[0];
+            return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) none)), Map.entry(USES_RETIRE, Tuple.of(name, (Object) none)),
+                    Map.entry(DELETE, Tuple.of(name)), Map.entry(USES_DELETE, Tuple.of(name)), Map.entry(SYSTEMS_DELETE, Tuple.of(name)),
                     Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))),
                     secrets == null ? null : conn -> replaced(conn, name, Map.of()).<Void>mapEmpty());
         }

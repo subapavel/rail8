@@ -1,0 +1,23 @@
+# The call of check runs for real, its send through acme/erp/rest the case's; a mock of direct:/check stands in for check.
+schemaVersion: 2
+kind: test
+flow: order
+mocks:
+  acme/erp/rest: { reply: fixtures/ack.xml }
+cases:
+  - name: the chain
+    send: fixtures/order.xml
+    expect:
+      status: 200
+      sent:
+        direct:/check: { count: 1, contains: "<Id>42</Id>" }
+        acme/erp/rest: { count: 1, settings: { path: /check } }
+  - name: check mocked
+    mocks:
+      direct:/check: { reply: fixtures/ack.xml }
+    send: fixtures/order.xml
+    expect:
+      status: 200
+      sent:
+        direct:/check: { count: 1 }
+        acme/erp/rest: { count: 0 }

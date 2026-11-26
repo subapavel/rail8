@@ -18,7 +18,6 @@ import dev.rail8.runtime.deploy.DeploymentStore.Reached;
 import io.vertx.core.json.JsonObject;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -225,15 +224,14 @@ final class NamedChecks {
     }
 
     /**
-     * No two senders poll one connection at one place: in this package, or this package and a flow of another. A retiring flow
-     * that this package runs again takes its uses back, so its earlier sender is no other.
+     * No two senders poll one connection at one place: in this package, or this package and a deployed flow of another. A
+     * retiring flow, whose uses the pool keeps under its own id, only drains its work and polls nothing.
      */
     private static void twoSenders(String name, List<ConnectionUse> mine, List<ConnectionUse> pool, List<String> problems) {
-        Set<String> again = new HashSet<>();
-        mine.forEach(u -> again.add(u.flow()));
         Map<String, String> taken = new LinkedHashMap<>();   // by connection and place: the flow that polls it
         for (ConnectionUse u : pool) {
-            if (u.polled().isPresent() && !u.deployment().equals(name) && !again.contains(u.flow())) {
+            boolean retiring = u.deployment().equals(u.flow());
+            if (u.polled().isPresent() && !u.deployment().equals(name) && !retiring) {
                 taken.putIfAbsent(u.connection() + " " + u.polled().get(), u.flow());
             }
         }
