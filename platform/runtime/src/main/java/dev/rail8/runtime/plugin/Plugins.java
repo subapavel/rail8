@@ -1,7 +1,10 @@
 package dev.rail8.runtime.plugin;
 
 import dev.rail8.api.Component;
+import dev.rail8.api.CredentialKind;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Expressions;
+import dev.rail8.api.Inbound;
 import dev.rail8.api.StepFactory;
 import dev.rail8.api.plugin.AdminService;
 import dev.rail8.api.plugin.Command;
@@ -81,7 +84,9 @@ import java.util.stream.Stream;
  * {@code rail8}, whose text keys are the platform's own. So are a call that throws — a component's {@code forms()} is called once
  * as it is built, so forms that cannot be built are one —, a null scheme, step type, language or {@code forms()}, a component
  * whose out direction reaches no connection unless it is one of the platform's internal adapters ({@link #INTERNAL}), so a flow
- * sends only through a connection, and more than {@link Plugin#MAX_CONTRIBUTIONS} of one kind.
+ * sends only through a connection, a component whose {@code reads()} is null, or names a kind of credential and does not
+ * override {@code consumer(Inbound, Entry)}, so a caller's credential always reaches the node's entry, and more than
+ * {@link Plugin#MAX_CONTRIBUTIONS} of one kind.
  * Each call into a module or plugin runs with the thread's context class loader set to its own for that call.
  *
  * <p>{@link #describe} gives each module and plugin as a line of the node's log, and {@link #list} gives each one with what it
@@ -397,14 +402,32 @@ public final class Plugins implements AutoCloseable {
                 Map.of("mock", "is the platform's mock", Forms.PLATFORM, "is the platform's own"), "forms()", Plugins::forms, IllegalStateException::new, owned);
     }
 
-    /** The forms of {@code c}, once they keep the rule of the internal adapters; null when it has none. */
+    /**
+     * The forms of {@code c}, once they keep the rule of the internal adapters and its consumers enter what they read; null when
+     * it has none.
+     */
     private static Forms forms(Component c) {
         Forms forms = c.forms();
         if (forms != null && forms.serves(Direction.OUT) && !forms.connects(Direction.OUT) && !INTERNAL.contains(c.scheme())) {
             throw new Broken("the out direction of scheme " + c.scheme() + " reaches no connection: only the platform's internal adapters "
                     + INTERNAL.stream().sorted().toList() + " send without one");
         }
+        Set<CredentialKind> reads = c.reads();
+        if (reads == null) throw new Broken("scheme " + c.scheme() + ": reads() answered null");
+        if (!reads.isEmpty() && !entersWhatItReads(c)) {
+            throw new Broken("scheme " + c.scheme() + " reads the credentials " + reads.stream().sorted().toList()
+                    + " but does not override consumer(Inbound, Entry), through which its consumers hand them to the node's entry");
+        }
         return forms;
+    }
+
+    /** Whether {@code c}'s class overrides {@link Component#consumer(Inbound, Entry)}. */
+    static boolean entersWhatItReads(Component c) {
+        try {
+            return c.getClass().getMethod("consumer", Inbound.class, Entry.class).getDeclaringClass() != Component.class;
+        } catch (NoSuchMethodException none) {   // a public method of a public interface: always found
+            return false;
+        }
     }
 
     /** A rule a contribution breaks, found by a check of the node's own: refused naming its owner, never as a failed call. */

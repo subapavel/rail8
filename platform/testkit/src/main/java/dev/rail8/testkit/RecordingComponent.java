@@ -5,13 +5,17 @@ import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Deadline;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
 import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Outbound;
+import dev.rail8.api.Presented;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Timer;
 import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Forms;
@@ -25,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -47,7 +52,10 @@ import java.util.function.Supplier;
  * completed. Health is up while a consumer runs. The consumer's handler receives the envelope with its
  * {@link Envelope#H_MESSAGE_ID} ({@link Envelope#withOutboundId()}); {@link #sent()} records it as it was given. A bounded send
  * ({@code send(e, call, d)}) with no time left is refused with a retryable {@link NackException}, not recorded; one built with a
- * {@link Timer} is cut there — the same failure — when its deadline, re-read at each firing, has run out. Passes
+ * {@link Timer} is cut there — the same failure — when its deadline, re-read at each firing, has run out. It declares the
+ * kinds of credential its real component reads ({@link #reading}); a consumer built with an entry
+ * ({@link #consumer(Inbound, Entry)}) enters each message with what its headers present ({@link FakeEntry#presented}), and a
+ * refused one fails its sender's send with a {@link NackException} that carries the refusal's code. Passes
  * {@link ComponentContract}.
  *
  * @since 0.1
@@ -68,6 +76,7 @@ public final class RecordingComponent implements Component {
     private final ArrayDeque<CountDownLatch> holds = new ArrayDeque<>();   // guarded by recordAndTake
     private final List<Waiter> waiters = new CopyOnWriteArrayList<>();
     private volatile Runnable afterSendVisible;   // null: none; a test seam
+    private volatile Set<CredentialKind> reads = Set.of();
 
     public RecordingComponent(String scheme) {
         this.scheme = Objects.requireNonNull(scheme, "scheme");
@@ -79,6 +88,14 @@ public final class RecordingComponent implements Component {
         this.scheme = Objects.requireNonNull(scheme, "scheme");
         this.timer = Objects.requireNonNull(timer, "timer");
     }
+
+    /** Declares {@code kinds}, the kinds of credential the real component reads, as this mock's {@link #reads()}. */
+    public RecordingComponent reading(Set<CredentialKind> kinds) {
+        this.reads = Set.copyOf(kinds);
+        return this;
+    }
+
+    @Override public Set<CredentialKind> reads() { return reads; }
 
     /** What the producers were sent, in order. */
     public List<Envelope> sent() { return List.copyOf(sent); }
@@ -191,7 +208,30 @@ public final class RecordingComponent implements Component {
         Objects.requireNonNull(h, "handler");
         String key = keyOf(in.connection(), "in");
         Drain drain = new Drain();
-        Function<Envelope, Future<Ack>> tracked = e -> drain.deliver(h, e);
+        return consumer(key, drain, e -> drain.deliver(h, e));
+    }
+
+    /**
+     * A consumer that enters each message through {@code entry} with what its headers present, and hands it on as a message
+     * of {@code in}'s flow; a refused one fails its sender's send with a {@link NackException} that carries the refusal's code and text, retryable when it waits.
+     *
+     * @throws IllegalArgumentException when {@code in} holds no connection: both directions reach one
+     */
+    @Override
+    public Consumer consumer(Inbound in, Entry entry) {
+        Objects.requireNonNull(entry, "entry");
+        String key = keyOf(in.connection(), "in");
+        Drain drain = new Drain();
+        return consumer(key, drain, e -> entry.enter(FakeEntry.presented(e.headers(), Presented.Via.of("", true))).transform(entered -> {
+            // taken in as a message of this sender's flow, as a transport hands its receiver the bytes and headers it was sent
+            Envelope taken = new Envelope(e.id(), in.flow(), e.step(), e.headers(), e.props(), e.keys(), e.body(), e.attachments(), e.views());
+            if (entered.succeeded()) return drain.deliver(entered.result(), taken);
+            if (entered.cause() instanceof Refused r) return Future.failedFuture(new NackException(r.code() + ": " + r.getMessage(), r.retryAfter().isPresent()));
+            return Future.failedFuture(entered.cause());
+        }));
+    }
+
+    private Consumer consumer(String key, Drain drain, Function<Envelope, Future<Ack>> tracked) {
         return new Consumer() {
             @Override public Future<Void> start() { handlers.put(key, tracked); return Future.succeededFuture(); }
             /** Unregisters the handler at once; completes once every answer it handed out has completed. */

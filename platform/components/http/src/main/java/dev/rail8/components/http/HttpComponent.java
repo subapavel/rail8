@@ -9,7 +9,9 @@ import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Deadline;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Fault;
 import dev.rail8.api.Headers;
@@ -20,6 +22,7 @@ import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Direction;
@@ -62,10 +65,13 @@ import java.util.function.Function;
  * <p><b>Consumer</b> (the flow form's {@code address}; no connection): it takes requests on the node's HTTP
  * port ({@link HttpIngress}) under the prefix {@value #PREFIX}, at {@code /http} followed by its {@code address}, such as
  * {@code /http/orders} ({@link HttpConsumer#url()}); the port's verticle owns the socket and the consumer never runs a pipeline
- * on its event loop. A request at the path is streamed into the {@link BlobStore} under the {@link Inbound#maxBodyBytes} of its
+ * on its event loop. A request at the path is paused and entered first ({@link Entry#enter}) with what the port read from its
+ * head ({@link HttpIngress#presented}), before any byte of its body is read: a {@link Refused} caller gets the refusal's answer
+ * ({@link Refused#answer}) and nothing is stored, any other failure of the entry is 500 with a fixed text. An entered request
+ * is answered 405 for a method other than POST and PUT, and is otherwise streamed into the {@link BlobStore} under the {@link Inbound#maxBodyBytes} of its
  * flow (413 above it; a store that fails otherwise is 500 with a fixed text, its failure logged at WARNING),
  * becomes the ingress envelope (new id, the request headers, {@link #METHOD} / {@link #PATH} props) and is handed to the handler
- * on its own virtual thread;
+ * on its own virtual thread, through the handler the entry gave;
  * the answer follows the {@link Ack}: {@code Reply} → 200 with the reply's headers and its body streamed, {@code Accepted} →
  * 202 with {@code x-message-id}, a retryable {@code Nack} → 503 + {@code Retry-After}, a final one → 400. A failed handler (a
  * sync flow's error reaches the caller) is answered by the failure's {@link Fault.Kind}: {@code MALFORMED} 400,
@@ -75,7 +81,7 @@ import java.util.function.Function;
  * fault it was and nothing of the failure. The failure itself is logged with the message's id and flow (INFO for a 4xx,
  * WARNING with its stack for a 5xx) and is in the message's history. The platform's own cookies
  * ({@link #PLATFORM_COOKIES}) are cut from the request's {@code cookie} before it becomes the envelope, and a reply's
- * {@code set-cookie} of one of them is never sent; other cookies pass. Other methods are 405. Its stop closes its mount: no request reaches it from then
+ * {@code set-cookie} of one of them is never sent; other cookies pass. Its stop closes its mount: no request reaches it from then
  * on, and the stop completes once the requests it took have answered their senders, or at the node's stop deadline.
  *
  * <p><b>Producer</b> (the connection's {@code url}, {@code timeoutMs} and {@code poolSize}; each call's {@code path} and
@@ -186,9 +192,23 @@ public final class HttpComponent implements Component {
 
     @Override public Forms forms() { return FORMS; }
 
+    /** A consumer whose every request is entered with {@code handler} as its handler, whoever its caller: for tests and tools. */
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
-        return new HttpConsumer(in, handler);
+        Objects.requireNonNull(handler, "handler");
+        return new HttpConsumer(in, Entry.of(presented -> Future.succeededFuture(handler)));
+    }
+
+    /** {@link HttpIngress#READS}: the port reads every kind for its adapters. */
+    @Override
+    public Set<CredentialKind> reads() {
+        return HttpIngress.READS;
+    }
+
+    /** The consumer the node builds: every request is entered through {@code entry} before its body is read. */
+    @Override
+    public Consumer consumer(Inbound in, Entry entry) {
+        return new HttpConsumer(in, entry);
     }
 
     /** The producer of the connection {@code out} names; an {@link IllegalArgumentException} when it names none or no url. */
@@ -327,14 +347,14 @@ public final class HttpComponent implements Component {
     /** @since 0.1 */
     public final class HttpConsumer implements Consumer {
         private final Inbound in;
-        private final Function<Envelope, Future<Ack>> handler;
+        private final Entry entry;
         private final String flow;
         private final long maxBodyBytes;
         private volatile HttpIngress.Mount mount;
 
-        HttpConsumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        HttpConsumer(Inbound in, Entry entry) {
             this.in = Objects.requireNonNull(in, "in");
-            this.handler = Objects.requireNonNull(handler, "handler");
+            this.entry = Objects.requireNonNull(entry, "entry");
             this.flow = in.flow();
             this.maxBodyBytes = in.maxBodyBytes();
         }
@@ -363,17 +383,53 @@ public final class HttpComponent implements Component {
             return m == null ? Future.succeededFuture() : m.close();
         }
 
+        /** On the event loop, before any of the body is read: the request stays paused until the entry decides. */
         private void handle(HttpServerRequest req) {
+            req.pause();
+            Future<Function<Envelope, Future<Ack>>> entered;
+            try {
+                entered = entry.enter(http.presented(req));
+            } catch (RuntimeException failed) {
+                entered = Future.failedFuture(failed);
+            }
+            entered.onComplete(decided -> {
+                if (decided.succeeded()) {
+                    try {
+                        take(req, decided.result());
+                    } catch (RuntimeException thrown) {   // no port is left to answer for a callback: this does
+                        LOG.log(System.Logger.Level.WARNING, "a request of flow " + flow + " failed before its body was stored", thrown);
+                        if (!req.response().headWritten()) req.response().setStatusCode(500).putHeader("content-type", "text/plain").end(failedText(500));
+                        else req.response().reset();
+                    }
+                } else if (decided.cause() instanceof Refused refused) {
+                    refused.answer(req);
+                } else {
+                    LOG.log(System.Logger.Level.WARNING, "the entry of flow " + flow + " failed", decided.cause());
+                    req.response().setStatusCode(500).putHeader("content-type", "text/plain").end(failedText(500));
+                }
+            });
+        }
+
+        /** An entered request, still paused, with the handler of its one message: its body stored, then the flow run. */
+        private void take(HttpServerRequest req, Function<Envelope, Future<Ack>> handler) {
             HttpServerResponse res = req.response();
-            if (req.method() != HttpMethod.POST && req.method() != HttpMethod.PUT) { res.setStatusCode(405).putHeader("allow", "POST, PUT").end(); return; }
+            if (req.method() != HttpMethod.POST && req.method() != HttpMethod.PUT) {
+                res.setStatusCode(405).putHeader("allow", "POST, PUT").end();
+                req.resume();   // its body, if any, is read and dropped
+                return;
+            }
             String declared = req.getHeader("content-length");
-            if (declared != null && Long.parseLong(declared) > maxBodyBytes) { res.setStatusCode(413).end("body above " + maxBodyBytes + " bytes"); return; }
+            if (declared != null && Long.parseLong(declared) > maxBodyBytes) {
+                res.setStatusCode(413).end("body above " + maxBodyBytes + " bytes");
+                req.resume();
+                return;
+            }
             String id = ids.next();
             Context ctx = vertx.getOrCreateContext();
             Headers headers = withoutPlatformCookies(headers(req.headers()));
             String method = req.method().name();
             String path = req.path();
-            req.pause();   // nothing flows until the store attached its handlers (a store that attaches later resumes)
+            // the request is still paused: nothing flows until the store attached its handlers (a store that attaches later resumes)
             blobs.write(BlobKey.body(id, 0), req, maxBodyBytes).onComplete(written -> {
                 if (written.failed()) {
                     if (written.cause() instanceof BodyTooLargeException) res.setStatusCode(413).end("body above " + maxBodyBytes + " bytes");

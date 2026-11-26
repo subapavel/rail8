@@ -130,6 +130,7 @@ class DeploymentsPollerLeaseTest {
         @Override public Forms forms() { return inner.forms(); }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
+        @Override public Consumer consumer(Inbound in, dev.rail8.api.Entry entry) { return inner.consumer(in, entry); }
 
         @Override public Producer producer(Outbound out) { return inner.producer(out); }
 
@@ -404,8 +405,8 @@ class DeploymentsPollerLeaseTest {
 
     /**
      * Adopted from the implementer's scratch (P2-02L verify): a deployed polling flow that loses its lease and holds it again runs
-     * a fresh consumer, built by its component for the same endpoint with the same handler as the first; the stopped one is not
-     * started again.
+     * a fresh consumer, built by its component for the same endpoint over the same entry as the first, the flow's; the stopped
+     * one is not started again.
      */
     @Test
     void aRegainedLeaseRunsAFreshConsumerOfTheSameEndpointAndHandler() throws Exception {
@@ -426,7 +427,7 @@ class DeploymentsPollerLeaseTest {
         Doors.Door fresh = built.get(1);
         until(fresh::started, "the fresh consumer polls");
         assertEquals(first.cfg(), fresh.cfg(), "built for the same endpoint, as the component gets it");
-        assertSame(first.handler(), fresh.handler(), "with the same handler: the flow's");
+        assertSame(polledDoors.entryOf(first), polledDoors.entryOf(fresh), "over the same entry: the flow's");
         assertEquals(1, first.history().stream().filter("start"::equals).count(), "the stopped consumer was not started again");
     }
 }

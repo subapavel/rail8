@@ -262,6 +262,42 @@ public final class PluginFixtures {
         @Override public List<Component> components(ComponentContext context) { return List.of(new NullDescribed()); }
     }
 
+    /** A component of the scheme {@code unentered} that reads Basic credentials and builds its consumers over a handler only. */
+    public static final class ReadsWithoutEntry implements Component {
+        @Override public String scheme() { return "unentered"; }
+        @Override public Forms forms() { return new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION)); }
+        @Override public java.util.Set<dev.rail8.api.CredentialKind> reads() { return java.util.Set.of(dev.rail8.api.CredentialKind.BASIC); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
+        @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
+    }
+
+    /** {@link ReadsWithoutEntry} with a consumer over an entry: through it, what it reads reaches the node. */
+    public static final class ReadsThroughEntry implements Component {
+        private final ReadsWithoutEntry same = new ReadsWithoutEntry();
+        @Override public String scheme() { return "entered"; }
+        @Override public Forms forms() { return same.forms(); }
+        @Override public java.util.Set<dev.rail8.api.CredentialKind> reads() { return same.reads(); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { throw new UnsupportedOperationException("never started"); }
+        @Override public Consumer consumer(Inbound in, dev.rail8.api.Entry entry) { throw new UnsupportedOperationException("never started"); }
+        @Override public Producer producer(Outbound out) { throw new UnsupportedOperationException("never started"); }
+        @Override public Future<Health> health() { return Future.succeededFuture(Health.up()); }
+    }
+
+    /** A plugin named {@code unentered} whose components are {@link ReadsThroughEntry} and {@link ReadsWithoutEntry}. */
+    public static final class Unentered implements Plugin {
+        @Override public String name() { return "unentered"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new ReadsThroughEntry(), new ReadsWithoutEntry()); }
+    }
+
+    /** A plugin named {@code entered} whose one component is {@link ReadsThroughEntry}. */
+    public static final class Entered implements Plugin {
+        @Override public String name() { return "entered"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new ReadsThroughEntry()); }
+    }
+
     /** A plugin whose name is null. */
     public static final class NullName implements Plugin {
         @Override public String name() { return null; }

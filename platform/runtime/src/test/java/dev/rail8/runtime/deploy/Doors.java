@@ -109,6 +109,8 @@ public final class Doors implements Component {
     private final List<String> internalAddressAsked = new CopyOnWriteArrayList<>();
     private final List<String> events = new CopyOnWriteArrayList<>();
     private final List<Door> doors = new CopyOnWriteArrayList<>();
+    private final List<String> entered = new CopyOnWriteArrayList<>();
+    private final Map<Consumer, dev.rail8.api.Entry> entries = new ConcurrentHashMap<>();
     private final List<EndpointConfig> producerConfigs = new CopyOnWriteArrayList<>();
     private final Map<String, String> stopFailures = new ConcurrentHashMap<>();
     /** The endpoints whose {@link #listensOn} throws from now on, each with its text. */
@@ -365,6 +367,29 @@ public final class Doors implements Component {
         doors.add(d);
         event("consumer " + d.flow());
         return d;
+    }
+
+    /**
+     * A consumer built over the node's entry: each message is entered with nothing presented and handed to the handler the
+     * entry gives. The flow is listed in {@link #entered()}.
+     */
+    @Override
+    public Consumer consumer(Inbound in, dev.rail8.api.Entry entry) {
+        Objects.requireNonNull(entry, "entry");
+        entered.add(in.flow());
+        Consumer built = consumer(in, e -> entry.enter(new dev.rail8.api.Presented.Nothing(dev.rail8.api.Presented.Via.of("", false))).compose(h -> h.apply(e)));
+        entries.put(built, entry);
+        return built;
+    }
+
+    /** The flows whose consumers were built over an entry, in build order. */
+    public List<String> entered() { return List.copyOf(entered); }
+
+    /** The entry {@code door} was built over; an {@link AssertionError} when it was built over a bare handler. */
+    public dev.rail8.api.Entry entryOf(Door door) {
+        dev.rail8.api.Entry entry = entries.get(door);
+        if (entry == null) throw new AssertionError("the consumer of " + door.flow() + " was built over a bare handler");
+        return entry;
     }
 
     @Override

@@ -7,7 +7,9 @@ import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Deadline;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.BlobKey;
 import dev.rail8.api.Headers;
@@ -17,8 +19,11 @@ import dev.rail8.api.Inbound;
 import dev.rail8.api.Key;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Outbound;
+import dev.rail8.api.Presented;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Timer;
+import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Direction;
 import dev.rail8.api.settings.Forms;
 import dev.rail8.api.settings.Settings;
@@ -70,7 +75,9 @@ import java.util.stream.Stream;
  * ({@code rail8 test}'s {@code send}); {@link #delivered} records what each consumer's handler was given, whoever gave
  * it. Standing in for {@code http}, a consumer keeps the cookies of the node's UI out of a flow as the real one does: cut from
  * a delivery's {@code cookie} before its handler and {@link #delivered} see it, and a reply's {@code set-cookie} of one of them
- * dropped. Development and CI only: a deployed node refuses a mock binding by its scheme and by this package (the node's start).
+ * dropped, and it reads the credentials the real one reads ({@link #reads()}): each message is entered through the entry it
+ * was built with ({@link #consumer(Inbound, Entry)}) with what its headers present, before any byte of it is stored, and a
+ * refused one fails its sender's send. Development and CI only: a deployed node refuses a mock binding by its scheme and by this package (the node's start).
  *
  * @since 0.1
  */
@@ -219,10 +226,12 @@ public final class MockComponent implements Component {
     public Future<Ack> ingest(String endpoint, Headers headers, Buffer bytes) {
         Running running = handlers.get(Objects.requireNonNull(endpoint, "endpoint"));
         if (running == null) throw new IllegalStateException("no consumer of the " + scheme + " mock runs on endpoint " + endpoint);
-        String id = ids.next();
-        return blobs.write(BlobKey.body(id, 0), bytes, running.maxBodyBytes()).compose(body -> {
-            Envelope in = Envelope.ingress(id, running.flow(), headers, body);
-            return running.handler().apply("http".equals(scheme) ? in.with(HTTP_METHOD, "POST").with(HTTP_PATH, running.path()) : in);
+        return running.enter().apply(headers).compose(handler -> {   // entered before any byte is stored
+            String id = ids.next();
+            return blobs.write(BlobKey.body(id, 0), bytes, running.maxBodyBytes()).compose(body -> {
+                Envelope in = Envelope.ingress(id, running.flow(), headers, body);
+                return handler.apply("http".equals(scheme) ? in.with(HTTP_METHOD, "POST").with(HTTP_PATH, running.path()) : in);
+            });
         });
     }
 
@@ -231,12 +240,47 @@ public final class MockComponent implements Component {
 
     /**
      * A consumer running on its endpoint: its {@link Inbound}'s flow and body limit, the path an http consumer takes requests
-     * at (its prefix and the setting {@code address}; the prefix alone without one) and its tracked handler.
+     * at (its prefix and the setting {@code address}; the prefix alone without one) and its entry: given the headers a message
+     * arrives with, the tracked handler of that one message, or a failure that refuses it.
      */
-    private record Running(String flow, long maxBodyBytes, String path, Function<Envelope, Future<Ack>> handler) {
-        Running(Inbound in, Function<Envelope, Future<Ack>> handler) {
-            this(in.flow(), in.maxBodyBytes(), HTTP_PREFIX + (setting(in, "address") instanceof String a ? a : ""), handler);
+    private record Running(String flow, long maxBodyBytes, String path, Function<Headers, Future<Function<Envelope, Future<Ack>>>> enter) {
+        Running(Inbound in, Function<Headers, Future<Function<Envelope, Future<Ack>>>> enter) {
+            this(in.flow(), in.maxBodyBytes(), HTTP_PREFIX + (setting(in, "address") instanceof String a ? a : ""), enter);
         }
+    }
+
+    /**
+     * What the caller of a message that arrives with {@code headers} presented, as the node's HTTP port reads a request's
+     * head: {@code authorization} ({@code Basic} or {@code Bearer}), then {@code x-api-key}, in any case; nothing for a mock of
+     * any other scheme than {@code http}. A value it cannot read presents an empty user and password, or an empty token.
+     */
+    private Presented presented(Headers headers) {
+        Presented.Via via = Presented.Via.of("", true);
+        if (!"http".equals(scheme)) return new Presented.Nothing(via);
+        String authorization = header(headers, "authorization");
+        if (authorization != null) {
+            String v = authorization.strip();
+            int space = v.indexOf(' ');
+            String kind = (space < 0 ? v : v.substring(0, space)).toLowerCase(java.util.Locale.ROOT);
+            String rest = space < 0 ? "" : v.substring(space + 1).strip();
+            if (kind.equals("bearer")) return new Presented.Bearer(rest, via);
+            if (!kind.equals("basic")) return new Presented.Bearer("", via);
+            try {
+                String decoded = new String(java.util.Base64.getDecoder().decode(rest), java.nio.charset.StandardCharsets.UTF_8);
+                int colon = decoded.indexOf(':');
+                return colon < 0 ? new Presented.Basic("", "", via) : new Presented.Basic(decoded.substring(0, colon), decoded.substring(colon + 1), via);
+            } catch (IllegalArgumentException notBase64) {
+                return new Presented.Basic("", "", via);
+            }
+        }
+        String key = header(headers, "x-api-key");
+        return key != null ? new Presented.ApiKey(key.strip(), via) : new Presented.Nothing(via);
+    }
+
+    /** The value of the header {@code name} in any case; null when there is none. */
+    private static String header(Headers headers, String name) {
+        for (Map.Entry<String, String> h : headers.asMap().entrySet()) if (h.getKey().equalsIgnoreCase(name)) return h.getValue();
+        return null;
     }
 
     /**
@@ -294,18 +338,52 @@ public final class MockComponent implements Component {
 
     @Override public Forms forms() { return forms; }
 
+    /** An http mock's: {@link HttpIngress#READS}, as the http component's; none for any other scheme. */
+    @Override
+    public Set<CredentialKind> reads() {
+        return "http".equals(scheme) ? HttpIngress.READS : Set.of();
+    }
+
+    /** A consumer whose every message reaches {@code h}, whoever its caller. */
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         Objects.requireNonNull(h, "handler");
+        return consumer(in, (headers, track) -> Future.succeededFuture(track.apply(h)));
+    }
+
+    /**
+     * A consumer whose every message is entered through {@code entry} first, before any byte of it is stored, with what its
+     * caller presented ({@link #presented}). A refused message fails its sender's send with a {@link NackException} that
+     * carries the refusal's code and text, retryable when the refusal waits ({@code too-many}, {@code busy}).
+     */
+    @Override
+    public Consumer consumer(Inbound in, Entry entry) {
+        Objects.requireNonNull(entry, "entry");
+        return consumer(in, (headers, track) -> entry.enter(presented(headers)).transform(entered -> {
+            if (entered.succeeded()) return Future.succeededFuture(track.apply(entered.result()));
+            if (entered.cause() instanceof Refused r) {
+                return Future.failedFuture(new NackException(r.code() + ": " + r.getMessage(), r.retryAfter().isPresent()));
+            }
+            return Future.failedFuture(entered.cause());
+        }));
+    }
+
+    /**
+     * The consumer of {@code in}, which enters each message with {@code enter}: given the headers it arrives with and the
+     * tracking of a handler, the tracked handler of that one message, or a failure that refuses it.
+     */
+    private Consumer consumer(Inbound in, java.util.function.BiFunction<Headers, Function<Function<Envelope, Future<Ack>>, Function<Envelope, Future<Ack>>>,
+            Future<Function<Envelope, Future<Ack>>>> enter) {
         Objects.requireNonNull(in, "in");
         String endpoint = in.connection().map(Connection::key).orElse(in.flow());
         Drain drain = new Drain();
         List<Envelope> given = delivered.computeIfAbsent(endpoint, k -> new CopyOnWriteArrayList<>());
-        Running running = new Running(in, e -> {
+        Function<Function<Envelope, Future<Ack>>, Function<Envelope, Future<Ack>>> track = h -> e -> {
             Envelope entered = entering(e);
             given.add(entered);   // recorded before the handler runs: whoever reads its answer finds it
             return drain.deliver(h, entered).map(this::leaving);
-        });
+        };
+        Running running = new Running(in, headers -> enter.apply(headers, track));
         Poller poller = new Poller(endpoint, running, drain);
         return new Consumer() {
             /** Registers the handler, feeds the behaviour's {@code files} and schedules round 0; fails when a fixture cannot be read. */
@@ -440,11 +518,13 @@ public final class MockComponent implements Component {
 
         /** Delivers one file; whether the round goes on. */
         private boolean take(Dropped file) {
+            Function<Envelope, Future<Ack>> handler = running.enter().apply(Headers.empty()).otherwiseEmpty().await();
+            if (handler == null) return false;   // not entered: kept, the round ends
             String id = ids.next();
             Future<Body> written = blobs.write(BlobKey.body(id, 0), file.bytes(), running.maxBodyBytes());
             written.otherwiseEmpty().await();
             if (written.failed()) return refuse(file);   // above the flow's maxBodyBytes: refused finally, as the real one does
-            Ack ack = running.handler().apply(Envelope.ingress(id, running.flow(), Headers.empty(), written.result())).otherwiseEmpty().await();
+            Ack ack = handler.apply(Envelope.ingress(id, running.flow(), Headers.empty(), written.result())).otherwiseEmpty().await();
             return switch (ack) {
                 case Ack.Accepted a -> removed(file);
                 case Ack.Reply r -> removed(file);
@@ -490,7 +570,7 @@ public final class MockComponent implements Component {
                 return after(b.delay(), () -> {
                     if (b.failsOn(n)) return Future.failedFuture(failure(name, b.fail().orElseThrow()));
                     Running running = handlers.get(name);
-                    if (running != null) return deliver(running.handler(), e);
+                    if (running != null) return running.enter().apply(e.headers()).compose(handler -> deliver(handler, e));
                     return b.reply().map(fixture -> reply(e, fixture, call.maxReplyBytes())).orElse(Future.succeededFuture(e));
                 });
             }

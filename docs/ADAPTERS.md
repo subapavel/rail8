@@ -63,12 +63,33 @@ mount when it stops. A prefix that another adapter on the node declares, or `/ra
 declares no prefix.
 
 An adapter runs inside the node as trusted code, and every adapter's requests share the node's event loops. The mount's
-handler is called on an event loop, so it must never block there: the template pauses the request, streams its body into
-the blob store and runs the flow on the message's own virtual thread. Keep that order when you add your protocol.
+handler is called on an event loop, so it must never block there. The template keeps this order for every request:
+
+1. **Pause** the request, so no byte of its body is read yet.
+2. **Enter**: hand what the caller presented to the node's entry, `entry.enter(presented)`. The shared port reads it from
+   the request's head and its TLS session (`ComponentContext.http().presented(request)`): `Authorization: Basic` or
+   `Bearer`, then `X-API-Key`, then the TLS peer chain. The entry answers the handler that takes this one message, or fails
+   with a `Refused`.
+3. **Store** the body into the blob store, under the flow's body limit, only once the caller is admitted.
+4. **Run** the flow on the message's own virtual thread through the handler the entry gave.
+
+A `Refused` is answered with `refused.answer(request)`: the status of its code (401 with `WWW-Authenticate: Basic` for an
+unknown caller, 403, 400, 429 or 503), `Retry-After` when it waits, and the body `{"code": …, "error": …}`; a request
+with a body has its connection closed, so the body is never read. An entry that fails otherwise is a 500. A request's
+method and size are judged after the entry, so a caller the node does not admit learns nothing of the endpoint. The
+node admits every caller for now; what it decides comes from the node, never from the adapter. Keep that order when you
+add your protocol.
+
+`Component.reads()` names the credentials an adapter reads from its callers (`CredentialKind`: `BASIC`, `API_KEY`,
+`CERTIFICATE`, `OAUTH2`); an adapter on the node's HTTP port answers `HttpIngress.READS`, as the template does. An
+adapter that reads one overrides `consumer(Inbound, Entry)`, the consumer the node builds; one that does not is refused
+when the node starts. An adapter that reads none may keep `consumer(Inbound, handler)` alone: the default
+`consumer(Inbound, Entry)` enters each of its messages with nothing presented. A `Presented` value shows no user,
+password, key or token in its text, so it may go into a log line.
 
 It builds and passes the contract suite as written; it speaks HTTP. The comments marked `HTTP:` in the component are where
-your protocol goes; the rest (the body streamed through the blob store, the handler's acknowledgement, the deadline, the
-stop) is what every adapter keeps. Then change the forms to your fields, and the package's endpoint files with them.
+your protocol goes; the rest (the entry before the body, the body streamed through the blob store, the handler's
+acknowledgement, the deadline, the stop) is what every adapter keeps. Then change the forms to your fields, and the package's endpoint files with them.
 
 A consumer that loses its connection after its start fails `broken()` with the cause; leave the waiting and the next
 attempt to the node, which stops the consumer and starts a fresh one of the same endpoint after a delay that grows with
@@ -111,7 +132,7 @@ What the node hands the adapter:
 
 | Type | What it is |
 | --- | --- |
-| `Inbound(flow, connection, settings, maxBodyBytes)` | a sender: the flow it feeds, the connection when its direction reaches one, the flow form's values, the body limit; `consumer(in, handler)` builds its consumer |
+| `Inbound(flow, connection, settings, maxBodyBytes)` | a sender: the flow it feeds, the connection when its direction reaches one, the flow form's values, the body limit; `consumer(in, entry)` builds its consumer, which enters every caller before it takes the message |
 | `Outbound(connection)` | what a producer is built for: one connection, or none on an internal adapter; `producer(out)` builds one producer per connection |
 | `Connection(key, values, secrets)` | the connection form's values, a secret field's under `secrets`; for an endpoint file the key is the endpoint's id |
 | `Call(flow, step, settings, maxReplyBytes, address)` | one send: the flow and step that send, the flow form's values of the step's endpoint and the reply's limit; `send(e, call)` |
@@ -175,6 +196,13 @@ or `host` in the endpoint's `config`. An out endpoint's `maxBodyBytes` is option
 reply's limit is the flow's `limits.maxBodyBytes`.
 
 ## Test it
+
+The contract suite checks the entry of an adapter that reads credentials: it builds the component over a store of its
+own (`component(BlobStore)` in the test) and a `FakeEntry`, and checks that each message enters before any byte of it
+is stored, reaches the flow only through the handler the entry gave and only once, that a refused caller gets the
+refusal's answer with nothing stored or delivered, that each kind in `reads()` reaches the entry as that kind, and that
+no delivered message holds the presented password, key or token. A kind the suite cannot present by headers alone
+(`CERTIFICATE`, or a protocol of your own) is presented by overriding `presenting(kind, envelope)`.
 
 ```sh
 mvn -f ~/acme-adapter/pom.xml verify                                     # the contract tests

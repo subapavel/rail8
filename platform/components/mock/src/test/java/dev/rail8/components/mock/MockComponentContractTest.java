@@ -20,6 +20,11 @@ class MockComponentContractTest extends ComponentContract {
         return new MockComponent("http", FakeRuntime.create().blobs(), timer);
     }
 
+    /** One whose consumers store what they take in into the suite's {@code blobs}. */
+    @Override protected Component component(dev.rail8.api.BlobStore blobs) {
+        return new MockComponent("http", blobs, FakeRuntime.create().timer());
+    }
+
     /** A connection keyed by the endpoint's id and holding its config, as the node hands the mock every use. */
     @Override protected Inbound inbound() {
         return Uses.in("partner-domestic", FLOW, MAX_BYTES, Map.of("url", "http://localhost:8081/echo"));

@@ -2,6 +2,7 @@ package dev.rail8.ingress;
 
 import dev.rail8.api.Component;
 import dev.rail8.api.Inbound;
+import dev.rail8.api.Presented;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.settings.Settings;
@@ -14,12 +15,22 @@ import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.net.SocketAddress;
 
+import javax.net.ssl.SSLPeerUnverifiedException;
+
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.security.cert.Certificate;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -231,6 +242,76 @@ public final class SharedHttpPort implements HttpIngress {
             return Future.succeededFuture(mounted);
         } catch (RuntimeException refused) {
             return Future.failedFuture(refused);
+        }
+    }
+
+    /**
+     * What the caller of {@code request} presented, read from its head and its TLS session, never its body. The first proof
+     * present decides: {@code Authorization}, then {@code X-API-Key}, then the TLS peer chain. {@code Authorization: Basic}
+     * is a {@link Presented.Basic} of the user and the password it encodes, split at the first colon; {@code Authorization:
+     * Bearer} a {@link Presented.Bearer}. An {@code Authorization} or an {@code X-API-Key} the port cannot read (more than one
+     * copy, a basic value that does not decode, another scheme) still presents a credential, one that no credential matches:
+     * an empty basic user and password, or an empty token or key. The request's {@link Presented.Via}: its remote address is
+     * the socket's peer, it is secure over TLS or from loopback, it comes from a browser when it carries {@code Origin} or
+     * {@code Referer}, or {@code Sec-Fetch-Site} with any value but {@code none}, and its sender choice is its one
+     * {@code Rail8-Sender}.
+     */
+    @Override
+    public Presented presented(HttpServerRequest request) {
+        Presented.Via via = via(request);
+        List<String> authorization = request.headers().getAll("authorization");
+        if (!authorization.isEmpty()) return authorization.size() == 1 ? authorization(authorization.getFirst(), via) : new Presented.Basic("", "", via);
+        List<String> apiKey = request.headers().getAll("x-api-key");
+        if (!apiKey.isEmpty()) return new Presented.ApiKey(apiKey.size() == 1 ? apiKey.getFirst().strip() : "", via);
+        if (request.isSSL()) {
+            try {
+                List<Certificate> peer = request.connection().peerCertificates();
+                List<X509Certificate> chain = peer == null ? List.of() : peer.stream().filter(X509Certificate.class::isInstance).map(X509Certificate.class::cast).toList();
+                if (!chain.isEmpty() && chain.size() == peer.size()) return new Presented.Certificate(chain, via);
+            } catch (SSLPeerUnverifiedException none) {   // the peer sent no certificate
+                return new Presented.Nothing(via);
+            }
+        }
+        return new Presented.Nothing(via);
+    }
+
+    /** One {@code Authorization} value as what it presents. */
+    private static Presented authorization(String value, Presented.Via via) {
+        String v = value.strip();
+        int space = v.indexOf(' ');
+        String scheme = (space < 0 ? v : v.substring(0, space)).toLowerCase(Locale.ROOT);
+        String rest = space < 0 ? "" : v.substring(space + 1).strip();
+        if (scheme.equals("bearer")) return new Presented.Bearer(rest, via);
+        if (!scheme.equals("basic")) return new Presented.Bearer("", via);
+        try {
+            String decoded = new String(Base64.getDecoder().decode(rest), StandardCharsets.UTF_8);
+            int colon = decoded.indexOf(':');
+            if (colon < 0) return new Presented.Basic("", "", via);
+            return new Presented.Basic(decoded.substring(0, colon), decoded.substring(colon + 1), via);
+        } catch (IllegalArgumentException notBase64) {
+            return new Presented.Basic("", "", via);
+        }
+    }
+
+    /** How {@code request} reached the port. */
+    private static Presented.Via via(HttpServerRequest request) {
+        SocketAddress peer = request.remoteAddress();
+        String remote = peer == null || peer.hostAddress() == null ? "" : peer.hostAddress();
+        String fetchSite = request.getHeader("sec-fetch-site");
+        boolean browser = request.getHeader("origin") != null || request.getHeader("referer") != null
+                || fetchSite != null && !"none".equalsIgnoreCase(fetchSite.strip());
+        List<String> sender = request.headers().getAll("rail8-sender");
+        Optional<String> choice = sender.size() == 1 ? Optional.of(sender.getFirst().strip()) : Optional.empty();
+        return new Presented.Via(remote, request.isSSL() || loopback(remote), browser, choice);
+    }
+
+    /** Whether {@code address}, a literal IPv4 or IPv6 address, is a loopback address; false for anything else. */
+    static boolean loopback(String address) {
+        if (address.isEmpty() || !address.matches("[0-9A-Fa-f:.%]+")) return false;   // a literal only: nothing is resolved
+        try {
+            return InetAddress.getByName(address).isLoopbackAddress();
+        } catch (UnknownHostException unformed) {
+            return false;
         }
     }
 

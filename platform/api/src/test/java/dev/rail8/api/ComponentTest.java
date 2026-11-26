@@ -45,6 +45,48 @@ class ComponentTest {
     static final Inbound IN = new Inbound("orders", Optional.of(PARTNER), Map.of("address", "/orders", "dir", "/outbox"), 1024);
 
     @Test
+    void aComponentReadsNoCredentialByDefault() {
+        assertEquals(java.util.Set.of(), BARE.reads(), "an adapter that declares nothing reads no credential from its callers");
+    }
+
+    /**
+     * The default consumer of an entry: what the handler-only consumer takes in is entered with nothing presented, and reaches
+     * the handler that the entry gave; a refusal fails that message as a failed handler would.
+     */
+    @Test
+    void theDefaultConsumerOfAnEntryEntersEachMessageWithNothingPresented() {
+        java.util.List<Presented> presented = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.concurrent.atomic.AtomicReference<Function<Envelope, Future<Ack>>> built = new java.util.concurrent.atomic.AtomicReference<>();
+        Component handlerOnly = new Component() {
+            @Override public String scheme() { return BARE.scheme(); }
+            @Override public Forms forms() { return BARE.forms(); }
+            @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+                built.set(handler);
+                return BARE_CONSUMER;
+            }
+            @Override public Producer producer(Outbound out) { return BARE.producer(out); }
+            @Override public Future<Health> health() { return BARE.health(); }
+        };
+        Entry entry = Entry.of(p -> {
+            presented.add(p);
+            return p.via().remote().isEmpty() && presented.size() == 1
+                    ? Future.succeededFuture(e -> Future.succeededFuture(new Ack.Accepted("taken-" + e.id())))
+                    : Future.failedFuture(new Refused(Refused.Reason.UNKNOWN, Optional.empty()));
+        });
+        handlerOnly.consumer(IN, entry);
+        Body body = new InMemoryBlobStore(1_000).write(BlobKey.body("m1", 0), io.vertx.core.buffer.Buffer.buffer("<a/>"), 100).await();
+        Envelope e = Envelope.ingress("m1", "orders", Headers.empty(), body);
+        assertEquals(new Ack.Accepted("taken-m1"), built.get().apply(e).result(), "the message reaches the handler the entry gave");
+        assertEquals(java.util.List.of(new Presented.Nothing(Presented.Via.of("", false))), presented, "entered with nothing presented");
+        assertEquals("unknown-caller", ((Refused) built.get().apply(e).cause()).code(), "a refusal fails that message");
+    }
+
+    static final Consumer BARE_CONSUMER = new Consumer() {
+        @Override public Future<Void> start() { return Future.succeededFuture(); }
+        @Override public Future<Void> stop() { return Future.succeededFuture(); }
+    };
+
+    @Test
     void listensOnIsEmptyByDefault() {
         assertEquals(Optional.empty(), BARE.listensOn(IN), "by default no address, whatever host and port the connection names");
     }

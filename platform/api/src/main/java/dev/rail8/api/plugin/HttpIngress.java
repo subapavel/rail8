@@ -1,13 +1,16 @@
 package dev.rail8.api.plugin;
 
 import dev.rail8.api.Component;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Inbound;
+import dev.rail8.api.Presented;
 import dev.rail8.api.settings.Field;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.http.HttpServerRequest;
 
 import java.net.URI;
+import java.util.Set;
 
 /**
  * The node's HTTP port, shared by every component that declares a prefix ({@link Component#httpPrefix()}): one port for all
@@ -19,7 +22,9 @@ import java.net.URI;
  * <p>A consumer mounts its endpoint when it starts and closes the mount when it stops. Between the two, every request at the
  * mount's path reaches the consumer's handler, whatever its method, and the consumer answers it by its own protocol: which
  * methods it takes, the body limit, streaming the body into the blob store, the message's own virtual thread and the status
- * from the flow's answer are the adapter's, as they would be on a port of its own. The node answers only what no mount can:
+ * from the flow's answer are the adapter's, as they would be on a port of its own. Before any of the body is read, the
+ * consumer enters the message ({@link dev.rail8.api.Entry#enter}) with what {@link #presented} reads from the request, and
+ * the request stays paused until the entry decides. The node answers only what no mount can:
  * 404 for a path that no flow serves; 503 with {@code Retry-After} for the path of a flow that is deployed but has no mount at
  * the moment (while a redeploy swaps it, while its consumer restarts, while it stops); 500 for a request whose handler threw
  * before it answered.
@@ -47,6 +52,9 @@ public interface HttpIngress {
     Field ADDRESS = Field.text("address", "Address", "The path under the adapter's prefix on the node's HTTP port that senders call, "
             + "such as /orders; matched exactly.").required().pattern(ADDRESS_PATTERN).in();
 
+    /** The kinds the port reads for every adapter on it: what such an adapter answers from {@link Component#reads()}. */
+    Set<CredentialKind> READS = Set.of(CredentialKind.BASIC, CredentialKind.API_KEY, CredentialKind.CERTIFICATE, CredentialKind.OAUTH2);
+
     /** The port where none is open ({@code rail8 validate}, {@code rail8 test}): every mount fails. */
     HttpIngress NONE = (scheme, in, requests) -> Future.failedFuture(new IllegalStateException(
             "flow '" + in.flow() + "': no HTTP port is open here"));
@@ -69,6 +77,18 @@ public interface HttpIngress {
      * @since 0.4
      */
     Future<Mount> mount(String scheme, Inbound in, Handler<HttpServerRequest> requests);
+
+    /**
+     * What the caller of a request this port handed to a mount presented. The first proof present decides, in this order:
+     * {@code Authorization} ({@code Basic}, or {@code Bearer}), then {@code X-API-Key}, then the client certificate. It reads
+     * the head and the TLS session only, never the body. The node's port overrides it; the default presents nothing, which
+     * a check refuses.
+     *
+     * @since 0.4
+     */
+    default Presented presented(HttpServerRequest request) {
+        return new Presented.Nothing(Presented.Via.of("", false));
+    }
 
     /**
      * One endpoint mounted on the port.

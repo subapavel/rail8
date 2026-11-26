@@ -2,11 +2,13 @@ package dev.rail8.testkit;
 
 import dev.rail8.api.Ack;
 import dev.rail8.api.BlobKey;
+import dev.rail8.api.BlobStore;
 import dev.rail8.api.Body;
 import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Deadline;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
@@ -14,7 +16,9 @@ import dev.rail8.api.Health;
 import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Outbound;
+import dev.rail8.api.Presented;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Secret;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.HttpIngress;
@@ -24,12 +28,15 @@ import dev.rail8.api.settings.Settings;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.streams.ReadStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -88,6 +95,14 @@ import static org.junit.jupiter.api.Assertions.fail;
  * HTTP port ({@link Component#httpPrefix()}) is none, or one of {@link HttpIngress#PREFIX_PATTERN} other than
  * {@link HttpIngress#RESERVED_PREFIX}, the same on every call, with {@link HttpIngress#ADDRESS} in its flow form.
  *
+ * <p>A component that reads credentials ({@link Component#reads()} not empty), and its mock, enter every message through
+ * the {@link dev.rail8.api.Entry} they were built with, the suite's {@link FakeEntry}: a message reaches the flow only
+ * through the handler {@code enter} gave, once per message; {@code enter} comes before any byte is stored, as the suite's
+ * blob store ({@link #component(BlobStore)}) fails a write that comes before its request's {@code enter}; a refused caller
+ * gets the refusal's answer, its code in the send's failure, and nothing is stored or delivered; each declared kind reaches
+ * {@code enter} as that kind ({@link #presenting}); and no delivered envelope holds the presented password, key or token in
+ * its headers, props, keys or body.
+ *
  * @since 0.1
  */
 @Timeout(60)
@@ -101,8 +116,44 @@ public abstract class ComponentContract {
 
     private static final Function<Envelope, Future<Ack>> ACCEPT = e -> Future.succeededFuture(new Ack.Accepted(e.id()));
 
+    /** The user the suite presents as a name and a password. */
+    protected static final String PRESENTED_USER = "contract-user";
+    /** The password the suite presents; no delivered envelope holds it. */
+    protected static final String PRESENTED_PASSWORD = "contract-password-7f3a9c41";
+    /** The API key the suite presents; no delivered envelope holds it. */
+    protected static final String PRESENTED_KEY = "contract-key-4b2e8d17";
+    /** The token the suite presents; no delivered envelope holds it. */
+    protected static final String PRESENTED_TOKEN = "contract-token-9d1c6a52";
+
     /** A fresh component under test; called once per test case. */
     protected abstract Component component();
+
+    /**
+     * A fresh component under test whose consumers store what they take in into {@code blobs}: the suite's store, which fails
+     * a write that comes before its request's {@code enter}. A component whose {@link Component#reads()} is not empty
+     * overrides it, and a mock that stores nothing answers {@link #component()}; the cases of the entry fail without it.
+     */
+    protected Component component(BlobStore blobs) {
+        throw new UnsupportedOperationException("a component that reads credentials overrides component(BlobStore), with the store its consumers write to");
+    }
+
+    /**
+     * {@code e} as it carries the credential of {@code kind} when a producer of {@link #outbound(Consumer)} sends it, so the
+     * started consumer's caller presents that kind; empty when the suite cannot present it so. By default a header:
+     * {@code Authorization: Basic} of {@link #PRESENTED_USER} and {@link #PRESENTED_PASSWORD}, {@code X-API-Key:}
+     * {@link #PRESENTED_KEY}, {@code Authorization: Bearer} {@link #PRESENTED_TOKEN}; a client certificate none, which the
+     * node's HTTP port reads for an adapter on it (one with a prefix, or one that reads {@link HttpIngress#READS}, as its
+     * mock does). An adapter with a listener of its own supplies a presenter for each kind it reads.
+     */
+    protected Optional<Envelope> presenting(CredentialKind kind, Envelope e) {
+        return switch (kind) {
+            case BASIC -> Optional.of(e.withHeader("authorization", "Basic " + Base64.getEncoder().encodeToString(
+                    (PRESENTED_USER + ":" + PRESENTED_PASSWORD).getBytes(StandardCharsets.UTF_8))));
+            case API_KEY -> Optional.of(e.withHeader("x-api-key", PRESENTED_KEY));
+            case OAUTH2 -> Optional.of(e.withHeader("authorization", "Bearer " + PRESENTED_TOKEN));
+            case CERTIFICATE -> Optional.empty();
+        };
+    }
 
     /**
      * A fresh component under test whose producers time their sends on {@code timer} — the case's fake timer, on the case's
@@ -357,6 +408,202 @@ public abstract class ComponentContract {
             second.close().await();
             consumer.stop().await();
         }
+    }
+
+    @Test
+    public void aMessageReachesTheFlowOnlyThroughTheHandlerEnterGaveOncePerMessage() {
+        Component component = component();
+        if (component.reads().isEmpty()) return;
+        FakeEntry fake = new FakeEntry();
+        Consumer consumer = component.consumer(inbound(), fake.entry(inbound().flow(), ACCEPT));
+        consumer.start().await();
+        Producer producer = component.producer(outbound(consumer));
+        try {
+            FakeRuntime rt = FakeRuntime.create();
+            for (String body : List.of("first", "second")) {
+                Future<Envelope> sent = settled(producer.send(presented(component, rt.ingress(FLOW, Headers.empty(), Buffer.buffer(body))), call(consumer)));
+                assertTrue(sent.succeeded(), body + ": delivered: " + sent.cause());
+            }
+            assertEquals(2, fake.presented().size(), "each message entered once: " + fake.presented());
+            assertEquals(List.of("first", "second"), fake.delivered().stream().map(e -> e.body().whole().toString()).toList(),
+                    "each message reached the flow through the handler its enter gave, with its body intact");
+            assertEquals(0, fake.secondApplies(), "no handler is applied twice");
+        } finally {
+            producer.close().await();
+            consumer.stop().await();
+        }
+    }
+
+    @Test
+    public void enterComesBeforeAnyByteIsStored() {
+        if (component().reads().isEmpty()) return;
+        FakeEntry fake = new FakeEntry().thenAdmit(FakeEntry.SYSTEM).thenRefuse(Refused.Reason.UNKNOWN).thenAdmit(FakeEntry.SYSTEM);
+        EnteredFirst blobs = new EnteredFirst(fake);
+        Component component = component(blobs);
+        Consumer consumer = component.consumer(inbound(), fake.entry(inbound().flow(), ACCEPT));
+        consumer.start().await();
+        Producer producer = component.producer(outbound(consumer));
+        try {
+            FakeRuntime rt = FakeRuntime.create();
+            for (String body : List.of("admitted", "refused", "admitted-again")) {
+                settled(producer.send(presented(component, rt.ingress(FLOW, Headers.empty(), Buffer.buffer(body))), call(consumer)));
+            }
+            assertEquals(List.of(), blobs.early(), "no byte is stored before its request entered");
+            assertEquals(List.of("admitted", "admitted-again"), fake.delivered().stream().map(e -> e.body().whole().toString()).toList(),
+                    "the admitted messages reach the flow");
+        } finally {
+            producer.close().await();
+            consumer.stop().await();
+        }
+    }
+
+    @Test
+    public void aRefusedCallerGetsTheRefusalsAnswerAndNothingIsStoredOrDelivered() {
+        if (component().reads().isEmpty()) return;
+        for (Refused.Reason reason : List.of(Refused.Reason.UNKNOWN, Refused.Reason.NOT_ALLOWED, Refused.Reason.BUSY)) {
+            FakeEntry fake = new FakeEntry().refusing(reason);
+            EnteredFirst blobs = new EnteredFirst(fake);
+            Component component = component(blobs);
+            Consumer consumer = component.consumer(inbound(), fake.entry(inbound().flow(), ACCEPT));
+            consumer.start().await();
+            Producer producer = component.producer(outbound(consumer));
+            try {
+                Envelope e = presented(component, FakeRuntime.create().ingress(FLOW, Headers.empty(), Buffer.buffer("refused-" + reason)));
+                Future<Envelope> sent = settled(producer.send(e, call(consumer)));
+                Refused refusal = new Refused(reason, reason == Refused.Reason.BUSY ? Optional.of(Duration.ofSeconds(1)) : Optional.empty());
+                assertTrue(sent.failed(), reason + ": the send fails");
+                assertTrue(String.valueOf(sent.cause().getMessage()).contains(refusal.code()),
+                        reason + ": the caller gets the refusal's answer, which carries its code " + refusal.code() + ": " + sent.cause());
+                assertEquals(List.of(), fake.delivered(), reason + ": nothing is delivered");
+                assertEquals(0, blobs.writes(), reason + ": nothing is stored");
+            } finally {
+                producer.close().await();
+                consumer.stop().await();
+            }
+        }
+    }
+
+    @Test
+    public void eachDeclaredKindReachesEnterAsThatKind() {
+        Component component = component();
+        for (CredentialKind kind : component.reads().stream().sorted().toList()) {
+            Optional<Envelope> carrying = presenting(kind, FakeRuntime.create().ingress(FLOW, Headers.empty(), Buffer.buffer("kind-" + kind)));
+            if (carrying.isEmpty()) {
+                // an adapter on the node's HTTP port, and its mock, read what the port reads: the port's own tests check a certificate
+                if (component.httpPrefix().isPresent() || component.reads().equals(HttpIngress.READS)) continue;
+                fail("the component reads " + kind + ": its test supplies a presenter of it, presenting(" + kind + ", e)");
+            }
+            FakeEntry fake = new FakeEntry();
+            Consumer consumer = component.consumer(inbound(), fake.entry(inbound().flow(), ACCEPT));
+            consumer.start().await();
+            Producer producer = component.producer(outbound(consumer));
+            try {
+                Future<Envelope> sent = settled(producer.send(carrying.get(), call(consumer)));
+                assertTrue(sent.succeeded(), kind + ": delivered: " + sent.cause());
+                assertEquals(1, fake.presented().size(), kind + ": entered once");
+                Presented p = fake.presented().getFirst();
+                switch (kind) {
+                    case BASIC -> assertTrue(p instanceof Presented.Basic b && (!byHeaders() || b.user().equals(PRESENTED_USER) && b.password().equals(PRESENTED_PASSWORD)),
+                            "BASIC reaches enter as a name and a password: " + p);
+                    case API_KEY -> assertTrue(p instanceof Presented.ApiKey k && (!byHeaders() || k.key().equals(PRESENTED_KEY)), "API_KEY reaches enter as a key: " + p);
+                    case OAUTH2 -> assertTrue(p instanceof Presented.Bearer t && (!byHeaders() || t.token().equals(PRESENTED_TOKEN)), "OAUTH2 reaches enter as a token: " + p);
+                    case CERTIFICATE -> assertInstanceOf(Presented.Certificate.class, p, "CERTIFICATE reaches enter as a chain");
+                }
+            } finally {
+                producer.close().await();
+                consumer.stop().await();
+            }
+        }
+    }
+
+    @Test
+    public void noDeliveredEnvelopeHoldsThePresentedPasswordKeyOrToken() {
+        Component component = component();
+        List<CredentialKind> kinds = component.reads().stream().sorted().toList();
+        if (kinds.isEmpty()) return;
+        FakeEntry fake = new FakeEntry();
+        Consumer consumer = component.consumer(inbound(), fake.entry(inbound().flow(), ACCEPT));
+        consumer.start().await();
+        Producer producer = component.producer(outbound(consumer));
+        try {
+            for (CredentialKind kind : kinds) {
+                Optional<Envelope> carrying = presenting(kind, FakeRuntime.create().ingress(FLOW, Headers.empty(), Buffer.buffer("secret-" + kind)));
+                if (carrying.isEmpty()) continue;
+                assertTrue(settled(producer.send(carrying.get(), call(consumer))).succeeded(), kind + ": delivered");
+            }
+            List<String> secrets = List.of(PRESENTED_PASSWORD, PRESENTED_KEY, PRESENTED_TOKEN,
+                    Base64.getEncoder().encodeToString((PRESENTED_USER + ":" + PRESENTED_PASSWORD).getBytes(StandardCharsets.UTF_8)));
+            for (Envelope e : fake.delivered()) {
+                String held = e.headers().asMap() + " " + e.props() + " " + e.keys() + " " + e.body().whole();
+                for (String secret : secrets) assertFalse(held.contains(secret), "a delivered envelope holds what the caller presented: " + held);
+            }
+        } finally {
+            producer.close().await();
+            consumer.stop().await();
+        }
+    }
+
+    /** {@code e} as it carries the first kind {@code component} reads that the suite presents itself; {@code e} when none. */
+    private Envelope presented(Component component, Envelope e) {
+        for (CredentialKind kind : component.reads().stream().sorted().toList()) {
+            Optional<Envelope> carrying = presenting(kind, e);
+            if (carrying.isPresent()) return carrying.get();
+        }
+        return e;
+    }
+
+    /** Whether the suite's own headers present the kinds: the test does not override {@link #presenting}. */
+    private boolean byHeaders() {
+        for (Class<?> c = getClass(); c != ComponentContract.class; c = c.getSuperclass()) {
+            for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                if (m.getName().equals("presenting") && List.of(m.getParameterTypes()).equals(List.of(CredentialKind.class, Envelope.class))) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * The suite's blob store for the cases of the entry: an {@link InMemoryBlobStore} that fails a write that comes before
+     * its request's {@code enter}, a write of a message taken in (its step 0) beyond the callers {@code fake} admitted so far,
+     * and names each such write.
+     */
+    private static final class EnteredFirst implements BlobStore {
+        private final FakeEntry fake;
+        private final InMemoryBlobStore store = FakeRuntime.create().withTreeLimit(4096).blobs();
+        private final AtomicInteger writes = new AtomicInteger();
+        private final List<String> early = new CopyOnWriteArrayList<>();
+
+        EnteredFirst(FakeEntry fake) { this.fake = fake; }
+
+        int writes() { return writes.get(); }
+
+        List<String> early() { return List.copyOf(early); }
+
+        /** Whether a write of {@code key} may go ahead: a reply's (a step after 0), or a message's taken in once its request entered. */
+        private boolean entered(BlobKey key) {
+            if (key.step() != 0) return true;
+            if (writes.incrementAndGet() <= fake.admitted().size()) return true;
+            early.add(key.toString());
+            return false;
+        }
+
+        @Override public long treeLimit() { return store.treeLimit(); }
+
+        @Override public Future<Body> write(BlobKey key, Buffer whole, long maxSize) {
+            return entered(key) ? store.write(key, whole, maxSize) : Future.failedFuture(new IllegalStateException("a write before its request's enter"));
+        }
+
+        @Override public Future<Body> write(BlobKey key, ReadStream<Buffer> in, long maxSize) {
+            return entered(key) ? store.write(key, in, maxSize) : Future.failedFuture(new IllegalStateException("a write before its request's enter"));
+        }
+
+        @Override public ReadStream<Buffer> open(BlobKey key) { return store.open(key); }
+
+        @Override public Future<Buffer> read(BlobKey key) { return store.read(key); }
+
+        @Override public Future<Boolean> exists(BlobKey key) { return store.exists(key); }
+
+        @Override public Future<Void> persist(BlobKey key) { return store.persist(key); }
     }
 
     /**
