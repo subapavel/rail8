@@ -158,6 +158,8 @@ public final class ConfigObjects implements ConfigStore {
         Objects.requireNonNull(query, "query");
         if (query.limit() < 1 || query.limit() > MAX_PAGE) throw badRequest("a page holds 1 to " + MAX_PAGE + " objects");
         return rows.read(tx -> {
+            ConfigRows.Head head = tx.head(false);
+            Overview overview = new Overview(head.generation(), head.stamp(), head.mocksAllowed(), tx.nodes());
             List<ObjectView> items = new ArrayList<>();
             String after = query.after().orElse("");
             boolean more = false;
@@ -165,12 +167,12 @@ public final class ConfigObjects implements ConfigStore {
                 List<ConfigRows.ObjectRow> page = tx.rows(query.kind(), query.prefix().orElse(""), after, MAX_PAGE);
                 for (ConfigRows.ObjectRow r : page) {
                     after = r.ref.key();
-                    if (query.needsConsent() && !waitsForConsent(tx, r)) continue;
+                    if (query.needs().isPresent() && !waits(tx, r, query.needs().get())) continue;
                     if (items.size() == query.limit()) {
                         more = true;
                         break;
                     }
-                    items.add(view(tx, r.ref, Optional.of(r)));
+                    items.add(view(tx, r.ref, Optional.of(r), overview));
                 }
                 if (more || page.size() < MAX_PAGE) break;
             }
@@ -198,8 +200,9 @@ public final class ConfigObjects implements ConfigStore {
                 }
                 verified.add(r.ref);
                 Holding holding = held.objects().get(r.ref);
-                boolean stopped = r.stoppedAt != null;
-                if (holding == null || holding.activation() != r.activation || holding.stopped() != stopped) {
+                Optional<ConnectionState.Stop> stopped = r.stoppedAt == null ? Optional.empty()
+                        : Optional.of(new ConnectionState.Stop(r.stoppedBy, r.stoppedAt));
+                if (holding == null || holding.activation() != r.activation || !holding.stopped().equals(stopped)) {
                     changed.add(new InForce(r.ref, r.activation, r.format, r.body, stopped));
                 }
             }
@@ -215,6 +218,14 @@ public final class ConfigObjects implements ConfigStore {
         Objects.requireNonNull(node, "node");
         Objects.requireNonNull(refused, "refused");
         rows.holds(node, epoch, generation, stamp, refused);
+    }
+
+    @Override
+    public Overview overview() {
+        return rows.read(tx -> {
+            ConfigRows.Head head = tx.head(false);
+            return new Overview(head.generation(), head.stamp(), head.mocksAllowed(), tx.nodes());
+        });
     }
 
     @Override
@@ -964,6 +975,11 @@ public final class ConfigObjects implements ConfigStore {
         return Servers.needs(new Sends(new TreeSet<>(), pairs(r.ref, r.draft)), consented(tx, r));
     }
 
+    /** Whether the row's draft waits for {@code needs}: any draft for its activation, one whose consent is not given for its consent. */
+    private boolean waits(ConfigRows.Tx tx, ConfigRows.ObjectRow r, Needs needs) {
+        return r.draft != null && (needs == Needs.ACTIVATION || waitsForConsent(tx, r));
+    }
+
     private boolean waitsForConsent(ConfigRows.Tx tx, ConfigRows.ObjectRow r) {
         Optional<Needed> needed = needed(tx, r);
         return needed.isPresent() && !(r.consent != null && needed.get().hex().equals(HEX.formatHex(r.consent)) && consentVerifies(r));
@@ -1018,11 +1034,6 @@ public final class ConfigObjects implements ConfigStore {
         return secrets.verify(new SecretStore.Binding(r.consentKeyId, r.consentTag), Jcs.bytes(consentArray(r, HEX.formatHex(r.consent))));
     }
 
-    private String binding(ConfigRows.ObjectRow r) {
-        if (r.keyId == null) return "unbound";
-        return verifies(r) ? "verified" : "fails";
-    }
-
     private SecretStore.Binder binder(ConfigRows.Tx tx) {
         return secrets.binder(tx.connection()).await();
     }
@@ -1067,44 +1078,122 @@ public final class ConfigObjects implements ConfigStore {
     // ---------------------------------------------------------------------------------------------------------------- views
 
     private ObjectView view(ConfigRows.Tx tx, Ref ref, Optional<ConfigRows.ObjectRow> row) {
+        ConfigRows.Head head = tx.head(false);
+        return view(tx, ref, row, new Overview(head.generation(), head.stamp(), head.mocksAllowed(), tx.nodes()));
+    }
+
+    /**
+     * The object as the screen shows it: what is in force and the draft, each with its values or instance name; for a draft its
+     * changes against the version in force, and for a connection's draft what an activation would refuse ({@code problems}) and
+     * the consent it needs; the stop; the secrets the values name; whether each live node holds the version in force; the
+     * deployed uses with their digest; and the adapter's connection form. Never a secret's value.
+     */
+    private ObjectView view(ConfigRows.Tx tx, Ref ref, Optional<ConfigRows.ObjectRow> row, Overview overview) {
+        boolean connection = ref.kind() == Ref.Kind.CONNECTION;
         JsonObject json = new JsonObject().put("kind", ref.kind().id()).put("key", ref.key());
-        if (ref.kind() == Ref.Kind.CONNECTION) tx.deployedAdapter(ref.key()).ifPresent(a -> json.put("deployedAdapter", a));
+        Optional<String> deployed = connection ? tx.deployedAdapter(ref.key()) : Optional.empty();
+        if (connection) {
+            json.put("system", ref.key().substring(0, ref.key().lastIndexOf('/')));
+            deployed.ifPresent(a -> json.put("deployedAdapter", a));
+        }
+        Optional<String> adapterName = connection ? row.flatMap(r -> Optional.ofNullable(r.body).or(() -> Optional.ofNullable(r.draft)))
+                .flatMap(b -> Optional.ofNullable(b.getString("adapter"))).or(() -> deployed) : Optional.empty();
+        adapterName.ifPresent(a -> json.put("adapter", a));
+        Optional<Adapter> adapter = adapterName.flatMap(adapters);
         if (row.isEmpty()) {
             json.put("etag", EMPTY_ETAG).put("revision", 0).put("version", 0).putNull("activation").putNull("inForce").putNull("draft");
-            return new ObjectView(json);
-        }
-        ConfigRows.ObjectRow r = row.get();
-        json.put("etag", etag(r)).put("revision", r.revision).put("version", r.version).put("activation", decimal(r.activation));
-        if (r.version == 0) {
-            json.putNull("inForce");
+            if (connection) json.putNull("run").putNull("stopped").put("secrets", new JsonArray());
         } else {
-            JsonObject inForce = new JsonObject().put("version", r.version).put("format", r.format).put("body", r.body)
-                    .put("removed", r.body == null).put("binding", binding(r)).put("at", r.activatedAt.toString()).put("by", r.activatedBy);
-            if (r.keyId != null) inForce.put("keyId", HEX.formatHex(r.keyId));
-            json.put("inForce", inForce);
-        }
-        if (r.draft == null) {
-            json.putNull("draft");
-        } else {
-            JsonObject draft = new JsonObject().put("format", r.draftFormat).put("body", r.draft).put("at", r.draftAt.toString()).put("by", r.draftBy);
-            if (ref.kind() == Ref.Kind.CONNECTION) {
-                draft.put("sends", sends(pairs(ref, r.draft)));
-                Optional<Needed> needed = needed(tx, r);
-                draft.put("needs", needed.map(n -> new JsonObject().put("digest", n.hex()).put("sends", sends(n.pairs()))).orElse(null));
-                if (r.consent == null) {
-                    draft.putNull("consent");
-                } else {
-                    draft.put("consent", new JsonObject().put("digest", HEX.formatHex(r.consent)).put("at", r.consentAt.toString())
-                            .put("by", r.consentBy).put("verified", consentVerifies(r)));
-                }
+            ConfigRows.ObjectRow r = row.get();
+            json.put("etag", etag(r)).put("revision", r.revision).put("version", r.version).put("activation", decimal(r.activation));
+            json.put("inForce", r.version == 0 ? null : inForceView(tx, r));
+            json.put("draft", r.draft == null ? null : draftView(tx, r, adapter));
+            if (connection) {
+                json.put("run", run(r));
+                json.put("stopped", r.stoppedAt == null ? null : new JsonObject().put("at", r.stoppedAt.toString()).put("by", r.stoppedBy));
+                json.put("secrets", secretsView(adapter, r.draft != null ? r.draft : r.body));
             }
-            json.put("draft", draft);
         }
-        if (ref.kind() == Ref.Kind.CONNECTION) {
-            json.put("run", run(r));
-            json.put("stopped", r.stoppedAt == null ? null : new JsonObject().put("at", r.stoppedAt.toString()).put("by", r.stoppedBy));
+        JsonArray nodes = new JsonArray();
+        for (NodeReport n : overview.nodes()) {
+            String holds = overview.holds(n, ref);
+            JsonObject node = new JsonObject().put("node", n.node()).put("holds", holds);
+            if (!holds.equals("yes")) {
+                n.generation().ifPresent(g -> node.put("generation", g));
+                n.readAt().ifPresent(at -> node.put("readAt", at.toString()));
+            }
+            nodes.add(node);
         }
+        json.put("nodes", nodes);
+        List<ConfigRows.Use> uses = connection ? tx.uses(ref.key()) : tx.usesOfSystem(ref.key());
+        JsonArray flows = new JsonArray();
+        for (ConfigRows.Use u : uses.subList(0, Math.min(uses.size(), MAX_PAGE))) {
+            JsonObject use = new JsonObject().put("flow", u.flow()).put("step", u.step()).put("direction", u.direction());
+            if (connection) use.put("address", u.address());
+            else use.put("connection", u.connection());
+            flows.add(use);
+        }
+        json.put("usedBy", new JsonObject().put("digest", usesDigest(uses)).put("count", uses.size()).put("flows", flows));
+        if (connection) json.put("form", adapter.map(a -> new JsonObject(a.forms().connection().toJson())).orElse(null));
         return new ObjectView(json);
+    }
+
+    /** The version in force as the screen shows it: a connection's adapter, values and mock, or a system's instance name. */
+    private JsonObject inForceView(ConfigRows.Tx tx, ConfigRows.ObjectRow r) {
+        JsonObject inForce = new JsonObject().put("version", r.version).put("removed", r.body == null);
+        if (r.body != null) bodyView(r.ref, r.body, inForce);
+        inForce.put("activatedAt", r.activatedAt.toString()).put("activatedBy", r.activatedBy)
+                .put("generation", tx.version(r.ref, r.version).map(h -> h.generation).orElse(null))
+                .put("binding", r.keyId != null && verifies(r) ? "ok" : "fails");
+        if (r.keyId != null) inForce.put("keyId", HEX.formatHex(r.keyId));
+        return inForce;
+    }
+
+    /** The draft as the screen shows it, with its changes, and for a connection the problems an activation would have and its consent. */
+    private JsonObject draftView(ConfigRows.Tx tx, ConfigRows.ObjectRow r, Optional<Adapter> adapter) {
+        boolean removed = r.draft.getBoolean("removed", false);
+        JsonObject draft = new JsonObject().put("removed", removed);
+        if (!removed) bodyView(r.ref, r.draft, draft);
+        draft.put("savedAt", r.draftAt.toString()).put("savedBy", r.draftBy).put("changes", diff(inForceBody(r), r.draft));
+        if (r.ref.kind() != Ref.Kind.CONNECTION) return draft;
+        JsonArray problems = new JsonArray();
+        if (!removed && !r.draft.containsKey("mock") && adapter.isPresent()) {
+            Body body = Body.of(r.draft);
+            Map<String, Secret.Kind> kinds = tx.kinds(secretUses(r.draft).keySet());
+            lines(adapter.get(), body, kinds).values().forEach(l -> l.forEach(problems::add));
+        }
+        draft.put("problems", problems);
+        draft.put("sends", sends(pairs(r.ref, r.draft)));
+        Optional<Needed> needed = needed(tx, r);
+        draft.put("consent", needed.map(n -> {
+            boolean given = r.consent != null && n.hex().equals(HEX.formatHex(r.consent)) && consentVerifies(r);
+            return new JsonObject().put("digest", n.hex()).put("sends", sends(n.pairs()))
+                    .put("given", given ? new JsonObject().put("at", r.consentAt.toString()).put("by", r.consentBy) : null);
+        }).orElse(null));
+        return draft;
+    }
+
+    /** Puts a body's fields into {@code into}: a connection's adapter, values and mock, or a system's instance name. */
+    private static void bodyView(Ref ref, JsonObject body, JsonObject into) {
+        if (ref.kind() == Ref.Kind.SYSTEM) {
+            into.put("instanceName", body.getString("instanceName"));
+            return;
+        }
+        into.put("adapter", body.getString("adapter")).put("values", body.getValue("values")).put("mock", body.getValue("mock"));
+    }
+
+    /** The secrets {@code body}'s secret fields name, each with its field and the kinds the field takes; never a value. */
+    private static JsonArray secretsView(Optional<Adapter> adapter, JsonObject body) {
+        JsonArray secrets = new JsonArray();
+        if (adapter.isEmpty() || body == null || !(body.getValue("values") instanceof JsonObject values)) return secrets;
+        Settings form = adapter.get().forms().connection();
+        for (String field : form.secrets()) {
+            if (!(values.getValue(field) instanceof String s) || !s.startsWith(REFERENCE)) continue;
+            JsonArray kinds = new JsonArray();
+            form.kinds(field).stream().sorted().forEach(k -> kinds.add(k.id()));
+            secrets.add(new JsonObject().put("field", field).put("name", s.substring(REFERENCE.length())).put("kinds", kinds));
+        }
+        return secrets;
     }
 
     private static JsonArray sends(Set<Send> pairs) {

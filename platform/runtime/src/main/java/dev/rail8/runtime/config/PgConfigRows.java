@@ -97,6 +97,10 @@ final class PgConfigRows implements ConfigRows {
             + " order by kind, key limit $2 for update skip locked";
     private static final String HISTORY_BOUND_ELSEWHERE = "select " + HISTORY_COLUMNS + " from config_history"
             + " where change = 'activate' and tag is not null and key_id <> $1 order by id limit $2 for update skip locked";
+    private static final String HOLDS = "update nodes set config_generation = $3, config_stamp = $4, config_epoch = $2, config_read_at = now(),"
+            + " config_refused = $5, config_refused_count = $6 where node = $1 and epoch = $2";
+    private static final String NODES = "select node, epoch, config_epoch, config_generation, config_stamp, config_read_at, config_refused,"
+            + " config_refused_count from nodes where lease_until >= now() order by node";
     private static final String BIND_HISTORY = "update config_history set key_id = $2, tag = $3 where id = $1";
     private static final String COUNT_UNDER = "select (select count(*) from config_objects where tag is not null and key_id = $1)"
             + " + (select count(*) from config_objects where consent_tag is not null and consent_key_id = $1)"
@@ -114,13 +118,13 @@ final class PgConfigRows implements ConfigRows {
 
     @Override
     public <T> T read(Function<Tx, T> work) {
-        return transaction(work);
+        return transaction(true, work);
     }
 
     @Override
     public <T> T write(Function<Tx, T> work) {
         try {
-            return transaction(work);
+            return transaction(false, work);
         } catch (PgException pg) {
             if (LOCK_NOT_AVAILABLE.equals(pg.getSqlState())) {
                 throw new ConfigRefusal(503, RefusalCode.BUSY, "another change of the configuration holds its locks: try again", new JsonObject());
@@ -129,12 +133,13 @@ final class PgConfigRows implements ConfigRows {
         }
     }
 
-    private <T> T transaction(Function<Tx, T> work) {
+    private <T> T transaction(boolean repeatable, Function<Tx, T> work) {
         SqlConnection connection = pool.getConnection().await();
         try {
             Transaction tx = connection.begin().await();
             T result;
             try {
+                if (repeatable) connection.query("set transaction isolation level repeatable read").execute().await();
                 connection.query("set local lock_timeout = " + lockWait.toMillis()).execute().await();
                 result = work.apply(new PgTx(connection));
             } catch (RuntimeException | Error failure) {
@@ -163,7 +168,19 @@ final class PgConfigRows implements ConfigRows {
 
     @Override
     public void holds(String node, long epoch, long generation, long stamp, ConfigStore.Refused refused) {
-        throw new UnsupportedOperationException("the nodes' columns of the configuration come with the node's read of the store");
+        String[] named = refused.objects().stream().map(PgConfigRows::refusedName).toArray(String[]::new);
+        pool.preparedQuery(HOLDS).execute(Tuple.of(node, epoch, generation, stamp, named, refused.count())).await();
+    }
+
+    /** An object a node left out as {@code nodes.config_refused} names it: {@code <kind>/<key>}. */
+    static String refusedName(Ref ref) {
+        return ref.kind().id() + "/" + ref.key();
+    }
+
+    /** The object {@code name} names, as {@link #refusedName} wrote it. */
+    static Ref refused(String name) {
+        int slash = name.indexOf('/');
+        return new Ref(Ref.Kind.of(name.substring(0, slash)), name.substring(slash + 1));
     }
 
     @Override
@@ -203,6 +220,21 @@ final class PgConfigRows implements ConfigRows {
         @Override
         public void notifyGeneration(long generation) {
             run(NOTIFY, Tuple.of(Long.toString(generation)));
+        }
+
+        @Override
+        public List<ConfigStore.NodeReport> nodes() {
+            List<ConfigStore.NodeReport> nodes = new ArrayList<>();
+            for (Row r : run(NODES, Tuple.tuple())) {
+                String[] named = r.getArrayOfStrings("config_refused");
+                List<Ref> refused = new ArrayList<>();
+                if (named != null) for (String n : named) refused.add(refused(n));
+                Integer count = r.getInteger("config_refused_count");
+                nodes.add(new ConfigStore.NodeReport(r.getString("node"), r.getLong("epoch"), optional(r.getLong("config_epoch")),
+                        optional(r.getLong("config_generation")), optional(r.getLong("config_stamp")),
+                        Optional.ofNullable(instant(r.getOffsetDateTime("config_read_at"))), refused, count == null ? 0 : count));
+            }
+            return nodes;
         }
 
         @Override
@@ -432,6 +464,10 @@ final class PgConfigRows implements ConfigRows {
     /** A jsonb value as an object: null for SQL null, JSON null or another kind of value. */
     private static JsonObject json(Object value) {
         return value instanceof JsonObject o ? o : null;
+    }
+
+    private static OptionalLong optional(Long value) {
+        return value == null ? OptionalLong.empty() : OptionalLong.of(value);
     }
 
     private static Buffer buffer(byte[] bytes) {

@@ -47,11 +47,11 @@ from the header `X-Rail8-Actor`.
 | --- | --- | --- | --- |
 | Administrator | `administrator` | a person | users, their roles, technical accounts and their tokens, sessions, the Audit screen |
 | Developer | `developer` | both | deploys and undeploys a commit, sees the deployed configuration, calls the modules' services (the mapping studio) |
-| Operator | `operator` | both | monitoring, retry, cancel, release and discard. Sees a message's status, times, error, flow, headers and the lines its steps logged. Planned: stops and starts a connection |
+| Operator | `operator` | both | monitoring, retry, cancel, release and discard. Sees a message's status, times, error, flow, headers and the lines its steps logged. Stops and starts a connection |
 | Message bodies | `message-bodies` | both | sees and downloads a message's body after each step |
-| Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Planned: consents that a secret may be sent to a server |
-| Connection administrator | `connection-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): systems in the environment, the values of connections, credentials, instance names, technical identifiers |
-| Partner administrator | `partner-administrator` | both | planned (`docs/ENVIRONMENT-CONFIGURATION.md`): partner profiles, business identifiers, agreements, API products, subscriptions, number sequences |
+| Secret administrator | `secret-administrator` | both | creates, overwrites and deletes secrets (the secret store, designed apart). Consents that a secret may be sent where a draft of a connection sends it |
+| Connection administrator | `connection-administrator` | both | the configuration of the environment (`docs/ENVIRONMENT-CONFIGURATION.md`): systems in the environment, the values of connections, credentials, instance names, technical identifiers, the switch of mocks |
+| Partner administrator | `partner-administrator` | both | partner profiles, business identifiers, agreements, API products, subscriptions, number sequences (`docs/ENVIRONMENT-CONFIGURATION.md`). Until the first of them is built, it reads the configuration and imports it |
 | Message sender | `message-sender` | both | planned (`docs/WHO-MAY-SEND.md`): sends a test message to a flow on the node's HTTP port, with the user's name and a personal token as the password of basic authentication |
 
 An administrator does not hold the message bodies role unless it is assigned. Assigning it to oneself is allowed and is
@@ -62,9 +62,10 @@ in the audit, marked as one's own. Only a person may hold the administrator role
 Each action has an id. The `Action` enum in the code is the whole table: an action, the roles that grant it, whether it
 needs a person logged in, and whether the emergency key may do it. A test compares the enum with this table.
 
-The configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`) adds `config.read`, `config.connections`,
+The configuration of an environment (`docs/ENVIRONMENT-CONFIGURATION.md`) has `config.read`, `config.connections`,
 `config.run`, `config.consent` and `config.import`, and grants `secret.list` to the connection administrator and the
-partner administrator too. They join this table, and the enum, when they are built.
+partner administrator too, so a form picks a secret by name and kind. `config.import` is the import's door; its routes come
+with the import. An activation by a caller that also holds `config.consent` consents by the same act.
 
 The entry of a message (`docs/WHO-MAY-SEND.md`) adds `message.send`, granted by the message sender: a token may do it,
 the emergency key may not. It joins this table, and the enum, when it is built.
@@ -94,9 +95,14 @@ the emergency key may not. It joins this table, and the enum, when it is built.
 | `token.revoke` | `POST /admin/tokens/{id}/revoke` | administrator logged in, the key |
 | `token.ceiling` | `POST /admin/tokens/ceiling` | administrator logged in |
 | `audit.read` | `GET /admin/audit` | administrator |
-| `secret.list` | `GET /admin/secrets`, `GET /admin/secrets/{name}`: names, never a value | developer, secret-administrator |
+| `secret.list` | `GET /admin/secrets`, `GET /admin/secrets/{name}`: names, never a value | developer, secret-administrator, connection-administrator, partner-administrator |
 | `secret.write` | `POST /admin/secrets`, `POST /admin/secrets/{name}`: the create and the overwrite | secret-administrator |
 | `secret.delete` | `DELETE /admin/secrets/{name}` | secret-administrator |
+| `config.read` | `GET /admin/config`, `/admin/config/connections`, `/admin/config/connections/{key}`, `/admin/config/connections/{key}/-/history`, `/admin/config/systems`, `/admin/config/systems/{key}`, `/admin/config/systems/{key}/-/history` | developer, operator, connection-administrator, partner-administrator, secret-administrator |
+| `config.connections` | `POST /admin/config/-/mocks`, `/admin/config/connections/{key}/-/save`, `/admin/config/connections/{key}/-/discard`, `/admin/config/connections/{key}/-/activate`, `/admin/config/systems/{key}/-/save`, `/admin/config/systems/{key}/-/discard`, `/admin/config/systems/{key}/-/activate` | connection-administrator |
+| `config.run` | `POST /admin/config/connections/{key}/-/stop`, `/admin/config/connections/{key}/-/start` | operator, connection-administrator |
+| `config.consent` | `POST /admin/config/connections/{key}/-/consent`: a consent and its withdrawal | secret-administrator |
+| `config.import` | the import's door, with no route yet | connection-administrator, partner-administrator |
 | `self.read` | `GET /admin/me` | every caller, the key included |
 | `self.password` | `POST /admin/me/password` | a person logged in |
 | `self.logout` | `POST /admin/me/logout` | a session |

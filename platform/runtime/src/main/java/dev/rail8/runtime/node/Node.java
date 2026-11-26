@@ -26,6 +26,8 @@ import dev.rail8.runtime.access.PgAccess;
 import dev.rail8.runtime.admin.AdminServer;
 import dev.rail8.runtime.blob.TieredBlobStore;
 import dev.rail8.runtime.cache.ValkeyCache;
+import dev.rail8.runtime.config.ConfigObjects;
+import dev.rail8.runtime.config.StoredEnvironment;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.PgDeploymentStore;
@@ -106,7 +108,8 @@ import java.util.function.Supplier;
  * ({@code RAIL8_PEER_HOST} and the port it bound: a
  * {@link NodeLease} over a {@link PgMembership} on a connection of its own, renewed every {@code RAIL8_NODE_LEASE_RENEW}, each renew
  * answering the live peers' addresses; its fence fences every at-least-once worker the deployments build; superseded, the node halts —
- * the process exits with {@value #SUPERSEDED}), builds the blob store on the journal (bodies in the journal under the
+ * the process exits with {@value #SUPERSEDED}), reads the configuration of the environment whole and writes what it holds into its
+ * row of {@code nodes} ({@link StoredEnvironment}; a store it cannot read refuses the start), builds the blob store on the journal (bodies in the journal under the
  * {@code default} tenant's key, their refs in the work pool, bounded by {@code RAIL8_BLOB_DURABLE_MAX}; no spool; a body in another
  * live node's journal read through the peer link) and states its notices once — the profile's, one journal copy and, when no
  * other member is live, that nobody takes its items over —, opens the stores (the work queue claiming only what this journal holds) and
@@ -334,6 +337,19 @@ public final class Node implements AutoCloseable {
             closeSignals = store::close;
             store.start(epoch.get(), config.secrets().imports()).await();
             NodeConfig withStore = config.withSecrets(config.secrets().withStore(store));
+            // the configuration of the environment, read whole and this node's row written before any package is restored and
+            // any work taken; a store that cannot be read refuses the start
+            ConfigObjects configStore = ConfigObjects.postgres(pool, store,
+                    scheme -> Optional.ofNullable(byScheme.get(scheme)).map(c -> new ConfigObjects.Adapter(c.forms(), Set.of())), clock, new SecureRandom());
+            StoredEnvironment environment = StoredEnvironment.of(config.env(), configStore, config.nodeId(), epoch::get, clock, timer);
+            environment.start();
+            closeSignals = () -> {
+                try {
+                    environment.close();
+                } finally {
+                    store.close();
+                }
+            };
             // a body in another live node's journal is read through its link, at the address the last renew answered (S7)
             PgMembership members = membership;
             PeerReads reads = new PeerReads(vertx, config.peer(), new PeerIdentity(config.nodeId(), epoch.get(), opened.id(), masters), opened, timer,
@@ -381,13 +397,18 @@ public final class Node implements AutoCloseable {
             // the node's started workers: its intake hands each saved item off to the flow's worker, leased to this node
             Workers workers = new Workers();
             // the work events between the nodes: listening on a connection of their own before any worker starts
-            // the secret store's notices too: it looks on each, and after each LISTEN acknowledged
-            PgWorkSignals signals = new PgWorkSignals(vertx, connectOptions(pg, "listen", config.nodeId()), pool, opened.node(), workers, timer, store::notice);
+            // the secret store's and the configuration's notices too: each looks on each of its own, and after each LISTEN acknowledged
+            PgWorkSignals signals = new PgWorkSignals(vertx, connectOptions(pg, "listen", config.nodeId()), pool, opened.node(), workers, timer, store::notice,
+                    environment::notice);
             closeSignals = () -> {
                 try {
                     signals.close().await();
                 } finally {
-                    store.close();
+                    try {
+                        environment.close();
+                    } finally {
+                        store.close();
+                    }
                 }
             };
             signals.start().await();
@@ -422,10 +443,12 @@ public final class Node implements AutoCloseable {
                     new AdminServer.HealthProbe(Map.of("postgres", () -> pool.query("select 1").execute().map(Health.up()),
                             "deployments", () -> Future.succeededFuture(restored.health()),
                             "secrets", () -> Future.succeededFuture(store.health()),
+                            "config", () -> Future.succeededFuture(environment.health()),
                             "journal", () -> Future.succeededFuture(opened.health())), messages::failed, notices, readiness,
                             () -> restored.credentials().flatMap(CredentialsCheck::last)),
                     Optional.of(restored), work, new PgFailedMessages(pool, work), sampler.map(s -> new AdminServer.Sampling(s.period(), s.since(), cpu, s::failed)),
                     new PgMessageList(pool), workers, signals, new AdminServer.Modules(listed.get(), services, clock), access);
+            admin.configuration(new AdminServer.Configuration(configStore, environment::notice, Optional.of(store)));
             int port = admin.start(vertx).await();
             retention.start();   // its first run on a virtual thread of its own: the start does not wait for it
             // the segments no row pins go; its first pass an interval later, on a virtual thread of its own

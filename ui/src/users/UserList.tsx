@@ -19,6 +19,8 @@ export const ROLE_NAMES: Record<Role, string> = {
   operator: 'Operator', // untranslated: a role's name is a term
   'message-bodies': 'Message bodies', // untranslated: a role's name is a term
   'secret-administrator': 'Secret administrator', // untranslated: a role's name is a term
+  'connection-administrator': 'Connection administrator', // untranslated: a role's name is a term
+  'partner-administrator': 'Partner administrator', // untranslated: a role's name is a term
 };
 
 /** The users on one page of the list. */

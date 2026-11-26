@@ -108,6 +108,12 @@ abstract class ConfigStoreContract {
     /** The number of history rows of {@code ref}. */
     abstract int historyRows(Ref ref);
 
+    /** The epoch of node {@code node} in its row of {@code nodes}, which its secret store's start wrote. */
+    abstract long epoch(String node);
+
+    /** Lets the lease of node {@code node} lapse. */
+    abstract void lapse(String node);
+
     // ------------------------------------------------------------------------------------------------- nodes
 
     static final Instant START = Instant.parse("2026-11-26T10:00:00Z");
@@ -168,6 +174,7 @@ abstract class ConfigStoreContract {
         final List<String> warnings = new CopyOnWriteArrayList<>();
         SecretStore secrets;
         ConfigObjects store;
+        StoredEnvironment env;
 
         Node(String id, long seed) {
             this.id = id;
@@ -229,9 +236,46 @@ abstract class ConfigStoreContract {
         start(n, key, previous);
     }
 
+    /** Starts the environment of {@code n} over its store: its first read and its report. */
+    StoredEnvironment environment(Node n) {
+        n.env = new StoredEnvironment("test", n.store, n.id, () -> epoch(n.id), n.clock, n.timer, text -> {
+            n.warnings.add(text);
+            captured.add(text);
+        });
+        n.env.start();
+        return n.env;
+    }
+
+    /** Moves the clock of {@code n} one tick of its environment on and waits for the read it starts. */
+    void envTick(Node n) {
+        n.clock.advance(StoredEnvironment.TICK);
+        await(n.env.ticked());
+    }
+
+    /** What {@code n}'s read of {@code ref} says of whether node {@code node} holds it. */
+    String holdsOf(Node n, Ref ref, String node) {
+        for (Object o : read(n, ref).json().getJsonArray("nodes")) {
+            JsonObject j = (JsonObject) o;
+            if (j.getString("node").equals(node)) return j.getString("holds");
+        }
+        throw new AssertionError(node + " is not a live node");
+    }
+
+    /** The version of the connection {@code ref} in {@code env}'s snapshot. */
+    static long versionIn(StoredEnvironment env, Ref ref) {
+        return env.current().connection(ref.key()).orElseThrow(() -> new AssertionError(ref + " is not in the snapshot")).version();
+    }
+
+    static long activationOf(ConfigStore.ObjectView view) {
+        return Long.parseLong(view.json().getString("activation"));
+    }
+
     @AfterEach
     void noSecretValueIsInAnyText() {
-        for (Node n : nodes) n.secrets.close();
+        for (Node n : nodes) {
+            if (n.env != null) n.env.close();
+            n.secrets.close();
+        }
         for (String value : values) {
             for (String text : captured) assertFalse(text.contains(value), "a captured text holds the value of a secret: " + text);
         }
@@ -297,14 +341,14 @@ abstract class ConfigStoreContract {
     }
 
     ConfigStore.ObjectView consent(Node n, Actor actor, Ref ref) {
-        String digest = read(n, ref).json().getJsonObject("draft").getJsonObject("needs").getString("digest");
+        String digest = read(n, ref).json().getJsonObject("draft").getJsonObject("consent").getString("digest");
         return write(n, actor, ref, new Change.Consent(etag(n, ref), Optional.of(digest)));
     }
 
     /** Saves {@code values}, consents when the draft needs it and activates. */
     ConfigStore.ObjectView inForce(Node n, Ref ref, Map<String, Object> values) {
         ConfigStore.ObjectView saved = save(n, ref, values);
-        if (saved.json().getJsonObject("draft") != null && saved.json().getJsonObject("draft").getValue("needs") != null) consent(n, SECRETS, ref);
+        if (saved.json().getJsonObject("draft") != null && saved.json().getJsonObject("draft").getValue("consent") != null) consent(n, SECRETS, ref);
         return activate(n, ref);
     }
 
@@ -404,14 +448,15 @@ abstract class ConfigStoreContract {
         ConfigStore.ObjectView saved = save(a, API, PLAIN);
         assertEquals(0, saved.json().getInteger("version"));
         assertNotNull(saved.json().getJsonObject("draft"));
-        assertNull(saved.json().getJsonObject("draft").getValue("needs"), "it sends no secret");
+        assertNull(saved.json().getJsonObject("draft").getValue("consent"), "it sends no secret");
         ConfigStore.ObjectView active = activate(a, API);
         JsonObject inForce = active.json().getJsonObject("inForce");
         assertEquals(1, inForce.getInteger("version"));
-        assertEquals(body(PLAIN), inForce.getJsonObject("body"));
-        assertEquals("verified", inForce.getString("binding"));
+        assertEquals("web", inForce.getString("adapter"));
+        assertEquals(body(PLAIN).getJsonObject("values"), inForce.getJsonObject("values"));
+        assertEquals("ok", inForce.getString("binding"));
         assertEquals(16, inForce.getString("keyId").length(), "the key id in hex");
-        assertEquals("connections", inForce.getString("by"));
+        assertEquals("connections", inForce.getString("activatedBy"));
         assertNull(active.json().getValue("draft"));
         assertNotNull(active.json().getString("activation"));
         List<String> changes = history(a, API).stream().map(h -> h.getString("change")).toList();
@@ -442,7 +487,7 @@ abstract class ConfigStoreContract {
     }
 
     @Test
-    void aListPagesByKeyAndFiltersTheDraftsThatWaitForConsent() {
+    void aListPagesByKeyAndFiltersTheDraftsThatWaitForConsentOrForTheirActivation() {
         Node a = node("a");
         partnerSecrets(a);
         save(a, Ref.connection("acme/a"), PLAIN);
@@ -450,21 +495,26 @@ abstract class ConfigStoreContract {
         save(a, Ref.connection("acme/c"), PLAIN);
         save(a, Ref.connection("other/d"), PLAIN);
         ConfigStore.Page<ConfigStore.ObjectView> first = a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.of("acme/"),
-                Optional.empty(), 2, false));
+                Optional.empty(), 2, Optional.empty()));
         assertEquals(List.of("acme/a", "acme/b"), first.items().stream().map(v -> v.json().getString("key")).toList());
         assertEquals(Optional.of("acme/b"), first.next());
         ConfigStore.Page<ConfigStore.ObjectView> second = a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.of("acme/"),
-                first.next(), 2, false));
+                first.next(), 2, Optional.empty()));
         assertEquals(List.of("acme/c"), second.items().stream().map(v -> v.json().getString("key")).toList());
         assertEquals(Optional.empty(), second.next());
         ConfigStore.Page<ConfigStore.ObjectView> waiting = a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(),
-                Optional.empty(), 10, true));
+                Optional.empty(), 10, Optional.of(ConfigStore.Needs.CONSENT)));
         assertEquals(List.of("acme/b"), waiting.items().stream().map(v -> v.json().getString("key")).toList());
         consent(a, SECRETS, Ref.connection("acme/b"));
-        assertTrue(a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(), Optional.empty(), 10, true)).items().isEmpty());
-        refused(400, "bad-request", () -> a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(), Optional.empty(), 0, false)));
+        assertTrue(a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(), Optional.empty(), 10,
+                Optional.of(ConfigStore.Needs.CONSENT))).items().isEmpty());
+        activate(a, Ref.connection("acme/a"));
+        assertEquals(List.of("acme/b", "acme/c", "other/d"), a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(),
+                Optional.empty(), 10, Optional.of(ConfigStore.Needs.ACTIVATION))).items().stream().map(v -> v.json().getString("key")).toList());
+        refused(400, "bad-request", () -> a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(), Optional.empty(), 0,
+                Optional.empty())));
         refused(400, "bad-request", () -> a.store.list(new ConfigStore.Query(Ref.Kind.CONNECTION, Optional.empty(), Optional.empty(),
-                ConfigStore.MAX_PAGE + 1, false)));
+                ConfigStore.MAX_PAGE + 1, Optional.empty())));
     }
 
     // ------------------------------------------------------------------------------------------------- expect
@@ -480,7 +530,7 @@ abstract class ConfigStoreContract {
         assertEquals(412, r.status());
         assertEquals("changed", r.code());
         assertEquals(etag(a, API), r.object().orElseThrow().etag());
-        assertEquals("/v2", r.object().orElseThrow().json().getJsonObject("draft").getJsonObject("body").getJsonObject("values").getString("path"));
+        assertEquals("/v2", r.object().orElseThrow().json().getJsonObject("draft").getJsonObject("values").getString("path"));
     }
 
     @Test
@@ -499,7 +549,7 @@ abstract class ConfigStoreContract {
         refused(400, "bad-request", () -> a.store.write(CONNECTIONS, ACME, new Change.Save(etag(a, ACME), "web", PLAIN, Optional.empty())));
         refused(400, "bad-request", () -> a.store.write(CONNECTIONS, API, new Change.SaveSystem(etag(a, API), "Acme")));
         refused(400, "bad-request", () -> a.store.write(CONNECTIONS, ACME, new Change.Stop("1.0")));
-        assertEquals("/v2", read(a, API).json().getJsonObject("draft").getJsonObject("body").getJsonObject("values").getString("path"),
+        assertEquals("/v2", read(a, API).json().getJsonObject("draft").getJsonObject("values").getString("path"),
                 "no refused write changed the object");
     }
 
@@ -531,9 +581,152 @@ abstract class ConfigStoreContract {
         ConfigStore.Held held = holding(b.store.state(ConfigStore.Held.nothing()));
         write(a, CONNECTIONS, API, new Change.Stop(read(a, API).run()));
         ConfigStore.State state = b.store.state(held);
-        assertTrue(state.changed().getFirst().stopped());
+        assertEquals(Optional.of(new ConnectionState.Stop("connections", a.clock.instant())), state.changed().getFirst().stopped());
         write(a, CONNECTIONS, API, new Change.Start(read(a, API).run()));
-        assertFalse(b.store.state(holding(state)).changed().getFirst().stopped());
+        assertEquals(Optional.empty(), b.store.state(holding(state)).changed().getFirst().stopped());
+    }
+
+    @Test
+    void aNodeReportsWhatItHoldsInItsOwnEpochAndEachObjectShowsWhetherEveryLiveNodeHoldsIt() {
+        Node a = node("a");
+        Node b = node("b");
+        inForce(a, API, PLAIN);
+        inForce(a, FILES, PLAIN);
+        ConfigStore.State state = a.store.state(ConfigStore.Held.nothing());
+        ConfigStore.Overview before = a.store.overview();
+        assertEquals(List.of("a", "b"), before.nodes().stream().map(ConfigStore.NodeReport::node).toList(), "the live nodes");
+        assertTrue(before.nodes().stream().allMatch(n -> n.generation().isEmpty()), "a node reports once it has read");
+        assertEquals("no", before.holds(before.nodes().getFirst(), API), "a node that has not read holds nothing");
+
+        a.store.holds("a", epoch("a"), state.generation(), state.stamp(), ConfigStore.Refused.none());
+        b.store.holds("b", epoch("b") - 1, state.generation(), state.stamp(), ConfigStore.Refused.none());
+        ConfigStore.Overview read = a.store.overview();
+        assertEquals(OptionalLong.of(state.generation()), read.nodes().getFirst().generation());
+        assertTrue(read.nodes().getFirst().readAt().isPresent());
+        assertEquals(OptionalLong.empty(), read.nodes().get(1).generation(), "a report of another epoch is not written");
+        assertEquals(List.of(new JsonObject().put("node", "a").put("holds", "yes"), new JsonObject().put("node", "b").put("holds", "no")),
+                read(a, API).json().getJsonArray("nodes").getList());
+
+        b.store.holds("b", epoch("b"), state.generation(), state.stamp(), new ConfigStore.Refused(List.of(FILES), 1));
+        ConfigStore.Overview leftOut = a.store.overview();
+        ConfigStore.NodeReport nodeB = leftOut.nodes().get(1);
+        assertEquals(List.of(FILES), nodeB.refused());
+        assertEquals("yes", leftOut.holds(nodeB, API));
+        assertEquals("no", leftOut.holds(nodeB, FILES), "an object the node left out");
+        b.store.holds("b", epoch("b"), state.generation(), state.stamp(), new ConfigStore.Refused(List.of(FILES), 101));
+        assertEquals("unknown", a.store.overview().holds(a.store.overview().nodes().get(1), API), "more left out than named");
+
+        write(a, CONNECTIONS, API, new Change.Stop(read(a, API).run()));
+        ConfigStore.Overview behind = a.store.overview();
+        assertEquals("no", behind.holds(behind.nodes().getFirst(), FILES), "a node one change behind holds no object as it is");
+        JsonObject nodeView = read(a, FILES).json().getJsonArray("nodes").getJsonObject(0);
+        assertEquals(state.generation(), nodeView.getLong("generation"), "a node that does not hold it shows what it read");
+        assertNotNull(nodeView.getString("readAt"));
+
+        lapse("b");
+        assertEquals(List.of("a"), a.store.overview().nodes().stream().map(ConfigStore.NodeReport::node).toList(), "a node whose lease lapsed");
+    }
+
+    // ------------------------------------------------------------------------------------------------- two nodes' environments
+
+    @Test
+    void aChangeInForceReachesTheOtherNodeAtTheNoticeAndAtTheNextTickWhenTheNoticeIsLost() {
+        Node a = node("a");
+        Node b = node("b");
+        StoredEnvironment ea = environment(a);
+        StoredEnvironment eb = environment(b);
+        ConfigStore.ObjectView first = inForce(a, API, PLAIN);
+        await(ea.notice());
+        assertEquals(activationOf(first), versionIn(ea, API), "the node that wrote holds it when it answers");
+        assertEquals(Optional.empty(), eb.current().connection(API.key()), "the other node before the notice");
+        assertEquals("yes", holdsOf(a, API, "a"));
+        assertEquals("no", holdsOf(a, API, "b"), "a node one change behind");
+
+        await(eb.notice());
+        ConnectionState.Values values = (ConnectionState.Values) eb.current().connection(API.key()).orElseThrow();
+        assertEquals(activationOf(first), values.version(), "the connection's version is its activation");
+        assertEquals("https://plain.example/api", values.values().get("url"));
+        assertEquals("yes", holdsOf(a, API, "b"));
+
+        ConfigStore.ObjectView second = inForce(a, API, with(PLAIN, "path", "/v2"));
+        assertEquals(activationOf(first), versionIn(eb, API), "the notice is lost");
+        envTick(b);
+        assertEquals(activationOf(second), versionIn(eb, API), "the next tick reads it");
+        assertEquals("/v2", ((ConnectionState.Values) eb.current().connection(API.key()).orElseThrow()).values().get("path"));
+        assertEquals(eb.current().generation(), a.store.overview().generation());
+    }
+
+    @Test
+    void afterASetBackASetBackActivatedToTheSameVersionNumberOrADeletedRowTheOtherNodeHoldsTheVersionInForce() {
+        Node a = node("a");
+        Node b = node("b");
+        StoredEnvironment eb = environment(b);
+        ConfigStore.ObjectView v1 = inForce(a, API, PLAIN);
+        inForce(a, FILES, PLAIN);
+        Object before = snapshot();
+        ConfigStore.ObjectView v2 = inForce(a, API, with(PLAIN, "path", "/v2"));
+        await(eb.notice());
+        assertEquals(activationOf(v2), versionIn(eb, API));
+
+        setBack(before);
+        assertEquals("no", holdsOf(a, API, "b"), "never yes on the other side of a set back");
+        await(eb.notice());
+        assertEquals(activationOf(v1), versionIn(eb, API), "the version in force after the set back");
+        assertTrue(b.warnings.stream().anyMatch(w -> w.contains("went back")), b.warnings.toString());
+        assertEquals("yes", holdsOf(a, API, "b"), "once it read the store as it is");
+
+        ConfigStore.ObjectView v2held = inForce(a, API, with(PLAIN, "path", "/v2"));
+        await(eb.notice());
+        setBack(before);
+        ConfigStore.ObjectView again = inForce(a, API, with(PLAIN, "path", "/v3"));
+        assertEquals(2, again.json().getInteger("version"), "the same version number again");
+        assertNotEquals(activationOf(v2held), activationOf(again), "an activation of its own");
+        await(eb.notice());
+        assertEquals(activationOf(again), versionIn(eb, API));
+        assertEquals("/v3", ((ConnectionState.Values) eb.current().connection(API.key()).orElseThrow()).values().get("path"));
+
+        deleteRow(FILES);
+        write(a, CONNECTIONS, API, new Change.Stop(read(a, API).run()));
+        await(eb.notice());
+        assertEquals(Optional.empty(), eb.current().connection(FILES.key()), "a row deleted");
+        assertTrue(eb.current().connection(API.key()).isPresent());
+    }
+
+    @Test
+    void aBodyChangedInTheDatabaseIsLeftOutOnTheOtherNodeWithNobodyActivatingIt() {
+        Node a = node("a");
+        Node b = node("b");
+        StoredEnvironment eb = environment(b);
+        inForce(a, API, PLAIN);
+        inForce(a, FILES, PLAIN);
+        await(eb.notice());
+        tamperBody(FILES, body(with(PLAIN, "url", "https://forged.example/api")));
+        write(a, CONNECTIONS, API, new Change.Stop(read(a, API).run()));
+        await(eb.notice());
+
+        assertEquals(Optional.empty(), eb.current().connection(FILES.key()));
+        assertEquals("its binding does not verify: save and activate it again", eb.current().leftOut().get(FILES));
+        assertEquals(dev.rail8.api.Health.Status.DEGRADED, eb.health().status());
+        assertEquals("no", holdsOf(a, FILES, "b"), "the node left it out");
+        assertEquals("yes", holdsOf(a, API, "b"));
+    }
+
+    @Test
+    void aStopShowsInTheOtherNodesSnapshotWithWhoAndWhenAndAStartClearsIt() {
+        Node a = node("a");
+        Node b = node("b");
+        StoredEnvironment eb = environment(b);
+        ConfigStore.ObjectView active = inForce(a, API, PLAIN);
+        await(eb.notice());
+        write(a, CONNECTIONS, API, new Change.Stop(read(a, API).run()));
+        await(eb.notice());
+        ConnectionState api = eb.current().connection(API.key()).orElseThrow();
+        assertEquals(Optional.of(new ConnectionState.Stop("connections", a.clock.instant())), api.stopped());
+        assertEquals(activationOf(active), api.version(), "a stop changes no version");
+
+        write(a, CONNECTIONS, API, new Change.Start(read(a, API).run()));
+        await(eb.notice());
+        assertEquals(Optional.empty(), eb.current().connection(API.key()).orElseThrow().stopped());
     }
 
     @Test
@@ -640,7 +833,7 @@ abstract class ConfigStoreContract {
         Node a = node("a");
         partnerSecrets(a);
         ConfigStore.ObjectView saved = save(a, API, PARTNER);
-        JsonObject needs = saved.json().getJsonObject("draft").getJsonObject("needs");
+        JsonObject needs = saved.json().getJsonObject("draft").getJsonObject("consent");
         assertEquals(2, needs.getJsonArray("sends").size());
         ConfigRefusal r = refused(() -> a.store.write(CONNECTIONS, API, new Change.Activate(etag(a, API), Optional.empty(), Optional.empty())));
         assertEquals("consent-needed", r.code());
@@ -652,8 +845,7 @@ abstract class ConfigStoreContract {
         ConfigStore.ObjectView consented = consent(a, SECRETS, API);
         JsonObject consent = consented.json().getJsonObject("draft").getJsonObject("consent");
         assertEquals(needs.getString("digest"), consent.getString("digest"));
-        assertTrue(consent.getBoolean("verified"));
-        assertEquals("secrets", consent.getString("by"));
+        assertEquals("secrets", consent.getJsonObject("given").getString("by"));
         JsonObject audit = audited("config.consent").getFirst();
         assertEquals("secrets", audit.getString("actor"));
         assertEquals(needs.getString("digest"), audit.getJsonObject("detail").getString("digest"));
@@ -662,7 +854,7 @@ abstract class ConfigStoreContract {
         assertEquals(needs.getJsonArray("sends"), audited("config.activate").getFirst().getJsonObject("detail").getJsonArray("sends"));
         assertFalse(audited("config.activate").getFirst().getJsonObject("detail").containsKey("consentedByThisAct"));
         save(a, API, with(PARTNER, "path", "/v2"));
-        assertNull(read(a, API).json().getJsonObject("draft").getValue("needs"), "the version in force sent these pairs");
+        assertNull(read(a, API).json().getJsonObject("draft").getValue("consent"), "the version in force sent these pairs");
     }
 
     @Test
@@ -702,11 +894,11 @@ abstract class ConfigStoreContract {
         none.put("a sent secret taken away", with(base, "token", null));
         none.put("two secret fields swapped", with(base, "token", "secret://partner.pin", "pin", "secret://partner.token"));
         need.forEach((what, values) -> {
-            assertNotNull(save(a, API, values).json().getJsonObject("draft").getValue("needs"), what);
+            assertNotNull(save(a, API, values).json().getJsonObject("draft").getValue("consent"), what);
         });
         none.forEach((what, values) -> {
             ConfigStore.ObjectView v = save(a, API, values);
-            assertNull(v.json().getJsonObject("draft").getValue("needs"), what);
+            assertNull(v.json().getJsonObject("draft").getValue("consent"), what);
         });
     }
 
@@ -718,8 +910,8 @@ abstract class ConfigStoreContract {
         inForce(a, API, PARTNER);
         inForce(a, API, with(PARTNER, "url", "https://second.example/api"));
         ConfigStore.ObjectView back = write(a, CONNECTIONS, API, new Change.GoBack(etag(a, API), 1));
-        assertEquals(body(PARTNER), back.json().getJsonObject("draft").getJsonObject("body"));
-        assertNull(back.json().getJsonObject("draft").getValue("needs"), "version 1 is kept and sent these pairs");
+        assertEquals(body(PARTNER).getJsonObject("values"), back.json().getJsonObject("draft").getJsonObject("values"));
+        assertNull(back.json().getJsonObject("draft").getValue("consent"), "version 1 is kept and sent these pairs");
         write(a, CONNECTIONS, API, new Change.Discard(etag(a, API)));
         inForce(a, API, with(PARTNER, "url", "https://third.example/api"));
         for (int i = 0; i < 4; i++) {
@@ -730,8 +922,8 @@ abstract class ConfigStoreContract {
         List<Integer> kept = history(a, API).stream().filter(h -> h.getString("change").equals("activate")).map(h -> h.getInteger("version")).toList();
         assertEquals(List.of(3, 2), kept, "the newest activations are kept");
         refused(404, "not-found", () -> a.store.write(CONNECTIONS, API, new Change.GoBack(etag(a, API), 1)));
-        assertNotNull(save(a, API, PARTNER).json().getJsonObject("draft").getValue("needs"), "version 1 is beyond retention");
-        assertNull(save(a, API, with(PARTNER, "url", "https://second.example/api")).json().getJsonObject("draft").getValue("needs"),
+        assertNotNull(save(a, API, PARTNER).json().getJsonObject("draft").getValue("consent"), "version 1 is beyond retention");
+        assertNull(save(a, API, with(PARTNER, "url", "https://second.example/api")).json().getJsonObject("draft").getValue("consent"),
                 "version 2 is kept");
     }
 
@@ -742,8 +934,8 @@ abstract class ConfigStoreContract {
         inForce(a, API, PARTNER);
         inForce(a, API, with(PARTNER, "url", "https://second.example/api"));
         tamperHistoryBody(API, 1, body(with(PARTNER, "url", "https://forged.example/api")));
-        assertNotNull(save(a, API, with(PARTNER, "url", "https://forged.example/api")).json().getJsonObject("draft").getValue("needs"));
-        assertNotNull(save(a, API, PARTNER).json().getJsonObject("draft").getValue("needs"), "the changed row no longer verifies");
+        assertNotNull(save(a, API, with(PARTNER, "url", "https://forged.example/api")).json().getJsonObject("draft").getValue("consent"));
+        assertNotNull(save(a, API, PARTNER).json().getJsonObject("draft").getValue("consent"), "the changed row no longer verifies");
     }
 
     @Test
@@ -751,7 +943,7 @@ abstract class ConfigStoreContract {
         Node a = node("a");
         partnerSecrets(a);
         save(a, API, PARTNER);
-        String digest = read(a, API).json().getJsonObject("draft").getJsonObject("needs").getString("digest");
+        String digest = read(a, API).json().getJsonObject("draft").getJsonObject("consent").getString("digest");
         tamperDraft(API, body(with(PARTNER, "url", "https://forged.example/api")));
         refused(412, "changed", () -> a.store.write(SECRETS, API, new Change.Consent(etag(a, API), Optional.of(digest))));
         save(a, API, PARTNER);
@@ -771,10 +963,10 @@ abstract class ConfigStoreContract {
         JsonObject given = consentOf(API);
         save(a, other, PARTNER);
         putConsent(other, given);
-        assertFalse(read(a, other).json().getJsonObject("draft").getJsonObject("consent").getBoolean("verified"));
+        assertNull(read(a, other).json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
         refused(409, "consent-needed", () -> a.store.write(CONNECTIONS, other, new Change.Activate(etag(a, other), Optional.empty(), Optional.empty())));
         copyIds(API, other);   // the row then differs from the one consented to by its key alone
-        assertFalse(read(a, other).json().getJsonObject("draft").getJsonObject("consent").getBoolean("verified"), "a consent names its key");
+        assertNull(read(a, other).json().getJsonObject("draft").getJsonObject("consent").getValue("given"), "a consent names its key");
         refused(409, "consent-needed", () -> a.store.write(CONNECTIONS, other, new Change.Activate(etag(a, other), Optional.empty(), Optional.empty())));
         write(a, CONNECTIONS, API, new Change.Discard(etag(a, API)));
         save(a, API, PARTNER);
@@ -792,7 +984,7 @@ abstract class ConfigStoreContract {
         String before = etag(a, API);
         consent(a, SECRETS, API);
         ConfigStore.ObjectView withdrawn = write(b, SECRETS_TOO, API, new Change.Consent(etag(b, API), Optional.empty()));
-        assertNull(withdrawn.json().getJsonObject("draft").getValue("consent"));
+        assertNull(withdrawn.json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
         assertNotEquals(before, withdrawn.etag(), "a withdrawal is a change of its own");
         refused(409, "nothing-to-consent", () -> b.store.write(SECRETS_TOO, API, new Change.Consent(etag(b, API), Optional.empty())));
         refused(409, "consent-needed", () -> a.store.write(CONNECTIONS, API, new Change.Activate(etag(a, API), Optional.empty(), Optional.empty())));
@@ -808,8 +1000,8 @@ abstract class ConfigStoreContract {
         partnerSecrets(a);
         save(a, API, PARTNER);
         consent(a, SECRETS, API);
-        assertNotNull(save(a, API, with(PARTNER, "path", "/v2")).json().getJsonObject("draft").getValue("consent"));
-        assertNull(save(a, API, with(PARTNER, "url", "https://elsewhere.example/api")).json().getJsonObject("draft").getValue("consent"));
+        assertNotNull(save(a, API, with(PARTNER, "path", "/v2")).json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
+        assertNull(save(a, API, with(PARTNER, "url", "https://elsewhere.example/api")).json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
     }
 
     // ------------------------------------------------------------------------------------------------- the binding
@@ -825,7 +1017,7 @@ abstract class ConfigStoreContract {
         tamperBody(API, body(with(PLAIN, "url", "https://forged.example/api")));
         unbind(FILES);
         assertEquals("fails", read(b, API).json().getJsonObject("inForce").getString("binding"));
-        assertEquals("unbound", read(b, FILES).json().getJsonObject("inForce").getString("binding"));
+        assertEquals("fails", read(b, FILES).json().getJsonObject("inForce").getString("binding"));
         ConfigStore.State fresh = b.store.state(ConfigStore.Held.nothing());
         assertTrue(fresh.changed().isEmpty(), "no node takes them");
         assertEquals(Set.of(API, FILES), Set.copyOf(fresh.refused().objects()));
@@ -843,10 +1035,10 @@ abstract class ConfigStoreContract {
         partnerSecrets(a);
         inForce(a, API, PARTNER);
         save(a, API, with(PARTNER, "path", "/v2"));
-        assertNull(read(a, API).json().getJsonObject("draft").getValue("needs"));
+        assertNull(read(a, API).json().getJsonObject("draft").getValue("consent"));
         tamperBody(API, body(with(PARTNER, "proxy", "forged.example:1")));
         tamperHistoryBody(API, 1, body(with(PARTNER, "proxy", "forged.example:1")));
-        JsonObject needs = read(a, API).json().getJsonObject("draft").getJsonObject("needs");
+        JsonObject needs = read(a, API).json().getJsonObject("draft").getJsonObject("consent");
         assertEquals(2, needs.getJsonArray("sends").size(), "nothing verified sent a pair");
         refused(409, "consent-needed", () -> a.store.write(CONNECTIONS, API, new Change.Activate(etag(a, API), Optional.empty(), Optional.empty())));
     }
@@ -858,10 +1050,10 @@ abstract class ConfigStoreContract {
         save(a, API, PARTNER);
         save(a, FILES, PLAIN);
         refused(409, "keys-differ", () -> a.store.write(SECRETS, API, new Change.Consent(etag(a, API),
-                Optional.of(read(a, API).json().getJsonObject("draft").getJsonObject("needs").getString("digest")))));
+                Optional.of(read(a, API).json().getJsonObject("draft").getJsonObject("consent").getString("digest")))));
         refused(409, "keys-differ", () -> a.store.write(BOTH, FILES, new Change.Activate(etag(a, FILES), Optional.empty(), Optional.empty())));
         assertEquals(0, read(a, FILES).json().getInteger("version"));
-        assertNull(read(a, API).json().getJsonObject("draft").getValue("consent"));
+        assertNull(read(a, API).json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
         assertTrue(audited("config.activate").isEmpty());
         assertTrue(audited("config.consent").isEmpty());
     }
@@ -897,13 +1089,13 @@ abstract class ConfigStoreContract {
         }
         JsonObject api = read(b, API).json().getJsonObject("inForce");
         assertNotEquals(underK1, api.getString("keyId"), "bound under the new key");
-        assertEquals("verified", api.getString("binding"));
+        assertEquals("ok", api.getString("binding"));
         JsonObject files = read(b, FILES).json().getJsonObject("inForce");
         assertEquals("fails", files.getString("binding"), "a body that did not verify is not blessed");
         assertEquals(underK1, files.getString("keyId"), "its key id is kept");
-        assertTrue(read(b, waiting).json().getJsonObject("draft").getJsonObject("consent").getBoolean("verified"));
+        assertNotNull(read(b, waiting).json().getJsonObject("draft").getJsonObject("consent").getValue("given"));
         assertTrue(captured.stream().anyMatch(w -> w.contains("acme/files") && w.contains("does not verify")), captured.toString());
-        assertFalse(read(b, forged).json().getJsonObject("draft").getJsonObject("consent").getBoolean("verified"), "a consent that did not verify is not blessed");
+        assertNull(read(b, forged).json().getJsonObject("draft").getJsonObject("consent").getValue("given"), "a consent that did not verify is not blessed");
         assertEquals(forgedConsent.getString("keyId"), consentOf(forged).getString("keyId"), "its key id is kept");
         assertTrue(captured.stream().anyMatch(w -> w.contains("acme/forged") && w.contains("does not verify")), captured.toString());
         assertTrue(captured.stream().anyMatch(w -> w.contains("acme/kept") && w.contains("does not verify")), captured.toString());
@@ -913,10 +1105,10 @@ abstract class ConfigStoreContract {
         assertEquals(List.of(API, kept), state.changed().stream().map(ConfigStore.InForce::ref).toList());
         assertEquals(List.of(FILES), state.refused().objects());
         save(a, API, with(PLAIN, "path", "/v2"));
-        assertNull(read(a, API).json().getJsonObject("draft").getValue("needs"));
+        assertNull(read(a, API).json().getJsonObject("draft").getValue("consent"));
         activate(a, waiting);
         refused(409, "consent-needed", () -> a.store.write(CONNECTIONS, forged, new Change.Activate(etag(a, forged), Optional.empty(), Optional.empty())));
-        assertNotNull(save(a, kept, with(PARTNER, "url", "https://forged.example/api")).json().getJsonObject("draft").getValue("needs"),
+        assertNotNull(save(a, kept, with(PARTNER, "url", "https://forged.example/api")).json().getJsonObject("draft").getValue("consent"),
                 "an activation of the history that did not verify sent nothing, under any key");
     }
 
@@ -928,14 +1120,14 @@ abstract class ConfigStoreContract {
         a.random.script(Long.MIN_VALUE + 1);               // the activation
         activate(a, API);
         assertTrue(read(a, API).run().startsWith(Long.toHexString(Long.MAX_VALUE) + "."), read(a, API).run());
-        assertEquals("verified", read(a, API).json().getJsonObject("inForce").getString("binding"));
+        assertEquals("ok", read(a, API).json().getJsonObject("inForce").getString("binding"));
         String underK1 = read(a, API).json().getJsonObject("inForce").getString("keyId");
         restart(a, K2, K1);
         for (int i = 0; i < 4; i++) a.tick();
         restart(a, K2, null);
         JsonObject api = read(a, API).json().getJsonObject("inForce");
         assertNotEquals(underK1, api.getString("keyId"), "bound again under the new key");
-        assertEquals("verified", api.getString("binding"), "ids at the ends of the range are bound and verified as they are");
+        assertEquals("ok", api.getString("binding"), "ids at the ends of the range are bound and verified as they are");
         assertEquals(List.of(API), a.store.state(ConfigStore.Held.nothing()).changed().stream().map(ConfigStore.InForce::ref).toList());
         a.random.script(Long.MAX_VALUE, Long.MIN_VALUE + 1);   // the incarnation and the activation acme/api holds
         save(a, FILES, PLAIN);
@@ -1079,7 +1271,7 @@ abstract class ConfigStoreContract {
         activate(a, ACME);
         use("pkg/outbound", "send", "acme/api", "web", "out", false);
         write(a, CONNECTIONS, ACME, new Change.SaveSystem(etag(a, ACME), "Acme Corporation"));
-        assertEquals("Acme Corporation", activate(a, ACME).json().getJsonObject("inForce").getJsonObject("body").getString("instanceName"));
+        assertEquals("Acme Corporation", activate(a, ACME).json().getJsonObject("inForce").getString("instanceName"));
         write(a, CONNECTIONS, ACME, new Change.Remove(etag(a, ACME)));
         ConfigRefusal r = refused(() -> a.store.write(CONNECTIONS, ACME, new Change.Activate(etag(a, ACME), Optional.empty(), Optional.empty())));
         assertEquals(409, r.status());

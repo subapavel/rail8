@@ -42,7 +42,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
 
     /** A value for each parameter of a path: nothing it names exists, so an act let through finds nothing to act on. */
     static final Map<String, String> VALUES = Map.of("name", "nobody", "id", "m-404", "n", "1", "seq", "999999", "flow", "shop",
-            "plugin", "demo", "path", "ping");
+            "plugin", "demo", "path", "ping", "key", "nobody/conn");
 
     static final Pattern PARAM = Pattern.compile(":(\\w+)");
 
@@ -61,7 +61,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
         Map<String, List<Action>> routes = new TreeMap<>();
         List<String> unchecked = new ArrayList<>();
         for (Route route : keyServer.router().getRoutes()) {
-            String path = route.getPath();
+            String path = route.getPath() != null ? route.getPath() : route.getMetadata(AdminServer.PATH);
             List<Action> actions = route.getMetadata(AdminServer.ACTIONS);
             String name = route.getMetadata(AdminServer.UNCHECKED);
             if (path == null || !path.startsWith("/admin")) {
@@ -209,7 +209,8 @@ class AdminServerAccessTest extends AdminAccessFixture {
         return send(kind.port(), parts[0], path, kind.bearer(), parts[0].equals("POST") ? "{}" : null);
     }
 
+    /** The ids of {@code roles} in the order of {@link Role}, as a refusal's {@code needs} names them. */
     static JsonArray ids(Set<Role> roles) {
-        return new JsonArray(roles.stream().map(Role::id).sorted().collect(Collectors.toList()));
+        return new JsonArray(roles.stream().sorted().map(Role::id).collect(Collectors.toList()));
     }
 }

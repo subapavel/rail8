@@ -450,4 +450,31 @@ class PgWorkSignalsIT {
             bounded(signals.close(), "the signals close");
         }
     }
+
+    /**
+     * The configuration's notices: each {@code pg_notify} on {@code rail8_config} runs the configuration's hook once and not the
+     * secret store's, each one on {@code rail8_secrets} the secret store's and not the configuration's, and the first {@code LISTEN}
+     * acknowledged runs both.
+     */
+    @Test
+    void theConfigurationsNoticesAndEachListenRunItsOwnHook() {
+        AtomicInteger store = new AtomicInteger();
+        AtomicInteger config = new AtomicInteger();
+        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-c", new Workers(), rt.timer(), store::incrementAndGet,
+                config::incrementAndGet);
+        try {
+            bounded(signals.start(), "the signals listen");
+            assertEquals(1, store.get(), "the first LISTEN acknowledged, for the secret store");
+            assertEquals(1, config.get(), "and for the configuration");
+            bounded(db.pool().query("select pg_notify('rail8_config', '3')").execute(), "a configuration notice");
+            until(() -> config.get() == 2, () -> "the configuration notice; notices " + config);
+            bounded(db.pool().query("select pg_notify('rail8_secrets', '4')").execute(), "a store notice");
+            until(() -> store.get() == 2, () -> "the store notice; notices " + store);
+            assertEquals(2, config.get(), "a store notice is not the configuration's");
+            barrier();
+            assertEquals(2, store.get(), "a configuration notice is not the store's");
+        } finally {
+            bounded(signals.close(), "the signals close");
+        }
+    }
 }

@@ -3,8 +3,8 @@ import { currentLanguage, textsIn } from '../language';
 import { refusalText } from '../refusal';
 import { uiFetch } from '../session';
 
-/** The five roles, in the order the screen lists them. */
-export const ROLES = ['administrator', 'developer', 'operator', 'message-bodies', 'secret-administrator'] as const;
+/** The seven roles, in the order the screen lists them. */
+export const ROLES = ['administrator', 'developer', 'operator', 'message-bodies', 'secret-administrator', 'connection-administrator', 'partner-administrator'] as const;
 
 export type Role = (typeof ROLES)[number];
 

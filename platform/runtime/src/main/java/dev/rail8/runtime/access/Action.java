@@ -6,9 +6,11 @@ import java.util.EnumSet;
 import java.util.Set;
 
 import static dev.rail8.runtime.access.Role.ADMINISTRATOR;
+import static dev.rail8.runtime.access.Role.CONNECTION_ADMINISTRATOR;
 import static dev.rail8.runtime.access.Role.DEVELOPER;
 import static dev.rail8.runtime.access.Role.MESSAGE_BODIES;
 import static dev.rail8.runtime.access.Role.OPERATOR;
+import static dev.rail8.runtime.access.Role.PARTNER_ADMINISTRATOR;
 import static dev.rail8.runtime.access.Role.SECRET_ADMINISTRATOR;
 
 /**
@@ -40,9 +42,16 @@ public enum Action {
     TOKEN_REVOKE("token.revoke", Who.ROLES, true, true, false, ADMINISTRATOR),
     TOKEN_CEILING("token.ceiling", Who.ROLES, true, false, false, ADMINISTRATOR),
     AUDIT_READ("audit.read", Who.ROLES, false, false, false, ADMINISTRATOR),
-    SECRET_LIST("secret.list", Who.ROLES, false, false, false, DEVELOPER, SECRET_ADMINISTRATOR),
+    SECRET_LIST("secret.list", Who.ROLES, false, false, false, DEVELOPER, SECRET_ADMINISTRATOR, CONNECTION_ADMINISTRATOR,
+            PARTNER_ADMINISTRATOR),
     SECRET_WRITE("secret.write", Who.ROLES, false, false, false, SECRET_ADMINISTRATOR),
     SECRET_DELETE("secret.delete", Who.ROLES, false, false, false, SECRET_ADMINISTRATOR),
+    CONFIG_READ("config.read", Who.ROLES, false, false, false, DEVELOPER, OPERATOR, CONNECTION_ADMINISTRATOR,
+            PARTNER_ADMINISTRATOR, SECRET_ADMINISTRATOR),
+    CONFIG_CONNECTIONS("config.connections", Who.ROLES, false, false, false, CONNECTION_ADMINISTRATOR),
+    CONFIG_RUN("config.run", Who.ROLES, false, false, false, OPERATOR, CONNECTION_ADMINISTRATOR),
+    CONFIG_CONSENT("config.consent", Who.ROLES, false, false, false, SECRET_ADMINISTRATOR),
+    CONFIG_IMPORT("config.import", Who.ROLES, false, false, false, CONNECTION_ADMINISTRATOR, PARTNER_ADMINISTRATOR),
     SELF_READ("self.read", Who.EVERY, false, true, false),
     SELF_PASSWORD("self.password", Who.PERSON, true, false, false),
     SELF_LOGOUT("self.logout", Who.SESSION, true, false, false),

@@ -16,6 +16,9 @@ import dev.rail8.runtime.access.AccessRefused;
 import dev.rail8.runtime.access.FakeHash;
 import dev.rail8.runtime.access.HashPlaces;
 import dev.rail8.runtime.access.MemoryAccess;
+import dev.rail8.runtime.config.ConfigStore;
+import dev.rail8.runtime.config.MemoryConfigStores;
+import dev.rail8.runtime.config.StoredEnvironment;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.Doors;
 import dev.rail8.runtime.deploy.GitRepos;
@@ -63,7 +66,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * loopback without a token. The password hash is a {@link FakeHash}, the clock {@link #rt}'s; the node's modules are one plugin,
  * {@code demo}, with {@code GET} and {@code POST ping}. While {@link #auditFails} is set, the audit rows of a use of the key and
  * of a view of a body are not written; while {@link #revokeFails} is set, a revoke of a token throws as a failed store would; {@link #viewsAtOpen} holds, for each stream of a body opened, how many views the audit
- * held at that moment. Its deployments read the secret store {@link #secrets}, whose routes the servers mount.
+ * held at that moment. Its deployments read the secret store {@link #secrets}, whose routes the servers mount. The routes of
+ * {@code /admin/config} serve the configuration store {@link #configStore}, in memory over {@link #configs}, whose calls through the
+ * routes {@link #configCalls} names, and the environment {@link #environment} of node {@code node-1} over it.
  */
 abstract class AdminAccessFixture {
 
@@ -91,6 +96,13 @@ abstract class AdminAccessFixture {
     /** The database {@link #secrets} reads, where a test starts the stores of other nodes. */
     final MemorySecretStores secretDb = new MemorySecretStores();
     Deployments deployments;
+    /** The database of the configuration's stores. */
+    final MemoryConfigStores configs = new MemoryConfigStores();
+    /** The configuration store of node {@code node-1}, as its environment reads it. */
+    ConfigStore configStore;
+    /** The names of the methods of {@link #configStore} the routes called, in order. */
+    final List<String> configCalls = new CopyOnWriteArrayList<>();
+    StoredEnvironment environment;
     AdminServer keyServer;
     int key;
     int shared;
@@ -122,6 +134,9 @@ abstract class AdminAccessFixture {
         secrets = secretDb.start("node-1", Map.of(StoreKey.VARIABLE, STORE_KEY), rt.clock(), rt.timer());
         deployments = new Deployments(config.withSecrets(config.secrets().withStore(secrets)), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(),
                 messages, new InMemoryDlq(), rows, () -> 0L);
+        configStore = configs.start("node-1", 1, secrets, rt.clock());
+        environment = new StoredEnvironment("test", configStore, "node-1", () -> 1, rt.clock(), rt.timer(), text -> { });
+        environment.start();
         keyServer = server(Optional.of(KEY));
         key = keyServer.start(vertx).await(10, TimeUnit.SECONDS);
         shared = server(Optional.of(SHARED)).start(vertx).await(10, TimeUnit.SECONDS);
@@ -131,6 +146,7 @@ abstract class AdminAccessFixture {
     @AfterEach
     void stop() throws Exception {
         for (AdminServer s : started) s.stop().await(10, TimeUnit.SECONDS);
+        environment.close();
         secrets.close();
         OnVirtualThread.call(() -> { deployments.close(); return null; });
     }
@@ -153,6 +169,8 @@ abstract class AdminAccessFixture {
         AdminServer server = new AdminServer(config, messages, new InMemoryDlq(), blobs,
                 new AdminServer.HealthProbe(Map.of(), () -> 0L), Optional.of(deployments), Optional.of(rows), Optional.of(new InMemoryFailedMessages(rows)),
                 Optional.empty(), Optional.empty(), new Workers(), WorkSignals.NONE, modules, access);
+        server.configuration(new AdminServer.Configuration(around(ConfigStore.class, configStore, m -> configCalls.add(m.getName())),
+                environment::notice, Optional.of(secrets)));
         started.add(server);
         return server;
     }
