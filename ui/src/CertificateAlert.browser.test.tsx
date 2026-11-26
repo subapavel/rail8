@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { CertificateAlert, readEndingCertificates, type EndingCertificate } from './CertificateAlert';
+import { SessionGate } from './SessionGate';
+import { sessionClient, type Me } from './session';
 
 const hosts: HTMLElement[] = [];
 
@@ -50,6 +52,45 @@ describe('the warning of certificates that end', () => {
 
   test('shows nothing when no certificate ends soon, or without an answer', async () => {
     for (const answer of [[], null]) expect((await show(answer)).textContent, JSON.stringify(answer)).toBe('');
+  });
+
+  test('reads nothing for a caller who may not list secrets, so the browser logs no refusal', async () => {
+    const me: Me = {
+      name: 'alice',
+      kind: 'person',
+      roles: ['administrator'],
+      actions: ['self.read', 'user.read'],
+      refused: { 'secret.list': { code: 'not-allowed', needs: ['developer', 'secret-administrator'] } },
+      via: 'session',
+      firstPassword: false,
+      expiresAt: '2026-11-26T22:00:00Z',
+      emergencyKey: false,
+      session: '0123456789abcdef',
+    };
+    const client = sessionClient({
+      send: (async () => new Response(JSON.stringify(me), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch,
+      reload: () => undefined,
+      timer: () => new Promise(() => undefined),
+    });
+    let reads = 0;
+    const read = () => {
+      reads += 1;
+      return Promise.resolve([{ name: 'bank.tls', notAfter: '2026-12-05T00:00:00Z', certificate: 'ending' as const }]);
+    };
+    const host = document.createElement('div');
+    document.body.append(host);
+    hosts.push(host);
+    await act(async () =>
+      createRoot(host).render(
+        <SessionGate client={client}>
+          <span>gate open</span>
+          <CertificateAlert read={read} />
+        </SessionGate>,
+      ),
+    );
+    await expect.element(page.getByText('gate open')).toBeVisible();
+    expect(reads).toBe(0);
+    expect(page.getByRole('alert').query()).toBeNull();
   });
 
   test('reads the marked key pairs from /admin/secrets, and no answer when the caller may not read it', async () => {
