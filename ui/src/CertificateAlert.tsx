@@ -1,6 +1,7 @@
 import { Alert } from 'antd';
 import { useEffect, useState } from 'react';
 import { instant, useText } from './language';
+import { useMay } from './SessionGate';
 import { uiFetch } from './session';
 
 /** A key pair whose leaf certificate ends within 30 days of the node's clock (`ending`), or has ended (`ended`), with its end. */
@@ -33,14 +34,16 @@ export async function readEndingCertificates(send: typeof fetch = uiFetch): Prom
 
 /**
  * A warning that names each key pair whose leaf certificate ends within 30 days or has ended, with its end, and says to
- * enter a new certificate. It reads the list once, through `read`; it shows nothing when no certificate ends soon, and when
- * the caller may not list secrets or the node does not answer.
+ * enter a new certificate. It reads the list once, through `read`, and only for a caller who may list secrets, so that no
+ * refusal is asked for; it shows nothing when no certificate ends soon, or when the node does not answer.
  */
 export function CertificateAlert({ read = readEndingCertificates }: { read?: () => Promise<EndingCertificate[] | null> }) {
   const texts = useText();
   const { t } = texts;
   const [ending, setEnding] = useState<EndingCertificate[] | null>(null);
+  const mayList = useMay('secret.list') === true;
   useEffect(() => {
+    if (!mayList) return undefined;
     let live = true;
     void read().then((answer) => {
       if (live) setEnding(answer);
@@ -48,8 +51,8 @@ export function CertificateAlert({ read = readEndingCertificates }: { read?: () 
     return () => {
       live = false;
     };
-  }, [read]);
-  if (ending === null || ending.length === 0) return null;
+  }, [read, mayList]);
+  if (!mayList || ending === null || ending.length === 0) return null;
   return (
     <Alert
       type="warning"
