@@ -174,6 +174,7 @@ public final class FlowBuilder {
     private WorkSignals signals = WorkSignals.NONE;
     private RetryPolicy retries = DEFAULT_RETRIES;
     private Runs runs;
+    private ConnectionSends connections = ConnectionSends.NONE;
 
     public FlowBuilder(Runtime runtime, Collection<StepFactory> factories, Collection<Expressions> languages, Map<String, EndpointConfig> endpoints) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -187,6 +188,15 @@ public final class FlowBuilder {
         this.endpoints = Map.copyOf(endpoints);
         this.targets = new Targets(Targets.DEFAULTS, Map.of(), runtime.timer());
         this.runs = new Runs(runtime.clock(), runtime.timer(), WorkerPolicy.DEFAULT.lease());
+    }
+
+    /**
+     * What the send steps of the flows of {@code schemaVersion: 2} built from now on ask, for each attempt through a connection,
+     * for its producer; without this call every connection is not set ({@link ConnectionSends#NONE}).
+     */
+    public FlowBuilder connections(ConnectionSends connections) {
+        this.connections = Objects.requireNonNull(connections, "connections");
+        return this;
     }
 
     /** Records a snapshot per step into {@code store}, metered by {@code meter}; without this call nothing is recorded. */
@@ -597,7 +607,8 @@ public final class FlowBuilder {
                 };
                 if (step.retryable()) stage = Retry.stage(stage, flow.retry(), runtime.timer());
                 stage = Runs.guard(numbered(stage, step), step);
-                if (recorder != null) stage = recorder.wrap(stage, step, step.index() == lastIndex, RecordingPolicy.from(step.config().get("recording"), flow.recording()));
+                if (recorder != null) stage = recorder.wrap(stage, step, step.index() == lastIndex, RecordingPolicy.from(step.config().get("recording"), flow.recording()),
+                        stepVersions(flow, step));
                 if (parker != null) stage = parker.wrap(stage, step);
                 stages.add(stepEvents ? StepEvent.marked(stage, flow.id(), step) : stage);   // outermost: a step's CPU time includes its wrappers
             }
@@ -674,13 +685,32 @@ public final class FlowBuilder {
         return l;
     }
 
+    /** What the history names a step of {@code flow} ran with: a send step of {@code schemaVersion: 2}, its connection's key. */
+    private static Map<String, String> stepVersions(FlowDefinition flow, StepConfig step) {
+        if (!"to".equals(step.type())) return Map.of();
+        return use(flow, step).connection().map(key -> Map.of(CONNECTION, key)).orElse(Map.of());
+    }
+
+    /** The name under which a send step's row of the history names the key of the connection it sends through. */
+    public static final String CONNECTION = "connection";
+
+    /** The send step {@code step} of the flow of {@code schemaVersion: 2} {@code flow} as written; empty for one of {@code schemaVersion: 1}. */
+    private static AdapterUse use(FlowDefinition flow, StepConfig step) {
+        for (AdapterUse use : flow.sends()) {
+            if (use.step().equals(step.name())) return use;
+        }
+        return new AdapterUse(step.name(), "", Optional.empty(), Direction.OUT, Map.of(), java.util.OptionalLong.empty());
+    }
+
     /**
-     * The built-in {@code to}: {@code endpoint}, or {@code byProp} + {@code endpoints} (the route's decision picks the producer).
+     * The built-in {@code to}. In a flow of {@code schemaVersion: 2}, through its adapter ({@link #named}). In one of
+     * {@code schemaVersion: 1}: {@code endpoint}, or {@code byProp} + {@code endpoints} (the route's decision picks the producer).
      * The producer gets the envelope through {@code forward} (the flow's {@code forwardHeaders}) under its target's limit;
      * what goes on is its reply. Every producer created is added to {@code opened} at once.
      */
     private Stage to(StepConfig step, FlowDefinition flow, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence,
                      SecretSource secrets) {
+        if (flow.sender().isPresent()) return named(step, flow, forward, opened, fence);
         if (step.config().get("endpoint") != null) {
             Send send = send(step, flow, step.requireString("endpoint"), opened, fence, secrets);
             return Stage.of(e -> send.apply(forward.apply(e)));
@@ -733,8 +763,105 @@ public final class FlowBuilder {
         }
         if (producer == null) throw Objects.requireNonNull(first, "no producer was built");
         opened.add(producer);
-        return new Send(endpoint, producer, call, component.target(out).map(targets::of).orElseGet(targets::unshared), runtime.clock(), runtime.timer(), fence,
+        return new Send("endpoint '" + endpoint + "'", producer, call, component.target(out).map(targets::of).orElseGet(targets::unshared), runtime.clock(), runtime.timer(), fence,
                 fence instanceof Fence f ? f : null);   // only a Fence bounds a send in time and abandons it when the fence closes
+    }
+
+    /**
+     * A send step of a flow of {@code schemaVersion: 2}: its adapter's {@link Call}, the settings as written over the flow form's
+     * defaults for sending and the reply's limit its {@code maxReplyBytes}, else the flow's {@code maxBodyBytes}. An adapter that
+     * connects to send sends through the connection the step names: each attempt asks {@link #connections} for the connection's
+     * producer and its target, and holds it until its send settles; one that cannot serve fails the attempt, retryably. One
+     * that does not, such as {@code direct}, sends through one producer of its own, built here without a connection and added
+     * to {@code opened}.
+     */
+    private Stage named(StepConfig step, FlowDefinition flow, UnaryOperator<Envelope> forward, List<Producer> opened, BooleanSupplier fence) {
+        AdapterUse use = use(flow, step);
+        Component component;
+        try {
+            component = runtime.component(use.adapter());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(step + ": adapter '" + use.adapter() + "': " + e.getMessage(), e);
+        }
+        Forms forms = component.forms();
+        if (!forms.serves(Direction.OUT)) throw new IllegalArgumentException(step + ": the adapter '" + use.adapter() + "' does not send");
+        if (forms.connects(Direction.OUT) != use.connection().isPresent()) {
+            throw new IllegalArgumentException(step + ": the adapter '" + use.adapter() + "' " + (forms.connects(Direction.OUT)
+                    ? "sends through a connection: name it" : "sends through no connection: name none"));
+        }
+        Map<String, Object> settings = new LinkedHashMap<>(forms.flow().defaults(Direction.OUT));
+        settings.putAll(use.settings());
+        Call call = new Call(flow.id(), step.name(), settings, use.maxReplyBytes().orElse(flow.maxBodyBytes()), Optional.empty());
+        Fence bound = fence instanceof Fence f ? f : null;   // only a Fence bounds a send in time and abandons it when the fence closes
+        if (use.connection().isEmpty()) {
+            Outbound out = new Outbound(Optional.empty());
+            Producer producer = component.producer(out);
+            opened.add(producer);
+            Send send = new Send("adapter '" + use.adapter() + "'", producer, call, component.target(out).map(targets::of).orElseGet(targets::unshared),
+                    runtime.clock(), runtime.timer(), fence, bound);
+            return Stage.of(e -> send.apply(forward.apply(e)));
+        }
+        String key = use.connection().get();
+        String to = "connection '" + key + "'";
+        TargetLimit unshared = targets.unshared();
+        return Stage.of(e -> {
+            Envelope out = forward.apply(e);
+            Duration within = MessageContext.isBound() ? MessageContext.current().remaining(runtime.clock()) : flow.timeout();
+            Settling taken = new Settling(connections.attempt(key, use.adapter(), within));
+            try {
+                return new Send(to, taken, call, taken.attempt.target().map(targets::of).orElse(unshared), runtime.clock(), runtime.timer(), fence, bound)
+                        .apply(out);
+            } finally {
+                taken.unsent();
+            }
+        });
+    }
+
+    /**
+     * An attempt's producer, as the send of one attempt calls it: the attempt is settled once its send's future settles, or at
+     * {@link #unsent()} when the send never called it. Its close closes nothing: the connection's producer is not the attempt's.
+     */
+    private static final class Settling implements Producer {
+        private final ConnectionSends.Attempt attempt;
+        private final java.util.concurrent.atomic.AtomicBoolean called = new java.util.concurrent.atomic.AtomicBoolean();
+
+        Settling(ConnectionSends.Attempt attempt) {
+            this.attempt = Objects.requireNonNull(attempt, "the connection's attempt");
+        }
+
+        @Override
+        public Future<Envelope> send(Envelope e, Call call) {
+            return settling(() -> attempt.producer().send(e, call));
+        }
+
+        @Override
+        public Future<Envelope> send(Envelope e, Call call, Deadline d) {
+            return settling(() -> attempt.producer().send(e, call, d));
+        }
+
+        private Future<Envelope> settling(Supplier<Future<Envelope>> send) {
+            called.set(true);
+            Future<Envelope> sent;
+            try {
+                sent = send.get();
+            } catch (RuntimeException | Error failure) {
+                attempt.settled();
+                throw failure;
+            }
+            if (sent == null) attempt.settled();
+            else sent.onComplete(settled -> attempt.settled());
+            return sent;
+        }
+
+        /** The send ended without calling the producer: the attempt is settled now. */
+        void unsent() {
+            if (!called.get()) attempt.settled();
+        }
+
+        @Override
+        public Future<Void> close() {
+            return Future.succeededFuture();
+        }
     }
 
     /** {@code secrets} asked each time for the kind at {@code trial} of those it is asked for, or for the last one when there are fewer. */
@@ -758,26 +885,26 @@ public final class FlowBuilder {
      * called, and a send it starts is watched by the run, which returns only once that send has settled. Otherwise what the
      * send fails with comes out as is.
      */
-    private record Send(String endpoint, Producer producer, Call call, TargetLimit limit, Clock clock, Timer timer, BooleanSupplier fence, Fence bound) {
+    private record Send(String to, Producer producer, Call call, TargetLimit limit, Clock clock, Timer timer, BooleanSupplier fence, Fence bound) {
         Envelope apply(Envelope e) {
             MessageContext context = MessageContext.isBound() ? MessageContext.current() : null;
             Runs.Run run = Runs.current();
-            FencedWait wait = bound == null ? null : new FencedWait(bound, timer, e.id(), endpoint);
+            FencedWait wait = bound == null ? null : new FencedWait(bound, timer, e.id(), to);
             Supplier<Future<Envelope>> send = () -> {
                 if (!fence.getAsBoolean()) {
-                    throw new FencedException("message " + e.id() + " not sent to endpoint '" + endpoint + "': the node's fence is closed (D-101 (2)); "
+                    throw new FencedException("message " + e.id() + " not sent to " + to + ": the node's fence is closed (D-101 (2)); "
                             + "its item is left to whoever runs it next");
                 }
                 Deadline d = context == null ? null : deadline(context.deadline());
                 if (d != null && !d.remaining().isPositive()) {
-                    return Future.failedFuture(new NackException("message " + e.id() + " not sent to endpoint '" + endpoint + "': its deadline passed (D-113)", true));
+                    return Future.failedFuture(new NackException("message " + e.id() + " not sent to " + to + ": its deadline passed (D-113)", true));
                 }
                 Runs.Why stopped = run == null ? null : run.why();
                 if (stopped != null) return Future.failedFuture(new RunStoppedException(stopped, null));
                 if (wait != null) wait.arm();   // before the producer is called: nothing of the send is out before the fence is watched
                 try {   // a null answer fails here, inside the catch, so its re-read is disarmed too
                     Future<Envelope> sent = Objects.requireNonNull(d == null ? producer.send(e, call) : producer.send(e, call, d),
-                            () -> "endpoint '" + endpoint + "': the send answered no future");
+                            () -> to + ": the send answered no future");
                     if (run != null) run.watch(sent);   // the run returns only once it has settled
                     return sent;
                 } catch (RuntimeException | Error failure) {
@@ -816,15 +943,15 @@ public final class FlowBuilder {
         private final Fence fence;
         private final Timer timer;
         private final String messageId;
-        private final String endpoint;
+        private final String to;
         private final Promise<Envelope> out = Promise.promise();
         private Timer.Cancellable armed;   // guarded by this: the re-read pending, the latest one scheduled
 
-        FencedWait(Fence fence, Timer timer, String messageId, String endpoint) {
+        FencedWait(Fence fence, Timer timer, String messageId, String to) {
             this.fence = fence;
             this.timer = timer;
             this.messageId = messageId;
-            this.endpoint = endpoint;
+            this.to = to;
         }
 
         /** Schedules the re-read at what the fence has left now (at least a nanosecond: one that closed meanwhile is re-read at once). */
@@ -851,7 +978,7 @@ public final class FlowBuilder {
                 arm();
                 return;
             }
-            out.tryFail(new FencedException("message " + messageId + ": its send to endpoint '" + endpoint + "' was abandoned, still open when the "
+            out.tryFail(new FencedException("message " + messageId + ": its send to " + to + " was abandoned, still open when the "
                     + "node's fence closed (D-101 (2), D-113); its item is left to whoever runs it next"));
         }
 
@@ -864,7 +991,7 @@ public final class FlowBuilder {
                 } else if (fence.getAsBoolean()) {
                     out.tryFail(settled.cause());
                 } else {
-                    out.tryFail(new FencedException("message " + messageId + ": its send to endpoint '" + endpoint + "' failed while the node's fence was "
+                    out.tryFail(new FencedException("message " + messageId + ": its send to " + to + " failed while the node's fence was "
                             + "closed (D-101 (2)); its item is left to whoever runs it next", settled.cause()));
                 }
             });

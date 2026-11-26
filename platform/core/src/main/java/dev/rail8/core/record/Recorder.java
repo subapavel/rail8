@@ -9,6 +9,7 @@ import dev.rail8.api.StepConfig;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -80,12 +81,24 @@ public final class Recorder {
      */
     public Snapshot startSnapshot(Envelope e, String name, RecordingPolicy policy) {
         Objects.requireNonNull(name, "name");
-        return snapshot(e, e.step(), name, Snapshot.Outcome.OK, null, clock.instant(), 0, Snapshot.CPU_UNKNOWN, policy, StepLog.EMPTY);
+        return snapshot(e, e.step(), name, Snapshot.Outcome.OK, null, clock.instant(), 0, Snapshot.CPU_UNKNOWN, policy, StepLog.EMPTY, versions);
     }
 
     /** {@code stage} (already numbered) recorded under {@code policy}; {@code last} marks the flow's final step. */
     public Stage wrap(Stage stage, StepConfig step, boolean last, RecordingPolicy policy) {
+        return wrap(stage, step, last, policy, Map.of());
+    }
+
+    /**
+     * {@code stage} recorded as {@link #wrap(Stage, StepConfig, boolean, RecordingPolicy)} does, each of its rows naming
+     * {@code stepVersions} beside the recorder's versions: what this step ran with, such as the key of the connection a send
+     * step sends through. A name the recorder's versions hold keeps the recorder's value.
+     */
+    public Stage wrap(Stage stage, StepConfig step, boolean last, RecordingPolicy policy, Map<String, String> stepVersions) {
         Objects.requireNonNull(stage, "stage");
+        Map<String, String> named = new HashMap<>(stepVersions);
+        named.putAll(versions);
+        Map<String, String> rowVersions = Map.copyOf(named);
         Objects.requireNonNull(step, "step");
         Objects.requireNonNull(policy, "policy");
         if (policy.level() == RecordingPolicy.Level.OFF) return stage;
@@ -99,7 +112,7 @@ public final class Recorder {
                 result = lines.during(() -> stage.apply(e, out -> {
                     if (!handedOn[0]) {
                         handedOn[0] = true;
-                        if (policy.records(step.index(), last, Snapshot.Outcome.OK)) record(out, step, Snapshot.Outcome.OK, null, started, cpu0, policy, lines.kept(scrubber));
+                        if (policy.records(step.index(), last, Snapshot.Outcome.OK)) record(out, step, Snapshot.Outcome.OK, null, started, cpu0, policy, lines.kept(scrubber), rowVersions);
                         else lines.seal();
                     }
                     return rest.apply(out);
@@ -107,7 +120,7 @@ public final class Recorder {
             } catch (Throwable failure) {   // checked ones too (an interrupted await throws InterruptedException undeclared) and Errors: recorded, then rethrown unchanged
                 if (!handedOn[0] && policy.records(step.index(), last, Snapshot.Outcome.FAILED)) {
                     try {
-                        record(e, step, Snapshot.Outcome.FAILED, failure.toString(), started, cpu0, policy, lines.kept(scrubber));
+                        record(e, step, Snapshot.Outcome.FAILED, failure.toString(), started, cpu0, policy, lines.kept(scrubber), rowVersions);
                     } catch (Throwable recordingFailure) {   // the step's failure is what leaves, whatever recording did; a throwable cannot suppress itself
                         if (recordingFailure != failure) failure.addSuppressed(recordingFailure);
                         // The recording failure is deliberately NOT passed to the logger: a handler would have to format it (toString, stack), and
@@ -121,17 +134,18 @@ public final class Recorder {
                 throw failure;
             }
             if (!handedOn[0] && policy.records(step.index(), last, Snapshot.Outcome.FILTERED)) {
-                record(result, step, Snapshot.Outcome.FILTERED, null, started, cpu0, policy, lines.kept(scrubber));
+                record(result, step, Snapshot.Outcome.FILTERED, null, started, cpu0, policy, lines.kept(scrubber), rowVersions);
             }
             return result;
         };
     }
 
-    private void record(Envelope e, StepConfig step, Snapshot.Outcome outcome, String error, Instant started, long cpu0, RecordingPolicy policy, StepLog log) {
+    private void record(Envelope e, StepConfig step, Snapshot.Outcome outcome, String error, Instant started, long cpu0, RecordingPolicy policy, StepLog log,
+                        Map<String, String> rowVersions) {
         long wall = Math.max(0, Duration.between(started, clock.instant()).toNanos());
         long cpu1 = meter.cpuNanos();
         long cpu = cpu0 == Snapshot.CPU_UNKNOWN || cpu1 == Snapshot.CPU_UNKNOWN ? Snapshot.CPU_UNKNOWN : Math.max(0, cpu1 - cpu0);
-        keep(snapshot(e, step.index(), step.name(), outcome, error, started, wall, cpu, policy, log), e.body());
+        keep(snapshot(e, step.index(), step.name(), outcome, error, started, wall, cpu, policy, log, rowVersions), e.body());
     }
 
     /** {@code s}, showing {@code body}, to the run's trail; without one, to a trail of its own, closed at once and not awaited. */
@@ -143,7 +157,7 @@ public final class Recorder {
     }
 
     private Snapshot snapshot(Envelope e, int step, String name, Snapshot.Outcome outcome, String error, Instant started, long wall, long cpu, RecordingPolicy policy,
-                              StepLog log) {
+                              StepLog log, Map<String, String> versions) {
         return new Snapshot(e.id(), e.flow(), step, Snapshot.attemptOf(e.props()), name, outcome, Optional.ofNullable(error), started, wall, cpu, e.headers(), e.props(), e.keys(),
                 e.body().hash(), e.body().size(), policy.keepsBody() ? Optional.of(e.body().key()) : Optional.empty(), versions, log);
     }

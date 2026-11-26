@@ -17,13 +17,15 @@ class SchemasTest {
 
     @ParameterizedTest
     @EnumSource(Schemas.class)
-    void everySchemaIsDraft202012CarriesAnIdAndRequiresSchemaVersionOne(Schemas schema) {
+    void everySchemaIsDraft202012CarriesAnIdAndRequiresItsSchemaVersions(Schemas schema) {
         JsonObject json = schema.json();
         assertEquals("https://json-schema.org/draft/2020-12/schema", json.getString("$schema"));
         assertEquals("urn:rail8:schema:" + schema.kind() + ":1", json.getString("$id"));
         assertTrue(json.getJsonArray("required").contains("schemaVersion"), "schemaVersion is required");
         assertTrue(json.getJsonArray("required").contains("kind"), "kind is required");
-        assertEquals(1, json.getJsonObject("properties").getJsonObject("schemaVersion").getInteger("const"));
+        JsonObject version = json.getJsonObject("properties").getJsonObject("schemaVersion");
+        if (schema == Schemas.FLOW || schema == Schemas.TEST) assertEquals(List.of(1, 2), version.getJsonArray("enum").getList());
+        else assertEquals(1, version.getInteger("const"));
         assertEquals(schema.kind(), json.getJsonObject("properties").getJsonObject("kind").getString("const"));
         assertEquals(false, json.getBoolean("additionalProperties"), "unknown top-level keys are mistakes, not extensions");
         assertTrue(json.getString("title").toLowerCase().contains("draft"), "stamped draft — review at hand-over");
@@ -35,6 +37,7 @@ class SchemasTest {
         assertEquals(Schemas.PACKAGE, Schemas.forKind("package"));
         assertEquals(Schemas.ENDPOINT, Schemas.forKind("endpoint"));
         assertEquals(Schemas.TEST, Schemas.forKind("test"));
+        assertEquals(Schemas.SYSTEM, Schemas.forKind("system"));
         assertThrows(IllegalArgumentException.class, () -> Schemas.forKind("partner"));
     }
 

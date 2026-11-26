@@ -33,13 +33,19 @@ import java.util.stream.Stream;
 
 /**
  * A package directory as the schemas see it: {@code package.yaml} at the root, a {@code folder.yaml} in any folder below
- * it, and every other {@code *.yaml} / {@code *.yml} — in any folder, whatever its name — an endpoint, a flow or a test by its
- * {@code kind}; a YAML without a known kind is a plain file when a flow or a test names it as one, else a problem. Folder names
+ * it, and every other {@code *.yaml} / {@code *.yml} — in any folder, whatever its name — an endpoint, a system, a flow or a
+ * test by its {@code kind}; a YAML without a known kind is a plain file when a flow or a test names it as one, else a problem. Folder names
  * are slugs of at most 64 characters, at most four folders deep. {@link #crossCheck()} is what no single-file schema can say: a
  * flow's endpoints exist, its stylesheets exist, a test's flow exists, the fixtures a test names exist — every file reference a
  * path from the package root that stays inside it. {@link #problems()} is everything a deploy refuses the package for before any
- * component is asked. {@link #manifest()}, {@link #endpoints()} and {@link #flows()} hand out copies of the documents as
- * loaded, by id; {@link #folders()} and {@link #artifacts()} are the package's tree.
+ * component is asked. {@link #manifest()}, {@link #endpoints()}, {@link #systems()} and {@link #flows()} hand out copies of the
+ * documents as loaded, by id (a system's is its key); {@link #folders()} and {@link #artifacts()} are the package's tree.
+ *
+ * <p>A flow of {@code schemaVersion: 1} names endpoint files of the package; one of {@code schemaVersion: 2} names an adapter
+ * and the connections of systems by key ({@link #connections}), which the package, another deployed package or a dependency
+ * defines: whether a key is defined is the deploy's to say, and {@code rail8 validate}'s. A test is of its flow's
+ * {@code schemaVersion}: one of 1 keys its mocks by endpoint id, one of 2 by connection key, and a call of another flow by
+ * {@code direct:<address>}.
  *
  * <p>Dependencies: {@code package.yaml} declares each at an exact version, {@code package.lock} at the root (read when it
  * exists; no document of the walk) pins each with its {@link #content(Path) content digest}, its repository and its commit, and a
@@ -63,7 +69,11 @@ public final class Package {
     private static final String GIT = ".git";
     /** A dependency reference's prefix: a package name, then a colon, before the first {@code /}. */
     private static final Pattern DEPENDENCY = Pattern.compile("([a-z][a-z0-9-]{0,63}):");
-    private static final Set<Schemas> ARTIFACTS = Set.of(Schemas.ENDPOINT, Schemas.FLOW, Schemas.TEST);
+    private static final Set<Schemas> ARTIFACTS = Set.of(Schemas.ENDPOINT, Schemas.SYSTEM, Schemas.FLOW, Schemas.TEST);
+    /** How a test of {@code schemaVersion: 2} keys the call of another flow: the internal adapter, a colon, the address called. */
+    public static final String DIRECT = "direct";
+    /** The most systems one package defines. */
+    public static final int MAX_SYSTEMS = 1000;
 
     /** What a flow that still sets {@code onFailure} is told: the choice of what a failure does to an ordered flow is gone. */
     static final String ON_FAILURE_GONE = "onFailure is gone: an ordered flow (partitionBy) always stops behind a message that failed"
@@ -82,6 +92,7 @@ public final class Package {
     private final Read lock;   // null without a package.lock
     private final List<Locked> locked;
     private final Map<String, JsonObject> endpoints;
+    private final Map<String, JsonObject> systems;
     private final Map<String, JsonObject> flows;
     private final Map<String, Path> flowFiles;
     private final List<Read> documents;
@@ -100,6 +111,7 @@ public final class Package {
         this.lock = load.lock;
         this.locked = List.copyOf(load.locked);
         this.endpoints = load.endpoints;
+        this.systems = load.systems;
         this.flows = load.flows;
         this.flowFiles = load.flowFiles;
         this.documents = List.copyOf(load.documents);
@@ -113,7 +125,8 @@ public final class Package {
         }
         this.folders = List.copyOf(folders);
         this.artifacts = documents.stream().filter(r -> ARTIFACTS.contains(r.schema()))   // documents are in path order already
-                .map(r -> new Artifact(r.path(), r.schema().kind(), r.schema() == Schemas.TEST ? Optional.empty() : Optional.of(id(r.document(), r.file()))))
+                .map(r -> new Artifact(r.path(), r.schema().kind(), r.schema() == Schemas.TEST ? Optional.empty()
+                        : Optional.of(r.schema() == Schemas.SYSTEM ? systemKey(r.document(), r.file()) : id(r.document(), r.file()))))
                 .toList();
     }
 
@@ -128,11 +141,11 @@ public final class Package {
     public record Folder(String path, Optional<String> namespace, Optional<String> description) {}
 
     /**
-     * One endpoint, flow or test document of the package ({@code package.yaml} and {@code folder.yaml} are none).
+     * One endpoint, system, flow or test document of the package ({@code package.yaml} and {@code folder.yaml} are none).
      *
      * @param path from the package root, {@code /}-separated
-     * @param kind {@code endpoint}, {@code flow} or {@code test}
-     * @param id   the document's id; empty for a test, which has none
+     * @param kind {@code endpoint}, {@code system}, {@code flow} or {@code test}
+     * @param id   the document's id, a system's key; empty for a test, which has none
      * @since 0.1
      */
     public record Artifact(String path, String kind, Optional<String> id) {}
@@ -188,6 +201,8 @@ public final class Package {
         final List<String> duplicates = new ArrayList<>();
         final Map<String, JsonObject> endpoints = new LinkedHashMap<>();
         final Map<String, Path> endpointFiles = new HashMap<>();
+        final Map<String, JsonObject> systems = new LinkedHashMap<>();
+        final Map<String, Path> systemFiles = new HashMap<>();
         final Map<String, JsonObject> flows = new LinkedHashMap<>();
         final Map<String, Path> flowFiles = new LinkedHashMap<>();
 
@@ -276,6 +291,7 @@ public final class Package {
                     }
                     Object kind = d.getValue("kind");
                     if ("endpoint".equals(kind)) byId(file, path, d, Schemas.ENDPOINT, endpoints, endpointFiles);
+                    else if ("system".equals(kind)) system(file, path, d);
                     else if ("flow".equals(kind)) byId(file, path, d, Schemas.FLOW, flows, flowFiles);
                     else if ("test".equals(kind)) documents.add(new Read(path, file, Schemas.TEST, d));
                     else if ("package".equals(kind)) misplaced.add(path + ": kind 'package' belongs in package.yaml at the package root only");
@@ -287,7 +303,7 @@ public final class Package {
             kindless.forEach((file, kind) -> {
                 if (!named.names(file)) {
                     misplaced.add(path(dir, file) + " at '/kind': " + (kind == null ? "no kind" : "unknown kind '" + kind + "'")
-                            + ": a YAML is an endpoint, a flow or a test by its kind, or a file a flow or a test names");
+                            + ": a YAML is an endpoint, a system, a flow or a test by its kind, or a file a flow or a test names");
                 }
             });
             unread.forEach((file, why) -> {
@@ -313,6 +329,16 @@ public final class Package {
             byId.put(id, d);
             Path earlier = files.put(id, file);
             if (earlier != null) duplicates.add(schema.kind() + " id '" + id + "' is declared twice, in " + path(dir, earlier) + " and in " + path);
+        }
+
+        /** A system under its key; a later file of the same key replaces the earlier one, and is a duplicate; past {@link #MAX_SYSTEMS} a problem. */
+        private void system(Path file, String path, JsonObject d) {
+            documents.add(new Read(path, file, Schemas.SYSTEM, d));
+            String key = systemKey(d, file);
+            systems.put(key, d);
+            Path earlier = systemFiles.put(key, file);
+            if (earlier != null) duplicates.add("system '" + key + "' is defined twice, in " + path(dir, earlier) + " and in " + path);
+            if (systems.size() == MAX_SYSTEMS + 1) duplicates.add(path + ": a package defines at most " + MAX_SYSTEMS + " systems");
         }
 
         /**
@@ -409,6 +435,47 @@ public final class Package {
         return document.getString("id", file.getFileName().toString());
     }
 
+    /** A system's key: {@code <partner>/<name>}, or {@code <name>} without a partner; its file's name when it has no name. */
+    private static String systemKey(JsonObject system, Path file) {
+        String name = system.getValue("name") instanceof String n ? n : file.getFileName().toString();
+        return system.getValue("partner") instanceof String partner ? partner + "/" + name : name;
+    }
+
+    /** A document's {@code schemaVersion}, 1 when it has none that is a number. */
+    public static int schemaVersion(JsonObject document) {
+        return document.getValue("schemaVersion") instanceof Number n ? n.intValue() : 1;
+    }
+
+    /**
+     * The connection keys the flow document {@code flow} of {@code schemaVersion: 2} names, each once, in file order: its
+     * sender's, then each send step's, its processes' included. Empty for a flow of {@code schemaVersion: 1}.
+     */
+    public static List<String> connections(JsonObject flow) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (schemaVersion(flow) != 2) return List.of();
+        if (flow.getValue("from") instanceof JsonObject from && from.getValue("connection") instanceof String key) keys.add(key);
+        for (WrittenStep step : writtenSteps(flow)) {
+            if ("to".equals(step.entry().getValue("type")) && step.entry().getValue("connection") instanceof String key) keys.add(key);
+        }
+        return List.copyOf(keys);
+    }
+
+    /**
+     * What a test of the flow document {@code flow} of {@code schemaVersion: 2} may mock and expect sends to, each once, in file
+     * order: its connection keys ({@link #connections}) and, for each send step of the internal adapter, {@code direct:<address>}.
+     */
+    public static List<String> mockable(JsonObject flow) {
+        Set<String> keys = new LinkedHashSet<>(connections(flow));
+        for (WrittenStep step : writtenSteps(flow)) {
+            JsonObject entry = step.entry();
+            if ("to".equals(entry.getValue("type")) && DIRECT.equals(entry.getValue("adapter")) && entry.getValue("settings") instanceof JsonObject settings
+                    && settings.getValue("address") instanceof String address) {
+                keys.add(DIRECT + ":" + address);
+            }
+        }
+        return List.copyOf(keys);
+    }
+
     /** {@code key}'s value when it is a string, else empty. */
     private static Optional<String> text(JsonObject document, String key) {
         return document.getValue(key) instanceof String s ? Optional.of(s) : Optional.empty();
@@ -431,13 +498,16 @@ public final class Package {
     /** Every endpoint document by its id, in path order: copies, the caller's to change. */
     public Map<String, JsonObject> endpoints() { return copies(endpoints); }
 
+    /** Every system document by its key ({@code <partner>/<name>} or {@code <name>}), in path order: copies, the caller's to change. */
+    public Map<String, JsonObject> systems() { return copies(systems); }
+
     /** Every flow document by its id, in path order: copies, the caller's to change. */
     public Map<String, JsonObject> flows() { return copies(flows); }
 
     /** Every folder below the package root, sorted by path; one more than four deep is not listed (a problem says so). */
     public List<Folder> folders() { return folders; }
 
-    /** Every endpoint, flow and test document, sorted by path. */
+    /** Every endpoint, system, flow and test document, sorted by path. */
     public List<Artifact> artifacts() { return artifacts; }
 
     /**
@@ -600,15 +670,28 @@ public final class Package {
 
     private void crossCheckFlow(List<String> problems, Path file, JsonObject document) {
         String flow = id(document, file);
+        boolean named = schemaVersion(document) == 2;   // names connections; its schema refuses an endpoint anywhere
         JsonObject from = document.getJsonObject("from", new JsonObject());
-        requireEndpoint(problems, "flow '" + flow + "' from", from.getString("endpoint"));
+        if (named) literal(problems, file, "flow '" + flow + "' from", from.getJsonObject("settings", new JsonObject()));
+        else requireEndpoint(problems, "flow '" + flow + "' from", from.getString("endpoint"));
         for (WrittenStep written : writtenSteps(document)) {
             JsonObject step = written.entry();
             String where = "flow '" + flow + "' " + written.label();
             // a step's fields beyond its type's requirements are untyped in the flow schema: each is read through a type guard
-            requireEndpoint(problems, where, string(problems, file, where + " endpoint", step.getValue("endpoint")));
+            if (!named) requireEndpoint(problems, where, string(problems, file, where + " endpoint", step.getValue("endpoint")));
             requireStepFile(problems, file, where + " stylesheet", string(problems, file, where + " stylesheet", step.getValue("stylesheet")));
             requireStepFile(problems, file, where + " schema", string(problems, file, where + " schema", step.getValue("schema")));
+            if (named) {
+                if ("to".equals(step.getValue("type"))) {
+                    for (String computed : List.of("by", "connections")) {
+                        if (!step.containsKey(computed)) continue;
+                        problems.add(relative(file) + ": " + where + " " + computed + ": a computed receiver (by, connections) is not supported yet; name the connection");
+                        break;
+                    }
+                    literal(problems, file, where, step.getJsonObject("settings", new JsonObject()));
+                }
+                continue;
+            }
             Object endpoints = step.getValue("endpoints");
             if (endpoints instanceof JsonObject byValue) {
                 for (String k : byValue.fieldNames()) {
@@ -617,6 +700,18 @@ public final class Package {
                 }
             } else if (endpoints != null) {
                 problems.add(relative(file) + ": " + where + " endpoints must map property values to endpoint ids, was " + endpoints);
+            }
+        }
+    }
+
+    /**
+     * Every setting of {@code settings} is literal: a string value that holds {@code ${} is refused, so that rendering the
+     * settings, once it ships, changes the meaning of no deployed flow.
+     */
+    private void literal(List<String> problems, Path file, String where, JsonObject settings) {
+        for (String name : settings.fieldNames()) {
+            if (settings.getValue(name) instanceof String value && value.contains("${")) {
+                problems.add(relative(file) + ": " + where + " settings." + name + ": '${' is not supported yet: every setting is literal");
             }
         }
     }
@@ -676,18 +771,25 @@ public final class Package {
      */
     private void crossCheckTest(List<String> problems, Path file, JsonObject test) {
         String flow = test.getString("flow");
-        if (!flows.containsKey(flow)) problems.add(relative(file) + ": flow '" + flow + "' is not in this package");
-        Optional<String> from = Optional.ofNullable(flows.get(flow)).map(f -> f.getValue("from")).filter(JsonObject.class::isInstance)
-                .map(f -> ((JsonObject) f).getValue("endpoint")).filter(String.class::isInstance).map(String.class::cast);
+        JsonObject tested = flows.get(flow);
+        int version = schemaVersion(test);
+        if (tested == null) problems.add(relative(file) + ": flow '" + flow + "' is not in this package");
+        else if (schemaVersion(tested) != version) {
+            problems.add(relative(file) + ": a test of schemaVersion " + version + " tests a flow of schemaVersion " + version + "; flow '" + flow
+                    + "' is of schemaVersion " + schemaVersion(tested));
+        }
+        Mocked mocked = new Mocked(version, flow, tested == null || schemaVersion(tested) != 2 ? null : Set.copyOf(mockable(tested)));
+        Optional<String> from = Optional.ofNullable(tested).map(f -> f.getValue("from")).filter(JsonObject.class::isInstance)
+                .map(f -> ((JsonObject) f).getValue(version == 2 ? "connection" : "endpoint")).filter(String.class::isInstance).map(String.class::cast);
         JsonObject mocks = test.getJsonObject("mocks", new JsonObject());
-        requireMocksExist(problems, file, mocks);
+        requireMocksExist(problems, file, mocks, mocked);
         JsonArray cases = test.getJsonArray("cases", new JsonArray());
         for (int i = 0; i < cases.size(); i++) {
             JsonObject c = cases.getJsonObject(i);
             String where = relative(file) + ": case '" + c.getString("name") + "' ";
             requireFile(problems, file, "case '" + c.getString("name") + "' send", c.getString("send"));
             JsonObject caseMocks = c.getJsonObject("mocks", new JsonObject());
-            requireMocksExist(problems, file, caseMocks);
+            requireMocksExist(problems, file, caseMocks, mocked);
             if (!c.containsKey("send")) {
                 from.filter(endpoint -> !fed(caseMocks.getJsonObject(endpoint, mocks.getJsonObject(endpoint, new JsonObject()))))
                         .ifPresent(endpoint -> problems.add(where + "sends nothing: no send and no files/messages feed on '" + endpoint + "'"));
@@ -697,7 +799,11 @@ public final class Package {
                 }
             }
             for (String endpoint : c.getJsonObject("expect").getJsonObject("sent", new JsonObject()).fieldNames()) {
-                if (!endpoints.containsKey(endpoint)) {
+                if (version == 2) {
+                    if (mocked.names() != null && !mocked.names().contains(endpoint)) {
+                        problems.add(where + "expects sends to '" + endpoint + "', which flow '" + flow + "' does not name");
+                    }
+                } else if (!endpoints.containsKey(endpoint)) {
                     problems.add(relative(file) + ": case '" + c.getString("name") + "' expects sends to endpoint '" + endpoint + "' which is not in this package");
                 }
             }
@@ -708,10 +814,27 @@ public final class Package {
         if (id != null && !endpoints.containsKey(id)) problems.add(where + ": endpoint '" + id + "' is not in this package");
     }
 
-    /** Each mock's endpoint exists, its {@code reply} fixture exists, and the folder its {@code files} or {@code messages} feed from. */
-    private void requireMocksExist(List<String> problems, Path testFile, JsonObject mocks) {
+    /**
+     * What a test may mock: of {@code schemaVersion} 1 the package's endpoints; of 2 what its flow {@code flow} names, {@code names}
+     * (null when that flow is not there or of another version: its own problem says so).
+     */
+    private record Mocked(int version, String flow, Set<String> names) {}
+
+    /**
+     * Each mock's endpoint exists, or what it keys is one its flow names, its {@code reply} fixture exists, and the folder its
+     * {@code files} or {@code messages} feed from.
+     */
+    private void requireMocksExist(List<String> problems, Path testFile, JsonObject mocks, Mocked mocked) {
         for (String endpoint : mocks.fieldNames()) {
-            if (!endpoints.containsKey(endpoint)) problems.add(relative(testFile) + ": mock for endpoint '" + endpoint + "' which is not in this package");
+            if (mocked.version() == 2) {
+                if (mocked.names() != null && !mocked.names().contains(endpoint)) {
+                    problems.add(relative(testFile) + ": mock for '" + endpoint + "', which flow '" + mocked.flow() + "' does not name");
+                }
+            } else if (!SLUG.matcher(endpoint).matches()) {
+                problems.add(relative(testFile) + ": mock for '" + endpoint + "', which is no endpoint id: a test of schemaVersion 1 keys its mocks by endpoint id");
+            } else if (!endpoints.containsKey(endpoint)) {
+                problems.add(relative(testFile) + ": mock for endpoint '" + endpoint + "' which is not in this package");
+            }
             JsonObject behaviour = mocks.getJsonObject(endpoint);
             if (behaviour.containsKey("reply")) requireFile(problems, testFile, "mock '" + endpoint + "' reply", behaviour.getString("reply"));
             for (String feed : FEEDS) requireFolder(problems, testFile, "mock '" + endpoint + "' " + feed, behaviour.getString(feed));
