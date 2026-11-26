@@ -418,7 +418,7 @@ public final class Node implements AutoCloseable {
                     Meter.system(), new PgDeploymentStore(pool, () -> PgConnection.connect(vertx, connectOptions(pg, "deploy", config.nodeId())).map(c -> c), store),
                     intake, leases,
                     new Targets(config.targets().defaults(), config.targets().overrides(), timer), lease, workers, signals, caches,
-                    epoch.get());   // the node's one Targets and fence; its rows of what it runs are written as the joined epoch
+                    epoch.get(), environment);   // the node's one Targets and fence; its rows of what it runs are written as the joined epoch
             deployments = restored;
             admitting.set(restored);
             StepCpu cpu = new StepCpu(StepCpu.Limits.DEFAULT);

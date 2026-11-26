@@ -102,6 +102,26 @@ public final class PgDeploymentStore implements DeploymentStore {
     /** Whether the record of package $1 with content $2 still has its secret uses to write; locked for the backfill's transaction. */
     private static final String UNKNOWN = "select not secret_uses_known from deployments where package = $1 and content = $2 for update";
 
+    private static final String SYSTEMS = "select deployment, system, definition from deployment_systems order by system";
+    private static final String CONNECTION_USES = "select deployment, flow, step, connection, adapter, direction, address, polled"
+            + " from deployment_connection_uses order by deployment, flow, step, connection, direction";
+    /** The configuration's generation, locked for share: an activation, which locks it for update, waits for the deploy's commit. */
+    private static final String CONFIG_GENERATION = "select generation from config_store for share";
+    private static final String REACHED = "select key, activation, stopped_at is not null as stopped from config_objects"
+            + " where kind = 'connection' and key = any($1::text[]) and body is not null";
+    private static final String NAMED = "select key from config_objects where kind = 'system' and key = any($1::text[]) and body is not null";
+    private static final String CHECKED = "update deployments set config_generation = $2 where package = $1";
+    /** The uses kept under the qualified ids of the flows in $1, which a new row runs at-least-once again. */
+    private static final String USES_REVIVED = "delete from deployment_connection_uses where deployment = any($1::text[])";
+    /** The uses of package $1's flows marked to retire move under each flow's qualified id, until its mark ends. */
+    private static final String USES_RETIRE = "update deployment_connection_uses set deployment = flow"
+            + " where deployment = $1 and flow in (select flow from retiring where package = $1)";
+    private static final String USES_DELETE = "delete from deployment_connection_uses where deployment = $1";
+    private static final String USE = "insert into deployment_connection_uses (deployment, flow, step, connection, adapter, direction, address, polled)"
+            + " values ($1, $2, $3, $4, $5, $6, $7, $8)";
+    private static final String SYSTEMS_DELETE = "delete from deployment_systems where deployment = $1";
+    private static final String SYSTEM = "insert into deployment_systems (deployment, system, definition) values ($1, $2, $3)";
+
     private final Pool pool;
     private final Supplier<Future<SqlConnection>> connect;
     /** Where the record of secret uses is written; null: no record of uses is kept. */
@@ -165,6 +185,27 @@ public final class PgDeploymentStore implements DeploymentStore {
     }
 
     @Override
+    public Future<List<DeployedSystem>> systems() {
+        return pool.query(SYSTEMS).execute().map(rows -> {
+            List<DeployedSystem> systems = new ArrayList<>();
+            for (Row r : rows) systems.add(new DeployedSystem(r.getString("deployment"), r.getString("system"), (JsonObject) r.getValue("definition")));
+            return systems;
+        });
+    }
+
+    @Override
+    public Future<List<ConnectionUse>> connectionUses() {
+        return pool.query(CONNECTION_USES).execute().map(rows -> {
+            List<ConnectionUse> uses = new ArrayList<>();
+            for (Row r : rows) {
+                uses.add(new ConnectionUse(r.getString("deployment"), r.getString("flow"), r.getString("step"), r.getString("connection"),
+                        r.getString("adapter"), r.getString("direction"), r.getBoolean("address"), Optional.ofNullable(r.getString("polled"))));
+            }
+            return uses;
+        });
+    }
+
+    @Override
     public Future<Boolean> writeListing(String node, long epoch, List<NodePackage> packages) {
         List<Tuple> rows = packages.stream().map(p -> Tuple.of(node, epoch, p.name(), p.version(), p.repository(), p.commit(),
                 p.deployedAt().atOffset(ZoneOffset.UTC), p.state().name(), p.behind().toArray(String[]::new))).toList();
@@ -212,8 +253,11 @@ public final class PgDeploymentStore implements DeploymentStore {
                 String flow = mark.getString(0);
                 ended = ended.compose(n -> pool.withTransaction(tx -> tx.preparedQuery(TRY_FLOW).execute(Tuple.of(flow)).compose(locked -> {
                     if (!locked.iterator().next().getBoolean(0)) return Future.<Void>succeededFuture();   // a write of a message for it is open
-                    return tx.preparedQuery(END).execute(Tuple.of(flow)).compose(deleted -> deleted.rowCount() == 0 || secrets == null
-                            ? Future.<Void>succeededFuture() : secrets.endDrain(tx, flow));
+                    return tx.preparedQuery(END).execute(Tuple.of(flow)).compose(deleted -> {
+                        if (deleted.rowCount() == 0) return Future.<Void>succeededFuture();
+                        Future<Void> uses = tx.preparedQuery(USES_DELETE).execute(Tuple.of(flow)).mapEmpty();
+                        return secrets == null ? uses : uses.compose(gone -> secrets.endDrain(tx, flow));
+                    });
                 })));
             }
             return ended;
@@ -278,6 +322,12 @@ public final class PgDeploymentStore implements DeploymentStore {
 
         @Override
         public Future<Long> save(DeploymentRecord r, Map<String, Map<String, Set<Secret.Kind>>> uses, Actor by, JsonObject detail) {
+            return save(r, uses, null, by, detail);
+        }
+
+        @Override
+        public Future<Long> save(DeploymentRecord r, Map<String, Map<String, Set<Secret.Kind>>> uses, Configuration configuration, Actor by,
+                                 JsonObject detail) {
             JsonArray pins = new JsonArray();
             for (DeploymentRecord.Pin p : r.dependencies()) {
                 pins.add(new JsonObject().put("name", p.name()).put("version", p.version()).put("content", p.content()).put("repository", p.repository())
@@ -287,12 +337,58 @@ public final class PgDeploymentStore implements DeploymentStore {
             return write(List.of(Map.entry(MARK, Tuple.of(r.name(), (Object) runs)), Map.entry(REVIVE, Tuple.of((Object) runs)),
                     Map.entry(SAVE, Tuple.of(r.name(), r.version(), r.repository(), r.commit(), r.content(), r.deployedAt().atOffset(ZoneOffset.UTC), pins, runs)),
                     Map.entry(AUDIT, audit(by, "deploy", "repository/" + r.repository(), detail))),
-                    secrets == null || uses == null ? null : conn -> knownUses(conn, r.name(), uses));
+                    conn -> {
+                        Future<Void> written = configuration == null ? Future.succeededFuture() : configuration(conn, r, configuration);
+                        return secrets == null || uses == null ? written : written.compose(done -> knownUses(conn, r.name(), uses));
+                    });
+        }
+
+        /**
+         * The package's systems and connection uses replaced and its generation written, under the configuration's lock for share;
+         * when the configuration's generation moved since the check, each reached connection and system compared again first.
+         */
+        private Future<Void> configuration(SqlConnection conn, DeploymentRecord r, Configuration c) {
+            String[] runs = r.atLeastOnce().toArray(String[]::new);
+            return conn.query(CONFIG_GENERATION).execute().compose(head -> {
+                long now = head.iterator().next().getLong(0);
+                return now == c.generation() ? Future.<Void>succeededFuture() : compared(conn, c);
+            }).compose(same -> conn.preparedQuery(CHECKED).execute(Tuple.of(r.name(), c.generation())))
+                    .compose(done -> conn.preparedQuery(USES_REVIVED).execute(Tuple.of((Object) runs)))
+                    .compose(done -> conn.preparedQuery(USES_RETIRE).execute(Tuple.of(r.name())))
+                    .compose(done -> conn.preparedQuery(USES_DELETE).execute(Tuple.of(r.name())))
+                    .compose(done -> conn.preparedQuery(SYSTEMS_DELETE).execute(Tuple.of(r.name())))
+                    .compose(done -> c.systems().isEmpty() ? Future.<Void>succeededFuture() : conn.preparedQuery(SYSTEM).executeBatch(c.systems().stream()
+                            .map(sys -> Tuple.of(r.name(), sys.key(), sys.definition())).toList()).mapEmpty())
+                    .compose(done -> c.uses().isEmpty() ? Future.<Void>succeededFuture() : conn.preparedQuery(USE).executeBatch(c.uses().stream()
+                            .map(u -> Tuple.of(r.name(), u.flow(), u.step(), u.connection(), u.adapter(), u.direction(), u.address(), u.polled().orElse(null)))
+                            .toList()).mapEmpty());
+        }
+
+        /** Fails with {@link ConfigurationChanged} when a reached connection or system is not what the check read. */
+        private Future<Void> compared(SqlConnection conn, Configuration c) {
+            String[] keys = c.connections().keySet().toArray(String[]::new);
+            String[] systems = c.named().keySet().toArray(String[]::new);
+            return conn.preparedQuery(REACHED).execute(Tuple.of((Object) keys)).compose(reached -> conn.preparedQuery(NAMED).execute(Tuple.of((Object) systems))
+                    .compose(named -> {
+                        Map<String, Reached> now = new TreeMap<>();
+                        for (Row row : reached) now.put(row.getString("key"), new Reached(row.getLong("activation"), row.getBoolean("stopped")));
+                        Set<String> inForce = new TreeSet<>();
+                        for (Row row : named) inForce.add(row.getString("key"));
+                        List<String> changed = new ArrayList<>();
+                        new TreeMap<>(c.connections()).forEach((key, read) -> {
+                            if (!read.equals(now.get(key))) changed.add("connection '" + key + "' changed while the deploy checked it: deploy again");
+                        });
+                        new TreeMap<>(c.named()).forEach((key, had) -> {
+                            if (had != inForce.contains(key)) changed.add("system '" + key + "' changed while the deploy checked it: deploy again");
+                        });
+                        return changed.isEmpty() ? Future.<Void>succeededFuture() : Future.<Void>failedFuture(new ConfigurationChanged(changed));
+                    }));
         }
 
         @Override
         public Future<Long> delete(String name, Actor by, JsonObject detail) {
             return write(List.of(Map.entry(MARK, Tuple.of(name, (Object) new String[0])), Map.entry(DELETE, Tuple.of(name)),
+                    Map.entry(USES_RETIRE, Tuple.of(name)), Map.entry(USES_DELETE, Tuple.of(name)), Map.entry(SYSTEMS_DELETE, Tuple.of(name)),
                     Map.entry(AUDIT, audit(by, "undeploy", "package/" + name, detail))),
                     secrets == null ? null : conn -> replaced(conn, name, Map.of()).<Void>mapEmpty());
         }

@@ -44,6 +44,12 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
     private final List<Audited> audited = new CopyOnWriteArrayList<>();
     /** What each node wrote it runs, by node id; guarded by {@code this}. */
     private final Map<String, Listing> listings = new TreeMap<>();
+    /** The systems the records define, by key; guarded by {@code this}. */
+    private final Map<String, DeployedSystem> systems = new TreeMap<>();
+    /** The connections the deployed and retiring flows reach; guarded by {@code this}. */
+    private final List<ConnectionUse> uses = new ArrayList<>();
+    /** The generation of the configuration each package's last deploy checked, by name; guarded by {@code this}. */
+    private final Map<String, Long> checked = new TreeMap<>();
     /** The leases the listings are checked against; null: none. */
     private final InMemoryMembership membership;
 
@@ -110,8 +116,24 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
     @Override
     public synchronized Future<Void> endMarks() {
+        uses.removeIf(u -> marked.contains(u.deployment()));
         marked.clear();
         return Future.succeededFuture();
+    }
+
+    @Override
+    public synchronized Future<List<DeployedSystem>> systems() {
+        return Future.succeededFuture(List.copyOf(systems.values()));
+    }
+
+    @Override
+    public synchronized Future<List<ConnectionUse>> connectionUses() {
+        return Future.succeededFuture(List.copyOf(uses));
+    }
+
+    /** The generation of the configuration the last deploy of {@code name} checked; empty when none was written. */
+    public synchronized Optional<Long> configGeneration(String name) {
+        return Optional.ofNullable(checked.get(name));
     }
 
     @Override
@@ -142,23 +164,59 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
         @Override
         public Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail) {
-            return write(record.name(), record, new Audited(by.name(), "deploy", "repository/" + record.repository(), detail.copy()));
+            return write(record.name(), record, null, new Audited(by.name(), "deploy", "repository/" + record.repository(), detail.copy()));
+        }
+
+        @Override
+        public Future<Long> save(DeploymentRecord record, Map<String, Map<String, Set<dev.rail8.api.Secret.Kind>>> secretUses, Configuration configuration,
+                                 Actor by, JsonObject detail) {
+            return write(record.name(), record, configuration, new Audited(by.name(), "deploy", "repository/" + record.repository(), detail.copy()));
         }
 
         @Override
         public Future<Long> delete(String name, Actor by, JsonObject detail) {
-            return write(name, null, new Audited(by.name(), "undeploy", "package/" + name, detail.copy()));
+            return write(name, null, null, new Audited(by.name(), "undeploy", "package/" + name, detail.copy()));
         }
 
-        /** Writes {@code record} as {@code name}'s row, or deletes the row when it is null, with its audit row {@code row}. */
-        private Future<Long> write(String name, DeploymentRecord record, Audited row) {
+        /**
+         * Writes {@code record} as {@code name}'s row, or deletes the row when it is null, with its audit row {@code row}; with
+         * {@code configuration}, the package's systems and uses replaced with its own. A delete removes the package's systems and
+         * uses; a save without a configuration keeps them. The uses of a flow marked here stay under its qualified id.
+         */
+        private Future<Long> write(String name, DeploymentRecord record, Configuration configuration, Audited row) {
             synchronized (InMemoryDeploymentStore.this) {
                 if (holder != this) return Future.failedFuture(new IllegalStateException("the pool's lock is no longer held"));
                 if (generation != read) return Future.failedFuture(new IllegalStateException("the pool's generation moved from " + read + " to " + generation));
+                for (DeployedSystem sys : configuration == null ? List.<DeployedSystem>of() : configuration.systems()) {
+                    DeployedSystem other = systems.get(sys.key());
+                    if (other != null && !other.deployment().equals(name)) {
+                        return Future.failedFuture(new IllegalStateException("system '" + sys.key() + "' is defined by the package '" + other.deployment() + "'"));
+                    }
+                }
                 DeploymentRecord replaced = record == null ? rows.remove(name) : rows.put(name, record);
                 List<String> runs = record == null ? List.of() : record.atLeastOnce();
-                if (replaced != null) replaced.atLeastOnce().stream().filter(flow -> !runs.contains(flow)).forEach(marked::add);
+                List<String> retiring = replaced == null ? List.of() : replaced.atLeastOnce().stream().filter(flow -> !runs.contains(flow)).toList();
+                if (replaced != null) marked.addAll(retiring);
                 runs.forEach(marked::remove);
+                if (record == null || configuration != null) {
+                    List<ConnectionUse> kept = new ArrayList<>();
+                    for (ConnectionUse u : uses) {
+                        if (!u.deployment().equals(name)) kept.add(u);
+                        else if (retiring.contains(u.flow())) {
+                            kept.add(new ConnectionUse(u.flow(), u.flow(), u.step(), u.connection(), u.adapter(), u.direction(), u.address(), u.polled()));
+                        }
+                    }
+                    uses.clear();
+                    uses.addAll(kept);
+                    systems.values().removeIf(sys -> sys.deployment().equals(name));
+                    checked.remove(name);
+                }
+                if (configuration != null) {
+                    uses.removeIf(u -> runs.contains(u.deployment()));   // a flow run again: its uses are its package's from now on
+                    configuration.systems().forEach(sys -> systems.put(sys.key(), sys));
+                    uses.addAll(configuration.uses());
+                    checked.put(name, configuration.generation());
+                }
                 audited.add(row);
                 read = ++generation;
                 return Future.succeededFuture(generation);

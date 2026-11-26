@@ -79,7 +79,7 @@ the emergency key may not. It joins this table, and the enum, when it is built.
 | `message.cancel` | `POST /admin/dlq/{id}/cancel`, `POST /admin/messages/{id}/cancel` | operator |
 | `work.release` | `POST /admin/work/{seq}/release` | operator |
 | `work.discard` | `POST /admin/work/{seq}/discard` | operator |
-| `deployment.read` | `GET /admin/packages`, `/admin/pool/packages`, `/admin/flows`, `/admin/flows/{flow}/cpu`, `/admin/targets`, `/admin/components`, `/admin/steps`, `/admin/modules` | developer, operator |
+| `deployment.read` | `GET /admin/packages`, `/admin/pool/packages`, `/admin/flows`, `/admin/flows/{flow}/cpu`, `/admin/systems`, `/admin/targets`, `/admin/components`, `/admin/steps`, `/admin/modules` | developer, operator |
 | `package.deploy` | `POST /admin/deploy`, the check (`?check=true`) and the deploy alike | developer |
 | `package.undeploy` | `DELETE /admin/packages/{name}` | developer |
 | `module.call` | `GET`, `POST /admin/modules/{plugin}/{path}` | developer |

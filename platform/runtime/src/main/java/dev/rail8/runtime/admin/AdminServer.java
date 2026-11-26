@@ -159,6 +159,10 @@ import java.util.stream.Collectors;
  * flows, no files, no folders and no artifacts) and its tree: {@code folders:[{path, namespace|null, description|null}]}
  * and {@code artifacts:[{path, kind, id|null}]}, each sorted by path, its {@code content} digest (null when FAILED) and its
  * {@code dependencies:[{name, version, content, repository, commit, direct}]}, the closure its deploy resolved.
+ * {@code GET /admin/systems} lists the systems the pool's records define: 200 {@code {environment, systems:[{key, package, partner,
+ * name, description, instanceName, connections:[{name, key, adapter, description, state, flows:[{flow, step}]}]}]}}, sorted by
+ * key and by name, {@code state} the connection's in this node's environment: {@code set}, {@code mocked}, {@code stopped} or
+ * {@code missing}, never a value.
  * {@code DELETE /admin/packages/{name}} undeploys on the route's virtual thread: 200 {@code {name, version, flowsRemoved}}
  * (its flows' qualified ids, sorted), or a refusal by the deploy's status map — 400, 403, 409 (another deploy or undeploy runs on
  * the node, or the work queue holds items of a flow of it), 503 (the node stops; or the
@@ -748,6 +752,7 @@ public final class AdminServer {
                 admin.delete("/admin/packages/:name", Action.PACKAGE_UNDEPLOY, (c, who) -> undeployed(c, who, d));
                 admin.get("/admin/flows", Action.DEPLOYMENT_READ, (c, who) -> flows(d));
                 admin.get("/admin/packages", Action.DEPLOYMENT_READ, (c, who) -> packages(d));
+                admin.get("/admin/systems", Action.DEPLOYMENT_READ, (c, who) -> Json.of(200, d.systems()));
                 admin.get("/admin/pool/packages", Action.DEPLOYMENT_READ, (c, who) -> poolPackages(d));
                 admin.get("/admin/targets", Action.DEPLOYMENT_READ, (c, who) -> targets(d));
                 admin.get("/admin/components", Action.DEPLOYMENT_READ, (c, who) -> components(d));

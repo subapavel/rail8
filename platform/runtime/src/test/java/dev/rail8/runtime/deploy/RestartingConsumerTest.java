@@ -420,6 +420,96 @@ class RestartingConsumerTest {
         assertTrue(restarting.waiting().isEmpty());
     }
 
+    // --- a restart
+
+    /** A restart gives up the consumer that runs and starts a fresh one with no delay, logged as a change of its connection. */
+    @Test
+    void aRestartGivesUpTheConsumerThatRunsAndStartsAFreshOneAtOnce() {
+        Inner c1 = inner();
+        Future<Void> start = restarting(c1, false).start();
+        until(start::isComplete, "it runs");
+        restarting.restart();
+        until(() -> c1.stops.get() == 1 && timer.pending() == 1, "c1 is given up and the next attempt is due");
+        assertEquals(Duration.ZERO, timer.nextDelay(), "with no delay");
+        clock.advance(Duration.ZERO);
+        runs(2);
+        assertEquals(List.of("build c1", "start c1", "stop c1", "stopped c1", "build c2", "start c2"), log);
+        assertTrue(logged(Level.INFO).stream().anyMatch(r -> r.getMessage().contains("the configuration of its connection changed")), "" + logged);
+    }
+
+    /** A restart while the consumer waits for its next attempt brings that attempt now. */
+    @Test
+    void aRestartWhileWaitingBringsTheNextAttemptNow() {
+        Future<Void> start = restarting(inner().failStart("connection 'erp/api' cannot serve"), false).start();
+        until(start::isComplete, "c1's start failed");
+        restarting.retry(start.cause());
+        waitsFor(Duration.ofSeconds(1), 1);
+        restarting.restart();
+        assertEquals(1, timer.pending(), "the attempt due in a second was replaced");
+        assertEquals(Duration.ZERO, timer.nextDelay(), "by one due now");
+        clock.advance(Duration.ZERO);
+        runs(2);
+        clock.advance(Duration.ofHours(1));
+        assertEquals(2, built.size(), "no other attempt: " + log);
+    }
+
+    /**
+     * Restarts during an attempt are one restart once it ended: the consumer it started is given up then and one fresh consumer
+     * starts, never one for each restart.
+     */
+    @Test
+    void restartsDuringAnAttemptAreOneOnceItEnded() {
+        Inner c1 = inner();
+        next(Inner::holdStart);
+        Future<Void> start = restarting(c1, false).start();
+        until(start::isComplete, "it runs");
+        c1.breakNow("dropped");
+        waitsFor(Duration.ofSeconds(1), 1);
+        clock.advance(Duration.ofSeconds(1));
+        startedAttempt(2);
+        restarting.restart();
+        restarting.restart();
+        assertEquals(0, c(2).stops.get(), "nothing given up while its start runs");
+        c(2).heldStart.complete();
+        until(() -> c(2).stops.get() == 1 && timer.pending() == 1, "once the attempt ended, c2 is given up and one attempt is due");
+        assertEquals(Duration.ZERO, timer.nextDelay());
+        clock.advance(Duration.ZERO);
+        runs(3);
+        clock.advance(Duration.ofHours(1));
+        assertEquals(3, built.size(), "one fresh consumer for the two restarts: " + log);
+    }
+
+    /** A restart before the start, after a failed start not tried again, and after the stop does nothing. */
+    @Test
+    void aRestartBeforeTheStartAfterAFailedStartOrAfterTheStopDoesNothing() {
+        restarting(inner().failStart("address in use"), false).restart();
+        assertEquals(0, timer.pending(), "before the start: nothing");
+        Future<Void> start = restarting.start();
+        until(start::isComplete, "c1's start failed");
+        until(() -> c(1).stops.get() == 1, "c1 is stopped");
+        restarting.restart();
+        assertEquals(0, timer.pending(), "a failed start not tried again: nothing");
+        Future<Void> stop = restarting.stop();
+        until(stop::isComplete, "stopped");
+        restarting.restart();
+        clock.advance(Duration.ofHours(1));
+        assertEquals(1, built.size(), "nothing built: " + log);
+    }
+
+    /** Without a first consumer the start builds one too; a build that fails is a failed start, tried again once retried. */
+    @Test
+    void withoutAFirstConsumerTheStartBuildsOneAndAFailedBuildIsAFailedStart() {
+        refusals.set(1);
+        Future<Void> start = restarting(null, false).start();
+        until(start::isComplete, "the build failed");
+        assertInstanceOf(IllegalArgumentException.class, start.cause());
+        assertEquals(0, timer.pending(), "nothing tried again before retry");
+        restarting.retry(start.cause());
+        waitsFor(Duration.ofSeconds(1), 1);
+        clock.advance(Duration.ofSeconds(1));
+        runs(1);
+    }
+
     // --- the stop
 
     @Test

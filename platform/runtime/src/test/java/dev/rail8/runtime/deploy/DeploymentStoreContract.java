@@ -9,6 +9,7 @@ import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -401,6 +402,67 @@ public abstract class DeploymentStoreContract {
         store.endMarks().await();
 
         assertEquals(new DeploymentStore.Snapshot(marked.generation(), List.of()), store.read().await(), "the marks end; the generation stays");
+    }
+
+    /**
+     * A save with its configuration replaces the package's systems and connection uses with its own; the uses of a flow the save
+     * retires stay under the flow's qualified id until {@code endMarks} ends its mark, and a save that runs it again takes them
+     * back; a delete removes the package's systems and keeps the uses of every flow it ran under their qualified ids.
+     */
+    @Test
+    void aSaveWithItsConfigurationReplacesTheSystemsAndUsesAndARetiringFlowKeepsItsUses() {
+        DeploymentStore.DeployedSystem erp = system("shop", "erp");
+        DeploymentStore.ConnectionUse orders = use("shop", "shop/orders", "from", "erp/inbox", "in", Optional.of("/orders"));
+        DeploymentStore.ConnectionUse audit = use("shop", "shop/audit", "post", "erp/api", "out", Optional.empty());
+        save(record("shop", "1.0.0", C_1, SHA_1, AT), configuration(List.of(erp), List.of(orders, audit)));
+        assertEquals(List.of(erp), store.systems().await(), "the package's systems are recorded");
+        assertEquals(sorted(List.of(orders, audit)), sorted(store.connectionUses().await()), "the uses of its flows are recorded");
+
+        DeploymentRecord dropped = new DeploymentRecord("shop", "2.0.0", "shop", C_2, SHA_2, AT, List.of(), List.of("shop/orders"));
+        DeploymentStore.DeployedSystem crm = system("shop", "crm");
+        save(dropped, configuration(List.of(crm), List.of(orders)));
+        DeploymentStore.ConnectionUse retiring = use("shop/audit", "shop/audit", "post", "erp/api", "out", Optional.empty());
+        assertEquals(List.of(crm), store.systems().await(), "the new version's systems replace the old ones");
+        assertEquals(sorted(List.of(orders, retiring)), sorted(store.connectionUses().await()), "the retiring flow's use stays under its id");
+
+        save(record("shop", "1.0.0", C_1, SHA_1, AT), configuration(List.of(erp), List.of(orders, audit)));
+        assertEquals(sorted(List.of(orders, audit)), sorted(store.connectionUses().await()), "a save that runs the flow again takes its uses back");
+
+        save(dropped, configuration(List.of(crm), List.of(orders)));
+        store.endMarks().await();
+        assertEquals(List.of(orders), store.connectionUses().await(), "once its mark ends, the retired flow's use goes");
+
+        delete("shop");
+        assertEquals(List.of(), store.systems().await(), "a delete removes the package's systems");
+        assertEquals(List.of(use("shop/orders", "shop/orders", "from", "erp/inbox", "in", Optional.of("/orders"))), store.connectionUses().await(),
+                "a delete keeps the uses of each flow it ran under the flow's id");
+    }
+
+    static DeploymentStore.DeployedSystem system(String deployment, String key) {
+        return new DeploymentStore.DeployedSystem(deployment, key, new JsonObject().put("name", key)
+                .put("connections", new JsonObject().put("api", new JsonObject().put("adapter", "http"))));
+    }
+
+    static DeploymentStore.ConnectionUse use(String deployment, String flow, String step, String connection, String direction, Optional<String> polled) {
+        return new DeploymentStore.ConnectionUse(deployment, flow, step, connection, "http", direction, false, polled);
+    }
+
+    static DeploymentStore.Configuration configuration(List<DeploymentStore.DeployedSystem> systems, List<DeploymentStore.ConnectionUse> uses) {
+        return new DeploymentStore.Configuration(0, systems, uses, Map.of(), Map.of());
+    }
+
+    static List<DeploymentStore.ConnectionUse> sorted(List<DeploymentStore.ConnectionUse> uses) {
+        return uses.stream().sorted(Comparator.comparing(DeploymentStore.ConnectionUse::deployment).thenComparing(DeploymentStore.ConnectionUse::flow))
+                .toList();
+    }
+
+    void save(DeploymentRecord r, DeploymentStore.Configuration configuration) {
+        PoolLock lock = lock();
+        try {
+            lock.save(r, Map.of(), configuration, BY, new JsonObject()).await();
+        } finally {
+            lock.close().await();
+        }
     }
 
     /** Whether {@code write} fails, once it completed. */

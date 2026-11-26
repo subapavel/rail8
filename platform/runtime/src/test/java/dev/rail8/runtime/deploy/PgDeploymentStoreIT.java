@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -80,7 +81,7 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
 
     @Override
     protected DeploymentStore emptyStore() {
-        pool.query("truncate deployments, retiring, node_packages").execute().await();
+        pool.query("truncate deployments, retiring, node_packages, deployment_systems, deployment_connection_uses").execute().await();
         pool.query("delete from nodes").execute().await();
         pool.query("delete from work").execute().await();
         pool.query("delete from audit where action in ('deploy', 'undeploy')").execute().await();
@@ -254,6 +255,44 @@ class PgDeploymentStoreIT extends DeploymentStoreContract {
         assertEquals(List.of("shop"), rows, "no row was written or deleted");
         long now = pool.query("select generation from deploy_pool").execute().await().iterator().next().getLong(0);
         assertEquals(read + 1, now, "only the plain SQL raised the generation");
+    }
+
+    /**
+     * A save whose configuration was checked at a generation the configuration has since left compares each reached connection and
+     * system again: one that is not what the check read fails the save, naming it, and nothing is written. At the generation it
+     * checked, the save writes the generation on the record.
+     */
+    @Test
+    void aSaveWhoseReachedConnectionChangedSinceItsCheckWritesNothing() {
+        save(record("shop", "1.0.0", C_1, SHA_1, AT));
+        DeploymentStore.Snapshot before = store.read().await();
+        pool.query("update config_store set generation = 1").execute().await();
+        try {
+            DeploymentStore.Configuration checked = new DeploymentStore.Configuration(0, List.of(system("shop", "erp")),
+                    List.of(use("shop", "shop/orders", "post", "erp/api", "out", java.util.Optional.empty())),
+                    Map.of("erp/api", new DeploymentStore.Reached(1, false)), Map.of("erp", true));
+            DeploymentStore.PoolLock lock = lock();
+            Throwable failed;
+            try {
+                failed = lock.save(record("shop", "2.0.0", C_2, SHA_2, AT), Map.of(), checked, BY, new JsonObject())
+                        .transform(done -> io.vertx.core.Future.succeededFuture(done.cause())).await();
+            } finally {
+                lock.close().await();
+            }
+            DeploymentStore.ConfigurationChanged changed = assertInstanceOf(DeploymentStore.ConfigurationChanged.class, failed);
+            assertEquals(List.of("connection 'erp/api' changed while the deploy checked it: deploy again",
+                    "system 'erp' changed while the deploy checked it: deploy again"), changed.problems());
+            assertEquals(before, store.read().await(), "nothing written: the record and the generation as they were");
+            assertEquals(List.of(), store.systems().await(), "no system written");
+            assertEquals(List.of(), store.connectionUses().await(), "no use written");
+
+            save(record("shop", "2.0.0", C_2, SHA_2, AT), new DeploymentStore.Configuration(1, List.of(), List.of(),
+                    Map.of("erp/api", new DeploymentStore.Reached(1, false)), Map.of()));
+            long generation = pool.query("select config_generation from deployments where package = 'shop'").execute().await().iterator().next().getLong(0);
+            assertEquals(1, generation, "the record carries the generation its deploy checked");
+        } finally {
+            pool.query("update config_store set generation = 0").execute().await();
+        }
     }
 
     /** delete removes the row from the {@code deployments} table, read with plain SQL: the other package's row stays. */

@@ -98,7 +98,7 @@ final class RestartingConsumer implements Consumer {
 
     /**
      * @param flow the flow's qualified id, for the logs
-     * @param first the consumer the first attempt starts
+     * @param first the consumer the first attempt starts; null to build it from {@code fresh} too, a failure of that build a failed start
      * @param fresh builds the consumer of every later attempt
      * @param polls whether the consumer polls under a lease: the next attempt then waits for the previous stop without a bound
      * @param bound how long an attempt's start may take, and how long the next attempt waits for the previous stop otherwise
@@ -107,7 +107,7 @@ final class RestartingConsumer implements Consumer {
     RestartingConsumer(String flow, Consumer first, Supplier<Consumer> fresh, boolean polls, Duration bound, Timer timer, Clock clock,
                        UnaryOperator<Throwable> scrubbed) {
         this.flow = Objects.requireNonNull(flow, "flow");
-        this.first = Objects.requireNonNull(first, "first");
+        this.first = first;
         this.fresh = Objects.requireNonNull(fresh, "fresh");
         this.polls = polls;
         this.bound = Objects.requireNonNull(bound, "bound");
@@ -185,6 +185,34 @@ final class RestartingConsumer implements Consumer {
         return done.future();
     }
 
+    /**
+     * Starts the consumer again at once, with no delay, built afresh: the one that runs is given up, and a next attempt that is
+     * waiting comes now. While an attempt is in flight, one restart follows once it ended, so a restart made obsolete by a later
+     * one never runs. Does nothing before {@link #start()}, after {@link #stop()}, and after a failed start not tried again.
+     */
+    void restart() {
+        Consumer inner = null;
+        Promise<Void> down = null;
+        synchronized (this) {
+            if (!started || stopping) return;
+            if (!attempt.isComplete()) {
+                attempt.onComplete(ended -> restart());   // a second of these finds the first's attempt due and does nothing
+                return;
+            }
+            if (current != null) {
+                inner = current;
+                current = null;
+                down = givingUp(Future.succeededFuture());
+            } else if (waiting == null) {
+                return;   // a failed start not tried again, or a restart's attempt already due: nothing runs, nothing waits
+            }
+            next.cancel();
+            next = timer.schedule(Duration.ZERO, this::fire);
+        }
+        if (inner != null) giveUp(inner, Future.succeededFuture(), down);
+        LOG.log(System.Logger.Level.INFO, "flow '" + flow + "': its consumer starts again: the configuration of its connection changed");
+    }
+
     /** The timer's task: the next attempt on a virtual thread of its own, never on the timer's thread. */
     private void fire() {
         Promise<Void> ended = Promise.promise();
@@ -237,9 +265,10 @@ final class RestartingConsumer implements Consumer {
         if (c == null) {
             try {
                 c = Objects.requireNonNull(fresh.get(), "the component built no consumer");
-            } catch (Throwable refused) {   // an Error of a plugin's build too: the attempt fails and the next one comes
+            } catch (Throwable refused) {   // an Error of a plugin's build too: the attempt fails and, once retried, the next one comes
+                boolean retried = retrying();   // read before the failure is told: a retry() it leads to schedules the next attempt itself
                 outcome.fail(refused);
-                failed(refused, "could not be built");
+                if (retried) failed(refused, "could not be built");
                 ended.complete();
                 return;
             }
