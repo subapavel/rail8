@@ -35,6 +35,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -416,7 +417,7 @@ class CallsBetweenFlowsIT {
 
     /**
      * Ten sync flows in a line, {@code chain/d0} to {@code chain/d9}, each calling the next: the call of {@code d8} would be the
-     * ninth deep, so it is refused for good. The sender of {@code d0} gets 502, {@code d9} never runs, and the eight callees that
+     * ninth deep, so it is refused for good. The sender of {@code d0} gets 502 with a fixed text, the history names the cap, {@code d9} never runs, and the eight callees that
      * did run are found by the ref of the first.
      */
     @Test
@@ -435,9 +436,11 @@ class CallsBetweenFlowsIT {
         HttpResponse<String> answer = post(node, door, "{\"id\": 11}", "application/json");
 
         assertEquals(502, answer.statusCode(), "a final refusal of a partner: " + answer.body());
-        assertTrue(answer.body().contains("more than the 8"), "the answer names the cap: " + answer.body());
+        assertEquals("the receiver refused the message", answer.body(), "the sender learns the kind of fault only");
         int admin = node.adminPort();
         String d0 = onlyMessageOf(admin, "chain/d0");
+        assertEquals(Optional.of(d0), answer.headers().firstValue("x-message-id"), "the answer names the message");
+        NodeIT.until(() -> message(admin, d0).encode().contains("more than the 8"), "the history of d0 names the cap: " + message(admin, d0));
         NodeIT.until(() -> chain(admin, d0).size() == 8, "d1 to d8 ran, each under the first's ref: " + chain(admin, d0));
         assertEquals(List.of(), messagesOf(admin, "chain/d9"), "d9 never ran");
     }
