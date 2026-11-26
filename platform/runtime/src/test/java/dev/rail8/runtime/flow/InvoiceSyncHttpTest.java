@@ -206,7 +206,7 @@ class InvoiceSyncHttpTest {
         if (partner != null) within(partner.close(), "the partner's close");
     }
 
-    record Answer(int status, String contentType, String body) {}
+    record Answer(int status, String contentType, String body, String messageId) {}
 
     /**
      * Posts {@code body} to the flow and returns the answer; fails at once when a partner send failed first (its retry would
@@ -216,7 +216,7 @@ class InvoiceSyncHttpTest {
     Answer post(Buffer body) {
         CompletableFuture<Answer> answer = caller.request(new RequestOptions().setMethod(HttpMethod.POST).setAbsoluteURI("http://127.0.0.1:" + port + "/http/in"))
                 .compose(req -> { req.putHeader("content-type", "application/xml"); req.putHeader("x-request-id", "r-42"); return req.send(body); })
-                .compose(res -> res.body().map(b -> new Answer(res.statusCode(), res.getHeader("content-type"), b.toString())))
+                .compose(res -> res.body().map(b -> new Answer(res.statusCode(), res.getHeader("content-type"), b.toString(), res.getHeader("x-message-id"))))
                 .toCompletionStage().toCompletableFuture();
         Throwable requestFailed = null;
         try {
@@ -256,10 +256,13 @@ class InvoiceSyncHttpTest {
     }
 
     @Test
-    void anInvoiceWithoutAnIdIsA422NamingTheValidateStepAndNothingReachesThePartner() {
+    void anInvoiceWithoutAnIdIsA422WithAFixedTextItsHistoryNamesTheValidateStepAndNothingReachesThePartner() {
         Answer a = post(Buffer.buffer(invoice.toString().replace("<Id>4711</Id>", "")));
-        assertEquals(422, a.status(), "an invalid input is the sender's fault, by kind (D-049)");
-        assertTrue(a.body().contains("validation failed at step 'validate'"), a.body());
+        assertEquals(422, a.status(), "an invalid input is the sender's fault, by kind");
+        assertEquals("the message is invalid", a.body(), "the caller learns the kind of fault, not the flow's steps");
+        List<Snapshot> t = within(store.timeline(a.messageId()), "the timeline read");
+        assertEquals("validate", t.getLast().stepName(), "the history of the message the answer names: " + t);
+        assertTrue(t.getLast().error().orElse("").contains("validation failed at step 'validate'"), "the detail is in the history: " + t.getLast().error());
         assertEquals(List.of(), partnerSaw);
     }
 

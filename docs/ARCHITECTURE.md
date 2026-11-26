@@ -103,6 +103,13 @@ A flow sets `delivery.mode`:
 
 HTTP answers: 200 a reply, 202 accepted, 400 malformed or refused for good, 413 too large, 422
 invalid, 502 or 503 a partner failed (503 when worth trying again), 500 anything else.
+A failed run's answer carries a fixed text per status ("the message is invalid", "the receiver
+cannot be reached now", "the flow failed") and the message's id in `x-message-id`; a body the store
+cannot take is 500 "the message could not be stored". The failure's detail goes to the node's log and
+to the message's history, never to the caller. The UI's cookies (`rail8-session`,
+`__Host-rail8-session`, `rail8-device`, `__Host-rail8-device`) are cut from a request's `cookie`
+before it becomes the envelope, and a reply's `Set-Cookie` of one of them is never sent; other
+cookies pass.
 
 ### Processing
 

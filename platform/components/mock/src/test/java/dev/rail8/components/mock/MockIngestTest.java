@@ -127,6 +127,26 @@ class MockIngestTest {
         assertEquals(BlobKey.body("in-1", 0), e.body().key(), "stored as the consumer stores an ingress body");
     }
 
+    /** As the http consumer does: the UI's cookies are cut before the handler, and a reply that sets one answers without it. */
+    @Test
+    void anHttpMocksIngestKeepsThePlatformsCookiesOutAndOtherCookiesPass() {
+        Handled handled = consume(http, in, e -> Future.succeededFuture(new Ack.Reply(e.withHeader("Set-Cookie", e.headers().get("x-set")))));
+        String cookies = "rail8-session=s1; __Host-rail8-session=s2; theme=dark; rail8-device=d1; __Host-rail8-device=d2";
+        for (String name : List.of("rail8-session", "__Host-rail8-session", "rail8-device", "__Host-rail8-device", "theme")) {
+            Ack ack = http.ingest("http-in", Headers.empty().with("cookie", cookies).with("x-set", name + "=v"), Buffer.buffer("<a/>")).await();
+            assertEquals("theme=dark", handled.envelopes().getLast().headers().get("cookie"), name + ": the handler sees only the other cookie");
+            assertEquals("theme=dark", http.delivered("http-in").getLast().headers().get("cookie"), name + ": and so does the record of what it got");
+            assertEquals(name.equals("theme") ? "theme=v" : null, assertInstanceOf(Ack.Reply.class, ack).reply().headers().get("Set-Cookie"), name);
+        }
+        http.ingest("http-in", Headers.empty().with("cookie", "rail8-session=s1").with("x-set", "theme=v"), Buffer.buffer("<a/>")).await();
+        assertFalse(handled.envelopes().getLast().headers().asMap().containsKey("cookie"), "a cookie with only the platform's is removed");
+
+        MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), ids);
+        Handled other = consume(sftp, Uses.in("sftp-in", "orders", 8, Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        sftp.ingest("sftp-in", Headers.empty().with("cookie", cookies), Buffer.buffer("<a/>")).await();
+        assertEquals(cookies, other.envelopes().getLast().headers().get("cookie"), "a mock of another scheme keeps its headers as given");
+    }
+
     @Test
     void ingestWithoutConsumerFails() {
         assertInstanceOf(IllegalStateException.class, failureOf(() -> http.ingest("http-in", Headers.empty(), Buffer.buffer("x"))),

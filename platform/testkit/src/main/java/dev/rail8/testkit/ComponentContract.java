@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -45,6 +46,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -54,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * The cases every component passes, real or mock: both must pass the same suite. A component's test extends this class
@@ -78,7 +81,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * through {@code send(e, call)} and {@code send(e, call, d)} alike; a send with no time left ({@code d.remaining() <= 0})
  * fails with a retryable {@link NackException} and reaches no partner; a send still unanswered when its {@link Deadline}
  * runs out is cut — failed with a retryable {@link NackException} on the {@link Timer} the component was built with
- * ({@link #component(Timer)}), the deadline re-read there, so a deadline renewed meanwhile is waited for. A fresh consumer
+ * ({@link #component(Timer)}), the deadline re-read there, so a deadline renewed meanwhile is waited for. The cookies of
+ * the node's UI a consumer names ({@link #platformCookies()}) never reach its handler nor leave in a reply's {@code set-cookie},
+ * and other cookies pass. A fresh consumer
  * of an inbound whose last consumer stopped serves it, as the node starts one after a break; {@link Consumer#broken()}
  * stays pending while a consumer delivers or refuses messages, and through its stop. A component's prefix on the node's
  * HTTP port ({@link Component#httpPrefix()}) is none, or one of {@link HttpIngress#PREFIX_PATTERN} other than
@@ -141,6 +146,14 @@ public abstract class ComponentContract {
      * of {@link #outbound(Consumer)} built for receiver 0; by default {@link #call(Consumer)}.
      */
     protected Call call(int n, Consumer started) { return call(started); }
+    /**
+     * The cookies of the node's UI that the consumer under test keeps out of a flow: cut from a delivery's {@code cookie}
+     * before its handler sees it, and never sent back from a reply's {@code set-cookie}. None by default, and the case that
+     * checks them is skipped: a consumer that takes requests where the UI's cookies can arrive, such as {@code http}, and the
+     * mock that stands in for it name them.
+     */
+    protected Set<String> platformCookies() { return Set.of(); }
+
     /** How long a case waits for an asynchronous delivery before it fails (a real transport needs a moment). */
     protected Duration patience() { return Duration.ofSeconds(10); }
 
@@ -550,6 +563,37 @@ public abstract class ComponentContract {
             assertEquals(sent.body().hash(), seen.get(0).body().hash(), "the body arrives intact");
             assertEquals(sent.body().size(), seen.get(0).body().size());
             assertEquals("ping", seen.get(0).body().whole().toString());
+        } finally {
+            producer.close().await();
+            consumer.stop().await();
+        }
+    }
+
+    @Test
+    public void thePlatformsCookiesNeitherReachTheHandlerNorLeaveInAReplyAndOtherCookiesPass() {
+        List<String> names = platformCookies().stream().sorted().toList();
+        assumeFalse(names.isEmpty(), "the consumer keeps no cookies out of a flow");
+        Component component = component();
+        List<Envelope> seen = new CopyOnWriteArrayList<>();
+        Consumer consumer = component.consumer(inbound(), e -> {
+            seen.add(e);
+            return Future.succeededFuture(new Ack.Reply(e.withHeader("set-cookie", e.headers().get("x-set"))));
+        });
+        consumer.start().await();
+        Producer producer = component.producer(outbound(consumer));
+        Call call = call(consumer);
+        try {
+            List<String> pairs = new ArrayList<>(names.stream().map(name -> name + "=platform").toList());
+            pairs.add(1, "theme=dark");
+            for (String name : Stream.concat(names.stream(), Stream.of("theme")).toList()) {
+                String set = name + "=v; Path=/";
+                Envelope sent = FakeRuntime.create().ingress("contract", Headers.empty().with("cookie", String.join("; ", pairs)).with("x-set", set), Buffer.buffer("cookies"));
+                Future<Envelope> reply = settled(producer.send(sent, call));
+                assertTrue(reply.succeeded(), name + ": the send is answered: " + reply.cause());
+                assertEquals("theme=dark", seen.getLast().headers().get("cookie"), name + ": the handler sees only the other cookie: " + seen.getLast().headers());
+                assertEquals(name.equals("theme") ? set : null, reply.result().headers().get("set-cookie"),
+                        name + ": a reply never sets one of the platform's cookies, and sets any other");
+            }
         } finally {
             producer.close().await();
             consumer.stop().await();

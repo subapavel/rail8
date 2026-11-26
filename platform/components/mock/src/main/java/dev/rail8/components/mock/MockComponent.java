@@ -67,7 +67,9 @@ import java.util.stream.Stream;
  * pending. While {@link #partnerDown} plays the partner of an endpoint down, a round there breaks its consumer
  * ({@link Consumer#broken()}), which polls no more; the files stay. {@link #ingest} hands a running consumer a message as the real one would take it from its sender
  * ({@code rail8 test}'s {@code send}); {@link #delivered} records what each consumer's handler was given, whoever gave
- * it. Development and CI only: a deployed node refuses a mock binding by its scheme and by this package (the node's start).
+ * it. Standing in for {@code http}, a consumer keeps the cookies of the node's UI out of a flow as the real one does: cut from
+ * a delivery's {@code cookie} before its handler and {@link #delivered} see it, and a reply's {@code set-cookie} of one of them
+ * dropped. Development and CI only: a deployed node refuses a mock binding by its scheme and by this package (the node's start).
  *
  * @since 0.1
  */
@@ -82,6 +84,8 @@ public final class MockComponent implements Component {
     private static final Key<String> HTTP_PATH = new Key<>("http.path");
     /** The http component's prefix on the node's HTTP port (HttpComponent.PREFIX): an http consumer's path is it and the address. */
     private static final String HTTP_PREFIX = "/http";
+    /** The cookies of the node's UI (HttpComponent.PLATFORM_COOKIES), which an http mock's consumer keeps out of a flow as the real one does. */
+    static final Set<String> PLATFORM_COOKIES = Set.of("rail8-session", "__Host-rail8-session", "rail8-device", "__Host-rail8-device");
 
     private final String scheme;
     private final BlobStore blobs;
@@ -220,6 +224,41 @@ public final class MockComponent implements Component {
         }
     }
 
+    /**
+     * What an http mock's consumer hands its handler: {@code e} with the {@link #PLATFORM_COOKIES} cut from {@code cookie}, the
+     * other cookies as written, a {@code cookie} left with none removed. Any other scheme's: {@code e} as it is.
+     */
+    private Envelope entering(Envelope e) {
+        String cookie = e.headers().get("cookie");
+        if (!"http".equals(scheme) || cookie == null) return e;
+        List<String> pairs = List.of(cookie.split(";"));
+        List<String> kept = pairs.stream().filter(pair -> !PLATFORM_COOKIES.contains(cookieName(pair))).toList();
+        if (kept.size() == pairs.size()) return e;
+        Map<String, String> m = new java.util.HashMap<>(e.headers().asMap());
+        String rest = String.join(";", kept).strip();
+        if (rest.isEmpty()) m.remove("cookie");
+        else m.put("cookie", rest);
+        return withHeaders(e, m);
+    }
+
+    /** What an http mock's consumer answers with: a reply without a {@code set-cookie}, in any case, of the {@link #PLATFORM_COOKIES}. */
+    private Ack leaving(Ack ack) {
+        if (!"http".equals(scheme) || !(ack instanceof Ack.Reply(Envelope reply))) return ack;
+        Map<String, String> m = new java.util.HashMap<>(reply.headers().asMap());
+        if (!m.entrySet().removeIf(h -> "set-cookie".equalsIgnoreCase(h.getKey()) && PLATFORM_COOKIES.contains(cookieName(h.getValue())))) return ack;
+        return new Ack.Reply(withHeaders(reply, m));
+    }
+
+    /** The name of a cookie in a {@code cookie} pair or a {@code set-cookie} value: what comes before its first {@code =}, trimmed. */
+    private static String cookieName(String cookie) {
+        int eq = cookie.indexOf('=');
+        return (eq < 0 ? cookie : cookie.substring(0, eq)).strip();
+    }
+
+    private static Envelope withHeaders(Envelope e, Map<String, String> headers) {
+        return new Envelope(e.id(), e.flow(), e.step(), new Headers(headers), e.props(), e.keys(), e.body(), e.attachments(), e.views());
+    }
+
     /** The value {@code name} of {@code in}: the flow's setting, else the connection's value (an undescribed form takes it). */
     private static Object setting(Inbound in, String name) {
         Object v = in.settings().get(name);
@@ -244,8 +283,9 @@ public final class MockComponent implements Component {
         Drain drain = new Drain();
         List<Envelope> given = delivered.computeIfAbsent(endpoint, k -> new CopyOnWriteArrayList<>());
         Running running = new Running(in, e -> {
-            given.add(e);   // recorded before the handler runs: whoever reads its answer finds it
-            return drain.deliver(h, e);
+            Envelope entered = entering(e);
+            given.add(entered);   // recorded before the handler runs: whoever reads its answer finds it
+            return drain.deliver(h, entered).map(this::leaving);
         });
         Poller poller = new Poller(endpoint, running, drain);
         return new Consumer() {
