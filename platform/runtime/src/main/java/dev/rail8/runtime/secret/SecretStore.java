@@ -1237,6 +1237,57 @@ public final class SecretStore {
         });
     }
 
+    /**
+     * The binding of this node's current key for the caller's transaction {@code tx}, to bind several byte arrays under one key:
+     * it takes the store's row lock for share and makes a write's key check, as {@link #bind} does, but keeps a failed check
+     * until {@link Binder#bind} is called, so the caller may take its own locks and make its own checks first.
+     */
+    public Future<Binder> binder(SqlConnection tx) {
+        StoreKey k = key;
+        return rows.sharedNodes(tx).compose(nodes -> keyCheck(nodes, k).transform(checked ->
+                Future.succeededFuture(new Binder(k.current(), checked.failed() ? checked.cause() : null))));
+    }
+
+    /** Binds byte arrays under one key, the node's current key when its {@link SecretStore#binder} was made. */
+    public static final class Binder {
+        private final byte[] key;
+        private final Throwable refused;
+
+        private Binder(byte[] key, Throwable refused) {
+            this.key = key;
+            this.refused = refused;
+        }
+
+        /** The id of the key this binder binds under. */
+        public byte[] keyId() {
+            return Seal.keyId(key);
+        }
+
+        /**
+         * {@code bytes} bound under this binder's key, as {@link SecretStore#bind} binds them.
+         *
+         * @throws SecretRefused 409 {@code keys-differ}, when a live node did not hold the key at the binder's check
+         */
+        public Binding bind(byte[] bytes) throws SecretRefused {
+            if (refused instanceof SecretRefused r) throw r;
+            if (refused != null) throw new IllegalStateException("the secret store's key check failed", refused);
+            return new Binding(Seal.keyId(key), tag(key, bytes));
+        }
+
+        @Override
+        public String toString() {
+            return "Binder[key " + HEX.formatHex(Seal.keyId(key)) + (refused == null ? "]" : ", refused]");
+        }
+    }
+
+    /**
+     * The kind of each name of {@code names} that is set in Postgres, in the caller's transaction {@code tx}; a name not set is
+     * absent. Read after {@link #replaceUses} in the same transaction, it holds while the names' locks are held.
+     */
+    public Future<Map<String, Secret.Kind>> kinds(SqlConnection tx, Set<String> names) {
+        return PgSecretRows.kinds(tx, names);
+    }
+
     /** Whether {@code binding} binds {@code bytes} under the key its id names, current or previous. */
     public boolean verify(Binding binding, byte[] bytes) {
         byte[] under = keyFor(key, binding.keyId());
