@@ -253,7 +253,8 @@ final class Dependencies implements AutoCloseable {
     private PackageRepositories repositories() throws IOException {
         if (repositories == null) {
             temp = Files.createTempDirectory("rail8-git-");
-            GitCache cache = new GitCache(new GitSettings(deps.toUri()), temp.resolve("cache"), NodeConfig.MAX_PACKAGE_BYTES_DEFAULT, false, WALL, Set::of);
+            GitCache cache = new GitCache(new GitSettings(deps.toUri()), temp.resolve("cache"), NodeConfig.MAX_PACKAGE_BYTES_DEFAULT, false, WALL, Set::of,
+                    Optional::empty);
             repositories = cache.open();
         }
         return repositories;

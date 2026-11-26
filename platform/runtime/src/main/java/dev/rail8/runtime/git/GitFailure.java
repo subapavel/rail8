@@ -22,6 +22,8 @@ public final class GitFailure extends Exception {
         HISTORY_INCOMPLETE("history incomplete"),
         /** The git server refused the credentials, or asked for some and was given none. */
         CREDENTIALS_REFUSED("credentials refused"),
+        /** The git server asked for credentials, and the secret store's {@code rail8.git} does not open on this node: none were sent. */
+        CREDENTIALS_UNREADABLE("the secret store's rail8.git is unreadable"),
         /** The fetches took longer than {@code RAIL8_GIT_TIMEOUT}. */
         TIMED_OUT("timed out (RAIL8_GIT_TIMEOUT)"),
         /** The fetch would pass {@code RAIL8_GIT_MAX_BYTES}, after the cached repositories nothing names were deleted. */

@@ -1,24 +1,55 @@
 package dev.rail8.runtime.git;
 
+import dev.rail8.api.Secret;
+import dev.rail8.runtime.secret.SecretStore;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.internal.storage.file.FileRepository;
 import org.eclipse.jgit.internal.storage.file.GC;
 import org.eclipse.jgit.lib.PersonIdent;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The contract of {@link PackageRepositories} on JGit over {@code file://} repositories, and what only the JGit cache does. */
+/**
+ * The contract of {@link PackageRepositories} on JGit over {@code file://} repositories, and what only the JGit cache does. A
+ * {@code file://} base never reads the store's {@code rail8.git}, which every cache here is given.
+ */
 class GitCacheTest extends PackageRepositoriesContract {
 
+    private static final String TOKEN = "glpat-Secret-Token-4711";
+
     private GitSource git;
+    /** The reads of the store's {@code rail8.git}, which holds a pair: a {@code file://} base never makes one. */
+    private final AtomicInteger reads = new AtomicInteger();
+
+    private Optional<SecretStore.Held> stored() {
+        reads.incrementAndGet();
+        return Optional.of(new SecretStore.Held(Secret.Kind.CREDENTIALS, "k1", new Secret.Credentials("rail8-reader", TOKEN)));
+    }
+
+    @AfterEach
+    void neverReadTheCredentials() {
+        assertEquals(0, reads.get(), "a file:// base reads no credentials");
+    }
 
     @Override
     protected Source newSource() {
@@ -28,10 +59,43 @@ class GitCacheTest extends PackageRepositoriesContract {
 
     @Override
     protected Cache cache(Options options) {
-        GitSettings settings = new GitSettings(git.base(), options.path(), options.ref(), java.util.Optional.empty(), GitSettings.TIMEOUT_DEFAULT,
-                options.maxBytes());
-        GitCache cache = new GitCache(settings, temp.resolve("cache"), options.maxPackageBytes(), options.deployed(), timer, options.named());
+        GitSettings settings = new GitSettings(git.base(), options.path(), options.ref(), GitSettings.TIMEOUT_DEFAULT, options.maxBytes());
+        GitCache cache = new GitCache(settings, temp.resolve("cache"), options.maxPackageBytes(), options.deployed(), timer, options.named(),
+                this::stored);
         return cache::open;
+    }
+
+    @Test
+    void aFileBaseWithRail8GitStoredReadsNoCredentialsAndWarnsOnceWithoutTheBaseOrTheToken() throws Exception {
+        String first = git.commit("orders", "main", pkg("orders"));
+        List<LogRecord> logged = new CopyOnWriteArrayList<>();
+        Handler capture = new Handler() {
+            @Override public void publish(LogRecord r) { logged.add(r); }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        Logger logger = Logger.getLogger(GitCache.class.getName());
+        logger.addHandler(capture);
+        try {
+            AtomicInteger told = new AtomicInteger();
+            GitCache cache = new GitCache(new GitSettings(git.base()), temp.resolve("cache"), 1L << 20, false, timer, Set::of, () -> {
+                told.incrementAndGet();
+                return Optional.of(new SecretStore.Held(Secret.Kind.CREDENTIALS, "k1", new Secret.Credentials("rail8-reader", TOKEN)));
+            });
+            cache.credentialsChanged();   // the node's start
+            cache.credentialsChanged();   // an overwrite
+            int atStart = told.get();
+            assertEquals(first, cache.open().forDeploy("orders", first).id());
+            cache.check("orders");
+            assertEquals(atStart, told.get(), "an operation reads no credentials");
+            List<String> warnings = logged.stream().filter(r -> r.getLevel() == Level.WARNING).map(LogRecord::getMessage).toList();
+            assertEquals(1, warnings.size(), warnings.toString());
+            assertTrue(warnings.getFirst().contains("rail8.git") && warnings.getFirst().contains("file://"), warnings.getFirst());
+            assertFalse(warnings.getFirst().contains(git.base().toString()) || warnings.getFirst().contains(git.base().getPath()), "no base: " + warnings);
+            assertFalse(warnings.getFirst().contains(TOKEN), warnings.getFirst());
+        } finally {
+            logger.removeHandler(capture);
+        }
     }
 
     @Test
@@ -70,7 +134,7 @@ class GitCacheTest extends PackageRepositoriesContract {
         Files.writeString(folder.resolve("flows").resolve("in.yaml"), "flow: changed, not committed\n");
 
         GitCache cache = new GitCache(new GitSettings(temp.resolve("workspace").toUri()), Files.createTempDirectory(temp, "cli-cache"),
-                1L << 20, false, timer, java.util.Set::of);
+                1L << 20, false, timer, java.util.Set::of, Optional::empty);
         Commit commit = cache.open().forDeploy("demo", "HEAD");
         assertEquals(head, commit.id());
         Path out = Files.createDirectories(temp.resolve("out"));

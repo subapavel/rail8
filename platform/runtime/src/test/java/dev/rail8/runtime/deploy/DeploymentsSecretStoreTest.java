@@ -11,6 +11,7 @@ import dev.rail8.api.settings.Settings;
 import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
 import dev.rail8.core.record.InMemoryMessageStore;
+import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.node.NodeConfig;
 import dev.rail8.runtime.node.OnVirtualThread;
 import dev.rail8.runtime.secret.MemorySecretStores;
@@ -28,6 +29,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -670,5 +673,52 @@ class DeploymentsSecretStoreTest {
         String timeline = String.valueOf(within(a.messages.timeline(e.id()), "the timeline"));
         assertTrue(timeline.contains("the partner refused the order of app, logged in with secret://in-login"), timeline);
         assertFalse(timeline.contains("pw-first-0815"), timeline);
+    }
+
+    // --- the pool's git credentials, rail8.git
+
+    /**
+     * Overwrites of {@code rail8.git} close together bring one extra check of the credentials, a minute after the last check
+     * ended: the changes are coalesced, and the regular checks go on from there.
+     */
+    @Test
+    void overwritesOfRail8GitBringOneExtraCheckAMinuteAfterTheLast() throws Exception {
+        Node a = new Node("node-1", Map.of());
+        MemorySecretStores.createValue(a.store, "in-token", "one");
+        a.deploy(shop());
+        CredentialsCheck check = a.deployments.credentials().orElseThrow();
+        check.start();
+        DeploymentsTest.until(() -> check.last().isPresent(), "the first check ended");
+        Instant first = check.last().orElseThrow().checkedAt();
+
+        MemorySecretStores.createCredentials(a.store, SecretStore.GIT, "rail8-reader", "git-token-0");
+        for (int i = 1; i < 10; i++) MemorySecretStores.overwriteCredentials(a.store, SecretStore.GIT, "rail8-reader", "git-token-" + i);
+        rt.clock().advance(CredentialsCheck.AFTER_CHANGE.minus(Duration.ofSeconds(1)));
+        assertEquals(first, check.last().orElseThrow().checkedAt(), "no check sooner than a minute after the last one ended");
+        rt.clock().advance(Duration.ofSeconds(1));
+        Instant extra = first.plus(CredentialsCheck.AFTER_CHANGE);
+        DeploymentsTest.until(() -> check.last().orElseThrow().checkedAt().equals(extra), "one extra check, a minute after the last one");
+        rt.clock().advance(CredentialsCheck.AFTER_CHANGE.minus(Duration.ofSeconds(1)));
+        assertEquals(extra, check.last().orElseThrow().checkedAt(), "ten changes, one extra check");
+        assertTrue(logged.stream().noneMatch(l -> l.contains("git-token-")), logged.toString());
+    }
+
+    /**
+     * A node with a {@code file://} base and the git variables set starts; its store imports them as {@code rail8.git}, which the
+     * git cache never sends to such a base: one WARNING says so, naming neither the base nor the token, and the deploy runs.
+     */
+    @Test
+    void aFileBaseWithTheGitVariablesStartsAndIgnoresRail8GitWithOneWarning() throws Exception {
+        Node a = new Node("node-1", Map.of("RAIL8_GIT_USER", "rail8-reader", "RAIL8_GIT_TOKEN", "git-token-from-the-variable"));
+        assertTrue(a.store.platform(SecretStore.GIT).isPresent(), "the first join imported the pair");
+        MemorySecretStores.createValue(a.store, "in-token", "one");
+        a.deploy(shop());
+        MemorySecretStores.overwriteCredentials(a.store, SecretStore.GIT, "rail8-reader", "git-token-overwritten");
+        a.follow();
+        List<String> warnings = logged.stream().filter(l -> l.contains("takes no credentials")).toList();
+        assertEquals(1, warnings.size(), logged.toString());
+        assertTrue(warnings.getFirst().contains(SecretStore.GIT), warnings.getFirst());
+        assertFalse(warnings.getFirst().contains(repos.base().getPath()), warnings.getFirst());
+        assertTrue(logged.stream().noneMatch(l -> l.contains("git-token-")), logged.toString());
     }
 }

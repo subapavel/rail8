@@ -1483,7 +1483,7 @@ orchestrator mounts secrets:
 | `RAIL8_PG_PASSWORD` | `RAIL8_PG_PASSWORD_FILE` | the Postgres password |
 | `RAIL8_VALKEY_URI` | `RAIL8_VALKEY_URI_FILE` | the Valkey URI, with its user and password |
 | `RAIL8_ADMIN_TOKEN` | `RAIL8_ADMIN_TOKEN_FILE` | the admin API's token |
-| `RAIL8_GIT_TOKEN` | `RAIL8_GIT_TOKEN_FILE` | the token for the package repositories |
+| `RAIL8_GIT_TOKEN` | `RAIL8_GIT_TOKEN_FILE` | the token for the package repositories, imported once as `rail8.git` |
 | `RAIL8_SECRET_<NAME>` | `RAIL8_SECRET_<NAME>_FILE` | the value of `secret://<name>`, imported once |
 | `RAIL8_JOURNAL_KEY` | `RAIL8_JOURNAL_KEY_FILE` | the journal's master key (preferred as a file) |
 | `RAIL8_SECRETS_KEY` | `RAIL8_SECRETS_KEY_FILE` | the secret store's key, required (preferred as a file) |
@@ -1496,7 +1496,8 @@ orchestrator mounts secrets:
 - The secret store is the only source of `secret://<name>`. A node that joins a store that was never
   written imports its `RAIL8_SECRET_<NAME>` variables, each as `<name>` in lower case with `_` as
   `-`, and `RAIL8_GIT_USER` with `RAIL8_GIT_TOKEN` as `rail8.git`, all or none, and logs one INFO.
-  After that no node reads them: a node that finds one set logs one WARNING naming it.
+  After that no node reads them: a node that finds one set logs one WARNING naming it. The import alone
+  reads the file forms of these variables, `RAIL8_GIT_TOKEN_FILE` among them.
 - A secret whose variable itself ends in `_FILE`, such as `secret://db-file`, is given as a file only:
   `RAIL8_SECRET_DB_FILE_FILE`. `RAIL8_SECRET_FILE` alone is the variable of `secret://file`.
 - The node reads no S3 or ClickHouse credentials today; a secret variable added later has the file

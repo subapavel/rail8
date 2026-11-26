@@ -99,8 +99,10 @@ import java.util.regex.Pattern;
  *             senders call it at ({@link Http#origin})
  * @param git the {@code RAIL8_GIT_*} keys: the pool's package repositories, absent without {@code RAIL8_GIT_BASE}. The base is an
  *            {@code https://} URI in every environment, a {@code file://} one in dev and ci only, and never carries user information;
- *            a deployed environment that sets it sets {@code RAIL8_GIT_REF} too. {@code RAIL8_GIT_USER} and {@code RAIL8_GIT_TOKEN}
- *            come together, for an https base only. No refusal repeats the base or the token
+ *            a deployed environment that sets it sets {@code RAIL8_GIT_REF} too. No refusal repeats the base. The pool's credentials
+ *            are the secret store's {@code rail8.git}: {@code RAIL8_GIT_USER} and {@code RAIL8_GIT_TOKEN} are imported once, by the
+ *            join of a store never written, and never read again. {@code rail8.git} is sent to an {@code https://} base only; on a
+ *            {@code file://} base it is ignored with a WARNING
  * @since 0.1
  */
 public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Path dataDir, Duration stopDeadline,
@@ -135,10 +137,6 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
             if (settings.local() && deployed(env)) {
                 throw new IllegalArgumentException("RAIL8_GIT_BASE is refused: a file:// base serves dev and ci only; a deployed environment reads"
                         + " its repositories over https:// (the value is not shown)");
-            }
-            if (settings.local() && settings.credentials().isPresent()) {
-                throw new IllegalArgumentException("RAIL8_GIT_USER and RAIL8_GIT_TOKEN are sent to an https:// base only; a file:// base takes"
-                        + " neither");
             }
             if (settings.ref().isEmpty() && deployed(env)) {
                 throw new IllegalArgumentException("RAIL8_GIT_REF must be set in a deployed environment that sets RAIL8_GIT_BASE: every commit it"
@@ -707,7 +705,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
      * {@code RAIL8_SECRET_*} and git variables, as given, are the import of a secret store never written
      * ({@link SecretStore.Import#fromEnv}), its {@code RAIL8_JOURNAL_KEY*} variables its master key source
      * ({@link MasterKeySource#fromEnv}). First each platform secret given as a file ({@code RAIL8_PG_PASSWORD_FILE},
-     * {@code RAIL8_ADMIN_TOKEN_FILE}, {@code RAIL8_GIT_TOKEN_FILE}, {@code RAIL8_VALKEY_URI_FILE}, {@code RAIL8_SECRETS_KEY_FILE})
+     * {@code RAIL8_ADMIN_TOKEN_FILE}, {@code RAIL8_VALKEY_URI_FILE}, {@code RAIL8_SECRETS_KEY_FILE})
      * is read in place of its variable ({@link SecretFiles#resolve}).
      */
     public static NodeConfig from(Map<String, String> variables) {
@@ -743,7 +741,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
                 number(env, "RAIL8_BLOB_DURABLE_MAX", MIB, 1, 64 * MIB));
         Path dataDir = Path.of(env.getOrDefault("RAIL8_DATA_DIR", "/var/lib/rail8"));
         return new NodeConfig(nodeId, name, admin, dataDir, stopDeadline(env), number(env, "RAIL8_MAX_PACKAGE_BYTES", MAX_PACKAGE_BYTES_DEFAULT, 1, GIB), pg, blobs,
-                Secrets.of(StoreKey.fromEnv(env), SecretStore.Import.fromEnv(importable(variables, env))), leases(env), retention(env), samplingPeriod(env), targets(env), journal(env, dataDir, nodeId, memoryTier),
+                Secrets.of(StoreKey.fromEnv(env), SecretStore.Import.fromEnv(variables)), leases(env), retention(env), samplingPeriod(env), targets(env), journal(env, dataDir, nodeId, memoryTier),
                 MasterKeySource.fromEnv(env), journalSweep(env), intakeGroup(env, pg.intakePoolSize()), duration(env, "RAIL8_NODE_LEASE", NODE_LEASE_DEFAULT),
                 duration(env, "RAIL8_NODE_LEASE_RENEW", NODE_LEASE_RENEW_DEFAULT), retries(env), peer(env, nodeId),
                 (int) number(env, "RAIL8_JOURNAL_COPIES", deployed(name) ? COPIES_MAX : 1, 1, COPIES_MAX),
@@ -753,8 +751,8 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
     }
 
     /**
-     * The {@code RAIL8_GIT_*} keys, absent without {@code RAIL8_GIT_BASE}; a refusal names the key, and none repeats the base or the
-     * token.
+     * The {@code RAIL8_GIT_*} keys, absent without {@code RAIL8_GIT_BASE}; a refusal names the key, and none repeats the base. The
+     * git user and token are not read here: the import of a store never written takes them.
      */
     private static Optional<GitSettings> git(Map<String, String> env) {
         String raw = env.get("RAIL8_GIT_BASE");
@@ -765,28 +763,12 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
         } catch (URISyntaxException notAUri) {
             throw new IllegalArgumentException("RAIL8_GIT_BASE is refused: it is not a URI (the value is not shown)");
         }
-        String user = env.get("RAIL8_GIT_USER");
-        String token = env.get("RAIL8_GIT_TOKEN");
-        if ((user == null) != (token == null)) throw new IllegalArgumentException("RAIL8_GIT_USER and RAIL8_GIT_TOKEN are given both or neither");
-        Optional<GitSettings.Credentials> credentials = user == null ? Optional.empty() : Optional.of(new GitSettings.Credentials(user, token));
-        return Optional.of(new GitSettings(base, env.getOrDefault("RAIL8_GIT_PATH", ""), Optional.ofNullable(env.get("RAIL8_GIT_REF")), credentials,
+        return Optional.of(new GitSettings(base, env.getOrDefault("RAIL8_GIT_PATH", ""), Optional.ofNullable(env.get("RAIL8_GIT_REF")),
                 span(env, "RAIL8_GIT_TIMEOUT", GitSettings.TIMEOUT_DEFAULT, GitSettings.TIMEOUT_MIN.toString(), GitSettings.TIMEOUT_MAX.toString()),
                 number(env, "RAIL8_GIT_MAX_BYTES", GitSettings.MAX_BYTES_DEFAULT, GitSettings.MAX_BYTES_MIN, GitSettings.MAX_BYTES_MAX),
                 span(env, "RAIL8_GIT_CHECK_EVERY", GitSettings.CHECK_EVERY_DEFAULT, GitSettings.CHECK_EVERY_MIN.toString(), GitSettings.CHECK_EVERY_MAX.toString()),
                 span(env, "RAIL8_GIT_CHECK_TIMEOUT", GitSettings.CHECK_TIMEOUT_DEFAULT, GitSettings.CHECK_TIMEOUT_MIN.toString(),
                         GitSettings.CHECK_TIMEOUT_MAX.toString())));
-    }
-
-    /**
-     * The variables the import is given: as set, but the git token as read at start, since the git cache reads its file form
-     * too.
-     */
-    private static Map<String, String> importable(Map<String, String> variables, Map<String, String> env) {
-        if (!variables.containsKey("RAIL8_GIT_TOKEN_FILE")) return variables;
-        Map<String, String> given = new java.util.HashMap<>(variables);
-        given.remove("RAIL8_GIT_TOKEN_FILE");
-        if (env.get("RAIL8_GIT_TOKEN") != null) given.put("RAIL8_GIT_TOKEN", env.get("RAIL8_GIT_TOKEN"));
-        return given;
     }
 
     /** The {@code RAIL8_PEER_*} keys: each range-checked naming its key. */

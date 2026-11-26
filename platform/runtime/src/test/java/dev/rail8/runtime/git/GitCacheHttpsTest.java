@@ -1,6 +1,8 @@
 package dev.rail8.runtime.git;
 
+import dev.rail8.api.Secret;
 import dev.rail8.runtime.git.GitFailure.Reason;
+import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.testkit.FakeClock;
 import dev.rail8.testkit.FakeTimer;
 import org.junit.jupiter.api.AfterEach;
@@ -25,6 +27,8 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -37,8 +41,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The JGit cache over https: the token sent only to the base's host and kept out of every message, log line and file of the cache,
- * credentials refused, a redirect to another host refused before it is made, a silent server stopped by the timer on a fake clock,
+ * The JGit cache over https: the secret store's {@code rail8.git} read once for each operation, a changed one sent from the next
+ * operation on and a deleted or unreadable one not sent; the token sent only to the base's host and kept out of every message, log
+ * line and file of the cache, credentials refused, a redirect to another host refused before it is made, a silent server stopped by the timer on a fake clock,
  * and the cache's limit held while a fetch receives.
  */
 @Timeout(120)
@@ -46,6 +51,7 @@ class GitCacheHttpsTest {
 
     private static final String USER = "rail8-reader";
     private static final String TOKEN = "glpat-Secret-Token-4711";
+    private static final String ROTATED = "glpat-Rotated-Token-0815";
 
     @TempDir
     Path temp;
@@ -99,29 +105,40 @@ class GitCacheHttpsTest {
         root.setLevel(rootLevel);
     }
 
-    private PackageRepositories open(URI base, Optional<GitSettings.Credentials> credentials, long maxBytes) {
-        GitSettings settings = new GitSettings(base, "", Optional.of("refs/heads/main"), credentials, GitSettings.TIMEOUT_DEFAULT, maxBytes);
-        return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, server.clientTls().getSocketFactory()).open();
+    /** What the secret store holds of {@code rail8.git}, as its platform read answers; each read counted. */
+    private final AtomicReference<Optional<SecretStore.Held>> stored = new AtomicReference<>(Optional.empty());
+    private final AtomicInteger reads = new AtomicInteger();
+
+    private Optional<SecretStore.Held> read() {
+        reads.incrementAndGet();
+        return stored.get();
     }
 
-    private GitCache cache(Optional<GitSettings.Credentials> credentials) {
-        GitSettings settings = new GitSettings(server.base("localhost"), "", Optional.of("refs/heads/main"), credentials, GitSettings.TIMEOUT_DEFAULT,
+    /** The store holds {@code rail8.git} with {@code token}. */
+    private void store(String token) {
+        stored.set(Optional.of(new SecretStore.Held(Secret.Kind.CREDENTIALS, "k1", new Secret.Credentials(USER, token))));
+    }
+
+    private PackageRepositories open(URI base, long maxBytes) {
+        GitSettings settings = new GitSettings(base, "", Optional.of("refs/heads/main"), GitSettings.TIMEOUT_DEFAULT, maxBytes);
+        return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, this::read, server.clientTls().getSocketFactory()).open();
+    }
+
+    private GitCache cache() {
+        GitSettings settings = new GitSettings(server.base("localhost"), "", Optional.of("refs/heads/main"), GitSettings.TIMEOUT_DEFAULT,
                 GitSettings.MAX_BYTES_DEFAULT);
-        return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, server.clientTls().getSocketFactory());
+        return new GitCache(settings, temp.resolve("cache"), 4L << 20, true, timer, Set::of, this::read, server.clientTls().getSocketFactory());
     }
 
-    private PackageRepositories open(Optional<GitSettings.Credentials> credentials) {
-        return open(server.base("localhost"), credentials, GitSettings.MAX_BYTES_DEFAULT);
-    }
-
-    private static Optional<GitSettings.Credentials> token(String token) {
-        return Optional.of(new GitSettings.Credentials(USER, token));
+    private PackageRepositories open() {
+        return open(server.base("localhost"), GitSettings.MAX_BYTES_DEFAULT);
     }
 
     /** The token and the forms a request would carry it in. */
     private static List<String> secrets() {
-        return List.of(TOKEN, Base64.getEncoder().encodeToString((USER + ":" + TOKEN).getBytes(StandardCharsets.UTF_8)),
-                Base64.getEncoder().encodeToString(TOKEN.getBytes(StandardCharsets.UTF_8)));
+        return Stream.of(TOKEN, ROTATED).flatMap(token -> Stream.of(token,
+                Base64.getEncoder().encodeToString((USER + ":" + token).getBytes(StandardCharsets.UTF_8)),
+                Base64.getEncoder().encodeToString(token.getBytes(StandardCharsets.UTF_8)))).toList();
     }
 
     private void assertNoSecretIn(String what, String text) {
@@ -150,7 +167,8 @@ class GitCacheHttpsTest {
     @Test
     void fetchesWithTheTokenAndKeepsItOutOfTheCacheAndTheLogs() throws Exception {
         server.requireCredentials(USER, TOKEN);
-        Commit commit = open(token(TOKEN)).forDeploy("orders", orders);
+        store(TOKEN);
+        Commit commit = open().forDeploy("orders", orders);
         Path out = Files.createDirectories(temp.resolve("out"));
         commit.write(out);
         assertEquals("name: orders\nversion: 2\n", Files.readString(out.resolve("package.yaml")));
@@ -162,12 +180,84 @@ class GitCacheHttpsTest {
         assertNoSecretLoggedOrCached();
     }
 
+    /** The Authorization header that carries {@code token}. */
+    private static String basic(String token) {
+        return "Basic " + Base64.getEncoder().encodeToString((USER + ":" + token).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** The Authorization headers the server saw from the request {@code from} on. */
+    private List<String> sentFrom(int from) {
+        return server.requests().subList(from, server.requests().size()).stream().flatMap(r -> r.authorization().stream()).toList();
+    }
+
+    @Test
+    void aFetchAfterAnOverwriteSendsTheNewTokenWithoutARestartReadingTheStoreOnceForEachOperation() throws Exception {
+        GitCache cache = cache();
+        server.requireCredentials(USER, TOKEN);
+        store(TOKEN);
+        assertEquals(orders, cache.open().forDeploy("orders", orders).id());
+        assertEquals(1, reads.get(), "one read for the fetch, at its first request the host asked credentials for");
+        assertEquals(Set.of(basic(TOKEN)), Set.copyOf(sentFrom(0)));
+
+        String next = source.commit("orders", "main", Map.of("package.yaml", PackageRepositoriesContract.file("name: orders\nversion: 3\n")));
+        String rotated = ROTATED;
+        server.requireCredentials(USER, rotated);
+        store(rotated);   // the secret administrator overwrites rail8.git
+        int before = server.requests().size();
+        assertEquals(next, cache.open().forDeploy("orders", next).id(), "the same cache fetches with the new token");
+        assertEquals(Set.of(basic(rotated)), Set.copyOf(sentFrom(before)), "the second fetch sends the new token, never the old one");
+        assertEquals(2, reads.get());
+
+        before = server.requests().size();
+        cache.check("orders");
+        assertEquals(3, reads.get(), "a check is an operation of its own: one read");
+        assertEquals(Set.of(basic(rotated)), Set.copyOf(sentFrom(before)));
+        assertNoSecretLoggedOrCached();
+    }
+
+    @Test
+    void aDeletedRail8GitSendsNoCredentialsAtTheNextOperation() throws Exception {
+        GitCache cache = cache();
+        server.requireCredentials(USER, TOKEN);
+        store(TOKEN);
+        cache.check("orders");
+        stored.set(Optional.empty());   // the secret administrator deletes rail8.git
+        int before = server.requests().size();
+        failure(Reason.CREDENTIALS_REFUSED, () -> cache.check("orders"));
+        failure(Reason.CREDENTIALS_REFUSED, () -> cache.open().forDeploy("orders", orders));
+        assertTrue(server.requests().size() > before, "the host was asked");
+        assertEquals(List.of(), sentFrom(before), "no credentials once rail8.git is gone");
+        assertNoSecretLoggedOrCached();
+    }
+
+    @Test
+    void anUnreadableRail8GitSendsNothingAndNamesItInTheFailure() throws Exception {
+        server.requireCredentials(USER, TOKEN);
+        stored.set(Optional.of(new SecretStore.Held(Secret.Kind.CREDENTIALS, "k2", null)));   // under a key this node does not hold
+        GitFailure fetch = failure(Reason.CREDENTIALS_UNREADABLE, () -> open().forDeploy("orders", orders));
+        assertEquals("orders at " + orders + ": the secret store's rail8.git is unreadable", fetch.getMessage());
+        GitFailure check = failure(Reason.CREDENTIALS_UNREADABLE, () -> cache().check("orders"));
+        assertEquals("orders at refs/heads/main: the secret store's rail8.git is unreadable", check.getMessage());
+        assertEquals(List.of(), sentFrom(0), "nothing was sent");
+        assertNoSecretLoggedOrCached();
+    }
+
+    @Test
+    void aHostThatAsksNoCredentialsIsAnsweredWithoutReadingTheStore() throws Exception {
+        store(TOKEN);
+        assertEquals(orders, open().forDeploy("orders", orders).id());
+        assertEquals(0, reads.get(), "the pair is read only when the host asks for it");
+        assertEquals(List.of(), sentFrom(0));
+    }
+
     @Test
     void refusesCredentialsTheServerRefusesWithTheFormattersTextOnly() throws Exception {
         server.requireCredentials(USER, TOKEN);
-        GitFailure wrong = failure(Reason.CREDENTIALS_REFUSED, () -> open(token("glpat-wrong")).forDeploy("orders", orders));
+        store("glpat-wrong");
+        GitFailure wrong = failure(Reason.CREDENTIALS_REFUSED, () -> open().forDeploy("orders", orders));
         assertEquals("orders at " + orders + ": credentials refused", wrong.getMessage());
-        GitFailure none = failure(Reason.CREDENTIALS_REFUSED, () -> open(Optional.empty()).forDeploy("orders", orders));
+        stored.set(Optional.empty());
+        GitFailure none = failure(Reason.CREDENTIALS_REFUSED, () -> open().forDeploy("orders", orders));
         assertEquals("orders at " + orders + ": credentials refused", none.getMessage());
         assertNoSecretLoggedOrCached();
     }
@@ -175,14 +265,15 @@ class GitCacheHttpsTest {
     @Test
     void refusesARedirectToAnotherHostBeforeAnyRequestReachesIt() throws Exception {
         server.requireCredentials(USER, TOKEN);
+        store(TOKEN);
         try (GitHttpsServer other = GitHttpsServer.start(temp.resolve("source"), temp.resolve("other-keys"))) {
             server.redirect("/group/orders/", other.base("127.0.0.1") + "orders/");
-            GitFailure failure = failure(Reason.TRANSPORT_FAILED, () -> open(token(TOKEN)).forDeploy("orders", orders));
+            GitFailure failure = failure(Reason.TRANSPORT_FAILED, () -> open().forDeploy("orders", orders));
             assertEquals("orders at " + orders + ": the transport failed", failure.getMessage());
             assertEquals(List.of(), other.requests(), "the other host saw no request, so no credentials");
 
             server.redirect("/group/orders/", other.base("localhost") + "orders/");
-            failure(Reason.TRANSPORT_FAILED, () -> open(token(TOKEN)).forDeploy("orders", orders));
+            failure(Reason.TRANSPORT_FAILED, () -> open().forDeploy("orders", orders));
             assertEquals(List.of(), other.requests(), "another port is another origin");
         }
         assertNoSecretLoggedOrCached();
@@ -191,20 +282,21 @@ class GitCacheHttpsTest {
     @Test
     void followsARedirectOnTheSameHost() throws Exception {
         server.requireCredentials(USER, TOKEN);
+        store(TOKEN);
         server.redirect("/group/moved/", server.base("localhost") + "orders/");
-        assertEquals(orders, open(token(TOKEN)).forDeploy("moved", orders).id());
+        assertEquals(orders, open().forDeploy("moved", orders).id());
         assertNoSecretLoggedOrCached();
     }
 
     @Test
     void answersNotFoundForARepositoryTheServerLacks() {
-        failure(Reason.NOT_FOUND, () -> open(Optional.empty()).forDeploy("missing", orders));
+        failure(Reason.NOT_FOUND, () -> open().forDeploy("missing", orders));
     }
 
     @Test
     void stopsAFetchThatWaitsOnASilentServerWhenTheTimerFires() throws Exception {
         CountDownLatch arrived = server.hold();
-        PackageRepositories repositories = open(Optional.empty());
+        PackageRepositories repositories = open();
         CompletableFuture<GitFailure> result = new CompletableFuture<>();
         Thread.ofVirtual().start(() -> {
             try {
@@ -226,7 +318,7 @@ class GitCacheHttpsTest {
     @Test
     void anAbortStopsAFetchThatWaitsOnASilentServerWithNoTimerFiring() throws Exception {
         CountDownLatch arrived = server.hold();
-        PackageRepositories repositories = open(Optional.empty());
+        PackageRepositories repositories = open();
         CompletableFuture<GitFailure> result = new CompletableFuture<>();
         Thread.ofVirtual().start(() -> {
             try {
@@ -249,7 +341,8 @@ class GitCacheHttpsTest {
     @Test
     void theCheckOfTheCredentialsListsTheRefsWithTheTokenAndWritesNothing() throws Exception {
         server.requireCredentials(USER, TOKEN);
-        cache(token(TOKEN)).check("orders");
+        store(TOKEN);
+        cache().check("orders");
         assertTrue(server.requests().stream().anyMatch(r -> r.authorization().isPresent()), "the token was sent");
         assertFalse(Files.exists(temp.resolve("cache")), "the check writes nothing into the cache");
         assertEquals(0, timer.pending(), "its deadline is cancelled once it answered");
@@ -259,15 +352,18 @@ class GitCacheHttpsTest {
     @Test
     void theCheckOfTheCredentialsSeesThemRefusedWithTheFormattersTextOnly() throws Exception {
         server.requireCredentials(USER, TOKEN);
-        GitFailure wrong = failure(Reason.CREDENTIALS_REFUSED, () -> cache(token("glpat-wrong")).check("orders"));
+        store("glpat-wrong");
+        GitFailure wrong = failure(Reason.CREDENTIALS_REFUSED, () -> cache().check("orders"));
         assertEquals("orders at refs/heads/main: credentials refused", wrong.getMessage());
-        failure(Reason.NOT_FOUND, () -> cache(token(TOKEN)).check("missing"));
+        store(TOKEN);
+        failure(Reason.NOT_FOUND, () -> cache().check("missing"));
         assertNoSecretLoggedOrCached();
     }
 
     @Test
     void theCheckOfTheCredentialsSeesAHostItCannotReach() {
-        GitCache cache = cache(token(TOKEN));
+        store(TOKEN);
+        GitCache cache = cache();
         server.close();
         failure(Reason.TRANSPORT_FAILED, () -> cache.check("orders"));
     }
@@ -275,7 +371,7 @@ class GitCacheHttpsTest {
     @Test
     void theCheckOfTheCredentialsStopsAtItsOwnTimeout() throws Exception {
         CountDownLatch arrived = server.hold();
-        GitCache cache = cache(Optional.empty());
+        GitCache cache = cache();
         CompletableFuture<GitFailure> result = new CompletableFuture<>();
         Thread.ofVirtual().start(() -> {
             try {
@@ -299,7 +395,7 @@ class GitCacheHttpsTest {
         new Random(11).nextBytes(big);
         String large = source.commit("large", "main", Map.of("package.yaml", PackageRepositoriesContract.file("name: large\n"),
                 "data.bin", new PackageRepositoriesContract.File(big)));
-        GitFailure failure = failure(Reason.CACHE_FULL, () -> open(server.base("localhost"), Optional.empty(), 1L << 20).forDeploy("large", large));
+        GitFailure failure = failure(Reason.CACHE_FULL, () -> open(server.base("localhost"), 1L << 20).forDeploy("large", large));
         assertEquals("large at " + large + ": the git cache is full (RAIL8_GIT_MAX_BYTES)", failure.getMessage());
         long cached;
         try (Stream<Path> files = Files.walk(temp.resolve("cache"))) {

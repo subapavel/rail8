@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -21,8 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The {@code RAIL8_GIT_*} keys: where the pool's package repositories are and how they are read. No base, no repositories. An
  * {@code https://} base in every environment, a {@code file://} one in dev and ci only, never one with user information, and no
- * refusal repeats the base. A deployed environment that sets a base sets its ref. The user and the token come together, for an
- * https base, and the configuration's string never shows the token.
+ * refusal repeats the base. A deployed environment that sets a base sets its ref. The git user and token are no setting: they are
+ * left to the import of a secret store never written, whatever the base, and the configuration's string never shows them.
  */
 class NodeConfigGitTest {
 
@@ -60,10 +61,11 @@ class NodeConfigGitTest {
         with(env, "RAIL8_GIT_MAX_BYTES", String.valueOf(2L << 30));
         with(env, "RAIL8_GIT_CHECK_EVERY", "PT1H");
         with(env, "RAIL8_GIT_CHECK_TIMEOUT", "PT30S");
-        git = NodeConfig.from(env).git().orElseThrow();
+        NodeConfig config = NodeConfig.from(env);
+        git = config.git().orElseThrow();
         assertEquals("examples/demo", git.path());
         assertEquals(Optional.of("refs/heads/release"), git.ref());
-        assertEquals(Optional.of(new GitSettings.Credentials("rail8-reader", TOKEN)), git.credentials());
+        assertEquals(List.of("RAIL8_GIT_TOKEN", "RAIL8_GIT_USER"), config.secrets().imports().names(), "the git variables are the import's alone");
         assertEquals(Duration.ofMinutes(2), git.timeout());
         assertEquals(2L << 30, git.maxBytes());
         assertEquals(Duration.ofHours(1), git.checkEvery());
@@ -87,7 +89,7 @@ class NodeConfigGitTest {
         with(env, "RAIL8_GIT_TOKEN", TOKEN);
         NodeConfig config = NodeConfig.from(env);
         assertFalse(config.toString().contains(TOKEN), config.toString());
-        assertTrue(config.toString().contains("rail8-reader"), config.toString());
+        assertFalse(config.toString().contains("rail8-reader"), config.toString());
         assertFalse(config.withSecrets(config.secrets()).toString().contains(TOKEN));
         assertEquals(config.git(), config.withSecrets(config.secrets()).git(), "withSecrets keeps the repositories");
     }
@@ -151,19 +153,24 @@ class NodeConfigGitTest {
         assertTrue(refused(env).getMessage().startsWith("RAIL8_GIT_PATH must be a relative folder"));
     }
 
+    /**
+     * The git variables are read by no setting: whatever the base, alone, blank or set with a {@code file://} base, the node's
+     * configuration is read, its git settings are those without them, and the import of a store never written is given them.
+     */
     @Test
-    void theUserAndTheTokenComeTogetherForAnHttpsBase() {
-        Map<String, String> https = with(minimal(), "RAIL8_GIT_BASE", "https://gitlab.example.com/");
-        IllegalArgumentException alone = refused(with(new java.util.HashMap<>(https), "RAIL8_GIT_TOKEN", TOKEN));
-        assertEquals("RAIL8_GIT_USER and RAIL8_GIT_TOKEN are given both or neither", alone.getMessage());
-        refused(with(new java.util.HashMap<>(https), "RAIL8_GIT_USER", "rail8-reader"));
-        IllegalArgumentException blank = refused(with(with(new java.util.HashMap<>(https), "RAIL8_GIT_USER", "rail8-reader"), "RAIL8_GIT_TOKEN", " "));
-        assertEquals("RAIL8_GIT_TOKEN must not be blank", blank.getMessage());
-
-        Map<String, String> file = with(with(with(minimal(), "RAIL8_GIT_BASE", "file:///workspace/"), "RAIL8_GIT_USER", "rail8-reader"), "RAIL8_GIT_TOKEN", TOKEN);
-        IllegalArgumentException local = refused(file);
-        assertTrue(local.getMessage().contains("https"), local.getMessage());
-        assertFalse(local.getMessage().contains(TOKEN));
+    void theGitVariablesAreLeftToTheImportWhateverTheBase() {
+        for (String base : new String[] {"https://gitlab.example.com/", "file:///workspace/"}) {
+            Map<String, String> plain = with(minimal(), "RAIL8_GIT_BASE", base);
+            GitSettings without = NodeConfig.from(plain).git().orElseThrow();
+            for (Map<String, String> set : List.of(Map.of("RAIL8_GIT_TOKEN", TOKEN), Map.of("RAIL8_GIT_USER", "rail8-reader", "RAIL8_GIT_TOKEN", " "),
+                    Map.of("RAIL8_GIT_USER", "rail8-reader", "RAIL8_GIT_TOKEN", TOKEN))) {
+                Map<String, String> env = new java.util.HashMap<>(plain);
+                env.putAll(set);
+                NodeConfig config = NodeConfig.from(env);
+                assertEquals(without, config.git().orElseThrow(), base + " with " + set.keySet());
+                assertEquals(new java.util.TreeSet<>(set.keySet()).stream().toList(), config.secrets().imports().names());
+            }
+        }
     }
 
     @ParameterizedTest(name = "{0}={1}")

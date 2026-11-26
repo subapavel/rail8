@@ -26,8 +26,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The check of the git credentials on a fake clock and a fake git host: the three outcomes with the formatter's text and their
- * time, a check never closer to the one before than its interval, no check while the node runs no package from git, and a change
- * of state logged once.
+ * time, a check never closer to the one before than its interval, no check while the node runs no package from git, a change
+ * of state logged once, and a change of the credentials bringing one coalesced extra check no sooner than a minute after the last.
  */
 class CredentialsCheckTest {
 
@@ -141,6 +141,77 @@ class CredentialsCheckTest {
         answer.set(null);
         clock.advance(EVERY);
         assertEquals(1, logged.stream().filter(r -> r.getLevel() == Level.INFO && r.getMessage().contains("work again")).count());
+    }
+
+    @Test
+    void tenChangesWithinAMinuteGiveOneExtraCheckNoSoonerThanAMinuteAfterTheLastEnded() {
+        check.start();
+        Instant first = clock.instant();
+        for (int i = 0; i < 10; i++) {
+            clock.advance(Duration.ofSeconds(5));
+            check.changed();
+        }
+        assertEquals(List.of(first), asked, "no change brings a check sooner than a minute after the last one ended");
+        assertEquals(1, timer.pending(), "the changes are coalesced into one next check");
+        clock.advance(Duration.ofSeconds(9));
+        assertEquals(List.of(first), asked);
+        clock.advance(Duration.ofSeconds(1));
+        assertEquals(List.of(first, first.plus(CredentialsCheck.AFTER_CHANGE)), asked, "one extra check, a minute after the last one ended");
+
+        clock.advance(EVERY.minus(Duration.ofSeconds(1)));
+        assertEquals(2, asked.size(), "the regular checks go on from the end of the extra one");
+        clock.advance(Duration.ofSeconds(1));
+        assertEquals(3, asked.size());
+        assertEquals(1, timer.pending(), "one next check is scheduled, never two");
+    }
+
+    @Test
+    void aChangeLongAfterTheLastCheckBringsAnExtraCheckAtOnce() {
+        check.start();
+        clock.advance(Duration.ofMinutes(5));
+        check.changed();
+        assertEquals(List.of(clock.instant().minus(Duration.ofMinutes(5)), clock.instant()), asked, "the last check ended more than a minute ago");
+        for (int i = 0; i < 10; i++) {
+            check.changed();
+            clock.advance(Duration.ofSeconds(10));
+        }
+        assertEquals(3, asked.size(), "overwrites in a loop for 100 s give at most one extra check a minute: " + asked);
+        for (int i = 1; i < asked.size(); i++) {
+            assertTrue(!Duration.between(asked.get(i - 1), asked.get(i)).minus(CredentialsCheck.AFTER_CHANGE).isNegative(), "two checks closer than a minute: " + asked);
+        }
+    }
+
+    @Test
+    void aChangeWhileACheckRunsBringsOneExtraCheckAMinuteAfterItEnds() {
+        List<Runnable> queued = new ArrayList<>();
+        CredentialsCheck held = new CredentialsCheck(repository -> asked.add(clock.instant()), runs::get, EVERY, clock, timer, queued::add);
+        try {
+            held.start();
+            held.changed();
+            held.changed();
+            assertEquals(0, timer.pending(), "a check that runs is not interrupted, and no second one starts beside it");
+            clock.advance(Duration.ofSeconds(30));
+            queued.removeFirst().run();   // the first check runs and ends now
+            assertEquals(1, timer.pending());
+            clock.advance(CredentialsCheck.AFTER_CHANGE.minus(Duration.ofSeconds(1)));
+            assertEquals(List.of(), queued);
+            clock.advance(Duration.ofSeconds(1));
+            assertEquals(1, queued.size(), "one extra check, a minute after the running one ended");
+        } finally {
+            held.close();
+        }
+    }
+
+    @Test
+    void aChangeBeforeTheStartOrAfterTheCloseSchedulesNothing() {
+        check.changed();
+        assertEquals(0, timer.pending(), "the first check, at the start, reads what is set then");
+        check.start();
+        check.close();
+        check.changed();
+        assertEquals(0, timer.pending());
+        clock.advance(EVERY);
+        assertEquals(1, asked.size());
     }
 
     @Test
