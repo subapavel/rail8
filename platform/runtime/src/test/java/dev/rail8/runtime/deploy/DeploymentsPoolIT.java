@@ -7,7 +7,10 @@ import dev.rail8.api.Headers;
 import dev.rail8.api.Runtime;
 import dev.rail8.core.audit.Actor;
 import dev.rail8.core.dlq.InMemoryDlq;
+import dev.rail8.core.dlq.Parked;
+import dev.rail8.core.queue.WorkQueue;
 import dev.rail8.core.record.InMemoryMessageStore;
+import dev.rail8.core.record.Page;
 import dev.rail8.runtime.db.Migrations;
 import dev.rail8.runtime.deploy.DeployRefusedException.Kind;
 import dev.rail8.runtime.deploy.DeploymentStore.Listings;
@@ -132,6 +135,45 @@ class DeploymentsPoolIT {
         for (Peer p : peers) p.close();
     }
 
+    /** A node's work queue that counts the claims its workers issue and those answered; every call goes on to {@code inner} as it is. */
+    static final class Claims implements WorkQueue {
+        final WorkQueue inner;
+        final AtomicInteger issued = new AtomicInteger();
+        final AtomicInteger answered = new AtomicInteger();
+
+        Claims(WorkQueue inner) { this.inner = inner; }
+
+        /** Whether every claim issued so far has its answer. */
+        boolean settled() { return answered.get() == issued.get(); }
+
+        @Override public Future<List<Item>> claim(String workerId, String flow, int max, Duration lease) {
+            issued.incrementAndGet();
+            return inner.claim(workerId, flow, max, lease).onComplete(done -> answered.incrementAndGet());
+        }
+        @Override public Future<Void> enqueue(String messageId, String flow, int step, String partitionKey) { return inner.enqueue(messageId, flow, step, partitionKey); }
+        @Override public Future<Optional<Item>> enqueueLeased(String messageId, String flow, int step, String partitionKey, String workerId, Duration lease) {
+            return inner.enqueueLeased(messageId, flow, step, partitionKey, workerId, lease);
+        }
+        @Override public Future<Boolean> complete(long seq, int attempts) { return inner.complete(seq, attempts); }
+        @Override public Future<Completion> completeRow(long seq, int attempts) { return inner.completeRow(seq, attempts); }
+        @Override public Future<Completion> completeUnkeyed(long seq, int attempts) { return inner.completeUnkeyed(seq, attempts); }
+        @Override public Future<Completion> completeAndTakeNext(long seq, int attempts, String workerId, Duration lease) {
+            return inner.completeAndTakeNext(seq, attempts, workerId, lease);
+        }
+        @Override public Future<Boolean> renew(long seq, int attempts, Duration lease) { return inner.renew(seq, attempts, lease); }
+        @Override public Future<Renewal> renewRow(long seq, int attempts, Duration lease) { return inner.renewRow(seq, attempts, lease); }
+        @Override public Future<Boolean> defer(long seq, int attempts, Duration delay) { return inner.defer(seq, attempts, delay); }
+        @Override public Future<Boolean> hold(long seq, int attempts) { return inner.hold(seq, attempts); }
+        @Override public Future<Boolean> stop(long seq, int attempts, Parked failure) { return inner.stop(seq, attempts, failure); }
+        @Override public Future<Page<Stopped>> stopped(Optional<String> after, int limit) { return inner.stopped(after, limit); }
+        @Override public Future<Page<Held>> held(Optional<String> after, int limit) { return inner.held(after, limit); }
+        @Override public Future<Page<Lost>> lost(Optional<String> after, int limit) { return inner.lost(after, limit); }
+        @Override public Future<Optional<Discarded>> discard(long seq, Actor by) { return inner.discard(seq, by); }
+        @Override public Future<Boolean> release(long seq) { return inner.release(seq); }
+        @Override public Future<Optional<Released>> releaseRow(long seq, Actor by) { return inner.releaseRow(seq, by); }
+        @Override public Future<Boolean> hasItems(String flow) { return inner.hasItems(flow); }
+    }
+
     /**
      * One node of the pool: its data directory {@code <tmp>/<id>}, its Doors, its Deployments over the pool's Postgres, joined to the
      * pool's {@code nodes} as it is built, as a node joins before it restores: a node built again with the same id is its restart.
@@ -140,6 +182,7 @@ class DeploymentsPoolIT {
         final String id;
         final long epoch;
         final Doors doors = new Doors();
+        final Claims claims;
         final Deployments deployments;
 
         /** A node in dev reading the pool's repositories. */
@@ -170,7 +213,7 @@ class DeploymentsPoolIT {
             e.put("RAIL8_GIT_BASE", base);
             Runtime runtime = new Runtime(rt.clock(), rt.timer(), rt.ids(), rt.blobs(), rt.hasher(), Map.of(Doors.SCHEME, doors));
             deployments = new Deployments(NodeConfig.from(e), runtime, Map.of(Doors.SCHEME, doors), rt.clock(), rt.timer(), List.of(), List.of(), messages, dlq,
-                    new PgWorkQueue(pool, id), () -> 0L, records, epoch);
+                    claims = new Claims(new PgWorkQueue(pool, id)), () -> 0L, records, epoch);
             peers.add(this);
         }
 
@@ -627,6 +670,8 @@ class DeploymentsPoolIT {
         a.deploy("shop", repos.commit(shop));
         b.follow();
         assertEquals(1, b.live("shop/keep").size(), "fixture: shop runs on node b too");
+        // node b's worker claims once at its start, and again only when the fake clock moves: a message accepted before the answer could run there
+        until(b.claims::settled, "node b's worker has the answer of its start claim");
         List<String> dirs = a.packageDirs("shop");
         CountDownLatch release = a.doors.partner().holdNext(1);
         Envelope queued;
@@ -637,7 +682,7 @@ class DeploymentsPoolIT {
             assertEquals(2L, rows("shop/keep"), "fixture: the first runs held at the partner, the second waits behind it");
 
             assertEquals("shop", a.undeploy("shop").name());
-            a.doors.partner().awaitSent(2);   // node a's drain takes the queued message: a drain of node b's could take it too
+            a.doors.partner().awaitSent(2);   // node a's drain takes the queued message before node b's tick starts a drain that could take it
 
             assertEquals(List.of(), a.live("shop/keep"), "no door of the flow runs on node a: " + a.doors.events());
             assertEquals(List.of("shop/keep"), marks(), "the pool marks the flow it retires");
