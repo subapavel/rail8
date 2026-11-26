@@ -189,6 +189,33 @@ public enum RefusalCode {
     /** 503: the change is written, but this node could not read it back: it is in force within one tick. */
     WRITTEN_UNREAD("written-unread"),
 
+    // --- the configuration of an environment
+
+    /** 404: no row holds the object {@code key}, and no deployed system names it; or a version whose history row is gone. */
+    NOT_FOUND("not-found"),
+    /** 409: the object {@code key} has no draft to discard or activate. */
+    NO_DRAFT("no-draft"),
+    /** 409: the object {@code key} has no draft, or its draft sends nothing that needs consent. */
+    NOTHING_TO_CONSENT("nothing-to-consent"),
+    /** 409: the connection {@code key} has nothing in force to stop or start. */
+    NOT_SET("not-set"),
+    /** 409: the draft of {@code key} sends pairs of secret and server that need the secret administrator's consent. */
+    CONSENT_NEEDED("consent-needed"),
+    /** 409: the instance name of the system {@code key} is in use by deployed flows: it is changed, never removed. */
+    NAME_IN_USE("name-in-use"),
+    /** 409: the environment does not allow mocks. */
+    MOCKS_REFUSED("mocks-refused"),
+    /** 409: the connection {@code key} takes another adapter than its deployed system names. */
+    ADAPTER_DIFFERS("adapter-differs"),
+    /** 409: the configuration holds the most objects of the kind, or the most bytes of bodies in force, it holds. */
+    CONFIG_FULL("config-full"),
+    /** 412: the object {@code key} changed since the caller read it, or a digest is not the draft's as it is now. */
+    CHANGED("changed"),
+    /** 422: the values of {@code key} are not complete for an activation: each line names the field and the direction. */
+    INCOMPLETE("incomplete"),
+    /** 503: the audit row of a change of the configuration could not be written, so nothing was changed. */
+    AUDIT_UNAVAILABLE("audit-unavailable"),
+
     // --- deploys
 
     /** 403 or 500: the node has no {@code RAIL8_GIT_BASE}. */

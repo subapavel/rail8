@@ -44,6 +44,9 @@ import java.util.Set;
  *   <li>{@code devices}: a device of the login limit that expired longer ago than the audit's max age (a device that ended
  *       otherwise has no row any more).</li>
  *   <li>{@code login_limits}: a row without a failure for {@link #LIMITS_KEPT}; its longest wait is far shorter.</li>
+ *   <li>{@code config_history}: a row older than the audit's max age, except each object's 100 newest activations, which are
+ *       the versions kept; a removed object whose removal is older than the age loses those too.</li>
+ *   <li>{@code config_objects}: a row with nothing in force, no draft and no history row left; a removal older than the age.</li>
  * </ol>
  * A phase ends with the batch that scanned fewer rows than the batch size. The lock found taken ends the run {@link Outcome#SKIPPED}
  * with what the committed batches deleted; so does {@link #close} between two batches. A failed batch is rolled back (unless its
@@ -155,11 +158,14 @@ public final class Retention {
      * @param tokens expired or revoked tokens deleted
      * @param devices expired devices deleted
      * @param limits rows of the login limit deleted
+     * @param configHistory rows of the configuration's history deleted
+     * @param configObjects objects of the configuration with nothing left deleted
      * @param batches transactions the run began, the last, short one of each phase included
      * @since 0.1
      */
     public record Run(Instant cutoff, Outcome outcome, long messages, long keys, long bodies, long bodyBytes, long kept,
-                      long audit, long sessions, long tokens, long devices, long limits, int batches) {}
+                      long audit, long sessions, long tokens, long devices, long limits, long configHistory, long configObjects,
+                      int batches) {}
 
     /**
      * The sums over every run that ended since the job was built.
@@ -306,6 +312,30 @@ public final class Retention {
                 with gone as (
                     delete from login_limits l using (select name, device from login_limits where last_failure_at < $1 limit $2) x
                      where (l.name, l.device) = (x.name, x.device) and l.last_failure_at < $1
+                     returning 1)
+                select count(*) from gone"""),
+        CONFIG_HISTORY("""
+                with gone as (
+                    delete from config_history h using (
+                        select c.id from config_history c
+                         where c.at < $1
+                           and (c.change <> 'activate'
+                                or exists (select 1 from config_objects o where o.kind = c.kind and o.key = c.key
+                                            and o.version > 0 and o.body is null and o.activated_at < $1)
+                                or (select count(*) from config_history k where k.kind = c.kind and k.key = c.key
+                                     and k.change = 'activate' and k.id > c.id) >= 100)
+                         order by c.at limit $2) x
+                     where h.id = x.id
+                     returning 1)
+                select count(*) from gone"""),
+        CONFIG_OBJECTS("""
+                with gone as (
+                    delete from config_objects o using (
+                        select kind, key from config_objects c
+                         where c.body is null and c.draft is null and (c.activated_at is null or c.activated_at < $1)
+                           and not exists (select 1 from config_history h where h.kind = c.kind and h.key = c.key)
+                         limit $2 for update skip locked) x
+                     where (o.kind, o.key) = (x.kind, x.key)
                      returning 1)
                 select count(*) from gone""");
 
@@ -470,7 +500,8 @@ public final class Retention {
         }
         LOG.log(System.Logger.Level.INFO, "retention run " + outcome + " (cutoff " + cutoff + "): deleted " + run.messages() + " messages rows, "
                 + run.keys() + " key rows, " + run.bodies() + " bodies of " + run.bodyBytes() + " bytes, " + run.audit() + " audit rows, "
-                + run.sessions() + " expired sessions, " + run.tokens() + " tokens, " + run.devices() + " expired devices, " + run.limits() + " login limit rows; kept " + run.kept() + " messages rows; "
+                + run.sessions() + " expired sessions, " + run.tokens() + " tokens, " + run.devices() + " expired devices, " + run.limits() + " login limit rows, " + run.configHistory() + " configuration history rows, " + run.configObjects()
+                + " configuration objects; kept " + run.kept() + " messages rows; "
                 + run.batches() + " batches");
         return run;
     }
@@ -554,7 +585,7 @@ public final class Retention {
             int b = Phase.BODIES.ordinal();
             return new Run(cutoff, outcome, deleted[m], extra[m], deleted[b], extra[b], kept[m], swept[Sweep.AUDIT.ordinal()],
                     swept[Sweep.SESSIONS.ordinal()], swept[Sweep.TOKENS.ordinal()], swept[Sweep.DEVICES.ordinal()],
-                    swept[Sweep.LIMITS.ordinal()], batches);
+                    swept[Sweep.LIMITS.ordinal()], swept[Sweep.CONFIG_HISTORY.ordinal()], swept[Sweep.CONFIG_OBJECTS.ordinal()], batches);
         }
     }
 }

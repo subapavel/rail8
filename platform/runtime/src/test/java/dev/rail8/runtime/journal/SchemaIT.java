@@ -85,7 +85,14 @@ class SchemaIT {
                 "secrets.nonce",           // 12 bytes of AES-GCM nonce (V33), never a body
                 "secrets.sealed",          // a secret sealed under the store key (V33), never a body
                 "nodes.secret_key",        // 8 bytes naming the store key a node holds (V33), never a body
-                "nodes.secret_key_previous")), // 8 bytes naming the node's previous store key (V33), never a body
+                "nodes.secret_key_previous", // 8 bytes naming the node's previous store key (V33), never a body
+                "config_objects.key_id",   // 8 bytes naming the store key the version in force is bound under (V35), never a body
+                "config_objects.tag",      // 32 bytes of HMAC binding the version in force (V35), never a body
+                "config_objects.consent",  // 32 bytes of SHA-256 of the pairs of secret and server consented to (V35), never a body
+                "config_objects.consent_key_id", // 8 bytes naming the store key the consent is bound under (V35), never a body
+                "config_objects.consent_tag", // 32 bytes of HMAC binding the consent (V35), never a body
+                "config_history.key_id",   // 8 bytes naming the store key an activation is bound under (V35), never a body
+                "config_history.tag")),    // 32 bytes of HMAC binding an activation (V35), never a body
                 bytea, "no bytea column may hold a body");
         assertEquals(1, db.count("select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'body_refs' and column_name = 'length'"),
                 "fixture: the query sees V12's tables");

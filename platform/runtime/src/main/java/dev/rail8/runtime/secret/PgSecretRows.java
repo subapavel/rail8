@@ -270,6 +270,15 @@ final class PgSecretRows implements SecretRows {
         });
     }
 
+    /** The kind of each name of {@code names} set in the store, in {@code tx}. */
+    static Future<Map<String, Secret.Kind>> kinds(SqlConnection tx, Set<String> names) {
+        return tx.preparedQuery(KINDS_OF).execute(Tuple.of((Object) names.toArray(String[]::new))).map(stored -> {
+            Map<String, Secret.Kind> kindOf = new HashMap<>();
+            stored.forEach(r -> kindOf.put(r.getString(0), kind(r.getString(1))));
+            return kindOf;
+        });
+    }
+
     /**
      * The uses of {@code pkg}'s flows ({@code flow}) and draining flows ({@code drain}): by kind, then by the user's qualified id,
      * the names it uses with their kinds.

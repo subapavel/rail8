@@ -257,6 +257,8 @@ Postgres holds everything whose loss would lose a message, and the message histo
 | `audit` | operator acts and the acts on users and sessions, each with who acted, how they proved it and the id of their session |
 | `users`, `role_assignments`, `sessions`, `tokens`, `devices`, `token_ceiling`, `login_limits`, `admin_bridge` | the users of the admin API with their roles and who granted each, their sessions, named tokens and browsers' device credentials (by fingerprint), the longest a token lives, the failed logins of each name and device, and whether the shared token still works (part 10) |
 | `bodies` | old bodies stored in the database; read only, kept as a fallback |
+| `config_store`, `config_objects`, `config_history` | the configuration of the environment (`docs/ENVIRONMENT-CONFIGURATION.md`): each connection's values and each system's instance name, as a draft, the version in force bound under the secret store's key, the secret administrator's consent and a connection's stop, with the history of each object; no node reads it yet |
+| `deployment_systems`, `deployment_connection_uses` | the systems a deployment defines and the connections its flows use; empty until a deploy writes them |
 
 Migrations run at node start (Flyway).
 
@@ -308,7 +310,9 @@ The audit is kept for `RAIL8_AUDIT_MAX_AGE`, from P30D to P3660D, P365D by defau
 value is shorter than `RAIL8_RETENTION_MAX_AGE` does not start, as a message's status reads its cancel
 from the audit. The same job deletes the sessions that ended longer ago than that, the tokens that
 expired or were revoked longer ago than that, the device credentials that expired longer ago than that, and the login
-limit's rows without a failure for 24 hours.
+limit's rows without a failure for 24 hours. It deletes the history of the configuration older than that, except each
+object's 100 newest activations while the object is not removed, and the row of an object removed longer ago than that
+with no history left. A write keeps an object's history at 1,000 rows, never one of its 100 newest activations.
 
 A message can be saved with a body whose key names another message (the caller's body, handed to a
 callee). The save keeps that body in the same transaction, and the message's work row points at the

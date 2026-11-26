@@ -110,6 +110,19 @@ public final class MemorySecretStores {
         done(store.delete(ADMIN, name, Optional.of(name)));
     }
 
+    /** The work of {@code store}'s last tick, for a test that moved its clock past {@link #TICK}. */
+    public static Future<Void> ticked(SecretStore store) {
+        return store.ticked();
+    }
+
+    /** A look of {@code store} at its rows, as a notice starts one. */
+    public static Future<Void> look(SecretStore store) {
+        return store.look();
+    }
+
+    /** How long a store waits between its ticks. */
+    public static final java.time.Duration TICK = SecretStore.TICK;
+
     private static <T> T done(Future<T> f) {
         if (!f.isComplete()) throw new AssertionError("an in-memory store's future completes at once");
         if (f.failed()) throw new AssertionError("the store refused: " + f.cause(), f.cause());
