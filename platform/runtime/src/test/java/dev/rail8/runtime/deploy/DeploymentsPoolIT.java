@@ -637,6 +637,7 @@ class DeploymentsPoolIT {
             assertEquals(2L, rows("shop/keep"), "fixture: the first runs held at the partner, the second waits behind it");
 
             assertEquals("shop", a.undeploy("shop").name());
+            a.doors.partner().awaitSent(2);   // node a's drain takes the queued message: a drain of node b's could take it too
 
             assertEquals(List.of(), a.live("shop/keep"), "no door of the flow runs on node a: " + a.doors.events());
             assertEquals(List.of("shop/keep"), marks(), "the pool marks the flow it retires");
