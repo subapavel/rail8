@@ -30,7 +30,7 @@ const certificatesOf = (text: string) => {
   return blocks.length > 0 ? blocks : text.trim() === '' ? [] : [text];
 };
 
-/** What the fields hold while the dialog is open; every one is emptied once the form is sent or closed. */
+/** What the fields hold while the dialog is open: emptied once the form is sent, and gone with the dialog once it is closed. */
 interface Typed {
   value: string;
   user: string;
@@ -56,18 +56,13 @@ export function SecretDialog({ api, name: given, kinds = KINDS, overwrite = fals
   const [kind, setKind] = useState<SecretKind>(kinds[0] ?? 'value');
   const [typed, setTyped] = useState<Typed>(EMPTY);
   const [sending, setSending] = useState(false);
-  const [refused, setRefused] = useState<{ text: string; field?: string } | null>(null);
+  const [refused, setRefused] = useState<{ text: string; code?: string; field?: string } | null>(null);
   const id = (field: string) => `rail8-secret-${field}`;
 
   const nameValid = name.length <= NAME_MAX && NAME.test(name);
   const complete =
     kind === 'value' ? typed.value !== '' : kind === 'credentials' ? typed.user !== '' && typed.password !== '' : typed.privateKey.trim() !== '';
   const set = (field: keyof Typed) => (event: { target: { value: string } }) => setTyped((now) => ({ ...now, [field]: event.target.value }));
-
-  const close = (written: SecretEntry | null) => {
-    setTyped(EMPTY);
-    onClose(written);
-  };
 
   const send = async () => {
     const value: SecretValue =
@@ -80,10 +75,11 @@ export function SecretDialog({ api, name: given, kinds = KINDS, overwrite = fals
     setSending(true);
     setRefused(null);
     try {
-      close(overwrite ? await api.overwrite(name, value) : await api.create(name, value));
+      onClose(overwrite ? await api.overwrite(name, value) : await api.create(name, value));
     } catch (error) {
-      const field = error instanceof SecretsError && error.code === 'invalid' ? refusalOf(error.body).values.field : undefined;
-      setRefused({ text: error instanceof Error ? error.message : String(error), ...(typeof field === 'string' ? { field } : {}) });
+      const code = error instanceof SecretsError ? error.code : undefined;
+      const field = error instanceof SecretsError && code === 'invalid' ? refusalOf(error.body).values.field : undefined;
+      setRefused({ text: error instanceof Error ? error.message : String(error), ...(code === undefined ? {} : { code }), ...(typeof field === 'string' ? { field } : {}) });
       setSending(false);
     }
   };
@@ -99,10 +95,10 @@ export function SecretDialog({ api, name: given, kinds = KINDS, overwrite = fals
   return (
     <MountedModal
       title={overwrite ? t('secrets.overwrite.title', { name }) : t('secrets.new')}
-      onCancel={sending ? undefined : () => close(null)}
+      onCancel={sending ? undefined : () => onClose(null)}
       width={640}
       footer={[
-        <Button key="cancel" disabled={sending} onClick={() => close(null)}>
+        <Button key="cancel" disabled={sending} onClick={() => onClose(null)}>
           {t('frame.cancel')}
         </Button>,
         <Button key="write" type="primary" loading={sending} disabled={!nameValid || !complete} onClick={() => void send()}>
@@ -119,7 +115,8 @@ export function SecretDialog({ api, name: given, kinds = KINDS, overwrite = fals
             description={
               <Flex vertical>
                 <span>{refused.text}</span>
-                <Typography.Text type="secondary">{t('secrets.enterAgain')}</Typography.Text>
+                {/* a write that committed is in force: it must not be sent again */}
+                {refused.code !== 'written-unread' && <Typography.Text type="secondary">{t('secrets.enterAgain')}</Typography.Text>}
               </Flex>
             }
           />
