@@ -159,7 +159,7 @@ class ModuleCommandsTest {
 
     @Test
     void theClisOwnCommandsAreTheNamesWhoseModulesBringNoCommand() {
-        List<String> own = Cli.COMMANDS.lines().filter(l -> l.matches("  [a-z][a-z-]*( .*)?")).map(l -> l.trim().split(" ")[0]).toList();
+        List<String> own = Cli.COMMANDS.lines().filter(l -> l.matches("  [a-z][a-z-]*( .*)?")).map(l -> l.trim().split(" ")[0]).distinct().toList();
         assertEquals(Plugins.CLI_COMMANDS, own);
         for (String name : own) {
             Ran ran = CliRuns.run(name);
