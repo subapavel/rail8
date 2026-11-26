@@ -64,15 +64,21 @@ cloud environment over this repository, read-only.
 3. The owner pastes the prompt into Codex. Codex posts its answer as a comment on the issue; when
    it does not, the owner pastes the answer instead.
 4. Read the answer. Take each objection, or turn it down with a reason in the issue.
-5. When the answer had any objection, revise the design, let the owner-proxy judge the revision,
-   and post a new prompt as in step 1. That prompt asks Codex to check that each of its earlier
-   findings is resolved, to look for what is still wrong, and to open its answer with
-   `No objections` or `Revise`. Repeat until an answer opens with `No objections`; then remove
-   the label and go on.
-6. A design is agreed, merged and built only after an answer from Codex without objections. No
-   deadline ends the wait. While you wait, an agent on a different Claude model than yours may
-   argue against the recommendation, so that the design is ready sooner; the label stays, and
-   the daily overview lists the issue until the owner has run the prompt.
+5. Every prompt asks Codex to mark each finding as blocking or as a note, and to open its answer
+   with `No blocking objections` or `Revise`. A finding is blocking when the design would show a
+   wrong result as right, lose data or a message, open a security fault, or do harm at an upgrade
+   that cannot be undone or that stops the platform. Everything else is a note.
+   When the answer opens with `Revise`, revise the design, let the owner-proxy judge the revision,
+   and post a new prompt as in step 1, as short as a complete prompt can be: it says what the
+   earlier reviews confirmed, what changed, and asks for blocking findings in that. Repeat until
+   an answer opens with `No blocking objections`. Take each note in or file it as an issue,
+   without another round; then remove the label and go on.
+   When two rounds in a row go on the same part of the design, take that part out or make it
+   simpler before the next prompt, and say so to the control session.
+6. A design is agreed, merged and built only after an answer from Codex without blocking
+   objections. No deadline ends the wait. While you wait, an agent on a different Claude model
+   than yours may argue against the recommendation, so that the design is ready sooner; the
+   label stays, and the daily overview lists the issue until the owner has run the prompt.
 7. The review of a design of security is not published. Its prompt ends with `Do not post your
    review anywhere; give it as your answer.` in place of the line about the comment, and has no
    sentence that allows one. The owner hands the answer to the control session, which keeps it
