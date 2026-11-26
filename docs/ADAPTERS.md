@@ -73,7 +73,7 @@ handler is called on an event loop, so it must never block there. The template k
 3. **Store** the body into the blob store, under the flow's body limit, only once the caller is admitted.
 4. **Run** the flow on the message's own virtual thread through the handler the entry gave.
 
-A `Refused` is answered with `refused.answer(request)`: the status of its code (401 with `WWW-Authenticate: Basic` for an
+A `Refused` is answered with `ComponentContext.http().refuse(request, refused)`, the node's own writer: the status of its code (401 with `WWW-Authenticate: Basic` for an
 unknown caller, 403, 400, 429 or 503), `Retry-After` when it waits, and the body `{"code": …, "error": …}`; a request
 with a body has its connection closed, so the body is never read. An entry that fails otherwise is a 500. A request's
 method and size are judged after the entry, so a caller the node does not admit learns nothing of the endpoint. The

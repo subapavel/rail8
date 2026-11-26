@@ -64,7 +64,7 @@ public interface Component {
      * The consumer of one sender, which hands each message over through {@code entry}: the node builds every sender's
      * consumer with it. For each message the consumer calls {@link Entry#enter} with what the caller presented before it
      * reads or stores any byte of the body, keeps the request paused until {@code enter} completes, answers a {@link Refused}
-     * in its own protocol ({@link Refused#answer} over HTTP) and stores nothing then, and otherwise hands the message to
+     * in its own protocol ({@link dev.rail8.api.plugin.HttpIngress#refuse} on the node's HTTP port) and stores nothing then, and otherwise hands the message to
      * the handler {@code enter} gave, once. It holds no handler of its own.
      *
      * <p>The default keeps an adapter built only on {@link #consumer(Inbound, Function)} working: it stores the body as that

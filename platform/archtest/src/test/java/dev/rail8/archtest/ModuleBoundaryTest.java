@@ -24,6 +24,8 @@ class ModuleBoundaryTest {
 
     @Test void apiDependsOnNoOtherRail8Module() { Rules.API_DEPENDS_ON_NO_OTHER_MODULE.check(tree); }
     @Test void apiUsesOnlyTheJdkAndTheVertxAllowlist() { Rules.API_SURFACE.check(tree); }
+    @Test void theEntryNamesOnlyTheContextBeyondTheAllowlist() { Rules.ENTRY_SURFACE.check(tree); }
+    @Test void theEntrysSignaturesNameOnlyTheAllowlist() { Rules.ENTRY_SIGNATURES.check(tree); }
     @Test void thePluginContractUsesOnlyTheJdkApiVertxAndTheAllowlist() { Rules.PLUGIN_SURFACE.check(tree); }
     @Test void noOtherApiPackageAndNoCoreClassNamesThePluginContract() { Rules.NOTHING_ELSE_NAMES_THE_PLUGIN_CONTRACT.check(tree); }
 

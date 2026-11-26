@@ -1,9 +1,5 @@
 package dev.rail8.api;
 
-import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.HttpServerResponse;
-import io.vertx.core.http.HttpVersion;
-
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
@@ -11,7 +7,9 @@ import java.util.Optional;
 
 /**
  * A refusal at the entry ({@link Entry#enter}): the caller may not send this message, and no message exists. Its
- * {@link #getMessage()} is the fixed text of its {@link #code()}, so it names no system, no flow and nothing presented.
+ * {@link #getMessage()} is the fixed text of its {@link #code()}, so it names no system, no flow and nothing presented. An
+ * adapter on the node's HTTP port answers it with {@link dev.rail8.api.plugin.HttpIngress#refuse}; an adapter of another
+ * protocol answers it in that protocol, from {@link #reason()}, {@link #code()} and {@link #retryAfter()}.
  *
  * @since 0.4
  */
@@ -78,47 +76,6 @@ public final class Refused extends RuntimeException {
 
     /** When the caller may try again: for {@link Reason#TOO_MANY} and {@link Reason#BUSY}. */
     public Optional<Duration> retryAfter() { return retryAfter; }
-
-    /** The HTTP status of the answer: 401, 403, 400, 429 or 503. */
-    public int status() {
-        return switch (reason) {
-            case UNKNOWN -> 401;
-            case NOT_ALLOWED, TLS_REQUIRED -> 403;
-            case SENDER_NEEDED -> 400;
-            case TOO_MANY -> 429;
-            case BUSY -> 503;
-        };
-    }
-
-    /**
-     * Ends the request with the whole HTTP answer: the status, {@code WWW-Authenticate} for an unknown caller,
-     * {@code Retry-After} in whole seconds rounded up when it waits, and the body {@code {"code": …, "error": …}} with the
-     * fixed text of the code. A request with a body has its connection closed (HTTP/1.x), or its HTTP/2 stream reset once
-     * the answer is sent, so the refused body is never read. A request whose answer was already begun is left as it is.
-     */
-    public void answer(HttpServerRequest request) {
-        HttpServerResponse response = request.response();
-        if (response.headWritten() || response.closed()) return;
-        boolean body = hasBody(request);
-        response.setStatusCode(status()).putHeader("content-type", "application/json");
-        if (reason == Reason.UNKNOWN) response.putHeader("www-authenticate", "Basic realm=\"rail8\", charset=\"UTF-8\"");
-        retryAfter.ifPresent(wait -> response.putHeader("retry-after", Long.toString(Math.max(1, (wait.toMillis() + 999) / 1000))));
-        boolean http2 = request.version() == HttpVersion.HTTP_2;
-        if (body && !http2) response.putHeader("connection", "close");
-        response.end("{\"code\":\"" + code() + "\",\"error\":\"" + text(reason) + "\"}").onComplete(sent -> {
-            if (!body) return;
-            if (http2) response.reset(0);
-            else request.connection().close();
-        });
-    }
-
-    /** Whether {@code request} carries a body: a {@code content-length} other than 0, or a {@code transfer-encoding}. */
-    private static boolean hasBody(HttpServerRequest request) {
-        String length = request.getHeader("content-length");
-        if (length != null) return !"0".equals(length.strip());
-        return request.getHeader("transfer-encoding") != null
-                || request.version() == HttpVersion.HTTP_2 && !request.isEnded();
-    }
 
     /** The fixed English text of {@code reason}'s code. */
     static String text(Reason reason) {

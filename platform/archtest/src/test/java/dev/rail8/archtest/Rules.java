@@ -3,8 +3,17 @@ package dev.rail8.archtest;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaConstructorCall;
+import com.tngtech.archunit.core.domain.JavaCodeUnit;
+import com.tngtech.archunit.core.domain.JavaField;
+import com.tngtech.archunit.core.domain.JavaMember;
+import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
+import com.tngtech.archunit.lang.ConditionEvents;
+import com.tngtech.archunit.lang.SimpleConditionEvent;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 import static com.tngtech.archunit.base.DescribedPredicate.describe;
@@ -94,7 +103,57 @@ final class Rules {
             .should().dependOnClassesThat().resideInAnyPackage(CORE, RUNTIME, COMPONENTS, STEPS, TESTKIT, CLI, INGRESS)
             .because("api is the bottom of the dependency direction api <- core <- runtime");
 
+    /**
+     * The entry of a caller ({@code Entry}), the one api class beyond the plugin contract that may name more of Vert.x: the
+     * node's Vert.x and the context, in its body only, to complete on its caller's context.
+     */
+    static final String ENTRY = "dev.rail8.api.Entry";
+    static final Set<String> ENTRY_VERTX = Set.of(VERTX, "io.vertx.core.Context");
+
+    /** The class {@code className} may name the JDK, api, the allowlist and {@code extra}, and nothing else. */
+    static ArchRule namesOnly(String className, Set<String> extra) {
+        return classes().that().haveFullyQualifiedName(className)
+                .should().onlyDependOnClassesThat(JDK.or(resideInAnyPackage(API)).or(VERTX_ALLOWED)
+                        .or(describe("the Vert.x types " + extra.stream().sorted().toList(), c -> extra.contains(c.getName()))))
+                .because(className + " alone among api's classes names " + extra.stream().sorted().toList() + ", and nothing more of Vert.x")
+                .allowEmptyShould(false);
+    }
+
+    /**
+     * No public or protected member of the class {@code className} names a Vert.x type beyond the allowlist in its signature:
+     * its fields' types, its methods' return and parameter types, its constructors' parameter types.
+     */
+    static ArchRule signaturesNameOnlyTheAllowlist(String className) {
+        return classes().that().haveFullyQualifiedName(className)
+                .should(new ArchCondition<JavaClass>("name no Vert.x type beyond " + VERTX_ALLOWLIST + " in a public or protected signature") {
+                    @Override
+                    public void check(JavaClass c, ConditionEvents events) {
+                        for (JavaMember m : c.getMembers()) {
+                            if (!m.getModifiers().contains(JavaModifier.PUBLIC) && !m.getModifiers().contains(JavaModifier.PROTECTED)) continue;
+                            List<JavaClass> named = new ArrayList<>();
+                            if (m instanceof JavaField f) named.add(f.getRawType());
+                            if (m instanceof JavaCodeUnit u) {
+                                named.add(u.getRawReturnType());
+                                named.addAll(u.getRawParameterTypes());
+                            }
+                            for (JavaClass t : named) {
+                                JavaClass base = t.isArray() ? t.getBaseComponentType() : t;
+                                if (base.getPackageName().startsWith("io.vertx") && !VERTX_ALLOWLIST.contains(base.getName())) {
+                                    events.add(SimpleConditionEvent.violated(m, m.getFullName() + " names " + base.getName() + " in its signature"));
+                                }
+                            }
+                        }
+                    }
+                })
+                .because("a plugin compiles against api's public signatures, which name no more of Vert.x than the allowlist")
+                .allowEmptyShould(false);
+    }
+
+    static final ArchRule ENTRY_SURFACE = namesOnly(ENTRY, ENTRY_VERTX);
+    static final ArchRule ENTRY_SIGNATURES = signaturesNameOnlyTheAllowlist(ENTRY);
+
     static final ArchRule API_SURFACE = classes().that().resideInAPackage(API).and().resideOutsideOfPackage(PLUGIN_CONTRACT)
+            .and().doNotHaveFullyQualifiedName(ENTRY)
             .should().onlyDependOnClassesThat(JDK.or(resideInAnyPackage(API)).or(VERTX_ALLOWED))
             .because("api uses the JDK plus Vert.x Future/Buffer/ReadStream/WriteStream and nothing else (CLAUDE.md, ARCHITECTURE §12)");
 

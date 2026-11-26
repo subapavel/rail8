@@ -305,8 +305,6 @@ public final class Refused extends RuntimeException {
     public Reason reason();
     public String code();                              // unknown-caller, not-allowed, sender-needed, too-many, busy, tls-required
     public Optional<Duration> retryAfter();            // TOO_MANY and BUSY
-    /** Ends the request with the whole HTTP answer; a request with a body has its connection closed, or its HTTP/2 stream reset. */
-    public void answer(HttpServerRequest request);
 }
 
 public interface Component {
@@ -330,8 +328,19 @@ public interface HttpIngress {
      * only, never the body. The node's port overrides it; the default presents nothing, which a check refuses.
      */
     default Presented presented(HttpServerRequest request) { return new Presented.Nothing(Presented.Via.of("", false)); }
+    /**
+     * Ends a request this port handed to a mount with the whole HTTP answer to a refusal; a request with a body has its
+     * connection closed, or its HTTP/2 stream reset. The node's port overrides it; the default throws.
+     */
+    default void refuse(HttpServerRequest request, Refused refused) { throw new IllegalStateException(); }
 }
 ```
+
+- **`rail8-api` names no HTTP server type outside its plugin contract.** `Refused` holds its reason, code and time to try
+  again; the node's HTTP port alone writes its answer (`HttpIngress.refuse`), so the answer is written in one place and a
+  change of Vert.x's response types touches the node, never a plugin. An adapter of another protocol answers a refusal
+  in its own, from `reason()`, `code()` and `retryAfter()`. `Entry` completes on its caller's context: it names Vert.x's
+  context in its body only, never in a public signature.
 
 - **The node builds every sender's consumer through `consumer(Inbound, Entry)`.** The default keeps an adapter built on
   the contract of systems and connections compiling: it stores the body, then enters with `Nothing`. Such an adapter
@@ -385,7 +394,7 @@ private void handle(HttpServerRequest req) {                      // the event l
     req.pause();
     entry.enter(ctx.http().presented(req)).onComplete(entered -> {
         if (entered.failed()) {
-            if (entered.cause() instanceof Refused r) r.answer(req); else req.response().setStatusCode(500).end();
+            if (entered.cause() instanceof Refused r) ctx.http().refuse(req, r); else req.response().setStatusCode(500).end();
             return;
         }
         streamBodyThenRun(req, entered.result());                 // as today, with the handler enter gave

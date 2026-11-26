@@ -816,7 +816,7 @@ What a component promises the node:
 - **Entry.** A consumer enters each caller before it reads a byte of the message: it hands what the
   caller presented (`Presented`, of the kinds `reads()` names) to the node's `Entry`, which answers
   the handler that takes that one message once, or fails with a `Refused` that the consumer answers
-  in its protocol (`Refused.answer` on the HTTP port). Only an admitted message is stored and run.
+  in its protocol (`HttpIngress.refuse` on the node's HTTP port, which writes the answer). Only an admitted message is stored and run.
   An adapter that reads credentials overrides `consumer(Inbound, Entry)`, or the node refuses to
   start; the node admits every caller for now.
 - **Back-pressure.** A flow with no room answers a retryable `Nack` before anything of it runs;

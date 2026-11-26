@@ -67,7 +67,7 @@ import java.util.function.Function;
  * {@code /http/orders} ({@link HttpConsumer#url()}); the port's verticle owns the socket and the consumer never runs a pipeline
  * on its event loop. A request at the path is paused and entered first ({@link Entry#enter}) with what the port read from its
  * head ({@link HttpIngress#presented}), before any byte of its body is read: a {@link Refused} caller gets the refusal's answer
- * ({@link Refused#answer}) and nothing is stored, any other failure of the entry is 500 with a fixed text. An entered request
+ * ({@link HttpIngress#refuse}) and nothing is stored, any other failure of the entry is 500 with a fixed text. An entered request
  * is answered 405 for a method other than POST and PUT, and is otherwise streamed into the {@link BlobStore} under the {@link Inbound#maxBodyBytes} of its
  * flow (413 above it; a store that fails otherwise is 500 with a fixed text, its failure logged at WARNING),
  * becomes the ingress envelope (new id, the request headers, {@link #METHOD} / {@link #PATH} props) and is handed to the handler
@@ -402,7 +402,7 @@ public final class HttpComponent implements Component {
                         else req.response().reset();
                     }
                 } else if (decided.cause() instanceof Refused refused) {
-                    refused.answer(req);
+                    http.refuse(req, refused);
                 } else {
                     LOG.log(System.Logger.Level.WARNING, "the entry of flow " + flow + " failed", decided.cause());
                     req.response().setStatusCode(500).putHeader("content-type", "text/plain").end(failedText(500));
