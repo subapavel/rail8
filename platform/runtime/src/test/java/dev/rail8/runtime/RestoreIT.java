@@ -413,6 +413,7 @@ class RestoreIT {
         demoPkg.put("endpoints/partner-domestic.yaml", replaced(demoPkg.get("endpoints/partner-domestic.yaml"), Map.of("url: " + partnerBase + "/echo", "url: secret://demo-partner")));
         Map<String, byte[]> otherFiles = demoFiles(partnerBase);
         otherFiles.put("package.yaml", replaced(otherFiles.get("package.yaml"), Map.of("name: demo", "name: other")));
+        otherFiles.keySet().removeIf(path -> path.startsWith("systems/"));   // the demo defines its systems: a second package may not
         otherFiles.put("endpoints/http-in.yaml", replaced(otherFiles.get("endpoints/http-in.yaml"), Map.of("address: /in", "address: /other")));
 
         Map<String, String> holding = env("node-1", tmp.resolve("node-1"));

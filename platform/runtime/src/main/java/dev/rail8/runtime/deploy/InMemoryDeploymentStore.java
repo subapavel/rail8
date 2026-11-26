@@ -163,6 +163,16 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
         }
 
         @Override
+        public Future<List<DeployedSystem>> systems() {
+            return InMemoryDeploymentStore.this.systems();
+        }
+
+        @Override
+        public Future<List<ConnectionUse>> connectionUses() {
+            return InMemoryDeploymentStore.this.connectionUses();
+        }
+
+        @Override
         public Future<Long> save(DeploymentRecord record, Actor by, JsonObject detail) {
             return write(record.name(), record, null, new Audited(by.name(), "deploy", "repository/" + record.repository(), detail.copy()));
         }

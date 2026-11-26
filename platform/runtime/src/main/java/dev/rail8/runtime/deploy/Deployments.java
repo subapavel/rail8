@@ -3274,13 +3274,16 @@ public final class Deployments {
 
     /**
      * What a deploy reads, under the pool's lock, of the pool's committed records and of the environment: the systems every
-     * record defines and the connections every deployed and retiring flow reaches, and the snapshot this node holds.
+     * record defines and the connections every deployed and retiring flow reaches, and the snapshot this node holds. Under the
+     * pool's lock they are read on the lock's own connection, never one of the work pool; a check, which holds no lock, reads the store.
      *
      * @throws DeployRefusedException {@link Kind#BUSY} when the store does not answer within the stop deadline
      */
     private NamedChecks.Pooled pooled() throws DeployRefusedException {
-        Future<List<DeploymentStore.DeployedSystem>> systems = bounded(records.systems(), "the read of the pool's systems");
-        Future<List<DeploymentStore.ConnectionUse>> uses = bounded(records.connectionUses(), "the read of the pool's connection uses");
+        PoolLock held = poolLock;
+        Future<List<DeploymentStore.DeployedSystem>> systems = bounded(held != null ? held.systems() : records.systems(), "the read of the pool's systems");
+        Future<List<DeploymentStore.ConnectionUse>> uses = bounded(held != null ? held.connectionUses() : records.connectionUses(),
+                "the read of the pool's connection uses");
         Future.join(systems, uses).otherwiseEmpty().await();
         Throwable failed = systems.failed() ? systems.cause() : uses.cause();
         if (failed != null) throw refused(Kind.BUSY, RefusalCode.POOL_BUSY, "the pool's systems could not be read: " + reason(failed), Map.of());

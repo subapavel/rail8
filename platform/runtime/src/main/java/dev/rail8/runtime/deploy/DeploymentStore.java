@@ -253,6 +253,16 @@ public interface DeploymentStore {
         /** The pool as read once the lock was taken. */
         Snapshot snapshot();
 
+        /** Every system the pool's records define, as {@link DeploymentStore#systems}, read on the lock's own connection. */
+        default Future<List<DeployedSystem>> systems() {
+            return Future.succeededFuture(List.of());
+        }
+
+        /** Every connection the pool's deployed and retiring flows reach, as {@link DeploymentStore#connectionUses}, read on the lock's own connection. */
+        default Future<List<ConnectionUse>> connectionUses() {
+            return Future.succeededFuture(List.of());
+        }
+
         /**
          * Writes {@code record} as its package's one row (a row the package had is replaced whole); answers the new generation. In
          * the same transaction each flow the replaced row runs at-least-once and {@code record} does not is marked, with a copy of
