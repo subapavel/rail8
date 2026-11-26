@@ -100,7 +100,7 @@
   "refusal.package-tree-refused": "Die Dateien von {repository} auf {commit} werden abgewiesen.",
   "refusal.package-unreadable": "Das Paket von {repository} auf {commit} kann nicht gelesen werden.",
   "refusal.password-change-required": "Ändern Sie Ihr Erstpasswort vor der Aktion {action}.",
-  "refusal.password-contains-name": "Das Passwort darf den Namen des Benutzers nicht enthalten.",
+  "refusal.password-contains-name": "Ein Passwort darf Ihren Namen nicht enthalten.",
   "refusal.password-length": "Ein Passwort hat {min} bis {max} Zeichen.",
   "refusal.password-needs-session": "Ein Passwort wird in einer Sitzung geändert.",
   "refusal.password-needs-user": "Nur ein Benutzer hat ein Passwort.",
@@ -152,5 +152,5 @@
   "refusal.version-required": "Beim Speichern muss die Version angegeben werden, die geändert wird.",
   "refusal.working-folder-busy": "Der Arbeitsordner ist belegt; nichts wurde geschrieben. Versuchen Sie es erneut.",
   "refusal.written-unread": "Die Änderung ist geschrieben, aber dieser Knoten konnte sie nicht zurücklesen: sie wird in Kürze wirksam. Senden Sie sie nicht erneut.",
-  "refusal.wrong-password": "Das Passwort ist falsch."
+  "refusal.wrong-password": "Das ist nicht das Passwort, mit dem Sie sich anmelden."
 }

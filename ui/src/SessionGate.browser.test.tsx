@@ -1,8 +1,9 @@
 import { Button } from 'antd';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { home } from './Home';
+import { GENERATED_ALPHABET } from './password';
 import type { Screen } from './screens';
 import { Allowed, SessionGate } from './SessionGate';
 import { sessionClient, type Me } from './session';
@@ -54,6 +55,7 @@ let root: Root | undefined;
 let host: HTMLElement | undefined;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   root?.unmount();
   host?.remove();
 });
@@ -132,7 +134,11 @@ describe('the session gate', () => {
     const w = render((url) => (url === '/admin/me/password' ? new Response(null, { status: 204 }) : json(200, { ...ME, firstPassword: true })));
     await expect.element(page.getByRole('heading', { name: 'Change the first password' })).toBeVisible();
     expect(page.getByRole('navigation', { name: 'Screens' }).query()).toBeNull();
-    await page.getByLabelText('Current password').fill('abcdefghijklmnopqrst');
+    await expect.element(page.getByText('The first password an administrator gave you. It confirms that it is you.')).toBeVisible();
+    await expect
+      .element(page.getByText('12 to 128 characters. It must not contain your name, anna, nor be the password you logged in with.'))
+      .toBeVisible();
+    await page.getByLabelText('The password you logged in with').fill('abcdefghijklmnopqrst');
     await page.getByLabelText('New password', { exact: true }).fill('a new long password');
     await page.getByLabelText('Repeat the new password').fill('another long password');
     await button('Change the password').click();
@@ -147,6 +153,70 @@ describe('the session gate', () => {
       current: 'abcdefghijklmnopqrst',
       next: 'a new long password',
     });
+  });
+
+  test('says what was wrong: not the password logged in with, or the rule the new one breaks', async () => {
+    const w = render((url) =>
+      url === '/admin/me/password'
+        ? json(403, { error: 'the current password is wrong', code: 'wrong-password' })
+        : json(200, { ...ME, firstPassword: true }),
+    );
+    await page.getByLabelText('The password you logged in with').fill('not the first one');
+    await page.getByLabelText('New password', { exact: true }).fill('short');
+    await page.getByLabelText('Repeat the new password').fill('short');
+    await button('Change the password').click();
+    await expect.element(page.getByText('A password has 12 to 128 characters: this one has 5.')).toBeVisible();
+    expect(w.calls.filter((c) => c.url === '/admin/me/password')).toHaveLength(0);
+
+    await page.getByLabelText('New password', { exact: true }).fill('a new long password');
+    await page.getByLabelText('Repeat the new password').fill('a new long password');
+    await button('Change the password').click();
+    await expect.element(page.getByText('This is not the password you logged in with.')).toBeVisible();
+
+    w.state.answer = (url) =>
+      url === '/admin/me/password'
+        ? json(400, { error: 'a password does not contain the name', code: 'password-contains-name' })
+        : json(200, { ...ME, firstPassword: true });
+    await page.getByLabelText('New password', { exact: true }).fill('anna is long enough');
+    await page.getByLabelText('Repeat the new password').fill('anna is long enough');
+    await button('Change the password').click();
+    await expect.element(page.getByText('A password must not contain your name.')).toBeVisible();
+  });
+
+  test('generates a new password, shows it to copy while it is the one typed, and sends it', async () => {
+    const w = render((url) => (url === '/admin/me/password' ? new Response(null, { status: 204 }) : json(200, { ...ME, firstPassword: true })));
+    await expect.element(button('Generate')).toBeVisible();
+    expect(page.getByLabelText('Generated password').query()).toBeNull();
+    // the first draw spells the name, which the node refuses, so another is drawn
+    const spelled = [...'aNNa', ...'x'.repeat(16)].map((c) => GENERATED_ALPHABET.indexOf(c));
+    vi.spyOn(crypto, 'getRandomValues').mockImplementationOnce(<T extends ArrayBufferView | null>(into: T) => {
+      (into as unknown as Uint8Array).set(spelled);
+      return into;
+    });
+    await button('Generate').click();
+    const shown = page.getByLabelText('Generated password');
+    await expect.element(shown).toBeVisible();
+    const generated = shown.element().textContent!;
+    expect(generated).toMatch(/^[a-zA-Z0-9]{20}$/);
+    expect(generated.toLowerCase()).not.toContain('anna');
+    expect(generated).not.toBe('aNNa' + 'x'.repeat(16));
+    await expect.element(page.getByLabelText('New password', { exact: true })).toHaveValue(generated);
+    await expect.element(page.getByLabelText('Repeat the new password')).toHaveValue(generated);
+    await expect.element(page.getByText('Copy it now: it is shown only here, and Rail8 does not keep it.')).toBeVisible();
+    await expect.element(shown.getByRole('button', { name: 'Copy' })).toBeVisible();
+
+    await page.getByLabelText('New password', { exact: true }).fill('typed by hand instead');
+    await expect.element(shown).not.toBeInTheDocument();
+    await button('Generate').click();
+    const again = page.getByLabelText('Generated password').element().textContent!;
+    expect(again).not.toBe(generated);
+
+    w.state.answer = (url) => (url === '/admin/me/password' ? new Response(null, { status: 204 }) : json(200, ME));
+    await page.getByLabelText('The password you logged in with').fill('abcdefghijklmnopqrst');
+    await button('Change the password').click();
+    await expect.element(page.getByRole('heading', { name: 'Home', level: 1 })).toBeVisible();
+    expect(JSON.parse(String(w.calls.find((c) => c.url === '/admin/me/password')!.init.body))).toEqual({ current: 'abcdefghijklmnopqrst', next: again });
+    expect(page.getByText(again).query()).toBeNull();
   });
 
   test('asks for the login again over the open tabs once the session ends, and cannot be dismissed', async () => {

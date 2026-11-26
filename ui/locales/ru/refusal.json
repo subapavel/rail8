@@ -100,7 +100,7 @@
   "refusal.package-tree-refused": "Файлы репозитория {repository} на коммите {commit} отклонены.",
   "refusal.package-unreadable": "Не удаётся прочитать пакет репозитория {repository} на коммите {commit}.",
   "refusal.password-change-required": "Перед действием {action} смените первый пароль.",
-  "refusal.password-contains-name": "Пароль не должен содержать имя пользователя.",
+  "refusal.password-contains-name": "Пароль не должен содержать ваше имя.",
   "refusal.password-length": "Пароль содержит от {min} до {max} символов.",
   "refusal.password-needs-session": "Пароль меняется в сеансе.",
   "refusal.password-needs-user": "Пароль есть только у пользователя.",
@@ -152,5 +152,5 @@
   "refusal.version-required": "При сохранении нужно указать версию, которая меняется.",
   "refusal.working-folder-busy": "Рабочая папка занята; ничего не записано. Попробуйте снова.",
   "refusal.written-unread": "Изменение записано, но этот узел не смог прочитать его обратно: оно скоро вступит в силу. Не отправляйте его повторно.",
-  "refusal.wrong-password": "Неверный пароль."
+  "refusal.wrong-password": "Это не тот пароль, с которым вы входите."
 }

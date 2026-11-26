@@ -100,7 +100,7 @@
   "refusal.package-tree-refused": "The files of {repository} at {commit} are refused.",
   "refusal.package-unreadable": "The package of {repository} at {commit} cannot be read.",
   "refusal.password-change-required": "Change your first password before {action}.",
-  "refusal.password-contains-name": "The password must not contain the user's name.",
+  "refusal.password-contains-name": "A password must not contain your name.",
   "refusal.password-length": "A password has {min} to {max} characters.",
   "refusal.password-needs-session": "A password is changed in a session.",
   "refusal.password-needs-user": "Only a user has a password.",
@@ -152,5 +152,5 @@
   "refusal.version-required": "A save names the version it changes.",
   "refusal.working-folder-busy": "The working folder is busy; nothing was written. Try again.",
   "refusal.written-unread": "The change is written, but this node could not read it back: it takes effect shortly. Do not send it again.",
-  "refusal.wrong-password": "The password is wrong."
+  "refusal.wrong-password": "This is not the password you log in with."
 }
