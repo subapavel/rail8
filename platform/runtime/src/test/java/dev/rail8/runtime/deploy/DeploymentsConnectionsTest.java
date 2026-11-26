@@ -445,12 +445,13 @@ class DeploymentsConnectionsTest {
     }
 
     /**
-     * The fake clock moved a second at a time, each step once the node's work settled, until {@code condition} holds; at most two
+     * The fake clock moved a second at a time, each step once the node's work settled (no claim can still land, every row handed
+     * out was answered, so no run is going when its time limit could pass), until {@code condition} holds; at most two
      * minutes of it: a retry's wake, armed as its run ends, fires on a later step.
      */
     void advancedUntil(BooleanSupplier condition, Supplier<String> what) {
         for (int s = 0; s < 120 && !condition.getAsBoolean(); s++) {
-            DeploymentsRetriesTest.until(queue::claimsSettled, () -> "the claims settled: " + queue.claims());
+            DeploymentsRetriesTest.until(() -> queue.claimsSettled() && queue.runsSettled(), () -> "the node's work settled: " + queue.claims());
             rt.clock().advance(Duration.ofSeconds(1));
         }
         DeploymentsRetriesTest.until(condition, what);
@@ -539,19 +540,29 @@ class DeploymentsConnectionsTest {
         assertEquals(0, doors.doors().size());
 
         env.connection("acme/erp/inbox", values(1, "rec://inbox"));
-        rt.clock().advance(Duration.ZERO);
-        DeploymentsCustomCodeTest.until(() -> doors.doors().size() == 1, "the restart");
+        restarted(1);
         assertEquals(DeployedFlow.State.RUNNING, deployments.flows().getFirst().state());
         accept("shop/orders");
 
         env.connection("acme/erp/inbox", values(4, "rec://moved"));
-        rt.clock().advance(Duration.ZERO);
-        DeploymentsCustomCodeTest.until(() -> doors.doors().size() == 2, "the restart");
+        restarted(2);
         assertEquals("rec://moved", doors.door("shop/orders").cfg().options().get("url"), "the new values start");
 
         env.instanceName("acme/erp", "ACME-ERP-DEV-2");   // an activation that leaves its connection as it was restarts nothing
         rt.clock().advance(Duration.ZERO);
         assertEquals(2, doors.doors().size());
+    }
+
+    /**
+     * Waits until {@code count} consumers started and the first flow is listed RUNNING again, its start completed, firing the
+     * timer's due tasks meanwhile: a restart asked while the previous start attempt is still ending is armed once that attempt
+     * ended, after the activation returned.
+     */
+    void restarted(int count) {
+        DeploymentsCustomCodeTest.until(() -> {
+            rt.clock().advance(Duration.ZERO);
+            return doors.doors().size() == count && deployments.flows().getFirst().state() == DeployedFlow.State.RUNNING;
+        }, "the restart");
     }
 
     /** A secret a connection names is read as a live handle: set once the deploy refused, the deploy goes through. */

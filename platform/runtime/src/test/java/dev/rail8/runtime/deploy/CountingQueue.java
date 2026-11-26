@@ -27,6 +27,8 @@ public final class CountingQueue implements WorkQueue {
     private final List<Thread> claimers = new CopyOnWriteArrayList<>();
     private final List<String> enqueued = new CopyOnWriteArrayList<>();
     private final List<String> claimed = new CopyOnWriteArrayList<>();
+    /** The seq of every row handed out and not yet answered by a complete, defer, stop or hold. */
+    private final java.util.Set<Long> out = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final List<String> hasItemsCalls = new CopyOnWriteArrayList<>();
     private final java.util.Map<String, Runnable> afterFirstHasItems = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger renews = new java.util.concurrent.atomic.AtomicInteger();
@@ -56,6 +58,12 @@ public final class CountingQueue implements WorkQueue {
         Thread self = Thread.currentThread();
         return claimers.stream().allMatch(t -> t == self || !t.isAlive());
     }
+
+    /**
+     * Whether every row handed out was answered: completed, deferred, stopped or held. While one is not, its run may still be going
+     * on its own thread, and a clock moved then may pass that run's time limit.
+     */
+    public boolean runsSettled() { return out.isEmpty(); }
 
     /** The items queued and not completed (FIX-30: an item completed by its own success leaves none). */
     public int size() { return inner.size(); }
@@ -89,14 +97,27 @@ public final class CountingQueue implements WorkQueue {
         claimers.add(Thread.currentThread());
         claims.add(workerId + " " + flow);
         Future<List<Item>> items = inner.claim(workerId, flow, max, lease);
-        items.onSuccess(taken -> taken.forEach(i -> claimed.add(i.messageId())));   // in-memory: already complete, runs here
+        items.onSuccess(taken -> taken.forEach(i -> {   // in-memory: already complete, runs here
+            claimed.add(i.messageId());
+            out.add(i.seq());
+        }));
         return items;
     }
 
-    @Override public Future<Boolean> complete(long seq, int attempts) { return inner.complete(seq, attempts); }
+    @Override public Future<Boolean> complete(long seq, int attempts) { return answered(seq, inner.complete(seq, attempts)); }
 
     @Override public Future<Completion> completeAndTakeNext(long seq, int attempts, String workerId, Duration lease) {
-        return inner.completeAndTakeNext(seq, attempts, workerId, lease);
+        return inner.completeAndTakeNext(seq, attempts, workerId, lease).onSuccess(c -> {
+            if (c.completed()) out.remove(seq);
+            c.next().ifPresent(i -> out.add(i.seq()));
+        });
+    }
+
+    /** {@code answer}, after row {@code seq} left the rows handed out when the queue answered true. */
+    private Future<Boolean> answered(long seq, Future<Boolean> answer) {
+        return answer.onSuccess(done -> {
+            if (done) out.remove(seq);
+        });
     }
 
     /**
@@ -123,16 +144,16 @@ public final class CountingQueue implements WorkQueue {
     /** The in-memory queue's defer (CORE-14a P3); one it answered true recorded with the clock at the call. */
     @Override public Future<Boolean> defer(long seq, int attempts, Duration delay) {
         java.time.Instant at = clock.instant();
-        return inner.defer(seq, attempts, delay).onSuccess(deferred -> {
+        return answered(seq, inner.defer(seq, attempts, delay).onSuccess(deferred -> {
             if (deferred) deferredAt.add(at);
-        });
+        }));
     }
 
-    @Override public Future<Boolean> stop(long seq, int attempts, dev.rail8.core.dlq.Parked failure) { return inner.stop(seq, attempts, failure); }
+    @Override public Future<Boolean> stop(long seq, int attempts, dev.rail8.core.dlq.Parked failure) { return answered(seq, inner.stop(seq, attempts, failure)); }
 
     @Override public Future<dev.rail8.core.record.Page<Stopped>> stopped(Optional<String> after, int limit) { return inner.stopped(after, limit); }
 
-    @Override public Future<Boolean> hold(long seq, int attempts) { return inner.hold(seq, attempts); }
+    @Override public Future<Boolean> hold(long seq, int attempts) { return answered(seq, inner.hold(seq, attempts)); }
 
     @Override public Future<dev.rail8.core.record.Page<Held>> held(Optional<String> after, int limit) { return inner.held(after, limit); }
 
