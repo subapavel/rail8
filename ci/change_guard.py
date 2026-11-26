@@ -124,11 +124,56 @@ STYLE_KEY = re.compile(r"(?:(?:[cC]olor|background|fill|stroke|border\w*|outline
 TOKEN = "var(--ant-...)"
 
 
+def interpolation_end(text: str, i: int) -> int | None:
+    """The index just after the `}` that closes the interpolation of a template whose body starts at `i`, past the
+    quotes, templates and braces nested in it; None when it does not close on its own line."""
+    depth = 1
+    while i < len(text):
+        c = text[i]
+        if c == "\n":
+            return None
+        if c in "'\"":
+            end = i + 1
+            while end < len(text) and text[end] not in (c, "\n"):
+                end += 2 if text[end] == "\\" else 1
+            if end >= len(text) or text[end] != c:
+                return None
+            i = end + 1
+            continue
+        if c == "`":
+            i += 1
+            while i < len(text) and text[i] != "`":
+                if text[i] == "\n":
+                    return None
+                if text[i] == "\\":
+                    i += 2
+                elif text.startswith("${", i):
+                    end = interpolation_end(text, i + 2)
+                    if end is None:
+                        return None
+                    i = end
+                else:
+                    i += 1
+            if i >= len(text):
+                return None
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
 def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
     """Splits a source file into (segment kind, text) per line number; kinds are code, comment and string.
 
     `kind` is java, script, style or hash. Java knows // and /* */ comments, "..." and '...' literals and \"\"\" text
-    blocks; script knows // and /* */ comments, '...', "..." and `...` literals and regular-expression literals;
+    blocks; script knows // and /* */ comments, '...', "..." and `...` literals, a template's interpolations on one
+    line kept in its literal, and regular-expression literals;
     style knows /* */ comments and '...' and "..." strings; hash (shell, YAML, Python) knows a # comment that starts
     a line or follows whitespace, '...' and "..." strings and Python's \"\"\" and \'\'\' text blocks. A '...' or
     "..." literal ends at the line's end.
@@ -199,6 +244,10 @@ def segments(text: str, kind: str) -> dict[int, list[tuple[str, str]]]:
             buf.append(text[i:i + 2]); i += 2; continue
         if state == "text" and text.startswith(triple, i):
             flush("code"); last_code = '"'; i += 3; continue
+        if state == "template" and text.startswith("${", i):
+            end = interpolation_end(text, i + 2)
+            if end is not None:
+                buf.append(text[i:end]); i = end; continue
         if state in ("string", "template") and c == quote:
             flush("code"); last_code = c; i += 1; continue
         buf.append(c); i += 1
