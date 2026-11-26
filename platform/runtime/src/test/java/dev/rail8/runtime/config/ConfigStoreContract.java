@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.TreeSet;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -99,6 +101,9 @@ abstract class ConfigStoreContract {
     /** Deletes the row of {@code ref} and its history. */
     abstract void deleteRow(Ref ref);
 
+    /** Flips a bit of the sealed value of the secret {@code name}, so that no node opens it. */
+    abstract void tamperSecret(String name);
+
     /** The configuration's tables as they are now. */
     abstract Object snapshot();
 
@@ -153,7 +158,14 @@ abstract class ConfigStoreContract {
     static final ConfigObjects.Adapter SFTP = new ConfigObjects.Adapter(new Forms(SFTP_FORM, Settings.NONE,
             Map.of(Direction.OUT, Forms.Reach.CONNECTION)), Set.of());
 
-    static final Map<String, ConfigObjects.Adapter> ADAPTERS = Map.of("web", WEB, "sftp", SFTP);
+    /** A client of TLS, out only: the host names the server, the key is a key pair. */
+    static final Settings TLS_FORM = Settings.of(
+            Field.text("host", "Host", "The server.").required().server().out(),
+            Field.secret("key", "Client key", "The key the client proves itself with.", Secret.Kind.KEY_PAIR).out());
+    static final ConfigObjects.Adapter TLS = new ConfigObjects.Adapter(new Forms(TLS_FORM, Settings.NONE,
+            Map.of(Direction.OUT, Forms.Reach.CONNECTION)), Set.of());
+
+    static final Map<String, ConfigObjects.Adapter> ADAPTERS = Map.of("web", WEB, "sftp", SFTP, "tls", TLS);
 
     static final Ref API = Ref.connection("acme/api");
     static final Ref FILES = Ref.connection("acme/files");
@@ -1382,5 +1394,325 @@ abstract class ConfigStoreContract {
         ConfigStore.State state = b.store.state(held);
         assertEquals(Set.of(API), state.gone());
         refused(404, "not-found", () -> b.store.read(API));
+    }
+
+    // ------------------------------------------------------------------------------------------------- export and import
+
+    static final Set<Ref.Kind> EVERY_KIND = EnumSet.allOf(Ref.Kind.class);
+    static final ConfigStore.Scope EVERYTHING = ConfigStore.Scope.everything();
+
+    /** The text of the file of the connection {@code ref}: the envelope of format 1, then {@code rest}. */
+    static String connectionFile(Ref ref, String rest) {
+        return "schemaVersion: 1\nkind: environment.connection\nkey: " + ref.key() + "\n" + rest;
+    }
+
+    static ConfigStore.File file(Ref ref, String rest) {
+        return new ConfigStore.File(ConfigFiles.path(ref), connectionFile(ref, rest));
+    }
+
+    /** A web connection's file with the url and inbox of {@link #PLAIN} and {@code more} lines of values. */
+    static ConfigStore.File plainFile(Ref ref, String... more) {
+        StringBuilder values = new StringBuilder("adapter: web\nvalues:\n  url: https://plain.example/api\n  inbox: /in\n");
+        for (String line : more) values.append("  ").append(line).append('\n');
+        return file(ref, values.toString());
+    }
+
+    ConfigStore.Export exported(Node n, ConfigStore.Scope scope) {
+        ConfigStore.Export e = n.store.export(scope);
+        e.files().forEach(f -> captured.add(f.text()));
+        return e;
+    }
+
+    JsonObject dryRun(Node n, ConfigStore.Scope scope, List<ConfigStore.File> files) {
+        JsonObject plan = n.store.importCheck(EVERY_KIND, scope, files).json();
+        captured.add(plan.encode());
+        return plan;
+    }
+
+    /** The dry run of {@code files} that {@code n} refuses with 422 {@code code}. */
+    JsonObject problems(Node n, ConfigStore.Scope scope, List<ConfigStore.File> files, String code) {
+        ConfigRefusal r = refused(() -> n.store.importCheck(EVERY_KIND, scope, files));
+        assertEquals(422, r.status(), r.getMessage());
+        assertEquals(code, r.code(), r.getMessage());
+        return r.detail();
+    }
+
+    JsonObject imported(Node n, ConfigStore.Scope scope, List<ConfigStore.File> files, Optional<String> note) {
+        String expect = dryRun(n, scope, files).getString("expect");
+        JsonObject answer = n.store.importWrite(CONNECTIONS, EVERY_KIND, scope, files, expect, note).json();
+        captured.add(answer.encode());
+        return answer;
+    }
+
+    static List<String> codes(JsonObject plan) {
+        return plan.getJsonArray("problems").stream().map(p -> ((JsonObject) p).getString("code")).toList();
+    }
+
+    static JsonObject object(JsonObject plan, Ref ref) {
+        for (Object o : plan.getJsonArray("objects")) {
+            JsonObject j = (JsonObject) o;
+            if (j.getString("kind").equals(ref.kind().id()) && j.getString("key").equals(ref.key())) return j;
+        }
+        throw new AssertionError(ref + " is not among the objects: " + plan.encode());
+    }
+
+    static List<String> keys(JsonArray refs) {
+        return refs.stream().map(o -> ((JsonObject) o).getString("kind") + "/" + ((JsonObject) o).getString("key")).toList();
+    }
+
+    @Test
+    void anExportImportsBackUnchangedAndItsFilesHoldNoSecretValueNorADefault() {
+        Node a = node("a");
+        partnerSecrets(a);
+        MemorySecretStores.createKeyPair(a.secrets, "client.key");
+        inForce(a, API, with(PARTNER, "timeoutMs", 30_000));
+        Ref tls = Ref.connection("acme/tls");
+        ConfigStore.ObjectView saved = save(a, tls, "tls", values("host", "tls.example", "key", "secret://client.key"));
+        if (saved.json().getJsonObject("draft").getValue("consent") != null) consent(a, SECRETS, tls);
+        activate(a, tls);
+        write(a, CONNECTIONS, ACME, new Change.SaveSystem(etag(a, ACME), "ACME production"));
+        activate(a, ACME);
+        save(a, FILES, "sftp", values("host", "sftp.example"));
+
+        ConfigStore.Export export = exported(a, EVERYTHING);
+        assertEquals(List.of("connection/acme/api.yaml", "connection/acme/tls.yaml", "system/acme.yaml"),
+                export.files().stream().map(ConfigStore.File::path).toList(), "only what is in force, a draft never");
+        assertEquals(List.of(), export.refused());
+        String api = export.files().get(0).text();
+        assertFalse(api.contains("timeoutMs"), "a value at its default is left out: " + api);
+        assertTrue(api.contains("  token: secret://partner.token\n"), api);
+        assertTrue(api.contains("secrets:\n  partner.pin:\n    kind: value\n  partner.token:\n    kind: value\n"), api);
+        String key = export.files().get(1).text();
+        assertTrue(key.contains("  client.key:\n    kind: key-pair\n    algorithm: "), key);
+        assertTrue(key.contains("    fingerprint: "), key);
+        assertEquals("schemaVersion: 1\nkind: environment.system\nkey: acme\ninstanceName: ACME production\n", export.files().get(2).text());
+
+        Map<Ref, String> etags = Map.of(API, etag(a, API), tls, etag(a, tls), ACME, etag(a, ACME));
+        int apiHistory = historyRows(API);
+        JsonObject plan = dryRun(a, EVERYTHING, export.files());
+        assertEquals(List.of(), codes(plan));
+        for (Ref ref : etags.keySet()) {
+            assertEquals("unchanged", object(plan, ref).getString("change"), plan.encode());
+            assertTrue(object(plan, ref).getBoolean("inForce"), plan.encode());
+            assertEquals(new JsonArray(), object(plan, ref).getJsonArray("fields"));
+        }
+        assertEquals(List.of("connection/acme/files"), keys(plan.getJsonArray("unnamed")), "a draft no file names");
+        JsonObject answer = imported(a, EVERYTHING, export.files(), Optional.empty());
+        for (Ref ref : etags.keySet()) {
+            assertEquals(etags.get(ref), etag(a, ref), "an unchanged object is not written: " + ref);
+            assertEquals(etags.get(ref), object(answer, ref).getString("etag"));
+        }
+        assertEquals(apiHistory, historyRows(API));
+
+        assertEquals(List.of("system/acme.yaml"), exported(a, new ConfigStore.Scope(Optional.of(Ref.Kind.SYSTEM), Optional.empty()))
+                .files().stream().map(ConfigStore.File::path).toList());
+        assertEquals(List.of("connection/acme/tls.yaml"), exported(a, new ConfigStore.Scope(Optional.empty(), Optional.of("acme/t")))
+                .files().stream().map(ConfigStore.File::path).toList());
+
+        tamperBody(API, body(with(PLAIN, "url", "https://forged.example/api")));
+        ConfigStore.Export tampered = exported(a, EVERYTHING);
+        assertEquals(List.of(API), tampered.refused(), "a body that does not verify is never exported");
+        assertEquals(List.of("connection/acme/tls.yaml", "system/acme.yaml"), tampered.files().stream().map(ConfigStore.File::path).toList());
+    }
+
+    @Test
+    void aBodyAtTheMostASaveTakesFitsItsFileAndImportsBackUnchanged() {
+        Node a = node("a");
+        String piece = "a\"é\\ é/";
+        StringBuilder path = new StringBuilder();
+        while (Jcs.bytes(body(with(PLAIN, "path", path.toString() + piece))).length <= ConfigObjects.MAX_BODY_BYTES) path.append(piece);
+        while (Jcs.bytes(body(with(PLAIN, "path", path.toString() + "a"))).length <= ConfigObjects.MAX_BODY_BYTES) path.append('a');
+        assertEquals(ConfigObjects.MAX_BODY_BYTES, Jcs.bytes(body(with(PLAIN, "path", path.toString()))).length);
+        inForce(a, API, with(PLAIN, "path", path.toString()));
+        ConfigStore.Export export = exported(a, EVERYTHING);
+        String text = export.files().getFirst().text();
+        assertTrue(text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= ConfigFiles.MAX_FILE_BYTES, "the file takes "
+                + text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + " bytes");
+        assertEquals("unchanged", object(dryRun(a, EVERYTHING, export.files()), API).getString("change"));
+    }
+
+    @Test
+    void aDryRunListsCreatedChangedAndUnchangedObjectsWithTheirFieldsNotesAndUnnamedRows() {
+        Node a = node("a");
+        deploySystem("acme", new JsonObject().put("connections", new JsonObject().put("api", new JsonObject().put("adapter", "web"))));
+        inForce(a, API, PLAIN);
+        Ref same = Ref.connection("acme/same");
+        inForce(a, same, PLAIN);
+        Ref other = Ref.connection("acme/other");
+        save(a, other, PLAIN);
+        Ref created = Ref.connection("acme/new");
+        Ref mocked = Ref.connection("acme/mocked");
+        Ref outside = Ref.connection("zeta/kept");
+        inForce(a, outside, PLAIN);
+        List<ConfigStore.File> files = List.of(plainFile(API, "path: /v2"), plainFile(same, "verifyTls: true"), plainFile(created),
+                file(mocked, "adapter: web\nmock:\n  reply: echo\nvalues:\n  url: https://mocked.example/api\n  inbox: /in\n"),
+                new ConfigStore.File("system/acme.yaml", "schemaVersion: 1\nkind: environment.system\nkey: acme\ninstanceName: ACME\n"));
+        ConfigStore.Scope acme = new ConfigStore.Scope(Optional.empty(), Optional.of("acme"));
+        JsonObject plan = dryRun(a, acme, files);
+        assertEquals(List.of(), codes(plan));
+        assertEquals(List.of("connection/acme/api", "connection/acme/mocked", "connection/acme/new", "connection/acme/same", "system/acme"),
+                keys(plan.getJsonArray("objects")), "by kind and key");
+        assertEquals("changed", object(plan, API).getString("change"));
+        assertEquals(new JsonArray().add("values.path"), object(plan, API).getJsonArray("fields"));
+        assertFalse(object(plan, API).getBoolean("inForce"));
+        assertEquals("unchanged", object(plan, same).getString("change"), "a value at its default is a value not set");
+        assertTrue(object(plan, same).getBoolean("inForce"));
+        assertEquals("created", object(plan, created).getString("change"));
+        assertEquals("created", object(plan, ACME).getString("change"));
+        assertEquals(List.of(), keys(plan.getJsonArray("blockers")));
+        List<String> notes = plan.getJsonArray("notes").stream().map(o -> ((JsonObject) o).getString("key") + " " + ((JsonObject) o).getString("code")).toList();
+        assertEquals(List.of("acme/mocked not-deployed", "acme/mocked mocks-not-allowed", "acme/new not-deployed", "acme/same not-deployed"), notes);
+        assertEquals(List.of("connection/acme/other"), keys(plan.getJsonArray("unnamed")), "a row outside the scope is not unnamed");
+        assertTrue(plan.getString("expect").matches("[0-9a-f]{64}"), plan.getString("expect"));
+        assertEquals(plan.getString("expect"), dryRun(a, acme, files.reversed()).getString("expect"), "the order of the files is no change");
+        assertNotEquals(plan.getString("expect"), dryRun(a, EVERYTHING, files).getString("expect"), "nor is the scope the same");
+    }
+
+    @Test
+    void aSecretALaterActivationWouldMissIsABlockerThatDoesNotRefuseTheImport() {
+        Node a = node("a");
+        partnerSecrets(a);
+        secret(a, "sftp.value", "a-plain-value");
+        tamperSecret("partner.token");
+        restart(a, K1, null);
+        List<ConfigStore.File> files = List.of(
+                file(API, "adapter: web\nvalues:\n  url: https://partner.example/api\n  token: secret://partner.token\n  inbox: /in\n"),
+                file(FILES, "adapter: sftp\nvalues:\n  host: sftp.example\n  password: secret://sftp.value\n  hostKey: secret://sftp.missing\n"),
+                file(Ref.connection("acme/mocked"), "adapter: web\nmock:\n  reply: echo\nvalues:\n  url: https://m.example/api\n  token: secret://none.here\n  inbox: /in\n"));
+        JsonObject plan = dryRun(a, EVERYTHING, files);
+        List<String> blockers = plan.getJsonArray("blockers").stream().map(o -> {
+            JsonObject b = (JsonObject) o;
+            return b.getString("key") + " " + b.getString("field") + " " + b.getString("secret") + " " + b.getString("code");
+        }).toList();
+        assertEquals(List.of("acme/api token partner.token unreadable", "acme/files password sftp.value kind", "acme/files hostKey sftp.missing not-set"),
+                blockers, "a mocked connection sends nothing, so it has none");
+        JsonObject answer = imported(a, EVERYTHING, files, Optional.empty());
+        assertEquals(plan.getJsonArray("blockers"), answer.getJsonArray("blockers"));
+        assertEquals(plan.getJsonArray("blockers"), audited("config.import").getFirst().getJsonObject("detail").getJsonArray("blockers"));
+        assertNotNull(read(a, FILES).json().getJsonObject("draft"));
+    }
+
+    @Test
+    void everyProblemOfEveryFileIsListedAndNothingIsWrittenWhileAnyIsLeft() {
+        Node a = node("a");
+        save(a, FILES, "sftp", values("host", "sftp.example"));
+        Ref good = Ref.connection("acme/new");
+        List<ConfigStore.File> files = new ArrayList<>(List.of(
+                new ConfigStore.File("connection/acme/broken.yaml", "key: [unclosed\n"),
+                file(API, "adapter: web\nvalues:\n  url: https://plain.example/api\n  inbox: /in\nrevision: 3\n"),
+                new ConfigStore.File("connection/Bad.yaml", "schemaVersion: 1\nkind: environment.connection\nkey: Bad\nadapter: web\nvalues: {}\n"),
+                plainFile(good),
+                plainFile(good, "path: /second"),
+                plainFile(Ref.connection("zeta/x")),
+                plainFile(Ref.connection("acme/odd"), "colour: red"),
+                plainFile(Ref.connection("acme/slow"), "timeoutMs: soon"),
+                file(FILES, "adapter: sftp\nvalues:\n  host: other.example\n"),
+                new ConfigStore.File("connection/acme/future.yaml", "schemaVersion: 2\nkind: environment.connection\nkey: acme/future\n")));
+        ConfigStore.Scope acme = new ConfigStore.Scope(Optional.empty(), Optional.of("acme/"));
+        JsonObject plan = problems(a, acme, files, "format");
+        assertEquals(new TreeSet<>(List.of("yaml", "schema", "key", "duplicate", "outside-scope", "unknown-field", "invalid", "draft-waits", "format")),
+                new TreeSet<>(codes(plan)), plan.encode());
+        assertEquals("created", object(plan, good).getString("change"), "a good file is still checked");
+        JsonObject waits = plan.getJsonArray("problems").stream().map(o -> (JsonObject) o).filter(p -> p.getString("code").equals("draft-waits")).findFirst().orElseThrow();
+        assertEquals("connections", waits.getString("savedBy"));
+        JsonObject unknown = plan.getJsonArray("problems").stream().map(o -> (JsonObject) o).filter(p -> p.getString("code").equals("unknown-field")).findFirst().orElseThrow();
+        assertEquals("colour", unknown.getString("field"));
+        assertEquals("web", unknown.getString("adapter"));
+
+        files.removeLast();
+        assertTrue(problems(a, acme, files, "problems").getJsonArray("problems").size() > 0);
+        refused(422, "problems", () -> a.store.importWrite(CONNECTIONS, EVERY_KIND, acme, files, dryRunExpect(a, acme, files), Optional.empty()));
+        refused(404, "not-found", () -> a.store.read(good));
+
+        ConfigRefusal notAllowed = refused(() -> a.store.importCheck(EnumSet.of(Ref.Kind.SYSTEM), EVERYTHING, List.of(plainFile(good))));
+        assertEquals(List.of("not-allowed"), codes(notAllowed.detail()));
+        List<ConfigStore.File> many = new ArrayList<>();
+        for (int i = 0; i <= ConfigStore.MAX_IMPORT_FILES; i++) many.add(plainFile(Ref.connection("acme/c" + i)));
+        refused(413, "too-large", () -> a.store.importCheck(EVERY_KIND, EVERYTHING, many));
+    }
+
+    /** The expect of the dry run of {@code files}, whether it has problems or not. */
+    String dryRunExpect(Node n, ConfigStore.Scope scope, List<ConfigStore.File> files) {
+        try {
+            return n.store.importCheck(EVERY_KIND, scope, files).expect();
+        } catch (ConfigRefusal r) {
+            captured.add(r.body().encode());
+            return r.detail().getString("expect");
+        }
+    }
+
+    @Test
+    void aWriteIsAllOrNoneAndRefusedWithTheDryRunAsItIsNowAfterAChangeOfAFileOrAnObject() {
+        Node a = node("a");
+        inForce(a, API, PLAIN);
+        Ref created = Ref.connection("acme/new");
+        List<ConfigStore.File> files = List.of(plainFile(API, "path: /v2"), plainFile(created));
+        String expect = dryRun(a, EVERYTHING, files).getString("expect");
+
+        List<ConfigStore.File> edited = List.of(plainFile(API, "path: /v3"), plainFile(created));
+        ConfigRefusal fileChanged = refused(() -> a.store.importWrite(CONNECTIONS, EVERY_KIND, EVERYTHING, edited, expect, Optional.empty()));
+        assertEquals(412, fileChanged.status());
+        assertEquals("changed", fileChanged.code());
+        assertEquals(dryRun(a, EVERYTHING, edited).getString("expect"), fileChanged.detail().getString("expect"), "the dry run as it is now");
+
+        save(a, API, with(PLAIN, "path", "/elsewhere"));
+        write(a, CONNECTIONS, API, new Change.Discard(etag(a, API)));
+        refused(412, "changed", () -> a.store.importWrite(CONNECTIONS, EVERY_KIND, EVERYTHING, files, expect, Optional.empty()));
+        save(a, created, PLAIN);
+        write(a, CONNECTIONS, created, new Change.Discard(etag(a, created)));
+        refused(412, "changed", () -> a.store.importWrite(CONNECTIONS, EVERY_KIND, EVERYTHING, files, dryRunExpect(a, EVERYTHING, List.of(plainFile(API, "path: /v2"))),
+                Optional.empty()));
+
+        a.store.limits(new ConfigObjects.Limits(2, 1, ConfigObjects.MAX_HISTORY, ConfigObjects.KEPT_ACTIVATIONS));
+        List<ConfigStore.File> three = List.of(plainFile(API, "path: /v2"), plainFile(Ref.connection("acme/new2")), plainFile(Ref.connection("acme/new3")));
+        refused(409, "config-full", () -> a.store.importWrite(CONNECTIONS, EVERY_KIND, EVERYTHING, three, dryRunExpect(a, EVERYTHING, three), Optional.empty()));
+        assertNull(read(a, API).json().getValue("draft"), "all or none");
+        refused(404, "not-found", () -> a.store.read(Ref.connection("acme/new2")));
+
+        int revision = read(a, created).json().getInteger("revision");
+        JsonObject answer = imported(a, EVERYTHING, List.of(plainFile(API, "path: /v2")), Optional.empty());
+        assertEquals("changed", object(answer, API).getString("change"));
+        assertEquals(etag(a, API), object(answer, API).getString("etag"));
+        assertEquals("/v2", read(a, API).json().getJsonObject("draft").getJsonObject("values").getString("path"));
+        assertEquals(revision, read(a, created).json().getInteger("revision"), "an object no file names is not touched");
+        refused(422, "invalid", () -> a.store.importWrite(CONNECTIONS, EVERY_KIND, EVERYTHING, files, expect, Optional.of("x".repeat(ConfigObjects.MAX_NOTE + 1))));
+    }
+
+    @Test
+    void anImportWritesDraftsWithHistoryAndOneAuditRowAndADraftEqualToItsFileKeepsItsConsent() {
+        Node a = node("a");
+        partnerSecrets(a);
+        inForce(a, API, PLAIN);
+        save(a, API, PARTNER);
+        consent(a, SECRETS, API);
+        int apiHistory = historyRows(API);
+        List<ConfigStore.File> files = List.of(
+                file(API, "adapter: web\nvalues:\n  url: https://partner.example/api\n  token: secret://partner.token\n  pin: secret://partner.pin\n  inbox: /in\n"),
+                file(FILES, "adapter: sftp\nvalues:\n  host: sftp.example\n"));
+        JsonObject plan = dryRun(a, EVERYTHING, files);
+        assertEquals("unchanged", object(plan, API).getString("change"), "the file is the draft");
+        assertFalse(object(plan, API).getBoolean("inForce"));
+        JsonObject answer = imported(a, EVERYTHING, files, Optional.of("from staging"));
+        assertEquals("created", object(answer, FILES).getString("change"));
+        assertEquals(apiHistory, historyRows(API));
+        assertNotNull(read(a, API).json().getJsonObject("draft").getJsonObject("consent").getValue("given"), "its consent is kept");
+
+        JsonObject h = history(a, FILES).getFirst();
+        assertEquals("import", h.getString("change"));
+        assertEquals("from staging", h.getString("note"));
+        assertEquals("connections", h.getString("actor"));
+        List<JsonObject> audit = audited("config.import");
+        assertEquals(1, audit.size());
+        assertEquals("config/import", audit.getFirst().getString("subject"));
+        JsonObject detail = audit.getFirst().getJsonObject("detail");
+        assertEquals("from staging", detail.getString("note"));
+        assertEquals(EVERYTHING.json(), detail.getJsonObject("scope"));
+        assertEquals(List.of("connection/acme/api", "connection/acme/files"), keys(detail.getJsonArray("objects")));
+        assertEquals(new JsonArray().add("adapter").add("values.host"), object(detail, FILES).getJsonArray("fields"));
+
+        activate(a, API);
+        assertEquals("https://partner.example/api", read(a, API).json().getJsonObject("inForce").getJsonObject("values").getString("url"));
+        activate(a, FILES);
+        assertEquals("unchanged", object(dryRun(a, EVERYTHING, exported(a, EVERYTHING).files()), FILES).getString("change"));
     }
 }

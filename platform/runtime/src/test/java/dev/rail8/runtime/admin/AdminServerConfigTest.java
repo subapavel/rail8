@@ -36,10 +36,11 @@ class AdminServerConfigTest extends AdminAccessFixture {
     String secretAdmin;
     String both;
     String developer;
+    String root;
 
     @BeforeEach
     void people() {
-        String root = root();
+        root = root();
         connections = changed("connections", person(root, "connections", "connection-administrator"));
         secretAdmin = changed("secrets", person(root, "secrets", "secret-administrator"));
         both = changed("both", person(root, "both", "connection-administrator", "secret-administrator"));
@@ -211,5 +212,61 @@ class AdminServerConfigTest extends AdminAccessFixture {
         assertTrue(environment.current().mocksAllowed(), "the switch holds on this node when it is answered");
         refused(412, "changed", connections, "POST", "/admin/config/-/mocks", new JsonObject().put("expect", false).put("allowed", true));
         refused(400, "bad-request", connections, "POST", "/admin/config/-/mocks", new JsonObject().put("expect", "no").put("allowed", true));
+    }
+
+    @Test
+    void anExportIsImportedBackThroughTheRoutesAroundAConsentAndAgainUnchanged() {
+        String etag = emptyEtag(API);
+        JsonObject saved = ok(connections, "POST", API + "/-/save", new JsonObject().put("expect", etag).put("adapter", "web").put("values", PARTNER));
+        JsonObject consented = ok(secretAdmin, "POST", API + "/-/consent", new JsonObject().put("expect", saved.getString("etag"))
+                .put("digest", saved.getJsonObject("draft").getJsonObject("consent").getString("digest")));
+        ok(connections, "POST", API + "/-/activate", new JsonObject().put("expect", consented.getString("etag")));
+
+        JsonObject export = ok(developer, "GET", "/admin/config/export?kind=connection&prefix=acme/", null);
+        assertEquals(new JsonArray(), export.getJsonArray("refused"));
+        JsonObject file = export.getJsonArray("files").getJsonObject(0);
+        assertEquals("connection/acme/api.yaml", file.getString("path"));
+        JsonObject scope = new JsonObject().put("kind", "connection");
+        JsonArray moved = new JsonArray().add(file.copy().put("text", file.getString("text").replace("partner.example", "partner2.example")));
+        JsonObject plan = ok(connections, "POST", "/admin/config/import?check=true", new JsonObject().put("scope", scope).put("files", moved));
+        assertEquals("changed", plan.getJsonArray("objects").getJsonObject(0).getString("change"), plan.encode());
+        assertEquals(new JsonArray(), plan.getJsonArray("problems"));
+        refused(400, "bad-request", connections, "POST", "/admin/config/import", new JsonObject().put("scope", scope).put("files", moved));
+        JsonObject written = ok(connections, "POST", "/admin/config/import", new JsonObject().put("scope", scope).put("files", moved)
+                .put("expect", plan.getString("expect")).put("note", "moved to partner2"));
+        assertEquals("changed", written.getJsonArray("objects").getJsonObject(0).getString("change"));
+        refused(412, "changed", connections, "POST", "/admin/config/import", new JsonObject().put("scope", scope).put("files", moved)
+                .put("expect", plan.getString("expect")));
+
+        JsonObject draft = ok(connections, "GET", API, null);
+        JsonObject needs = draft.getJsonObject("draft").getJsonObject("consent");
+        assertNull(needs.getValue("given"), "a new server for its secrets waits for consent: " + draft);
+        JsonObject again = ok(secretAdmin, "POST", API + "/-/consent", new JsonObject().put("expect", draft.getString("etag")).put("digest", needs.getString("digest")));
+        JsonObject active = ok(connections, "POST", API + "/-/activate", new JsonObject().put("expect", again.getString("etag")));
+        assertEquals("https://partner2.example/api", active.getJsonObject("inForce").getJsonObject("values").getString("url"));
+
+        JsonArray files = ok(developer, "GET", "/admin/config/export", null).getJsonArray("files");
+        JsonObject unchanged = ok(connections, "POST", "/admin/config/import?check=true", new JsonObject().put("scope", new JsonObject()).put("files", files));
+        assertEquals("unchanged", unchanged.getJsonArray("objects").getJsonObject(0).getString("change"), unchanged.encode());
+        assertEquals(true, unchanged.getJsonArray("objects").getJsonObject(0).getBoolean("inForce"));
+        JsonObject none = ok(connections, "POST", "/admin/config/import", new JsonObject().put("scope", new JsonObject()).put("files", files)
+                .put("expect", unchanged.getString("expect")));
+        assertEquals(active.getString("etag"), none.getJsonArray("objects").getJsonObject(0).getString("etag"), "an unchanged file writes nothing");
+
+        String partners = changed("partners", person(root, "partners", "partner-administrator"));
+        JsonObject notAllowed = refused(422, "problems", partners, "POST", "/admin/config/import?check=true",
+                new JsonObject().put("scope", new JsonObject()).put("files", files));
+        assertEquals("not-allowed", notAllowed.getJsonArray("problems").getJsonObject(0).getString("code"), notAllowed.encode());
+        refused(403, "not-allowed", developer, "POST", "/admin/config/import?check=true", new JsonObject().put("scope", new JsonObject()).put("files", files));
+        refused(400, "bad-request", developer, "GET", "/admin/config/export?kind=partner", null);
+        refused(400, "bad-request", connections, "POST", "/admin/config/import?check=maybe", new JsonObject().put("scope", new JsonObject()).put("files", files));
+        refused(400, "bad-request", connections, "POST", "/admin/config/import?check=true", new JsonObject().put("scope", new JsonObject().put("kind", 1))
+                .put("files", files));
+        refused(400, "bad-request", connections, "POST", "/admin/config/import?check=true", new JsonObject().put("scope", new JsonObject())
+                .put("files", new JsonArray().add(new JsonObject().put("path", "a.yaml"))));
+
+        for (String text : seen) {
+            assertFalse(text.contains(TOKEN_VALUE) || text.contains(PIN_VALUE), "no answer holds a secret's value: " + text);
+        }
     }
 }

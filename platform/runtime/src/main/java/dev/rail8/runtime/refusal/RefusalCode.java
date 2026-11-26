@@ -213,6 +213,10 @@ public enum RefusalCode {
     CHANGED("changed"),
     /** 422: the values of {@code key} are not complete for an activation: each line names the field and the direction. */
     INCOMPLETE("incomplete"),
+    /** 422: an import's dry run has problems, each naming its file: nothing is written. */
+    PROBLEMS("problems"),
+    /** 422: a file of an import is of a kind, or a format, this node does not read: the answer names the newest format of each kind it reads. */
+    FORMAT("format"),
     /** 503: the audit row of a change of the configuration could not be written, so nothing was changed. */
     AUDIT_UNAVAILABLE("audit-unavailable"),
 

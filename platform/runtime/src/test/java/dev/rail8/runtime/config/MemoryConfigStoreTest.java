@@ -138,6 +138,11 @@ class MemoryConfigStoreTest extends ConfigStoreContract {
     }
 
     @Override
+    void tamperSecret(String name) {
+        secretStores.tamper(name);
+    }
+
+    @Override
     void deleteRow(Ref ref) {
         synchronized (db) {
             db.objects.remove(ref);

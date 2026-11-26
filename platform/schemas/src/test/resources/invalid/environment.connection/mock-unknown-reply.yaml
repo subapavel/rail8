@@ -1,0 +1,7 @@
+# expect: /mock/reply
+schemaVersion: 1
+kind: environment.connection
+key: acme/erp/rest
+adapter: http
+mock: { reply: always }
+values: { url: https://erp.acme.example/api }

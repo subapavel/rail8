@@ -60,6 +60,19 @@ public final class Cli {
                   or ::1 unless $RAIL8_ADMIN_TLS=off; https:// trusts the system's certificates, or those of the PEM
                   file $RAIL8_ADMIN_CA only; bearer token: $RAIL8_TOKEN, else a shared token in $RAIL8_ADMIN_TOKEN;
                   never a value of the emergency key's form, rail8k_...)
+              config get connection|system <key> [--admin <url>]
+              config export <dir> [--kind connection|system] [--prefix <p>] [--admin <url>]
+              config import <dir> [--kind connection|system] [--prefix <p>] (--check | --expect <sha256> [--note <text>]) [--admin <url>]
+              config consent connection <key> --expect <etag> --digest <sha256> [--admin <url>]
+              config activate connection|system <key> --expect <etag> [--confirm <digest>] [--note <text>] [--admin <url>]
+              config stop|start <key> --expect <run> [--admin <url>]
+              config mocks allow|refuse --expect true|false [--confirm <digest>] [--admin <url>]
+                  the configuration of the node's environment at <url>/admin/config: read one connection or system; export
+                  what is in force into <dir>, one YAML file per object, no secret's value; import the .yaml files of <dir>
+                  in the scope as drafts, first as a dry run (--check) whose expect the write then gives, all or none, at
+                  most 1,000 files and 4 MiB a call; consent to a draft, activate it, stop or start a connection, or allow
+                  or refuse mocks, each given the state the node answered (url and bearer token as for deploy); prints the
+                  node's answer
               user add <name> [--role <role>] [--admin <url>]
                   ask the node at <url>/admin/users to create the person <name> with the role (none without --role) and
                   print the first password it answers, once; the person chooses a password of their own at the first login
@@ -110,7 +123,7 @@ public final class Cli {
      * Runs the command {@code args} names, on a virtual thread of its own (the node's deploy code blocks on Vert.x futures), and
      * returns its exit code; never exits the JVM.
      *
-     * @param env     the environment the command reads: deploy, user and bootstrap {@code RAIL8_ADMIN}, {@code RAIL8_TOKEN} (deploy),
+     * @param env     the environment the command reads: deploy, config, user and bootstrap {@code RAIL8_ADMIN}, {@code RAIL8_TOKEN} (deploy, config),
      *                {@code RAIL8_ADMIN_TOKEN},
      *                {@code RAIL8_ADMIN_TLS} and {@code RAIL8_ADMIN_CA}, validate and test {@code RAIL8_PLUGINS}; a module's command is
      *                given all of it
@@ -131,6 +144,7 @@ public final class Cli {
                     yield withPlugins(modules, options, env, plugins -> Validate.run(options, plugins, out));
                 }
                 case "deploy" -> Deploy.run(Deploy.arguments(args), env, out, err);
+                case "config" -> Config.run(args, env, out, err);
                 case "user" -> Users.user(args, env, out, err);
                 case "bootstrap" -> Bootstrap.run(Bootstrap.arguments(args), env, out, err);
                 case "key" -> Users.key(args, out);

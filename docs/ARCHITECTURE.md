@@ -1446,6 +1446,7 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `POST /admin/users/{name}/tokens`; `GET /admin/tokens?expiringWithin=…`, `POST /admin/tokens/{id}/revoke`, `POST /admin/tokens/ceiling` | a technical account's new token; every live token, those expiring soon, a revoke of any, the ceiling |
 | `GET /admin/config`, `POST /admin/config/-/mocks` | the configuration of the environment: its generation, whether it allows mocks, and what each live node holds; the switch of mocks (`docs/ENVIRONMENT-CONFIGURATION.md`) |
 | `GET /admin/config/connections`, `GET /admin/config/connections/{key}`, `POST …/{key}/-/save`, `/-/discard`, `/-/consent`, `/-/activate`, `/-/stop`, `/-/start`, `GET …/{key}/-/history` | the connections of the environment, each with its version in force, draft, consent, stop and history; the same routes under `/admin/config/systems` for the systems' instance names, without consent, stop and start |
+| `GET /admin/config/export?kind&prefix`, `POST /admin/config/import?check` | the export of what is in force as one YAML file an object, without secret values or state; the import of such files, a dry run with `check=true`, else their drafts written all or none given the dry run's `expect` (`docs/ENVIRONMENT-CONFIGURATION.md`) |
 
 The list of recent messages reads Postgres only. `from` and `to` are ISO-8601 instants at most 31 days
 apart; it lists the messages whose arrival started at `from` or later and before `to`, each with its id,

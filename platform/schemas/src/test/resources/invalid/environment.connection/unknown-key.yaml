@@ -1,0 +1,7 @@
+# expect: /revision
+schemaVersion: 1
+kind: environment.connection
+key: acme/erp/rest
+adapter: http
+values: { url: https://erp.acme.example/api }
+revision: 12

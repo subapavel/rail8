@@ -112,6 +112,11 @@ class StoredEnvironmentTest {
         @Override public void writeMocks(Actor actor, Change.Mocks change) { throw new UnsupportedOperationException(); }
         @Override public Overview overview() { throw new UnsupportedOperationException(); }
         @Override public Page<HistoryRow> history(Ref ref, OptionalLong after, int limit) { throw new UnsupportedOperationException(); }
+        @Override public Export export(Scope scope) { throw new UnsupportedOperationException(); }
+        @Override public Plan importCheck(Set<Ref.Kind> writes, Scope scope, List<File> files) { throw new UnsupportedOperationException(); }
+        @Override public Plan importWrite(Actor actor, Set<Ref.Kind> writes, Scope scope, List<File> files, String expect, Optional<String> note) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     static ConfigStore.InForce connection(Ref ref, long activation, JsonObject body, Optional<ConnectionState.Stop> stopped) {

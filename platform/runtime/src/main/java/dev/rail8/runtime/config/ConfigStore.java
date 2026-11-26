@@ -59,6 +59,98 @@ public interface ConfigStore {
     /** A page of the object's history, newest first: the rows before {@code after}, with the secret store's acts merged in. */
     Page<HistoryRow> history(Ref ref, OptionalLong after, int limit);
 
+    /** The most files an import takes in one call. */
+    int MAX_IMPORT_FILES = 1_000;
+
+    /**
+     * Every version in force in {@code scope} whose binding verifies, one file per object, sorted by kind and key: no draft, no
+     * state, no history, no consent and no secret's value. An object whose binding fails is left out and named.
+     */
+    Export export(Scope scope);
+
+    /**
+     * The dry run of an import of {@code files} over {@code scope} by a caller who may write the objects of the kinds
+     * {@code writes}: what each file changes, the blockers of a later activation, the notes, the objects of the scope no file
+     * names, the problems, and the {@code expect} its write states. It changes nothing.
+     *
+     * @throws ConfigRefusal 422 {@code problems}, or {@code format} when a file is of a kind or a format this node does not read,
+     *                       answering the dry run; 413 {@code too-large} beyond {@value #MAX_IMPORT_FILES} files
+     */
+    Plan importCheck(Set<Ref.Kind> writes, Scope scope, List<File> files);
+
+    /**
+     * The write of an import: under the locks of the objects its files name, the dry run again, then a draft of each object a
+     * file creates or changes, all in one transaction, with a history row {@code import} each and one audit row
+     * {@code config.import}. It never deletes, discards, activates or replaces a draft that differs from its file. Answers each
+     * object its file names with its {@code etag} and whether its file is the version in force.
+     *
+     * @throws ConfigRefusal 412 {@code changed} when the dry run differs from {@code expect}, answering the new dry run; 422 as
+     *                       {@link #importCheck}; 409 {@code config-full}; 422 {@code invalid} for a note over 200 characters
+     */
+    Plan importWrite(Actor actor, Set<Ref.Kind> writes, Scope scope, List<File> files, String expect, Optional<String> note);
+
+    /**
+     * What an export or an import covers: the objects of {@code kind}, or of every kind, whose key starts with {@code prefix},
+     * or every object.
+     */
+    record Scope(Optional<Ref.Kind> kind, Optional<String> prefix) {
+        public Scope {
+            Objects.requireNonNull(kind, "kind");
+            Objects.requireNonNull(prefix, "prefix");
+        }
+
+        /** Every object. */
+        public static Scope everything() {
+            return new Scope(Optional.empty(), Optional.empty());
+        }
+
+        /** Whether the scope covers {@code ref}. */
+        public boolean covers(Ref ref) {
+            return kind.map(k -> k == ref.kind()).orElse(true) && prefix.map(p -> ref.key().startsWith(p)).orElse(true);
+        }
+
+        /** The scope as a request states it: {@code {kind?, prefix?}}. */
+        public JsonObject json() {
+            JsonObject json = new JsonObject();
+            kind.ifPresent(k -> json.put("kind", k.id()));
+            prefix.ifPresent(p -> json.put("prefix", p));
+            return json;
+        }
+    }
+
+    /** A file of an export or an import: its path in the folder, such as {@code connection/acme/erp/rest.yaml}, and its text. */
+    record File(String path, String text) {
+        public File {
+            Objects.requireNonNull(path, "path");
+            Objects.requireNonNull(text, "text");
+        }
+    }
+
+    /** An export: its files, and the objects in force left out because their binding fails. */
+    record Export(List<File> files, List<Ref> refused) {
+        public Export {
+            files = List.copyOf(files);
+            refused = List.copyOf(refused);
+        }
+    }
+
+    /** A dry run or a write of an import, as JSON; immutable. */
+    record Plan(JsonObject json) {
+        public Plan {
+            json = json.copy();
+        }
+
+        @Override
+        public JsonObject json() {
+            return json.copy();
+        }
+
+        /** The {@code expect} the write states. */
+        public String expect() {
+            return json.getString("expect");
+        }
+    }
+
     /** An object as the screen shows it, as JSON; immutable. */
     record ObjectView(JsonObject json) {
         public ObjectView {

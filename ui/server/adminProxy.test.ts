@@ -8,7 +8,7 @@ import { join, relative } from 'node:path';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { adminProxy, CA_MAX_BYTES, forward, nodeOf, PROXY_BODY_MAX_BYTES, trustAdminCa } from './adminProxy';
+import { adminProxy, CA_MAX_BYTES, forward, IMPORT_BODY_MAX_BYTES, nodeOf, PROXY_BODY_MAX_BYTES, trustAdminCa } from './adminProxy';
 import { uiSession, type Mode } from './session';
 
 const origins = ['http://localhost:5173'];
@@ -361,6 +361,11 @@ describe('adminProxy', () => {
     expect(text.status).toBe(415);
     expect(JSON.parse(text.body)).toMatchObject({ code: 'unsupported-media-type', values: {} });
     expect(bodies).toHaveLength(3);
+    expect((await send(base, 'POST', '/admin/config/import?check=true', json, Buffer.alloc(IMPORT_BODY_MAX_BYTES, 0x20))).status).toBe(200);
+    const importTooLarge = await send(base, 'POST', '/admin/config/import', json, Buffer.alloc(IMPORT_BODY_MAX_BYTES + 1, 0x20));
+    expect(importTooLarge.status).toBe(413);
+    expect(JSON.parse(importTooLarge.body)).toMatchObject({ code: 'too-large', values: { max: IMPORT_BODY_MAX_BYTES } });
+    expect(bodies).toHaveLength(4);
   });
 
   it('passes Retry-After and WWW-Authenticate back', async () => {

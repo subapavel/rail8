@@ -91,6 +91,8 @@ public final class ConfigObjects implements ConfigStore {
     /** The rows a batch of binding again binds at most. */
     static final int BATCH = 100;
 
+    /** The files of export and import. */
+    private static final ConfigFiles FILES = ConfigFiles.STANDARD;
     private static final String REFERENCE = "secret://";
     private static final String ALLOWED_HOSTS = "allowedHosts";
     private static final Pattern SECRET_NAME = Pattern.compile("[a-z0-9][a-z0-9._-]{0,127}");
@@ -207,7 +209,9 @@ public final class ConfigObjects implements ConfigStore {
                 Optional<ConnectionState.Stop> stopped = r.stoppedAt == null ? Optional.empty()
                         : Optional.of(new ConnectionState.Stop(r.stoppedBy, r.stoppedAt));
                 if (holding == null || holding.activation() != r.activation || !holding.stopped().equals(stopped)) {
-                    changed.add(new InForce(r.ref, r.activation, r.format, r.body, stopped));
+                    boolean upgraded = r.body != null && !r.body.getBoolean("removed", false);
+                    changed.add(new InForce(r.ref, r.activation, upgraded ? FILES.newest(r.ref.kind()) : r.format,
+                            upgraded ? FILES.upgrade(r.ref.kind(), r.format, r.body) : r.body, stopped));
                 }
             }
             Set<Ref> gone = new HashSet<>(held.objects().keySet());
@@ -646,6 +650,358 @@ public final class ConfigObjects implements ConfigStore {
             tx.notifyGeneration(generation);
             return null;
         });
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------- export and import
+
+    @Override
+    public Export export(Scope scope) {
+        Objects.requireNonNull(scope, "scope");
+        Map<String, JsonObject> listed = listedSecrets();
+        return rows.read(tx -> {
+            List<File> files = new ArrayList<>();
+            List<Ref> refused = new ArrayList<>();
+            for (ConfigRows.ObjectRow r : inScope(tx, scope)) {
+                if (r.version == 0 || r.body == null) continue;
+                if (!verifies(r)) {
+                    refused.add(r.ref);
+                    continue;
+                }
+                JsonObject body = FILES.upgrade(r.ref.kind(), r.format, r.body);
+                Optional<Settings> form = form(r.ref, body);
+                files.add(new File(ConfigFiles.path(r.ref), FILES.text(r.ref, body, form, secretsBlock(form, body, listed))));
+            }
+            return new Export(files, refused);
+        });
+    }
+
+    @Override
+    public Plan importCheck(Set<Ref.Kind> writes, Scope scope, List<File> files) {
+        importAsked(writes, scope, files);
+        Map<String, JsonObject> listed = listedSecrets();
+        return rows.read(tx -> {
+            Planned planned = plan(tx, writes, scope, files, listed, false);
+            refuseProblems(planned);
+            return new Plan(planned.json());
+        });
+    }
+
+    @Override
+    public Plan importWrite(Actor actor, Set<Ref.Kind> writes, Scope scope, List<File> files, String expect, Optional<String> note) {
+        Objects.requireNonNull(actor, "actor");
+        importAsked(writes, scope, files);
+        requireExpect(expect);
+        Objects.requireNonNull(note, "note");
+        if (note.isPresent() && note.get().length() > MAX_NOTE) {
+            throw new ConfigRefusal(422, RefusalCode.INVALID, "a note holds at most " + MAX_NOTE + " characters",
+                    new JsonObject().put("field", "note").put("max", MAX_NOTE));
+        }
+        Map<String, JsonObject> listed = listedSecrets();
+        Instant now = now();
+        return rows.write(tx -> {
+            Planned planned = plan(tx, writes, scope, files, listed, true);
+            if (!planned.json().getString("expect").equals(expect)) {
+                throw new ConfigRefusal(412, RefusalCode.CHANGED, "the files or the objects they name changed since the dry run that gave"
+                        + " expect: this is the dry run as it is now", new JsonObject(), planned.json(), null);
+            }
+            refuseProblems(planned);
+            for (Ref.Kind kind : Ref.Kind.values()) {
+                long creates = planned.named().stream().filter(n -> n.ref.kind() == kind && n.row.isEmpty()).count();
+                long most = kind == Ref.Kind.CONNECTION ? limits.connections() : limits.systems();
+                if (creates > 0 && tx.count(kind) + creates > most) {
+                    throw new ConfigRefusal(409, RefusalCode.CONFIG_FULL, "the import would make the configuration hold more than " + most
+                            + " objects of kind " + kind.id() + ", the most it holds", new JsonObject().put("kind", kind.id()).put("most", most));
+                }
+            }
+            Set<Long> drawn = new HashSet<>();
+            JsonArray answered = new JsonArray();
+            JsonArray audited = new JsonArray();
+            for (Named n : planned.named()) {
+                ConfigRows.ObjectRow r = n.row.map(ConfigRows.ObjectRow::copy).orElse(null);
+                if (!n.change.equals("unchanged")) {
+                    if (r == null) {
+                        r = new ConfigRows.ObjectRow();
+                        r.ref = n.ref;
+                        r.incarnation = draw(tx, drawn);
+                    }
+                    JsonObject from = inForceBody(r);
+                    r.draftId = draw(tx, drawn);
+                    r.draftFormat = FORMAT;
+                    r.draft = n.body.copy();
+                    r.draftAt = now;
+                    r.draftBy = actor.who().name();
+                    r.revision++;
+                    tx.put(r);
+                    history(tx, r, actor, now, "import", diff(from, r.draft), note.orElse(null), null);
+                }
+                answered.add(values(n.ref).put("change", n.change).put("etag", r == null ? EMPTY_ETAG : etag(r)).put("inForce", n.inForce));
+                audited.add(values(n.ref).put("change", n.change).put("fields", n.fields.copy()));
+            }
+            JsonObject json = planned.json();
+            JsonObject detail = new JsonObject().put("scope", scope.json()).put("objects", audited).put("blockers", json.getJsonArray("blockers"));
+            note.ifPresent(text -> detail.put("note", text));
+            tx.audit(actor.who(), now, "config.import", "config/import", withRemote(actor, detail));
+            return new Plan(new JsonObject().put("objects", answered).put("blockers", json.getJsonArray("blockers"))
+                    .put("notes", json.getJsonArray("notes")).put("unnamed", json.getJsonArray("unnamed")));
+        });
+    }
+
+    /** One object an import's files name: the first file that names it, its row, and what the file does to it once checked. */
+    private static final class Named {
+        final Ref ref;
+        final String path;
+        /** The file's body in the newest format, unchecked; null when the file could not be read whole. */
+        final JsonObject file;
+        Optional<ConfigRows.ObjectRow> row = Optional.empty();
+        /** The body the file gives, checked as a save checks it; null when it is refused. */
+        JsonObject body;
+        String change;
+        boolean inForce;
+        JsonArray fields = new JsonArray();
+
+        Named(Ref ref, String path, JsonObject file) {
+            this.ref = ref;
+            this.path = path;
+            this.file = file;
+        }
+    }
+
+    /** A dry run: its answer and the objects its files name, by kind and key. */
+    private record Planned(JsonObject json, List<Named> named) { }
+
+    private static final Comparator<Ref> BY_KIND_AND_KEY = Comparator.comparing(Ref::kind).thenComparing(Ref::key);
+
+    private static void importAsked(Set<Ref.Kind> writes, Scope scope, List<File> files) {
+        Objects.requireNonNull(writes, "writes");
+        Objects.requireNonNull(scope, "scope");
+        Objects.requireNonNull(files, "files");
+        if (files.size() > MAX_IMPORT_FILES) {
+            throw new ConfigRefusal(413, RefusalCode.TOO_LARGE, "an import holds at most " + MAX_IMPORT_FILES + " files: import the folder by"
+                    + " kind or by prefix, each call all or none", new JsonObject().put("max", MAX_IMPORT_FILES));
+        }
+    }
+
+    /**
+     * The dry run of {@code files} over {@code scope} in {@code tx}. With {@code lock}, as the write computes it: {@code config_store}
+     * for update, then the named rows for update, by kind and key.
+     */
+    private Planned plan(ConfigRows.Tx tx, Set<Ref.Kind> writes, Scope scope, List<File> files, Map<String, JsonObject> listed, boolean lock) {
+        JsonArray problems = new JsonArray();
+        List<Map<String, Object>> digests = new ArrayList<>();
+        TreeMap<Ref, Named> named = new TreeMap<>(BY_KIND_AND_KEY);
+        for (File f : files) {
+            digests.add(Map.of("path", f.path(), "sha256", HEX.formatHex(sha256(f.text()))));
+            ConfigFiles.Read read = FILES.read(f.path(), f.text());
+            read.problems().forEach(problems::add);
+            if (read.ref().isEmpty()) continue;
+            Ref ref = read.ref().get();
+            if (!scope.covers(ref)) {
+                problems.add(problem(f.path(), ref, "outside-scope", ref + " is outside the import's scope " + scope.json().encode()));
+            }
+            if (!writes.contains(ref.kind())) {
+                problems.add(problem(f.path(), ref, "not-allowed", "the caller may not write objects of kind " + ref.kind().id())
+                        .put("action", "config.connections"));
+            }
+            Named first = named.get(ref);
+            if (first != null) {
+                problems.add(problem(f.path(), ref, "duplicate", "the file " + first.path + " names " + ref + " too"));
+                continue;
+            }
+            named.put(ref, new Named(ref, f.path(), read.body().orElse(null)));
+        }
+        ConfigRows.Head head = tx.head(lock);
+        for (Named n : named.values()) n.row = tx.row(n.ref, lock);
+        JsonArray objects = new JsonArray();
+        JsonArray blockers = new JsonArray();
+        JsonArray notes = new JsonArray();
+        List<Map<String, Object>> etags = new ArrayList<>();
+        for (Named n : named.values()) {
+            ConfigRows.ObjectRow r = n.row.orElse(null);
+            etags.add(Map.of("kind", n.ref.kind().id(), "key", n.ref.key(), "etag", r == null ? EMPTY_ETAG : etag(r)));
+            if (n.file == null) continue;
+            try {
+                n.body = n.ref.kind() == Ref.Kind.CONNECTION ? importedConnection(n, problems) : systemBody(n.file.getString("instanceName"));
+                if (n.body != null && n.ref.kind() == Ref.Kind.CONNECTION) adapterDiffers(tx, n.ref, n.body.getString("adapter"));
+            } catch (ConfigRefusal refused) {
+                problems.add(problem(n.path, n.ref, refused.code(), refused.getMessage()).mergeIn(refused.values().copy().put("path", n.path)));
+                n.body = null;
+            }
+            if (n.body == null) continue;
+            JsonObject mine = normal(n.ref, n.body);
+            JsonObject draft = r == null || r.draft == null ? null : normal(n.ref, stored(r.ref, r.draftFormat, r.draft));
+            JsonObject inForce = r == null || r.body == null ? null : normal(n.ref, stored(r.ref, r.format, r.body));
+            JsonObject base = draft != null ? draft : inForce;
+            n.change = base == null ? "created" : same(base, mine) ? "unchanged" : "changed";
+            n.inForce = inForce != null && same(inForce, mine);
+            for (Object d : diff(base == null ? new JsonObject() : base, mine)) n.fields.add(((JsonObject) d).getString("field"));
+            if (draft != null && !same(draft, mine)) {
+                problems.add(problem(n.path, n.ref, "draft-waits", n.ref + " has a draft saved by " + r.draftBy + " that differs from its file:"
+                        + " its author or a connection administrator discards it first").put("savedBy", r.draftBy));
+            }
+            objects.add(values(n.ref).put("change", n.change).put("fields", n.fields.copy()).put("inForce", n.inForce));
+            boolean deployed = n.ref.kind() == Ref.Kind.CONNECTION ? tx.deployedAdapter(n.ref.key()).isPresent() : tx.deployed(n.ref.key());
+            if (!deployed) notes.add(values(n.ref).put("code", "not-deployed").put("text", "no deployed system defines " + n.ref + " yet"));
+            boolean mocked = n.body.containsKey("mock");
+            if (mocked && !head.mocksAllowed()) {
+                notes.add(values(n.ref).put("code", "mocks-not-allowed").put("text", n.ref + " is mocked, and the environment does not allow mocks"));
+            }
+            if (n.ref.kind() == Ref.Kind.CONNECTION && !mocked) blockers(tx, n.ref, n.body, listed).forEach(blockers::add);
+        }
+        JsonArray unnamed = new JsonArray();
+        for (ConfigRows.ObjectRow r : inScope(tx, scope)) {
+            if ((r.body != null || r.draft != null) && !named.containsKey(r.ref)) unnamed.add(values(r.ref));
+        }
+        digests.sort(Comparator.comparing((Map<String, Object> d) -> (String) d.get("path")).thenComparing(d -> (String) d.get("sha256")));
+        String expect = HEX.formatHex(Jcs.sha256(Map.of("scope", scope.json(), "files", digests, "objects", etags)));
+        JsonObject json = new JsonObject().put("expect", expect).put("objects", objects).put("blockers", blockers).put("notes", notes)
+                .put("unnamed", unnamed).put("problems", problems);
+        return new Planned(json, List.copyOf(named.values()));
+    }
+
+    /**
+     * The body of a connection's file, checked as a save checks it; null, with a problem {@code unknown-field} for each, when its
+     * values set a field the adapter does not know.
+     */
+    private JsonObject importedConnection(Named n, JsonArray problems) {
+        String adapterName = n.file.getString("adapter");
+        JsonObject values = n.file.getJsonObject("values");
+        Optional<Adapter> adapter = adapters.apply(adapterName);
+        if (adapter.isPresent()) {
+            Settings form = adapter.get().forms().connection();
+            boolean unknown = false;
+            for (String field : new TreeSet<>(values.fieldNames())) {
+                if (field.equals(ALLOWED_HOSTS) || form.has(field)) continue;
+                problems.add(problem(n.path, n.ref, "unknown-field", "the adapter " + adapterName + " has no field " + field)
+                        .put("adapter", adapterName).put("field", field));
+                unknown = true;
+            }
+            if (unknown) return null;
+        }
+        Optional<Change.Mock> mock = n.file.getValue("mock") instanceof JsonObject m
+                ? Optional.of(new Change.Mock(m.getString("reply"), Optional.ofNullable(m.getString("delay")), Optional.ofNullable(m.getString("fail"))))
+                : Optional.empty();
+        return connectionBody(adapterName, values.getMap(), mock);
+    }
+
+    /**
+     * What would refuse a later activation of the connection {@code ref} with {@code body} without refusing its draft: each secret
+     * its secret fields name that the store does not hold ({@code not-set}), holds of a kind its field does not take
+     * ({@code kind}), or holds unreadable on this node ({@code unreadable}).
+     */
+    private List<JsonObject> blockers(ConfigRows.Tx tx, Ref ref, JsonObject body, Map<String, JsonObject> listed) {
+        Settings form = adapter(body.getString("adapter")).forms().connection();
+        Map<String, Set<Secret.Kind>> uses = secretUses(body);
+        Map<String, Secret.Kind> kinds = tx.kinds(uses.keySet());
+        List<JsonObject> blockers = new ArrayList<>();
+        JsonObject values = body.getJsonObject("values");
+        for (String field : form.secrets()) {
+            if (!(values.getValue(field) instanceof String s) || !s.startsWith(REFERENCE)) continue;
+            String name = s.substring(REFERENCE.length());
+            Secret.Kind kind = kinds.get(name);
+            JsonObject entry = listed.get(name);
+            String code = kind == null ? "not-set" : !form.kinds(field).contains(kind) ? "kind"
+                    : entry != null && entry.getBoolean("unreadable", false) ? "unreadable" : null;
+            if (code == null) continue;
+            blockers.add(values(ref).put("field", field).put("secret", name).put("code", code).put("text", switch (code) {
+                case "not-set" -> "the secret " + name + " is not set in this environment";
+                case "kind" -> "the secret " + name + " is of a kind the field " + field + " does not take";
+                default -> "the secret " + name + " does not open on this node";
+            }));
+        }
+        return blockers;
+    }
+
+    /** Refuses with 422 when the dry run has problems: {@code format} when a file is of a kind or a format this node does not read. */
+    private static void refuseProblems(Planned planned) {
+        JsonArray problems = planned.json().getJsonArray("problems");
+        if (problems.isEmpty()) return;
+        boolean format = problems.stream().anyMatch(p -> "format".equals(((JsonObject) p).getString("code")));
+        throw new ConfigRefusal(422, format ? RefusalCode.FORMAT : RefusalCode.PROBLEMS, "the import has " + problems.size()
+                + " problems, so nothing is written", new JsonObject().put("problems", problems.size()), planned.json(), null);
+    }
+
+    /** Every row of {@code scope}, by kind and key. */
+    private static List<ConfigRows.ObjectRow> inScope(ConfigRows.Tx tx, Scope scope) {
+        List<ConfigRows.ObjectRow> all = new ArrayList<>();
+        for (Ref.Kind kind : Ref.Kind.values()) {
+            if (scope.kind().isPresent() && scope.kind().get() != kind) continue;
+            String after = "";
+            while (true) {
+                List<ConfigRows.ObjectRow> page = tx.rows(kind, scope.prefix().orElse(""), after, MAX_PAGE);
+                all.addAll(page);
+                if (page.size() < MAX_PAGE) break;
+                after = page.getLast().ref.key();
+            }
+        }
+        return all;
+    }
+
+    /** The form of the connection {@code ref}'s adapter that {@code body} names, when the node knows it; none for a system. */
+    private Optional<Settings> form(Ref ref, JsonObject body) {
+        if (ref.kind() != Ref.Kind.CONNECTION) return Optional.empty();
+        return adapters.apply(body.getString("adapter")).map(a -> a.forms().connection());
+    }
+
+    /** {@code body} as an import compares it: a connection's values without those at their defaults. */
+    private JsonObject normal(Ref ref, JsonObject body) {
+        if (body.getBoolean("removed", false)) return body;
+        return form(ref, body).map(f -> ConfigFiles.withoutDefaults(body, f)).orElse(body);
+    }
+
+    /** A stored body of {@code format}, a draft's or one in force, in the newest format. */
+    private static JsonObject stored(Ref ref, int format, JsonObject body) {
+        return body.getBoolean("removed", false) ? body : FILES.upgrade(ref.kind(), format, body);
+    }
+
+    private static boolean same(JsonObject a, JsonObject b) {
+        return Jcs.write(a).equals(Jcs.write(b));
+    }
+
+    /**
+     * The block {@code secrets} of a file: each secret {@code body}'s secret fields name that the store holds, with its kind and,
+     * for a key pair, its algorithm, its leaf's subject and end, and the fingerprint of its public key; never a value.
+     */
+    private static JsonObject secretsBlock(Optional<Settings> form, JsonObject body, Map<String, JsonObject> listed) {
+        JsonObject block = new JsonObject();
+        if (form.isEmpty() || !(body.getValue("values") instanceof JsonObject values)) return block;
+        TreeMap<String, JsonObject> named = new TreeMap<>();
+        for (String field : form.get().secrets()) {
+            if (!(values.getValue(field) instanceof String s) || !s.startsWith(REFERENCE)) continue;
+            String name = s.substring(REFERENCE.length());
+            JsonObject entry = listed.get(name);
+            if (entry == null) continue;
+            JsonObject facts = new JsonObject().put("kind", entry.getString("kind"));
+            if (entry.getValue("keyPair") instanceof JsonObject pair) {
+                for (String fact : List.of("algorithm", "subject", "notAfter", "fingerprint")) {
+                    if (pair.getValue(fact) instanceof String text) facts.put(fact, text);
+                }
+            }
+            named.put(name, facts);
+        }
+        named.forEach(block::put);
+        return block;
+    }
+
+    /** The secret store's list, by name: each secret's kind, whether it opens on this node, and a key pair's public facts. */
+    private Map<String, JsonObject> listedSecrets() {
+        Map<String, JsonObject> listed = new HashMap<>();
+        for (Object o : secrets.list().await().getJsonArray("secrets")) {
+            JsonObject entry = (JsonObject) o;
+            listed.put(entry.getString("name"), entry);
+        }
+        return listed;
+    }
+
+    private static JsonObject problem(String path, Ref ref, String code, String text) {
+        return ConfigFiles.problem(path, code, text).put("kind", ref.kind().id()).put("key", ref.key());
+    }
+
+    private static byte[] sha256(String text) {
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256").digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException every) {
+            throw new IllegalStateException("every Java platform has SHA-256", every);
+        }
     }
 
     // ---------------------------------------------------------------------------------------------------------------- binding again
