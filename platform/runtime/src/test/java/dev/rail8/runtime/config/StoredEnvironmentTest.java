@@ -53,6 +53,7 @@ class StoredEnvironmentTest {
         boolean mocksAllowed;
         final Map<Ref, InForce> rows = new HashMap<>();
         Refused refused = Refused.none();
+        Map<Ref, String> refusedKeys = Map.of();
         volatile boolean away;
         volatile boolean reportFails;
         volatile CountDownLatch gate;
@@ -62,6 +63,11 @@ class StoredEnvironmentTest {
 
         synchronized void put(InForce f) {
             rows.put(f.ref(), f);
+            bump();
+        }
+
+        /** A new generation with nothing in force changed. */
+        synchronized void bump() {
             generation++;
             stamp++;
         }
@@ -81,7 +87,7 @@ class StoredEnvironmentTest {
             if (away) throw new IllegalStateException("the database is away");
             synchronized (this) {
                 if (held.generation() == generation && held.stamp() == stamp) {
-                    return new State(generation, stamp, mocksAllowed, List.of(), Set.of(), Refused.none());
+                    return new State(generation, stamp, mocksAllowed, List.of(), Set.of(), Refused.none(), Map.of());
                 }
                 List<InForce> changed = new ArrayList<>();
                 for (InForce f : rows.values()) {
@@ -90,7 +96,7 @@ class StoredEnvironmentTest {
                 }
                 Set<Ref> gone = new HashSet<>(held.objects().keySet());
                 gone.removeAll(rows.keySet());
-                return new State(generation, stamp, mocksAllowed, changed, gone, refused);
+                return new State(generation, stamp, mocksAllowed, changed, gone, refused, refusedKeys);
             }
         }
 
@@ -166,6 +172,7 @@ class StoredEnvironmentTest {
     void aBodyThatDoesNotVerifyOrOfAFormatThisNodeDoesNotReadIsLeftOutAndTheNodeIsDegradedWhileOneDoesNotVerify() {
         store.put(new ConfigStore.InForce(API, 11, ConfigObjects.FORMAT + 1, web("https://acme.example"), Optional.empty()));
         store.refused = new ConfigStore.Refused(List.of(Ref.connection("acme/forged")), 1);
+        store.refusedKeys = Map.of(Ref.connection("acme/forged"), "00112233aabbccdd");
         env.start();
 
         assertEquals(Map.of(Ref.connection("acme/forged"), "its binding does not verify: save and activate it again",
@@ -173,6 +180,10 @@ class StoredEnvironmentTest {
         assertEquals(2, env.current().leftOutCount());
         assertEquals(Health.Status.DEGRADED, env.health().status());
         assertTrue(env.health().detail().contains("do not verify"), env.health().detail());
+        store.bump();
+        tick();
+        assertEquals(1, warnings.stream().filter(w -> w.contains("connection acme/forged") && w.contains("00112233aabbccdd")).count(),
+                "a WARNING names the key and the key's id once, over two reads that refuse it: " + warnings);
     }
 
     @Test
@@ -202,7 +213,7 @@ class StoredEnvironmentTest {
 
         assertEquals(List.of(1L, 3L), told, "one snapshot may cover several activations");
         assertEquals(14, env.current().connection("acme/api").orElseThrow().version());
-        assertEquals(2, store.reports.size(), "a report each time what the node holds changes");
+        assertEquals(4, store.reports.size(), "a report after each read, the ones that found nothing new included");
     }
 
     @Test
@@ -221,6 +232,23 @@ class StoredEnvironmentTest {
         await(third);
 
         assertEquals(before + 2, store.reads.get(), "the read that ran, and one more for the notices during it");
+    }
+
+    @Test
+    void aNoticeDuringTheStartsReadMakesOneMoreReadAndLaterNoticesRead() throws Exception {
+        store.entered = new CountDownLatch(1);
+        store.gate = new CountDownLatch(1);
+        Thread starting = Thread.ofVirtual().start(env::start);
+        assertTrue(store.entered.await(20, TimeUnit.SECONDS));
+        Future<Void> during = env.notice();
+        store.gate.countDown();
+        starting.join();
+        await(during);
+        assertEquals(2, store.reads.get(), "the start's read, and one more for the notice during it");
+
+        store.put(connection(API, 11, web("https://acme.example"), Optional.empty()));
+        await(env.notice());
+        assertEquals(11, env.current().connection("acme/api").orElseThrow().version(), "a later notice reads again");
     }
 
     @Test
@@ -280,7 +308,7 @@ class StoredEnvironmentTest {
         tick();
         assertEquals(1, store.reports.size(), "the next tick writes it");
         tick();
-        assertEquals(1, store.reports.size(), "and no more while nothing changes");
+        assertEquals(2, store.reports.size(), "and every read writes it again, so the row says when the node last read the store");
     }
 
     @Test

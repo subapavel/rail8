@@ -1564,7 +1564,7 @@ public final class AdminServer {
             JsonObject o = object(c, MOCKS_SHAPE, Set.of("expect", "allowed"), Set.of("confirm"));
             config.store().writeMocks(configActor(c, who, Action.CONFIG_CONNECTIONS), new Change.Mocks(flag(o, "expect", MOCKS_SHAPE),
                     flag(o, "allowed", MOCKS_SHAPE), optionalText(o, "confirm", MOCKS_SHAPE)));
-            config.reread().get().await();
+            config.reread().get().otherwiseEmpty().await();   // a read that failed leaves the answer's nodes saying so
             return Json.of(200, environment(config.store().overview()));
         });
         for (Ref.Kind kind : Ref.Kind.values()) {
@@ -1623,7 +1623,7 @@ public final class AdminServer {
         Ref ref = configRef(ctx, kind);
         Change asked = change.get();
         config.store().write(configActor(ctx, who, action), ref, asked);
-        config.reread().get().await();
+        config.reread().get().otherwiseEmpty().await();   // a read that failed leaves the answer's nodes saying so
         return Json.of(200, shown(config, config.store().read(ref)));
     }
 
