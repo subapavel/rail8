@@ -46,7 +46,7 @@ class TestCommandCallsTest {
                 "PASS order: the chain (flow time 50ms)",
                 "PASS order: archive down (flow time 2400ms)",
                 "PASS order: check mocked (flow time 50ms)",
-                "3 cases: 3 passed, 0 failed"), ran.outLines(), ran.toString());
+                "4 cases: 4 passed, 0 failed"), ran.outLines(), ran.toString());
         assertEquals(0, ran.exit(), ran.toString());
     }
 
