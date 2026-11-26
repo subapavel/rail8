@@ -172,6 +172,39 @@ class DeployCommandIT {
         }
     }
 
+    /**
+     * The quickstart's environment put in force on the node at {@code url} as {@code deploy/quickstart/configure} puts it, with
+     * the credentials of {@code env}: the dry run of the import of {@code deploy/quickstart/config}, the import with its expect,
+     * and the activation of each object not in force. The demo's flows of schemaVersion 2 deploy only where their connections
+     * are set and their systems have instance names.
+     */
+    static void configured(Map<String, String> env, String url) {
+        String folder = CliRuns.REPO.resolve("deploy/quickstart/config").toString();
+        Ran check = run(env, "config", "import", folder, "--check", "--admin", url);
+        assertEquals(0, check.exit(), "fixture: the dry run of the quickstart's environment: " + check);
+        Ran imported = run(env, "config", "import", folder, "--expect", new JsonObject(check.out().trim()).getString("expect"), "--admin", url);
+        assertEquals(0, imported.exit(), "fixture: the import of the quickstart's environment: " + imported);
+        for (Object each : new JsonObject(imported.out().trim()).getJsonArray("objects")) {
+            JsonObject object = (JsonObject) each;
+            if (object.getBoolean("inForce")) continue;
+            Ran activated = run(env, "config", "activate", object.getString("kind"), object.getString("key"), "--expect", object.getString("etag"), "--admin", url);
+            assertEquals(0, activated.exit(), "fixture: the activation of " + object.getString("kind") + " " + object.getString("key") + ": " + activated);
+        }
+    }
+
+    /**
+     * The quickstart's environment put in force on the node of the shared token, which holds no role of the configuration: through
+     * it, {@code rail8 bootstrap} makes an administrator and an account with the roles connection-administrator and
+     * secret-administrator, whose token puts it in force ({@link #configured(Map, String)}).
+     */
+    void configured() throws Exception {
+        Path tokenFile = work.resolve("configure.token");
+        Ran made = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN, "RAIL8_ADMIN", adminUrl()), "bootstrap", "--admin", "owner", "--deploy-account", "configure",
+                "--token-file", tokenFile.toString(), "--role", "connection-administrator", "--role", "secret-administrator");
+        assertEquals(0, made.exit(), "fixture: the account that configures: " + made);
+        configured(Map.of("RAIL8_TOKEN", Files.readString(tokenFile)), adminUrl());
+    }
+
     /** {@code dir} copied into the repository {@code name} under {@link #repos} and committed; answers the commit's id. */
     String committed(Path dir, String name) throws Exception {
         return DepsFixture.commit(CliRuns.copy(dir, repos.resolve(name)));
@@ -194,6 +227,7 @@ class DeployCommandIT {
     @Test
     void theDemosCommitDeploysWith200AndExits0() throws Exception {
         String commit = committed(DEMO, "demo");
+        configured();
 
         Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "demo", commit, "--expect", "none", "--admin", adminUrl());
 
@@ -213,6 +247,7 @@ class DeployCommandIT {
     @Test
     void aCheckOfHeadDeploysNothingAndExits0() throws Exception {
         committed(DEMO, "demo");
+        configured();
 
         Ran ran = run(Map.of("RAIL8_ADMIN_TOKEN", TOKEN), "deploy", "demo", "HEAD", "--check", "--admin", adminUrl());
 
@@ -252,6 +287,7 @@ class DeployCommandIT {
     void aPipelineReadsTheStateAndSendsItWithTheDeploy() throws Exception {
         String first = committed(DEMO, "demo");
         Map<String, String> env = Map.of("RAIL8_ADMIN_TOKEN", TOKEN);
+        configured();
 
         Ran empty = run(env, "deploy", "demo", first, "--check", "--admin", adminUrl());
         assertEquals("none", new JsonObject(empty.out().trim()).getString("replaces"), empty.toString());
@@ -281,7 +317,8 @@ class DeployCommandIT {
             Path tokenFile = work.resolve("deploy.token");
 
             Ran bootstrap = run(Map.of("RAIL8_ADMIN_TOKEN", key, "RAIL8_ADMIN", url),
-                    "bootstrap", "--admin", "alice", "--deploy-account", "ci-deploy", "--token-file", tokenFile.toString());
+                    "bootstrap", "--admin", "alice", "--deploy-account", "ci-deploy", "--token-file", tokenFile.toString(),
+                    "--role", "connection-administrator", "--role", "secret-administrator");
 
             assertEquals(0, bootstrap.exit(), bootstrap.toString());
             String password = bootstrap.out().strip();
@@ -289,6 +326,7 @@ class DeployCommandIT {
             assertTrue(token.startsWith("rail8t_"), "a named token in the file");
             Ran keyOnly = run(Map.of("RAIL8_ADMIN_TOKEN", key), "deploy", "demo", commit, "--expect", "none", "--admin", url);
             assertEquals(2, keyOnly.exit(), "the key alone deploys nothing: " + keyOnly);
+            configured(Map.of("RAIL8_TOKEN", token, "RAIL8_ADMIN_TOKEN", key), url);   // the deploy account's two roles put the environment in force
             Ran deploy = run(Map.of("RAIL8_TOKEN", token, "RAIL8_ADMIN_TOKEN", key), "deploy", "demo", commit, "--expect", "none", "--admin", url);
             assertEquals(0, deploy.exit(), "the deploy account's token deploys: " + deploy);
             try (HttpClient client = HttpClient.newHttpClient()) {
