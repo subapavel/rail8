@@ -1,24 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:rail8:schema:flow:1",
-  "title": "Rail8 flow file, schemaVersion 1 (draft — review at hand-over, P0-12)",
-  "description": "One flow: where messages come from, how they are delivered and recorded, the finite limits every flow has, and the ordered steps. Component- and step-specific keys are passed through to the component's or step's own configSchema at deploy time.",
+  "title": "Rail8 flow file, schemaVersion 1 or 2 (draft)",
+  "description": "One flow: where messages come from, how they are delivered and recorded, the finite limits every flow has, and the ordered steps. A flow of schemaVersion 1 names endpoint files; one of schemaVersion 2 names an adapter, a connection of a system by its key, and the settings in the flow. Component- and step-specific keys are passed through to the component's or step's own configSchema at deploy time.",
   "type": "object",
   "required": ["schemaVersion", "kind", "id", "version", "from", "delivery", "limits", "steps"],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "enum": [1, 2], "description": "1: the sender and the send steps name endpoint files; 2: they name an adapter, a connection of a system and the settings in the flow." },
     "kind": { "const": "flow" },
     "id": { "$ref": "#/$defs/slug", "description": "Flow id, unique in its package; the identity is tenant / package / flow:id @ version." },
     "version": { "$ref": "#/$defs/semver" },
     "description": { "type": "string" },
-    "from": {
-      "type": "object",
-      "description": "The consumer endpoint this flow listens on, plus the component's own options.",
-      "required": ["endpoint"],
-      "properties": { "endpoint": { "$ref": "#/$defs/slug" } },
-      "additionalProperties": true
-    },
+    "from": { "description": "The sender: an endpoint file in schemaVersion 1, an adapter with its connection and settings in schemaVersion 2." },
     "delivery": {
       "type": "object",
       "required": ["mode"],
@@ -86,7 +80,64 @@
       }
     }
   },
+  "allOf": [
+    { "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "const": 2 } } },
+      "then": { "properties": { "from": { "$ref": "#/$defs/sender" }, "steps": { "items": { "$ref": "#/$defs/sendStep" } },
+                                "processes": { "additionalProperties": { "properties": { "steps": { "items": { "$ref": "#/$defs/sendStep" } } } } } } },
+      "else": { "properties": { "from": { "$ref": "#/$defs/endpointSender" }, "steps": { "items": { "$ref": "#/$defs/endpointStep" } },
+                                "processes": { "additionalProperties": { "properties": { "steps": { "items": { "$ref": "#/$defs/endpointStep" } } } } } } } }
+  ],
   "$defs": {
+    "endpointSender": {
+      "type": "object",
+      "description": "schemaVersion 1: the consumer endpoint this flow listens on, plus the component's own options.",
+      "required": ["endpoint"],
+      "properties": { "endpoint": { "$ref": "#/$defs/slug" } },
+      "additionalProperties": true
+    },
+    "sender": {
+      "type": "object",
+      "description": "schemaVersion 2: the adapter, the connection of the system Rail8 fetches from when the adapter connects to receive (a polling sender), and the settings in the flow.",
+      "required": ["adapter"],
+      "additionalProperties": false,
+      "properties": {
+        "adapter": { "$ref": "#/$defs/adapter" },
+        "connection": { "$ref": "#/$defs/connectionKey" },
+        "settings": { "$ref": "#/$defs/settings" },
+        "senders": { "not": {}, "description": "Who may send: reserved for the design of the entry, refused until it ships." }
+      }
+    },
+    "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9+.-]{0,31}$", "description": "The adapter's type, the scheme it serves: http, sftp, direct." },
+    "connectionKey": { "type": "string", "pattern": "^(?!(rail8|subscribers|by-agreement)/)[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63}){1,2}$", "description": "A connection of a system: <system>/<connection>, or <partner>/<system>/<connection>." },
+    "settings": {
+      "type": "object", "maxProperties": 128,
+      "propertyNames": { "pattern": "^[a-z][a-zA-Z0-9]{0,63}$" },
+      "additionalProperties": { "type": ["string", "integer", "boolean"] },
+      "description": "The settings in the flow, checked against the adapter's flow form for the direction; every value is literal."
+    },
+    "endpointStep": {
+      "$ref": "#/$defs/step",
+      "if": { "properties": { "type": { "const": "to" } } },
+      "then": { "anyOf": [ { "required": ["endpoint"], "properties": { "endpoint": { "$ref": "#/$defs/slug" } } },
+                           { "required": ["byProp", "endpoints"], "properties": { "byProp": { "$ref": "#/$defs/keyName" }, "endpoints": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/slug" } } } } ] }
+    },
+    "sendStep": {
+      "$ref": "#/$defs/step",
+      "if": { "properties": { "type": { "const": "to" } } },
+      "then": {
+        "required": ["adapter"],
+        "propertyNames": { "enum": ["type", "name", "retryable", "recording", "adapter", "connection", "agreement", "by", "connections", "settings", "maxReplyBytes"] },
+        "properties": {
+          "adapter": { "$ref": "#/$defs/adapter" },
+          "connection": { "$ref": "#/$defs/connectionKey" },
+          "agreement": { "not": {}, "description": "Reserved: a receiver by agreement, designed with partner communication; refused." },
+          "by": { "type": "string", "maxLength": 1024, "description": "A computed receiver: not supported yet, refused when the flow loads." },
+          "connections": { "type": "object", "description": "The choices of a computed receiver: not supported yet, refused when the flow loads." },
+          "settings": { "$ref": "#/$defs/settings" },
+          "maxReplyBytes": { "type": "integer", "minimum": 1, "description": "The largest reply taken; the flow's limits.maxBodyBytes when absent." }
+        }
+      }
+    },
     "slug": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "maxLength": 64 },
     "semver": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
     "duration": { "type": "string", "pattern": "^\\d+(ms|s|m|h)$" },
@@ -116,9 +167,6 @@
           "then": { "required": ["prop", "routes"],
                     "properties": { "prop": { "$ref": "#/$defs/keyName" }, "otherwise": { "type": "string" },
                                     "routes": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["when", "set"], "properties": { "when": { "type": "string" }, "set": { "type": "string" } } } } } } },
-        { "if": { "properties": { "type": { "const": "to" } } },
-          "then": { "anyOf": [ { "required": ["endpoint"], "properties": { "endpoint": { "$ref": "#/$defs/slug" } } },
-                               { "required": ["byProp", "endpoints"], "properties": { "byProp": { "$ref": "#/$defs/keyName" }, "endpoints": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/slug" } } } } ] } },
         { "if": { "properties": { "type": { "const": "extractKey" } } }, "then": { "required": ["key", "xpath"], "properties": { "key": { "$ref": "#/$defs/keyName" }, "xpath": { "type": "string" } } } },
         { "if": { "properties": { "type": { "const": "validate" } } }, "then": { "required": ["required"], "properties": { "required": { "type": "string" } } } },
         { "if": { "properties": { "type": { "const": "xsd" } } }, "then": { "required": ["schema"], "properties": { "schema": { "type": "string", "minLength": 1, "description": "Path of the XSD file from the package root (D-078); an include or import inside it is relative to the including file. Stays inside the package." } } } },

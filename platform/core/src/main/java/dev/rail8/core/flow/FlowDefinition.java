@@ -2,6 +2,8 @@ package dev.rail8.core.flow;
 
 import dev.rail8.api.Envelope;
 import dev.rail8.api.StepConfig;
+import dev.rail8.api.settings.Direction;
+import dev.rail8.core.key.Keys;
 import dev.rail8.core.record.Recorder;
 import dev.rail8.core.record.RecordingPolicy;
 
@@ -13,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 /**
@@ -38,12 +41,20 @@ import java.util.Set;
  * deep, and a flow runs at most {@link #MAX_STEPS} steps. The key of an {@code extractKey}, the prop of a {@code route}, the
  * {@code byProp} of a {@code to} and {@code partitionBy} may not start with {@link Envelope#RESERVED_PREFIX}, the platform's own.
  *
+ * <p>A flow of {@code schemaVersion: 1} names endpoint files: {@code fromEndpoint} is its {@code from.endpoint}, and a
+ * {@code to} names {@code endpoint}, or {@code byProp} and {@code endpoints}. One of {@code schemaVersion: 2} names systems'
+ * connections: its {@code sender} is present ({@link AdapterUse}), {@code fromEndpoint} is {@code <id>/from}, a name no endpoint
+ * file has, and each {@code to} names its {@code adapter}, its {@code connection} by key when the adapter connects, its
+ * {@code settings} and its {@code maxReplyBytes} ({@link #sends()}). Every setting is literal: a value that holds {@code ${} is
+ * refused, and so are {@code by} and {@code connections}, a computed receiver not supported yet, the reserved {@code agreement},
+ * and {@code endpoint}, {@code byProp} and {@code endpoints}, which belong to the other shape.
+ *
  * @since 0.1
  */
 public record FlowDefinition(String id, String version, String fromEndpoint, String deliveryMode, Duration saveTimeout, Duration timeout,
                              long maxBodyBytes, Optional<Long> maxInFlight, Optional<Long> maxInFlightBytes, Optional<String> partitionBy,
                              List<String> forwardHeaders, RetryPolicy retry, Optional<RetryPolicy> retries, RecordingPolicy recording,
-                             List<StepConfig> steps) {
+                             List<StepConfig> steps, Optional<AdapterUse> sender) {
 
     /** Keys of a step entry that are the step's shape, not its configuration. */
     private static final Set<String> STRUCTURAL = Set.of("type", "name", "retryable");
@@ -114,6 +125,16 @@ public record FlowDefinition(String id, String version, String fromEndpoint, Str
         forwardHeaders = List.copyOf(forwardHeaders);
         steps = List.copyOf(steps);
         if (steps.isEmpty()) throw new IllegalArgumentException("steps must name at least one step");
+        Objects.requireNonNull(sender, "sender");
+    }
+
+    /** A definition of {@code schemaVersion: 1}: its sender and its send steps name endpoint files. */
+    public FlowDefinition(String id, String version, String fromEndpoint, String deliveryMode, Duration saveTimeout, Duration timeout,
+                          long maxBodyBytes, Optional<Long> maxInFlight, Optional<Long> maxInFlightBytes, Optional<String> partitionBy,
+                          List<String> forwardHeaders, RetryPolicy retry, Optional<RetryPolicy> retries, RecordingPolicy recording,
+                          List<StepConfig> steps) {
+        this(id, version, fromEndpoint, deliveryMode, saveTimeout, timeout, maxBodyBytes, maxInFlight, maxInFlightBytes, partitionBy,
+                forwardHeaders, retry, retries, recording, steps, Optional.empty());
     }
 
     /** A definition whose messages have the {@link #DEFAULT_TIMEOUT} per run and that schedules no retries of its own. */
@@ -121,7 +142,7 @@ public record FlowDefinition(String id, String version, String fromEndpoint, Str
                           Optional<Long> maxInFlight, Optional<Long> maxInFlightBytes, Optional<String> partitionBy,
                           List<String> forwardHeaders, RetryPolicy retry, RecordingPolicy recording, List<StepConfig> steps) {
         this(id, version, fromEndpoint, deliveryMode, saveTimeout, DEFAULT_TIMEOUT, maxBodyBytes, maxInFlight, maxInFlightBytes, partitionBy,
-                forwardHeaders, retry, Optional.empty(), recording, steps);
+                forwardHeaders, retry, Optional.empty(), recording, steps, Optional.empty());
     }
 
     /** Builds the definition from the parsed flow document. */
@@ -131,14 +152,124 @@ public record FlowDefinition(String id, String version, String fromEndpoint, Str
         Map<String, Object> from = section(doc, "from");
         Map<String, Object> delivery = section(doc, "delivery");
         Map<String, Object> limits = section(doc, "limits");
+        Object version = doc.get("schemaVersion");
+        boolean named = version instanceof Number n && n.intValue() == 2;
+        if (version != null && !named && !(version instanceof Number n && n.intValue() == 1)) {
+            throw new IllegalArgumentException("schemaVersion must be 1 or 2, was " + version);
+        }
+        String id = string(doc, "id");
+        List<StepConfig> steps = steps(doc.get("steps"), doc.get("processes"));
+        if (named) steps.forEach(FlowDefinition::sendStep);
         return new FlowDefinition(
-                string(doc, "id"), string(doc, "version"), string(from, "from.endpoint", "endpoint"), string(delivery, "delivery.mode", "mode"),
+                id, string(doc, "version"), named ? id + "/" + AdapterUse.SENDER : string(from, "from.endpoint", "endpoint"), string(delivery, "delivery.mode", "mode"),
                 delivery.get("saveTimeout") == null ? DEFAULT_SAVE_TIMEOUT : duration(delivery, "delivery.saveTimeout", "saveTimeout"),
                 delivery.get("timeout") == null ? DEFAULT_TIMEOUT : duration(delivery, "delivery.timeout", "timeout"),
                 number(limits, "limits.maxBodyBytes", "maxBodyBytes").orElseThrow(() -> new IllegalArgumentException("limits.maxBodyBytes is required")),
                 number(limits, "limits.maxInFlight", "maxInFlight"), number(limits, "limits.maxInFlightBytes", "maxInFlightBytes"),
                 Optional.ofNullable(doc.get("partitionBy")).map(Object::toString).map(p -> notReserved("partitionBy", p)),
-                strings(doc.get("forwardHeaders")), retry(doc.get("retry")), retries(delivery.get("retries")), RecordingPolicy.from(doc.get("recording"), RecordingPolicy.DEFAULT), steps(doc.get("steps"), doc.get("processes")));
+                strings(doc.get("forwardHeaders")), retry(doc.get("retry")), retries(delivery.get("retries")), RecordingPolicy.from(doc.get("recording"), RecordingPolicy.DEFAULT), steps,
+                named ? Optional.of(sender(from)) : Optional.empty());
+    }
+
+    /** The keys a sender of {@code schemaVersion: 2} takes. */
+    private static final Set<String> SENDER_KEYS = Set.of("adapter", "connection", "settings", "senders");
+    /** The keys a send step of {@code schemaVersion: 2} takes beside the structural ones and its {@code recording}. */
+    private static final Set<String> SEND_KEYS = Set.of("adapter", "connection", "agreement", "by", "connections", "settings", "maxReplyBytes", "recording");
+    /** The keys of a send step that belong to a flow of {@code schemaVersion: 1}. */
+    private static final List<String> ENDPOINT_KEYS = List.of("endpoint", "byProp", "endpoints");
+
+    /** The sender {@code from} of a flow of {@code schemaVersion: 2}. */
+    private static AdapterUse sender(Map<String, Object> from) {
+        for (String key : from.keySet()) {
+            if ("endpoint".equals(key)) throw new IllegalArgumentException("from.endpoint: a flow of schemaVersion 2 names its sender's adapter and connection, not an endpoint");
+            if ("senders".equals(key)) throw new IllegalArgumentException("from.senders: who may send to a flow is not supported yet; remove it");
+            if (!SENDER_KEYS.contains(key)) throw new IllegalArgumentException("from." + key + ": a sender takes adapter, connection and settings");
+        }
+        return new AdapterUse(AdapterUse.SENDER, string(from, "from.adapter", "adapter"), connection(from, "from.connection"), Direction.IN,
+                settings(from, "from"), OptionalLong.empty());
+    }
+
+    /** {@code step}, a step of a flow of {@code schemaVersion: 2}, when it is no {@code to} or one this shape takes; else refused. */
+    private static void sendStep(StepConfig step) {
+        if (!"to".equals(step.type())) return;
+        Map<String, Object> config = step.config();
+        String at = "step '" + step.name() + "'";
+        for (String key : ENDPOINT_KEYS) {
+            if (config.containsKey(key)) {
+                throw new IllegalArgumentException(at + " " + key + ": a flow of schemaVersion 2 names its receiver's adapter and connection, not an endpoint");
+            }
+        }
+        if (config.containsKey("by") || config.containsKey("connections")) {
+            throw new IllegalArgumentException(at + ": a computed receiver (by, connections) is not supported yet; name the connection");
+        }
+        if (config.containsKey("agreement")) throw new IllegalArgumentException(at + " agreement: a receiver by agreement is reserved, not supported");
+        for (String key : config.keySet()) {
+            if (!SEND_KEYS.contains(key)) throw new IllegalArgumentException(at + " " + key + ": a send step takes adapter, connection, settings and maxReplyBytes");
+        }
+        string(config, at + " adapter", "adapter");
+        connection(config, at + " connection");
+        settings(config, at);
+        maxReply(config, at);
+    }
+
+    /** The connection key at {@code key} {@code connection} of {@code m}, read through {@link Keys#connection}; empty when absent. */
+    private static Optional<String> connection(Map<?, ?> m, String path) {
+        Object key = m.get("connection");
+        if (key == null) return Optional.empty();
+        if (!(key instanceof String s)) throw new IllegalArgumentException(path + " must be a connection key, was " + key);
+        try {
+            return Optional.of(Keys.connection(s));
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalArgumentException(path + ": " + refused.getMessage(), refused);
+        }
+    }
+
+    /** The {@code settings} of {@code m}, each value literal: a string, a whole number or a boolean, never holding {@code ${}. */
+    private static Map<String, Object> settings(Map<?, ?> m, String at) {
+        Object node = m.get("settings");
+        if (node == null) return Map.of();
+        if (!(node instanceof Map<?, ?> settings)) throw new IllegalArgumentException(at + " settings must be an object");
+        Map<String, Object> copy = new LinkedHashMap<>();
+        settings.forEach((key, value) -> {
+            String where = at + " settings." + key;
+            if (value instanceof String s && s.contains("${")) throw new IllegalArgumentException(where + ": '${' is not supported yet: every setting is literal");
+            if (!(value instanceof String || value instanceof Boolean || value instanceof Number n && !(n instanceof Double || n instanceof Float))) {
+                throw new IllegalArgumentException(where + " must be a string, a whole number or a boolean, was " + value);
+            }
+            copy.put(String.valueOf(key), value);
+        });
+        return copy;
+    }
+
+    /** A send step's {@code maxReplyBytes}: positive when present. */
+    private static OptionalLong maxReply(Map<?, ?> m, String at) {
+        Optional<Long> reply = number(m, at + " maxReplyBytes", "maxReplyBytes");
+        if (reply.isPresent() && reply.get() < 1) throw new IllegalArgumentException(at + " maxReplyBytes must be at least 1, was " + reply.get());
+        return reply.map(OptionalLong::of).orElse(OptionalLong.empty());
+    }
+
+    /**
+     * The send steps of a flow of {@code schemaVersion: 2}, in run order, a process's under each of its calls; empty for one of
+     * {@code schemaVersion: 1}.
+     */
+    public List<AdapterUse> sends() {
+        if (sender.isEmpty()) return List.of();
+        List<AdapterUse> sends = new ArrayList<>();
+        for (StepConfig step : steps) {
+            if (!"to".equals(step.type())) continue;
+            String at = "step '" + step.name() + "'";
+            sends.add(new AdapterUse(step.name(), string(step.config(), at + " adapter", "adapter"), connection(step.config(), at + " connection"),
+                    Direction.OUT, settings(step.config(), at), maxReply(step.config(), at)));
+        }
+        return List.copyOf(sends);
+    }
+
+    /** The sender and the send steps of a flow of {@code schemaVersion: 2}; empty for one of {@code schemaVersion: 1}. */
+    public List<AdapterUse> uses() {
+        List<AdapterUse> uses = new ArrayList<>();
+        sender.ifPresent(uses::add);
+        uses.addAll(sends());
+        return List.copyOf(uses);
     }
 
     /** Endpoints the steps send to, in order, each once: {@code to.endpoint} and the values of {@code to.endpoints}. The {@code from} endpoint is a consumer and not listed. */

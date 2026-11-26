@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:rail8:schema:system:1",
+  "title": "Rail8 system file, schemaVersion 1 (draft)",
+  "description": "One system: an application Rail8 sends to or receives from, defined once in an installation by one deployed package. Its key is its name, or its partner and name; each connection is how Rail8 reaches it with one adapter, keyed <system key>/<connection>. Nothing of where it is or how to log in is here: the environment holds a connection's values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "name"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "system" },
+    "partner": { "$ref": "#/$defs/first", "description": "The partner the system belongs to; absent for a system without one." },
+    "name": { "$ref": "#/$defs/segment" },
+    "description": { "type": "string", "maxLength": 1000 },
+    "connections": {
+      "type": "object", "maxProperties": 64,
+      "propertyNames": { "$ref": "#/$defs/segment" },
+      "additionalProperties": {
+        "type": "object", "required": ["adapter"], "additionalProperties": false,
+        "properties": {
+          "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9+.-]{0,31}$" },
+          "description": { "type": "string", "maxLength": 1000 }
+        }
+      }
+    }
+  },
+  "if": { "not": { "required": ["partner"] } },
+  "then": { "properties": { "name": { "$ref": "#/$defs/first" } } },
+  "$defs": {
+    "segment": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+    "first": { "$ref": "#/$defs/segment", "not": { "enum": ["rail8", "subscribers", "by-agreement"] } }
+  }
+}
