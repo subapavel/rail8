@@ -1,20 +1,21 @@
-# sftp-invoice (at-least-once): the sftp mock feeds the files under fixtures/inbox (no send, an SFTP door has no answer); the partner
-# gets the transformed invoice once; a partner that keeps failing 503 parks the message in the DLQ after two runs (the first and the one scheduled retry, 1 s
-# later) of 1 + 3 step retries each: retries 3 + 3 + 1 = 7, flow time 2400ms.
-schemaVersion: 1
+# sftp-invoice (at-least-once): the sftp mock of the connection billing/sftp feeds the files under fixtures/inbox (no send, an SFTP
+# door has no answer); the partner's connection acme/erp/rest gets the transformed invoice once, at the path /invoices; a partner
+# that keeps failing 503 parks the message in the DLQ after two runs (the first and the one scheduled retry, 1 s later) of 1 + 3
+# step retries each: retries 3 + 3 + 1 = 7, flow time 2400ms.
+schemaVersion: 2
 kind: test
 flow: sftp-invoice
 mocks:
-  sftp-inbox: { files: fixtures/inbox/*.xml }
-  partner-domestic: { reply: fixtures/partner-ack.xml, delay: 20ms }
+  billing/sftp: { files: fixtures/inbox/*.xml }
+  acme/erp/rest: { reply: fixtures/partner-ack.xml, delay: 20ms }
 cases:
   - name: invoice file
     expect:
       sent:
-        partner-domestic: { count: 1, xpath: /PartnerInvoice/@number, equals: "4711" }
+        acme/erp/rest: { count: 1, settings: { path: /invoices }, xpath: /PartnerInvoice/@number, equals: "4711" }
       keys: { invoiceId: "4711" }
       dlq: 0
   - name: partner down
     mocks:
-      partner-domestic: { fail: 503 }
+      acme/erp/rest: { fail: 503 }
     expect: { dlq: 1, retries: 7 }

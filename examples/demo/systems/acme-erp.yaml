@@ -1,0 +1,9 @@
+# The domestic partner's ERP, called by the invoice flows. Where it is in each environment, its URL, is a value of the
+# environment's connection acme/erp/rest; the quickstart's is in deploy/quickstart/config/.
+schemaVersion: 1
+kind: system
+partner: acme
+name: erp
+description: The domestic partner's ERP, which takes our invoices.
+connections:
+  rest: { adapter: http, description: Its invoice API. }

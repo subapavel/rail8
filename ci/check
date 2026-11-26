@@ -87,8 +87,10 @@ export_secrets_key() {
 }
 
 # Starts the quickstart's node (docker-compose.yml) afresh with an emergency key and a secret store's key of this run, waits
-# for /health and makes its first users with bootstrap: exports RAIL8_ADMIN_TOKEN (the key), RAIL8_SECRETS_KEY, RAIL8_TOKEN
-# (the deploy account's token) and admin_password (the administrator's).
+# for /health, makes its first users with bootstrap, the deploy account a connection and secret administrator too, as the
+# quickstart's text does, and puts the quickstart's environment in force with deploy/quickstart/configure: exports
+# RAIL8_ADMIN_TOKEN (the key), RAIL8_SECRETS_KEY, RAIL8_TOKEN (the deploy account's token) and admin_password (the
+# administrator's).
 start_quickstart_node() {
   local admin=$1 deploy=$2 key start
   key=$(bin/rail8 key new)
@@ -102,11 +104,21 @@ start_quickstart_node() {
     if [ $(( $(date +%s) - start )) -ge 120 ]; then echo "::error::/health not green within 120 s of up"; return 1; fi
     sleep 2
   done
-  admin_password=$(bin/rail8 bootstrap --admin "$admin" --deploy-account "$deploy" --token-file "$tmp/deploy-token")
+  admin_password=$(bin/rail8 bootstrap --admin "$admin" --deploy-account "$deploy" --token-file "$tmp/deploy-token" \
+    --role connection-administrator --role secret-administrator)
   mask "$admin_password"
   RAIL8_TOKEN=$(cat "$tmp/deploy-token")
   mask "$RAIL8_TOKEN"
   export RAIL8_TOKEN
+  configure_quickstart
+}
+
+# Runs deploy/quickstart/configure with RAIL8_TOKEN twice: the first run puts every object of deploy/quickstart/config in
+# force, the second puts none.
+configure_quickstart() {
+  "$root"/deploy/quickstart/configure
+  "$root"/deploy/quickstart/configure | tee "$tmp/configure-again.log"
+  grep -q '^configure: 0 activated' "$tmp/configure-again.log" || { echo "::error::a second run of deploy/quickstart/configure activated objects"; return 1; }
 }
 
 stop_quickstart_node() {
@@ -244,13 +256,15 @@ check_stack() {
     sleep 1
   done
   echo "seconds from up to /health green: $(( $(date +%s) - start ))"
-  # the administrator and the deploy account, made through the admin API with the key; the administrator's password is
-  # not kept
-  password=$("$root"/bin/rail8 bootstrap --admin ci-admin --deploy-account ci-deploy --token-file "$tmp/deploy-token")
+  # the administrator and the deploy account, made through the admin API with the key, the deploy account a connection and
+  # secret administrator too, which the environment's script needs; the administrator's password is not kept
+  password=$("$root"/bin/rail8 bootstrap --admin ci-admin --deploy-account ci-deploy --token-file "$tmp/deploy-token" \
+    --role connection-administrator --role secret-administrator)
   mask "$password"
   RAIL8_TOKEN=$(cat "$tmp/deploy-token")
   mask "$RAIL8_TOKEN"
   export RAIL8_TOKEN
+  configure_quickstart
   docker compose run --rm deploy || { echo "::error::deploy failed"; docker compose logs rail8 | tail -50; exit 1; }
   curl -sf -H "Authorization: Bearer $RAIL8_TOKEN" localhost:8081/admin/packages | grep -q '"name":"demo"'
   # an invoice sent to the node's HTTP port, published on 8080, is answered by the partner

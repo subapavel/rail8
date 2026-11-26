@@ -1,13 +1,16 @@
 # A file dropped in the SFTP inbox, the same transformation at least once: the file is deleted after the durable save (the consumer's
 # job), the invoice is sent to the domestic partner through the Postgres work queue; a partner that keeps failing parks it in the DLQ after
-# one scheduled retry of the run, 1 s later (delivery.retries).
-schemaVersion: 1
+# one scheduled retry of the run, 1 s later (delivery.retries). It names the connections of two systems, billing/sftp and acme/erp/rest
+# (systems/), whose values each environment holds; the flow holds only its own settings.
+schemaVersion: 2
 kind: flow
 id: sftp-invoice
 version: 0.1.0
 description: Validate an invoice file from the SFTP inbox, map it for the partner and send it on.
 from:
-  endpoint: sftp-inbox
+  adapter: sftp
+  connection: billing/sftp
+  settings: { dir: /inbox, afterSuccess: delete }
 delivery:
   mode: at-least-once
   saveTimeout: 5s
@@ -39,4 +42,6 @@ steps:
   - type: to
     name: partner
     retryable: true
-    endpoint: partner-domestic
+    adapter: http
+    connection: acme/erp/rest
+    settings: { path: /invoices }
