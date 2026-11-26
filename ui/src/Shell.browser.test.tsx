@@ -6,6 +6,7 @@ import { home } from './Home';
 import { Page } from './Page';
 import { screenList, type Find, type Found, type Screen } from './screens';
 import { Shell } from './Shell';
+import { opened } from './motion-test';
 
 // the screens the application lists, found as main.tsx finds them
 const screens = screenList(home, import.meta.glob('./*/module.tsx', { eager: true }));
@@ -84,6 +85,7 @@ async function renderOpen(list: readonly Screen[]) {
 /** Chooses `name` in the menu of the tab `title`, opened with a right click. */
 async function fromMenu(title: string, name: string) {
   await tab(title).click({ button: 'right' });
+  await opened(item(name));
   await item(name).click();
   await expect.element(item(name)).not.toBeInTheDocument();
 }

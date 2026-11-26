@@ -11,6 +11,7 @@ import { AUTHOR, fakeStateOf, type Seed } from './contract/seed';
 import type { PackagesApi } from './api';
 import { fakeLock, fakePackagesApi, lockText, tagOf, type FakeLock } from './fake';
 import { packagesScreen } from './screen';
+import { opened } from '../motion-test';
 
 const NOW = new Date('2026-11-23T10:00:00Z');
 
@@ -118,7 +119,7 @@ async function openFlow(edit: boolean) {
 /** Opens the commit dialog and writes `message`. */
 async function startCommit(message: string) {
   await button('Commit…').click();
-  await expect.element(dialog()).toBeVisible();
+  await opened(dialog());
   await dialog().getByLabelText('Message', { exact: true }).fill(message);
 }
 
@@ -741,6 +742,7 @@ describe('discarding changes of a package', () => {
     await openFlow(false);
     await pick('flows/orders.yaml').click();
     await button('Discard changes…').click();
+    await opened(discardDialog());
     await tick().click();
 
     editFlow!();

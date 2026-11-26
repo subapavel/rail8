@@ -11,6 +11,7 @@ import { filesScreen } from '../fake/files';
 import { flowTab } from '../screen';
 import { FlowsError, type FlowFile, type FlowsApi } from './api';
 import { NewFlow } from './NewFlow';
+import { opened } from '../../motion-test';
 
 const invoice = `schemaVersion: 1
 kind: flow
@@ -416,6 +417,7 @@ describe('Editing a flow', () => {
     await nodeOf('validate').click();
     await page.getByRole('textbox', { name: 'Settings', exact: true }).fill('{ not json');
     await button('Close invoice').click();
+    await opened(button('Save and close'));
     await button('Save and close').click();
     await expect.element(text('Some fields are not valid. Correct them, then save.')).toBeVisible();
     await expect.element(page.getByRole('tab', { name: 'invoice', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -803,6 +805,7 @@ describe('Editing the rest of a flow', () => {
     await open(fakeFlows(), endpoints);
     await button('Edit').click();
     await button('Add a step at steps[4]').click();
+    await opened(page.getByRole('menuitem', { name: /^payment/ }));
     await page.getByRole('menuitem', { name: /^payment/ }).click();
     await expect.element(text('demo/endpoints/call-payment.yaml was not created: the file exists already')).toBeVisible();
     await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();

@@ -1,5 +1,5 @@
 import { Tag, Tooltip } from 'antd';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useText } from '../../../language';
 
 export interface PreviewBadgeProps {
@@ -16,6 +16,8 @@ export interface PreviewBadgeProps {
 export function PreviewBadge({ feature, issue }: PreviewBadgeProps) {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  // a press of the pointer on the badge, until the focus it gives arrives or the badge loses the focus
+  const pressed = useRef(false);
   const { t } = useText();
   return (
     <Tooltip
@@ -25,7 +27,20 @@ export function PreviewBadge({ feature, issue }: PreviewBadgeProps) {
       onOpenChange={setHovered}
       title={t('studio.preview.tip', { feature, issue })}
     >
-      <Tag tabIndex={0} color="purple" onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
+      {/* focus a click gave does not keep the tooltip open: it would stay over what is above the badge once the pointer left */}
+      <Tag
+        tabIndex={0}
+        color="purple"
+        onPointerDown={() => (pressed.current = true)}
+        onFocus={() => {
+          setFocused(!pressed.current);
+          pressed.current = false;
+        }}
+        onBlur={() => {
+          setFocused(false);
+          pressed.current = false;
+        }}
+      >
         {t('studio.preview')}
       </Tag>
     </Tooltip>
