@@ -331,6 +331,17 @@ class ChangeGuardTest(unittest.TestCase):
             "ui/locales/en/<module>.json and show it with t('<key>')",
         ], self.findings(repo, 11))
 
+    def test_a_template_inside_the_interpolation_of_a_template_keeps_the_code_after_it_code(self):
+        repo = self.repo(self.ENGLISH)
+        repo.change({"ui/src/a.ts": "\n".join([
+            "const quoted = (word: string) => `'${word.replaceAll(\"'\", `'\\\\''`)}'`;",
+            "/**",
+            " * The quoted form of a word, as the shell reads it.",
+            " */",
+            "const plain = (word: string) => word;",
+        ]) + "\n"})
+        self.assertClean(repo)
+
     def test_a_key_that_english_does_not_have_is_a_finding(self):
         repo = self.repo(self.ENGLISH)
         repo.change({
