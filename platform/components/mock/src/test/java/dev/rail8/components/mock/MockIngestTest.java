@@ -140,6 +140,8 @@ class MockIngestTest {
         }
         http.ingest("http-in", Headers.empty().with("cookie", "rail8-session=s1").with("x-set", "theme=v"), Buffer.buffer("<a/>")).await();
         assertFalse(handled.envelopes().getLast().headers().asMap().containsKey("cookie"), "a cookie with only the platform's is removed");
+        http.ingest("http-in", Headers.empty().with("Cookie", "rail8-device=d1; theme=dark").with("x-set", "theme=v"), Buffer.buffer("<a/>")).await();
+        assertEquals("theme=dark", handled.envelopes().getLast().headers().get("Cookie"), "a header named in another case is cut too");
 
         MockComponent sftp = new MockComponent("sftp", rt.blobs(), rt.timer(), ids);
         Handled other = consume(sftp, Uses.in("sftp-in", "orders", 8, Map.of()), e -> Future.succeededFuture(new Ack.Accepted(e.id())));

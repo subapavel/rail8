@@ -119,15 +119,32 @@ class DeliveryModesTest {
         vertx.close().await();
     }
 
+    /** What the http component logs during a case: each record's message and its failure. */
+    final List<String> logged = new CopyOnWriteArrayList<>();
+    final java.util.logging.Handler capture = new java.util.logging.Handler() {
+        @Override public void publish(java.util.logging.LogRecord r) { logged.add(r.getMessage() + (r.getThrown() == null ? "" : " | " + r.getThrown())); }
+        @Override public void flush() {}
+        @Override public void close() {}
+    };
+
     @BeforeEach
     void wire() {
         rt.withComponent(partner);
+        java.util.logging.Logger.getLogger(HttpComponent.class.getName()).addHandler(capture);
     }
 
     @AfterEach
     void down() {
+        java.util.logging.Logger.getLogger(HttpComponent.class.getName()).removeHandler(capture);
         holds.forEach(CountDownLatch::countDown);   // no send stays parked past its test
         for (Consumer c : started) c.stop().await();
+    }
+
+    /** The answer {@code a} names its message, and the log holds {@code detail} for it; the body is never the detail. */
+    void assertDetailLogged(Answer a, String detail) {
+        String id = a.headers().get("x-message-id");
+        assertTrue(id != null && !id.isBlank(), "the answer names its message: " + a.headers());
+        assertTrue(logged.stream().anyMatch(line -> line.contains("message " + id + " ") && line.contains(detail)), "the log holds " + detail + ": " + logged);
     }
 
     // --- fixtures
@@ -264,11 +281,12 @@ class DeliveryModesTest {
     }
 
     @Test
-    void aSyncFlowMapsAnInvalidInputTo422NamingTheStep() {
+    void aSyncFlowMapsAnInvalidInputTo422AndLogsTheStep() {
         listen(flow("sync", List.of(VALIDATE, TO_PARTNER)));
         Answer a = post(Buffer.buffer(invoice.toString().replace("<Id>4711</Id>", "")));
         assertEquals(422, a.status(), a.body());
-        assertTrue(a.body().startsWith("validation failed at step 'validate'"), "the step's message, not its toString(): " + a.body());
+        assertEquals("the message is invalid", a.body());
+        assertDetailLogged(a, "validation failed at step 'validate'");
         assertTextPlain(a);
         assertEquals(List.of(), partner.sent());
     }
@@ -278,7 +296,8 @@ class DeliveryModesTest {
         listen(flow("sync", List.of(MAP_FOR_PARTNER, TO_PARTNER)));
         Answer a = post(Buffer.buffer("not xml"));
         assertEquals(400, a.status(), a.body());
-        assertTrue(a.body().contains("not well-formed"), a.body());
+        assertEquals("the message cannot be read", a.body());
+        assertDetailLogged(a, "not well-formed");
         assertTextPlain(a);
         assertEquals(List.of(), partner.sent());
     }
@@ -291,12 +310,14 @@ class DeliveryModesTest {
         partner.failNext(1, () -> new NackException("order refused", false));
         Answer refused = post(ORDER);
         assertEquals(502, refused.status(), refused.body());
-        assertTrue(refused.body().contains("order refused"), refused.body());
+        assertEquals("the receiver refused the message", refused.body());
+        assertDetailLogged(refused, "order refused");
         assertNull(refused.headers().get("retry-after"));
         partner.failNext(1, () -> new NackException("partner busy", true));
         Answer busy = post(ORDER);
         assertEquals(503, busy.status(), busy.body());
-        assertTrue(busy.body().contains("partner busy"), busy.body());
+        assertEquals("the receiver cannot be reached now", busy.body());
+        assertDetailLogged(busy, "partner busy");
         assertEquals("1", busy.headers().get("retry-after"));
         assertTextPlain(busy);
     }
@@ -307,7 +328,8 @@ class DeliveryModesTest {
         partner.failNext(1, () -> new IllegalStateException("boom"));
         Answer a = post(ORDER);
         assertEquals(500, a.status(), a.body());
-        assertEquals("boom", a.body());
+        assertEquals("the flow failed", a.body());
+        assertDetailLogged(a, "boom");
         assertTextPlain(a);
     }
 
