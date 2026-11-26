@@ -357,6 +357,13 @@ class DeploymentsTest {
     }
 
     @Test
+    void theNodeBuildsEachConsumerOverAnEntryOfItsFlow() throws Exception {
+        deploy(shop("shop"));
+        assertEquals(java.util.Set.of("shop/orders", "shop/audit", "shop/ping"), java.util.Set.copyOf(doors.entered()));
+        assertEquals(doors.doors().size(), doors.entered().size(), "no consumer was built over a bare handler");
+    }
+
+    @Test
     void theConsumerGetsTheFlowIdAndTheFlowsMaxBody() throws Exception {
         deploy(shop("shop"));
 

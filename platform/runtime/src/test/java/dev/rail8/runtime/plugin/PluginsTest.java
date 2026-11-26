@@ -699,6 +699,21 @@ class PluginsTest {
     }
 
     @Test
+    void aComponentThatReadsCredentialsButBuildsNoConsumerOverAnEntryRefusesTheStartNamingThePlugin() throws IOException {
+        jar("entered.jar", PluginFixtures.Entered.class);
+        try (Plugins plugins = load()) {
+            assertEquals(List.of("entered"), plugins.components(context()).stream().map(Component::scheme).toList());
+        }
+        Files.delete(dir.resolve("entered.jar"));
+        jar("unentered.jar", PluginFixtures.Unentered.class);
+        try (Plugins plugins = load()) {
+            String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
+            assertEquals("plugin unentered: scheme unentered reads the credentials [BASIC] "
+                    + "but does not override consumer(Inbound, Entry), through which its consumers hand them to the node's entry", refused);
+        }
+    }
+
+    @Test
     void aComponentWhoseSettingsAreNullRefusesTheStartNamingThePlugin() throws IOException {
         jar("unsaid.jar", PluginFixtures.NullSettings.class);
         try (Plugins plugins = load()) {

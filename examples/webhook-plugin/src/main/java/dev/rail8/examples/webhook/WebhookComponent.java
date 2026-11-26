@@ -8,7 +8,9 @@ import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
+import dev.rail8.api.CredentialKind;
 import dev.rail8.api.Deadline;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Headers;
 import dev.rail8.api.Health;
@@ -17,6 +19,7 @@ import dev.rail8.api.Inbound;
 import dev.rail8.api.NackException;
 import dev.rail8.api.Outbound;
 import dev.rail8.api.Producer;
+import dev.rail8.api.Refused;
 import dev.rail8.api.Timer;
 import dev.rail8.api.Views;
 import dev.rail8.api.plugin.HttpIngress;
@@ -57,8 +60,10 @@ import java.util.function.Function;
  *
  * <p><b>Consumer</b> (the flow's setting {@code address}, required, the path under the prefix {@value #PREFIX} that senders
  * call, see {@link WebhookConsumer#url()}; no connection). Its start mounts the sender on the node's HTTP port, its stop closes
- * the mount. A POST to the sender's path is streamed into the blob store, refused with 413 above the flow's
- * {@link Inbound#maxBodyBytes}, and handed to the flow's handler as a new message, on a virtual thread of its own. The handler's
+ * the mount. A request at the sender's path is paused and entered first, with what its caller presented as the port reads it
+ * ({@link HttpIngress#presented}), before any byte of its body is read: a refused caller gets the refusal's answer and nothing
+ * is stored. An entered POST is streamed into the blob store, refused with 413 above the flow's
+ * {@link Inbound#maxBodyBytes}, and handed as a new message to the handler the entry gave, on a virtual thread of its own. The handler's
  * {@link Ack} is the answer: {@code Accepted} 202 with the message id in {@code x-message-id}, {@code Reply} 200 with the reply's
  * headers and body, a retryable {@code Nack} 503 and a final one 400, both with the reason as the body. A handler that fails is
  * 500 with its message. Another method is 405. Once {@link Consumer#stop()} began, a request is 503 and the handler is not called.
@@ -74,8 +79,9 @@ import java.util.function.Function;
  * node's HTTP port in {@link WebhookConsumer}, the client in {@link WebhookProducer}, and the statuses they answer and read are
  * this component's protocol; the parts marked {@code HTTP:} below are where an adapter for another protocol puts its own. An
  * adapter taking requests over HTTP keeps the prefix, its own, and the mount; one for a protocol that is not HTTP declares no
- * prefix and opens its listener or connection itself. What every adapter keeps: the body streamed into and out of the blob
- * store, one handler call on a virtual thread of its own per message, the answer taken only from the handler's {@link Ack}, the
+ * prefix and opens its listener or connection itself. What every adapter keeps: each message entered before any byte of it is
+ * stored, the body streamed into and out of the blob store, one call of the handler its entry gave, on a virtual thread of
+ * its own, per message, the answer taken only from the handler's {@link Ack}, the
  * message id sent on, the cut at the deadline on the {@link Timer}, and a stop that waits for the deliveries in flight.
  */
 public final class WebhookComponent implements Component {
@@ -133,9 +139,23 @@ public final class WebhookComponent implements Component {
 
     @Override public Forms forms() { return FORMS; }
 
+    /** A consumer whose every request reaches {@code handler}, whoever its caller: for tests and tools. */
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
-        return new WebhookConsumer(in, handler);
+        Objects.requireNonNull(handler, "handler");
+        return new WebhookConsumer(in, Entry.of(presented -> Future.succeededFuture(handler)));
+    }
+
+    // HTTP: the credentials the node's HTTP port reads; an adapter with a listener of its own names those it reads there.
+    @Override
+    public Set<CredentialKind> reads() {
+        return HttpIngress.READS;
+    }
+
+    /** The consumer the node builds: every request is entered through {@code entry} before any byte of its body is read. */
+    @Override
+    public Consumer consumer(Inbound in, Entry entry) {
+        return new WebhookConsumer(in, entry);
     }
 
     @Override
@@ -196,14 +216,14 @@ public final class WebhookComponent implements Component {
     /** A consumer: its sender mounted on the node's HTTP port. */
     public final class WebhookConsumer implements Consumer {
         private final Inbound in;
-        private final Function<Envelope, Future<Ack>> handler;
+        private final Entry entry;
         private final String flow;
         private final long maxBodyBytes;
         private volatile HttpIngress.Mount mount;
 
-        WebhookConsumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
+        WebhookConsumer(Inbound in, Entry entry) {
             this.in = Objects.requireNonNull(in, "in");
-            this.handler = Objects.requireNonNull(handler, "handler");
+            this.entry = Objects.requireNonNull(entry, "entry");
             this.flow = in.flow();
             this.maxBodyBytes = in.maxBodyBytes();
         }
@@ -235,17 +255,28 @@ public final class WebhookComponent implements Component {
             return m == null ? Future.succeededFuture() : m.close();
         }
 
-        // HTTP: one request is one message; its body goes into the blob store, its headers become the message's.
+        // HTTP: one request is one message. On the event loop, before any byte of its body is read, it is paused and entered with
+        // what its caller presented; the entry decides, then its body goes into the blob store and its headers become the message's.
         private void handle(HttpServerRequest req) {
+            req.pause();   // nothing flows until the entry decided and the blob store reads the body
+            entry.enter(http.presented(req)).onComplete(entered -> {
+                if (entered.succeeded()) take(req, entered.result());
+                else if (entered.cause() instanceof Refused refused) refused.answer(req);   // HTTP: another protocol answers in its own
+                else reason(req.response(), 500, "the entry failed");
+            });
+        }
+
+        /** An entered request, still paused, with the handler of its one message. */
+        private void take(HttpServerRequest req, Function<Envelope, Future<Ack>> handler) {
             HttpServerResponse res = req.response();
             if (req.method() != HttpMethod.POST) {
                 res.setStatusCode(405).putHeader("allow", "POST").end();
+                req.resume();   // its body, if any, is read and dropped
                 return;
             }
             String id = ids.next();
             Headers headers = headers(req.headers());
             Context context = vertx.getOrCreateContext();
-            req.pause();   // nothing flows until the blob store reads the body
             blobs.write(BlobKey.body(id, 0), req, maxBodyBytes).onComplete(written -> {
                 if (written.failed()) {
                     reason(res, written.cause() instanceof BodyTooLargeException ? 413 : 500, String.valueOf(written.cause().getMessage()));

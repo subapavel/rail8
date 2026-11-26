@@ -7,6 +7,7 @@ import io.vertx.core.Future;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -46,6 +47,35 @@ public interface Component {
      * @since 0.4
      */
     Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler);
+
+    /**
+     * The kinds of credential this adapter's consumers read from callers; none by default. A component that declares a kind
+     * overrides {@link #consumer(Inbound, Entry)}, or the node refuses it when it loads it. An adapter on the node's HTTP port
+     * answers {@link dev.rail8.api.plugin.HttpIngress#READS}; one with a listener of its own the kinds it reads there, such as
+     * {@link CredentialKind#CERTIFICATE}. A flow takes a sender of an adapter that reads none only with its check off.
+     *
+     * @since 0.4
+     */
+    default Set<CredentialKind> reads() {
+        return Set.of();
+    }
+
+    /**
+     * The consumer of one sender, which hands each message over through {@code entry}: the node builds every sender's
+     * consumer with it. For each message the consumer calls {@link Entry#enter} with what the caller presented before it
+     * reads or stores any byte of the body, keeps the request paused until {@code enter} completes, answers a {@link Refused}
+     * in its own protocol ({@link Refused#answer} over HTTP) and stores nothing then, and otherwise hands the message to
+     * the handler {@code enter} gave, once. It holds no handler of its own.
+     *
+     * <p>The default keeps an adapter built only on {@link #consumer(Inbound, Function)} working: it stores the body as that
+     * consumer does, then enters with {@link Presented.Nothing}. Such an adapter reads no credential, so a flow uses it as
+     * a listening sender only with the check off, and it answers a refusal as it answers a failed handler.
+     *
+     * @since 0.4
+     */
+    default Consumer consumer(Inbound in, Entry entry) {
+        return consumer(in, e -> entry.enter(new Presented.Nothing(Presented.Via.of("", false))).compose(h -> h.apply(e)));
+    }
 
     /** A producer of the connection {@code out} names, or of the internal adapter when it names none. @since 0.4 */
     Producer producer(Outbound out);

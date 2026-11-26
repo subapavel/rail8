@@ -6,6 +6,7 @@ import dev.rail8.api.Connection;
 import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.EndpointConfig;
+import dev.rail8.api.Entry;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Expressions;
 import dev.rail8.api.Health;
@@ -3227,15 +3228,16 @@ public final class Deployments {
                 Supplier<Consumer> build;
                 Consumer consumer;
                 boolean polls;
+                Entry entry = Entries.admitting(def.id(), handler);
                 if (sender.isPresent()) {   // each build reads the environment as it is then: a start fails while its connection cannot serve
                     polls = NamedChecks.polled(component, def, sender.get()).isPresent();
-                    build = () -> component.consumer(inbound(def, sender.get(), component), handler);
+                    build = () -> component.consumer(inbound(def, sender.get(), component), entry);
                     consumer = null;
                 } else {
                     Inbound in = EndpointUse.inbound(component.forms(), from, def.id(), def.maxBodyBytes(), f.secrets().endpoints());
                     polls = Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null").isPresent();
-                    consumer = component.consumer(in, handler);
-                    build = () -> component.consumer(in, handler);
+                    consumer = component.consumer(in, entry);
+                    build = () -> component.consumer(in, entry);
                 }
                 String key = f.id() + "/from";
                 Consumer first = consumer == null ? null : polls ? leased(key, consumer, build) : consumer;

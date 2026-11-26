@@ -1,5 +1,6 @@
 package dev.rail8.examples.webhook;
 
+import dev.rail8.api.BlobStore;
 import dev.rail8.api.Component;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Connection;
@@ -44,6 +45,12 @@ class WebhookComponentContractTest extends ComponentContract {
     @Override protected Component component(Timer timer) {
         FakeRuntime rt = FakeRuntime.create().withTreeLimit(4096);   // bodies above 4 KiB stream through the server and the client
         return new WebhookComponent(vertx, rt.blobs(), rt.ids(), timer, port);
+    }
+
+    /** One whose consumers store what they take in into the suite's {@code blobs}. */
+    @Override protected Component component(BlobStore blobs) {
+        FakeRuntime rt = FakeRuntime.create();
+        return new WebhookComponent(vertx, blobs, rt.ids(), rt.timer(), port);
     }
 
     /** The consumer is served at {@code /webhook/in}; the in direction reaches no connection. */

@@ -46,6 +46,16 @@ class HttpComponentContractTest extends ComponentContract {
         return new HttpComponent(vertx, rt.blobs(), rt.ids(), timer, port);
     }
 
+    /** One whose consumers store what they take in into the suite's {@code blobs}. */
+    @Override protected Component component(dev.rail8.api.BlobStore blobs) {
+        FakeRuntime rt = FakeRuntime.create();
+        dev.rail8.api.Timer onVertx = (delay, task) -> {
+            long id = vertx.setTimer(Math.max(1, delay.toMillis()), fired -> task.run());
+            return () -> vertx.cancelTimer(id);
+        };
+        return new HttpComponent(vertx, blobs, rt.ids(), onVertx, port);
+    }
+
     /** A sender at {@code /in}: the in direction reaches no connection. */
     @Override protected Inbound inbound() {
         return Uses.in(FLOW, "/in", 1_000_000);
