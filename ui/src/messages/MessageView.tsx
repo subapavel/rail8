@@ -213,7 +213,7 @@ function StepsTable({ attempt, rows, onShow }: { attempt: number; rows: Row[]; o
   const across = (span: number) => (row: Row) => (row.kind === 'wait' ? { colSpan: span } : {});
   const columns: TableColumnsType<Row> = [
     { title: t('messages.step'), key: 'step', width: 64, align: 'right', render: (_, row) => step(row)?.step ?? '' },
-    { title: t('messages.step.title'), key: 'name', onCell: across(3), render: (_, row) => (row.kind === 'wait' ? say(texts, waitLabels[row.reason]) : row.step.name) },
+    { title: t('messages.step.title'), key: 'name', onCell: across(3), render: (_, row) => (row.kind === 'wait' ? say(texts, waitLabels[row.reason]) : <StepName step={row.step} />) },
     { title: t('messages.outcome'), key: 'outcome', width: 120, onCell: across(0), render: (_, row) => row.kind === 'step' && <OutcomeLabel outcome={row.step.outcome} /> },
     { title: t('messages.startedAt'), key: 'started', width: 240, onCell: across(0), render: (_, row) => step(row)?.startedAt },
     {
@@ -265,6 +265,19 @@ function StepsTable({ attempt, rows, onShow }: { attempt: number; rows: Row[]; o
       columns={columns}
       dataSource={rows}
     />
+  );
+}
+
+/** A step's name, and below it the connection a send went through, when it went through one. */
+function StepName({ step }: { step: StepRecord }) {
+  const { t } = useText();
+  const connection = step.versions?.connection;
+  if (connection === undefined) return step.name;
+  return (
+    <Flex vertical>
+      {step.name}
+      <Typography.Text type="secondary">{t('messages.step.connection', { connection })}</Typography.Text>
+    </Flex>
   );
 }
 

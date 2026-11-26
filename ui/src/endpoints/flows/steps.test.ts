@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, FLOW_PARTS, KEY_NAME, settingsOf, STEP_NAME } from './steps';
+import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, FLOW_PARTS, KEY_NAME, NAMED_FLOW_FIELDS, NAMED_TO, settingsOf, STEP_NAME } from './steps';
 import type { StepField } from './types';
 import { textsIn } from '../../language';
 
@@ -11,26 +11,27 @@ const platform = join(__dirname, '..', '..', '..', '..', 'platform');
 const schema = JSON.parse(readFileSync(join(platform, 'schemas', 'src', 'main', 'resources', 'schemas', 'flow.schema.json'), 'utf8')) as {
   required: string[];
   properties: Record<string, Record<string, unknown> & { required?: string[]; properties?: Record<string, Record<string, unknown>> }>;
-  $defs: Record<string, { pattern?: string; properties?: Record<string, unknown>; allOf?: unknown[] }>;
+  $defs: Record<string, { pattern?: string; required?: string[]; properties?: Record<string, unknown>; allOf?: unknown[]; then?: unknown }>;
 };
 
 type Then = { required?: string[]; properties?: Record<string, Record<string, unknown>>; anyOf?: Then[]; propertyNames?: { enum: string[] } };
 
-/** What the flow schema says of each step type it knows: its keys and those it requires. */
-const typed = new Map(
-  (schema.$defs.step!.allOf as { if: { properties: { type: { const: string } } }; then: Then }[]).map(({ if: when, then }) => {
-    const parts = [then, ...(then.anyOf ?? [])];
-    return [
-      when.properties.type.const,
-      {
-        keys: new Set(parts.flatMap((p) => Object.keys(p.properties ?? {}))),
-        required: new Set(then.required ?? []),
-        properties: Object.assign({}, ...parts.map((p) => p.properties ?? {})) as Record<string, Record<string, unknown>>,
-        propertyNames: then.propertyNames?.enum,
-      },
-    ];
-  }),
-);
+/** What the flow schema says of a step type: its keys and those it requires. */
+const known = (then: Then) => {
+  const parts = [then, ...(then.anyOf ?? [])];
+  return {
+    keys: new Set(parts.flatMap((p) => Object.keys(p.properties ?? {}))),
+    required: new Set(then.required ?? []),
+    properties: Object.assign({}, ...parts.map((p) => p.properties ?? {})) as Record<string, Record<string, unknown>>,
+    propertyNames: then.propertyNames?.enum,
+  };
+};
+
+/** What the flow schema says of each step type it knows; `to` as a flow of schemaVersion 1 writes it. */
+const typed = new Map([
+  ...(schema.$defs.step!.allOf as { if: { properties: { type: { const: string } } }; then: Then }[]).map(({ if: when, then }) => [when.properties.type.const, known(then)] as const),
+  ['to', known(schema.$defs.endpointStep!.then as Then)] as const,
+]);
 
 /** The kinds of field that hold what a schema property takes: text or a choice for a string, a list for an array, a map for an object. */
 const kindOf = (property: Record<string, unknown> | undefined): string[] => {
@@ -68,6 +69,18 @@ describe('the built-in steps the UI describes', () => {
     }
   });
 
+  it('describe the to of a flow of schemaVersion 2 as the flow schema does, but the keys refused until they ship', () => {
+    const named = known(schema.$defs.sendStep!.then as Then);
+    const refused = ['agreement', 'by', 'connections'];
+    expect(NAMED_TO.fields.map((f) => f.name).sort()).toEqual([...named.keys].filter((k) => !refused.includes(k)).sort());
+    for (const f of NAMED_TO.fields) {
+      expect(f.required, `${f.name} required`).toBe(named.required.has(f.name));
+      const pattern = patternOf(named.properties[f.name]);
+      if (pattern !== undefined && f.type === 'text') expect(`^${f.pattern}$`, `${f.name} pattern`).toBe(pattern);
+      if (named.properties[f.name]!.type === 'integer') expect(f).toMatchObject({ type: 'integer', min: named.properties[f.name]!.minimum });
+    }
+  });
+
   it('let a process call take the keys the flow schema lets it take, and no other', () => {
     const keys = typed.get('process')!.propertyNames!;
     expect(['type', 'name', ...BUILT_IN.process!.fields.map((f) => f.name)].sort()).toEqual([...keys].sort());
@@ -87,10 +100,10 @@ describe('the built-in steps the UI describes', () => {
 });
 
 describe('the flow’s own settings', () => {
-  /** The schema's property of a dotted name, and whether the schema requires it. */
-  const property = (name: string) => {
+  /** The schema's property of a dotted name, and whether the schema requires it; `from` as `sender` describes it. */
+  const property = (name: string, sender: 'endpointSender' | 'sender') => {
     const [top, inner] = name.split('.') as [string, string | undefined];
-    const outer = schema.properties[top]!;
+    const outer = top === 'from' ? (schema.$defs[sender] as (typeof schema.properties)[string]) : schema.properties[top]!;
     const resolved = typeof outer.$ref === 'string' ? (schema.$defs[outer.$ref.replace('#/$defs/', '')] as typeof outer) : outer;
     if (inner === undefined) return { at: outer, required: schema.required.includes(top) };
     return { at: resolved.properties![inner]!, required: schema.required.includes(top) && (resolved.required ?? []).includes(inner) };
@@ -101,8 +114,12 @@ describe('the flow’s own settings', () => {
     expect([...tops, ...FLOW_PARTS].sort()).toEqual(Object.keys(schema.properties).sort());
   });
 
-  it.each(FLOW_FIELDS.map((f) => [f.name, f] as const))('describe %s as the flow schema does', (name, f) => {
-    const { at, required } = property(name);
+  it.each([
+    ...FLOW_FIELDS.map((f) => [f.name, f, 'endpointSender'] as const),
+    ...NAMED_FLOW_FIELDS.filter((f) => f.name.startsWith('from.')).map((f) => [`${f.name} of schemaVersion 2`, f, 'sender'] as const),
+  ])('describe %s as the flow schema does', (_, f, sender) => {
+    const name = f.name;
+    const { at, required } = property(name, sender);
     expect(at, name).toBeDefined();
     expect(f.required, `${name} required`).toBe(required);
     const pattern = patternOf(at);

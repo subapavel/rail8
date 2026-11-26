@@ -20,6 +20,8 @@ export interface StepRecord {
   cpuNanos: number | null;
   /** The payload after the step: its hash, its size in bytes, and whether its bytes were kept. */
   body: { hash: string; size: number; kept: boolean };
+  /** What the step ran with, by name: a send through a connection names its key under `connection`. */
+  versions?: Record<string, string>;
 }
 
 /** A message's recorded steps: every attempt in order, and the steps of each in order. */

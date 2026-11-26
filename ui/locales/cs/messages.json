@@ -72,6 +72,7 @@
   "messages.status.failed": "Selhalo",
   "messages.status.running": "Běží",
   "messages.step": "Krok",
+  "messages.step.connection": "přes {connection}",
   "messages.step.failed": "Krok {step} ({name}) pokusu {attempt} selhal",
   "messages.step.name": "Název kroku",
   "messages.step.noError": "Krok nezaznamenal žádnou chybovou zprávu.",

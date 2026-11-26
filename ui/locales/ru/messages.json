@@ -72,6 +72,7 @@
   "messages.status.failed": "Сбой",
   "messages.status.running": "Выполняется",
   "messages.step": "Шаг",
+  "messages.step.connection": "через {connection}",
   "messages.step.failed": "Сбой шага {step} ({name}) в попытке {attempt}",
   "messages.step.name": "Имя шага",
   "messages.step.noError": "Шаг не записал сообщения об ошибке.",

@@ -39,6 +39,22 @@ export function canvasStructure(view: FlowView, revision: number): string {
     .map(n => [n.id, n.type])]);
 }
 
+/**
+ * What the node `n` sends to, when it sends: an endpoint by its id, a connection by its key with its adapter, or the
+ * address a `direct` send of a flow of schemaVersion 2 calls.
+ */
+function receiverOf(n: FlowNode): { name: string; detail: string } | undefined {
+  if (n.kind === 'destination') return { name: n.label, detail: n.detail ?? '' };
+  const values = n.type === 'to' ? n.form?.values : undefined;
+  if (values === undefined) return undefined;
+  if (typeof values.endpoint === 'string') return { name: values.endpoint, detail: '' };
+  const adapter = typeof values.adapter === 'string' ? values.adapter : '';
+  if (typeof values.connection === 'string') return { name: values.connection, detail: adapter };
+  const settings = values.settings;
+  const address = typeof settings === 'object' && settings !== null && !Array.isArray(settings) ? (settings as Record<string, unknown>).address : undefined;
+  return adapter === 'direct' && typeof address === 'string' ? { name: address, detail: adapter } : undefined;
+}
+
 /** Canvas coordinates are absolute. Only the final React Flow nodes use parent-relative coordinates. */
 export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, size?: Size): CanvasGraph {
   const byId = new Map(view.nodes.map(n => [n.id, n]));
@@ -60,14 +76,14 @@ export function canvasGraph(view: FlowView, vertical: boolean, folded: boolean, 
       parentId: n.parent ?? FLOW_FRAME, x: (vertical ? across : along) - TILE / 2,
       y: (vertical ? along : across) - TILE / 2, width: TILE, height: TILE,
     });
-    const endpoint = n.kind === 'destination' ? n.label : n.type === 'to' ? n.form?.values.endpoint : undefined;
-    if (typeof endpoint !== 'string') continue;
+    const target = receiverOf(n);
+    if (target === undefined) continue;
     const called = calls.get(n.id);
     receivers.push({
       source: n.id,
       item: {
         id: `receiver:${n.id}`, role: 'receiver', original: called ?? n,
-        label: called?.label ?? endpoint, detail: called ? endpoint : n.kind === 'destination' ? n.detail ?? '' : '',
+        label: called?.label ?? target.name, detail: called ? target.name : target.detail,
         x: 0, y: 0, ...SYSTEM,
       },
     });

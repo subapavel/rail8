@@ -198,10 +198,41 @@ describe('view of a file it cannot draw', () => {
   });
 
   it('draws a file of another schemaVersion, with the problem', () => {
-    const drawn = view('schemaVersion: 2\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - type: to\n    endpoint: partner-domestic\n', demo, en);
+    const drawn = view('schemaVersion: 3\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { endpoint: http-in }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - type: to\n    endpoint: partner-domestic\n', demo, en);
     expect(drawn.readable).toBe(true);
-    expect(drawn.problems).toEqual([{ path: ['schemaVersion'], message: 'schemaVersion is 2, not 1: the editor shows this flow read-only' }]);
-    expect(drawn.readOnly).toBe('schemaVersion is 2, not 1');
+    expect(drawn.problems).toEqual([{ path: ['schemaVersion'], message: 'schemaVersion is 3, not 1 or 2: the editor shows this flow read-only' }]);
+    expect(drawn.readOnly).toBe('schemaVersion is 3, not 1 or 2');
+  });
+
+  it('draws a flow of schemaVersion 2 read-only, its sender and receivers by adapter and connection, with no problem', () => {
+    const drawn = view(readFileSync(join(fixtures, 'named.yaml'), 'utf8'), demo, en);
+    expect(drawn.problems).toEqual([]);
+    expect(drawn.readOnly).toBe('it names its sender and receivers by connection (schemaVersion 2), and the editor changes flows of schemaVersion 1 only');
+    const at = (id: string) => drawn.nodes.find((n) => n.id === id);
+    expect(at('/from')).toMatchObject({ label: 'billing/sftp', detail: 'sftp' });
+    expect(at('/from')).not.toHaveProperty('opens');
+    expect(at('/steps/1')).toMatchObject({ label: 'partner', detail: 'acme/erp/rest · http' });
+    expect(at('/steps/1')!.form!.settings.fields.map((f) => f.name)).toEqual(['adapter', 'connection', 'settings', 'maxReplyBytes']);
+    expect(at('/steps/2')).toMatchObject({ label: 'order', detail: 'direct · /orders/partner' });
+    expect(at('/steps/2#calls')).toMatchObject({ kind: 'flow', label: 'order-partner', opens: { flow: 'demo/flows/order-partner.yaml' } });
+    const flowFields = drawn.settings!.settings.fields.map((f) => f.name);
+    expect(flowFields).toContain('from.adapter');
+    expect(flowFields).not.toContain('from.endpoint');
+  });
+
+  it('draws a sender of schemaVersion 2 without a connection by its adapter and address, and finds what is wrong in it', () => {
+    const flow = (from: string, to: string) =>
+      `schemaVersion: 2\nkind: flow\nid: x\nversion: 0.1.0\nfrom: ${from}\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - ${to}\n`;
+    const direct = view(flow('{ adapter: direct, settings: { address: /orders } }', '{ type: to, adapter: http, connection: acme/erp/rest }'), demo, en);
+    expect(direct.problems).toEqual([]);
+    expect(direct.nodes.find((n) => n.id === '/from')).toMatchObject({ label: 'direct', detail: 'direct · /orders' });
+    const wrong = view(flow('{ connection: Billing }', '{ type: to, connection: acme/erp/rest }'), demo, en);
+    expect(wrong.problems.map((p) => pointer(p.path))).toEqual(['/from/adapter', '/from/connection', '/steps/0/adapter']);
+  });
+
+  it('draws a call of schemaVersion 2 to an address no flow serves, with the problem', () => {
+    const text = 'schemaVersion: 2\nkind: flow\nid: x\nversion: 0.1.0\nfrom: { adapter: http }\ndelivery: { mode: sync }\nlimits: { maxBodyBytes: 1 }\nsteps:\n  - { type: to, adapter: direct, settings: { address: /nowhere } }\n';
+    expect(view(text, demo, en).problems).toEqual([{ path: ['steps', 0], message: 'no flow serves the direct address /nowhere' }]);
   });
 
   it('draws a step that is no mapping in its place, locked', () => {

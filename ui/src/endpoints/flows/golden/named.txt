@@ -1,0 +1,15 @@
+readable: true
+nodes:
+  {"runsAs":[],"runs":0,"defaultName":false,"id":"/from","kind":"from","path":["from"],"label":"billing/sftp","detail":"sftp","width":240,"height":56,"x":232,"y":0}
+  {"runsAs":["validate"],"runs":1,"defaultName":false,"id":"/steps/0","kind":"step","path":["steps",0],"label":"validate","type":"xsd","form":{"path":["steps",0],"fields":["schema"]},"width":240,"height":56,"detail":"flows/invoice.xsd","x":232,"y":96}
+  {"runsAs":["partner"],"runs":1,"defaultName":false,"id":"/steps/1","kind":"step","path":["steps",1],"label":"partner","type":"to","form":{"path":["steps",1],"fields":["adapter","connection","settings","maxReplyBytes"]},"width":240,"height":56,"detail":"acme/erp/rest · http","x":232,"y":192}
+  {"runsAs":["order"],"runs":1,"defaultName":false,"id":"/steps/2","kind":"step","path":["steps",2],"label":"order","type":"to","form":{"path":["steps",2],"fields":["adapter","connection","settings","maxReplyBytes"]},"width":240,"height":56,"detail":"direct · /orders/partner","x":232,"y":288}
+  {"runsAs":[],"runs":0,"defaultName":false,"id":"/steps/2#calls","kind":"flow","path":["steps",2],"label":"order-partner","detail":"waits for its reply","opens":{"flow":"demo/flows/order-partner.yaml"},"width":200,"height":48,"x":504,"y":292}
+  {"runsAs":[],"runs":0,"defaultName":false,"id":"/steps#end","kind":"end","path":["steps"],"label":"end","width":120,"height":32,"x":292,"y":384}
+edges:
+  {"id":"/from->/steps/0","source":"/from","target":"/steps/0","kind":"next","insertAt":["steps",0]}
+  {"id":"/steps/0->/steps/1","source":"/steps/0","target":"/steps/1","kind":"next","insertAt":["steps",1]}
+  {"id":"/steps/1->/steps/2","source":"/steps/1","target":"/steps/2","kind":"next","insertAt":["steps",2]}
+  {"id":"/steps/2->/steps/2#calls","source":"/steps/2","target":"/steps/2#calls","kind":"calls","label":"calls flow order-partner"}
+  {"id":"/steps/2->/steps#end","source":"/steps/2","target":"/steps#end","kind":"next","insertAt":["steps",3]}
+problems:
