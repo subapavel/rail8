@@ -28,7 +28,9 @@ import java.util.function.Function;
  *   <li>{@code retries} — the sends to any mock beyond the first of the same message at the same step (the step the envelope
  *       sent carries): two {@code to} steps to one endpoint are no retry;</li>
  *   <li>{@code error} — the answer's failure message, or its Nack's reason, contains the text;</li>
- *   <li>{@code sent.<endpoint>} — {@code count}: the endpoint's sends, retries included; {@code equals} or {@code contains}:
+ *   <li>{@code sent.<endpoint>} — {@code count}: the endpoint's sends, retries included; {@code settings}: each setting it names
+ *       equals that of every send, the adapter's defaults filled in — one line for the first send and setting it does not hold
+ *       for, {@code was no send} when there is none; {@code equals} or {@code contains}:
  *       holds for every send, on the value of {@code xpath} or, without it, on the body as UTF-8 — one line for the first send
  *       it does not hold for, {@code was no send} when there is none ({@code sent.<endpoint>.count} first, then
  *       {@code .equals} or {@code .contains}).</li>
@@ -51,10 +53,12 @@ final class Expectations {
      * @param dlq the DLQ's rows
      * @param sends every send to any mock, in each mock's order
      * @param sentTo an endpoint's sends, in order
+     * @param settingsTo the settings of each of an endpoint's sends, in the order of {@code sentTo}
      * @param xpaths each {@code xpath} of the case's {@code sent}, compiled
      */
     record Observed(Optional<String> messageId, Ack ack, Throwable failure, MessageStore messages, int dlq, List<Envelope> sends,
-                    Function<String, List<Envelope>> sentTo, Map<String, Function<Envelope, Optional<String>>> xpaths) {}
+                    Function<String, List<Envelope>> sentTo,
+                    Function<String, List<Map<String, Object>>> settingsTo, Map<String, Function<Envelope, Optional<String>>> xpaths) {}
 
     /** One {@code expect} key's check: adds the lines of what failed. */
     @FunctionalInterface
@@ -124,12 +128,36 @@ final class Expectations {
         if (error.filter(e -> e.contains(text)).isEmpty()) failed.add(line("error", text, Cli.oneLine(error.orElse(NONE))));
     }
 
+    /** Each setting of {@code expected} against every send's {@code settings}: a line for the first that differs, or for no send. */
+    private static void settings(List<String> failed, String endpoint, JsonObject expected, List<Map<String, Object>> settings) {
+        String key = "sent." + endpoint + ".settings";
+        if (settings.isEmpty()) {
+            failed.add(line(key, expected.encode(), "no send"));
+            return;
+        }
+        for (Map<String, Object> sent : settings) {
+            for (String name : expected.fieldNames()) {
+                Object was = sent.get(name);
+                if (same(expected.getValue(name), was)) continue;
+                failed.add(line(key + "." + name, expected.getValue(name), was == null ? NONE : was));
+                return;
+            }
+        }
+    }
+
+    /** Whether a setting written in the test equals the one sent: numbers by value, whatever their Java type. */
+    private static boolean same(Object expected, Object was) {
+        if (expected instanceof Number e && was instanceof Number w) return e.longValue() == w.longValue() && e.doubleValue() == w.doubleValue();
+        return Objects.equals(expected, was);
+    }
+
     private static void sent(JsonObject expect, Observed o, List<String> failed) {
         JsonObject sent = expect.getJsonObject("sent");
         for (String endpoint : sent.fieldNames()) {
             JsonObject check = sent.getJsonObject(endpoint);
             List<Envelope> sends = o.sentTo().apply(endpoint);
             if (check.containsKey("count")) compare(failed, "sent." + endpoint + ".count", check.getInteger("count"), sends.size());
+            if (check.containsKey("settings")) settings(failed, endpoint, check.getJsonObject("settings"), o.settingsTo().apply(endpoint));
             String op = check.containsKey("equals") ? "equals" : "contains";
             if (!check.containsKey(op)) continue;   // a count alone
             String expected = check.getString(op);

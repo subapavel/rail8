@@ -84,7 +84,11 @@ class ValidateCommandTest {
             "  greet.yaml  flow  greet",
             "greeting/mappings/  -  -",
             "greeting/structures/  -  -",
-            "greeting/structures/greeting/  -  -");
+            "greeting/structures/greeting/  -  -",
+            "systems/  -  -",
+            "  acme-erp.yaml  system  acme/erp",
+            "  billing.yaml  system  billing",
+            "  globex-erp.yaml  system  globex/erp");
 
     /** The {@code tree} fixture: a root endpoint, folder.yaml with both fields and with a description only, a nested folder. */
     static final List<String> TREE = List.of(
@@ -342,6 +346,52 @@ class ValidateCommandTest {
 
         assertEquals(List.of(), ran.problems(), ran.toString());
         assertEquals(0, ran.exit(), ran.toString());
+    }
+
+    /**
+     * Each connection key a flow of {@code schemaVersion: 2} names is checked against the system files of the package's locked
+     * dependencies, with the step's adapter: a key a dependency defines passes offline, one it defines for another adapter is a
+     * problem, and a key none defines is a note, checked at deploy; exit 0 with a note.
+     */
+    @Test
+    void aConnectionKeyIsCheckedAgainstTheDependenciesSystemsAndOneNoneDefinesIsANote() throws Exception {
+        Path deps = tmp.resolve("deps");
+        Path common = DepsFixture.copy("common", deps.resolve("common"));
+        Files.createDirectories(common.resolve("systems"));
+        Files.writeString(common.resolve("systems/acme-erp.yaml"), "schemaVersion: 1\nkind: system\npartner: acme\nname: erp\n"
+                + "connections:\n  rest: { adapter: http }\n");
+        DepsFixture.commit(common);
+        Path invoice = DepsFixture.copy("invoice", deps.resolve("invoice"));
+        Path named = invoice.resolve("flows/named.yaml");
+        Files.writeString(named, """
+                schemaVersion: 2
+                kind: flow
+                id: named
+                version: 1.0.0
+                from: { adapter: http, settings: { address: /named } }
+                delivery: { mode: sync }
+                limits: { maxBodyBytes: 65536 }
+                steps:
+                  - { type: to, name: send, adapter: http, connection: acme/erp/rest, settings: { path: /orders } }
+                """);
+        DepsFixture.lock(invoice, common);
+
+        Ran known = run("validate", invoice.toString());
+        assertEquals(List.of(), known.problems(), known.toString());
+        assertTrue(known.outLines().stream().noneMatch(l -> l.startsWith("note: ")), known.toString());
+        assertEquals(0, known.exit(), known.toString());
+
+        CliRuns.rewrite(named, Map.of("connection: acme/erp/rest", "connection: globex/erp/rest"));
+        Ran unknown = run("validate", invoice.toString());
+        assertEquals(List.of(), unknown.problems(), unknown.toString());
+        assertTrue(unknown.outLines().contains("note: globex/erp/rest: not defined in this package or its dependencies; checked at deploy"), unknown.toString());
+        assertEquals(0, unknown.exit(), unknown.toString());
+
+        CliRuns.rewrite(named, Map.of("connection: globex/erp/rest", "connection: acme/erp/soap"));
+        Ran missing = run("validate", invoice.toString());
+        assertEquals(List.of("problem: flow 'named' step 'send' connection 'acme/erp/soap': the system 'acme/erp' of a dependency defines no connection 'soap'"),
+                missing.problems(), missing.toString());
+        assertEquals(1, missing.exit(), missing.toString());
     }
 
     /**

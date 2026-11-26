@@ -451,16 +451,24 @@ public final class Deployments {
     /** As the constructor above, the rows of what this node runs written as the node's {@code epoch} in the pool's membership: tests. */
     public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
                        List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records, long epoch) {
-        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, new Workers(), epoch);
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records, new Workers(), epoch,
+                Environment.fixed(config.env(), Environment.Snapshot.empty()));
+    }
+
+    /** As the first constructor, the flows of {@code schemaVersion: 2} reaching their connections through {@code environment}: a tool's node. */
+    public Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
+                       List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, Environment environment) {
+        this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, new InMemoryDeploymentStore(), new Workers(), 0,
+                environment);
     }
 
     private Deployments(NodeConfig config, Runtime runtime, Map<String, Component> components, Clock clock, Timer timer, List<StepFactory> steps,
                         List<Expressions> languages, MessageStore messages, Dlq dlq, WorkQueue queue, Meter meter, DeploymentStore records,
-                        Workers workers, long epoch) {
+                        Workers workers, long epoch, Environment environment) {
         this(config, runtime, components, clock, timer, steps, languages, messages, dlq, queue, meter, records,
                 new SequentialIntake(messages, queue, workers, config.nodeId()), new InMemoryPollerLeases(clock),
                 new Targets(config.targets().defaults(), config.targets().overrides(), timer), () -> true, workers, WorkSignals.NONE,
-                new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES), epoch);
+                new InMemoryCache(clock, InMemoryCache.MAX_ENTRIES, InMemoryCache.MAX_BYTES), epoch, environment);
     }
 
     /** Deployments whose poller leases are held in this process's memory, on {@code clock}: one node alone. */

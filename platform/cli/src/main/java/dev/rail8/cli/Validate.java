@@ -3,6 +3,9 @@ package dev.rail8.cli;
 import dev.rail8.api.Component;
 import dev.rail8.api.Runtime;
 import dev.rail8.core.dlq.InMemoryDlq;
+import dev.rail8.core.flow.AdapterUse;
+import dev.rail8.core.flow.FlowDefinition;
+import dev.rail8.core.key.Keys;
 import dev.rail8.core.queue.InMemoryWorkQueue;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.core.record.Meter;
@@ -38,8 +41,10 @@ import java.util.stream.Collectors;
  * the node's dry build ({@link Deployments#validate}) over a node's modules and the plugins of {@code --plugins} ({@link Plugins})
  * in the environment {@code --env} (dev
  * unless given, whatever {@code RAIL8_ENV} says), with in-memory stores on one Vert.x, the closure held for that call so that
- * the node's own resolution runs over it; nothing of the package or its closure is deployed, started or stored. Prints the package's tree,
- * then one {@code problem: } line per problem, each once; exit 0 without a problem, 1 with one.
+ * the node's own resolution runs over it; nothing of the package or its closure is deployed, started or stored. Each connection a
+ * flow of {@code schemaVersion: 2} names of a system outside the package is looked up in the system files of its dependencies,
+ * with the use's adapter; one that none defines is a note, checked at deploy. Prints the package's tree, then one {@code note: }
+ * line per note and one {@code problem: } line per problem, each once; exit 0 without a problem, 1 with one.
  */
 final class Validate {
 
@@ -54,6 +59,7 @@ final class Validate {
             checked = check(options.dir(), options.value("--env").orElse("dev"), deps, plugins);
         }
         checked.pkg().ifPresent(pkg -> tree(pkg, out));
+        checked.notes().forEach(n -> out.println("note: " + n));
         checked.problems().forEach(p -> out.println("problem: " + p));
         return checked.problems().isEmpty() ? 0 : 1;
     }
@@ -66,8 +72,9 @@ final class Validate {
      * @param schemes the schemes of the components the dry build ran over, the plugins' included; empty when it did not run
      * @param dependencies the closure the dry build held, leaves first, its folders {@code deps}'s until it is closed; empty when it
      *                     did not run
+     * @param notes each connection key a flow names that neither the package nor its dependencies define, one line each
      */
-    record Checked(Optional<Package> pkg, List<String> problems, Set<String> schemes, List<Dependencies.Found> dependencies) {}
+    record Checked(Optional<Package> pkg, List<String> problems, Set<String> schemes, List<Dependencies.Found> dependencies, List<String> notes) {}
 
     /**
      * {@link Package#problems()} of {@code dir}, then its closure's from {@code deps}, then the dry build's over {@code plugins} in
@@ -78,12 +85,13 @@ final class Validate {
         try {
             pkg = Package.load(dir);
         } catch (IllegalArgumentException unreadable) {   // a file that does not parse stops the load; the message starts with its path from the root
-            return new Checked(Optional.empty(), List.of(Cli.oneLine(unreadable.getMessage())), Set.of(), List.of());
+            return new Checked(Optional.empty(), List.of(Cli.oneLine(unreadable.getMessage())), Set.of(), List.of(), List.of());
         }
         Set<String> problems = new LinkedHashSet<>();   // the dry build repeats Package.problems(): each line once, in order
         pkg.problems().forEach(p -> problems.add(Cli.oneLine(p)));
         Set<String> schemes = Set.of();
         List<Dependencies.Found> closure = List.of();
+        List<String> notes = new ArrayList<>();
         if (pkg.manifest().getValue("name") instanceof String name) {   // without a name the problems above say so; nothing to build as
             List<String> unresolved = new ArrayList<>();
             List<Dependencies.Found> resolved = deps.resolve(name, pkg.lock(), unresolved);
@@ -93,9 +101,68 @@ final class Validate {
                 built.problems().forEach(p -> problems.add(Cli.oneLine(p)));
                 schemes = built.schemes();
                 closure = resolved;
+                connections(pkg, resolved, problems, notes);
             }
         }
-        return new Checked(Optional.of(pkg), List.copyOf(problems), schemes, closure);
+        return new Checked(Optional.of(pkg), List.copyOf(problems), schemes, closure, List.copyOf(notes));
+    }
+
+    /**
+     * Each connection a flow of {@code schemaVersion: 2} of {@code pkg} names of a system outside it, against the system files of
+     * {@code closure}: a connection the system there does not define, or defines for another adapter, is a problem; a system none
+     * of them defines is a note. The package's own systems are the dry build's to check.
+     */
+    private static void connections(Package pkg, List<Dependencies.Found> closure, Set<String> problems, List<String> notes) throws IOException {
+        Map<String, JsonObject> systems = new LinkedHashMap<>();
+        for (Dependencies.Found found : closure) Package.load(found.dir()).systems().forEach(systems::putIfAbsent);
+        Set<String> noted = new LinkedHashSet<>();
+        for (Map.Entry<String, JsonObject> flow : pkg.flows().entrySet()) {
+            if (Package.schemaVersion(flow.getValue()) != 2) continue;
+            FlowDefinition def;
+            try {
+                def = FlowDefinition.from(plain(flow.getValue()));
+            } catch (RuntimeException unread) {   // the dry build says why
+                continue;
+            }
+            for (AdapterUse use : def.uses()) {
+                if (use.connection().isEmpty()) continue;
+                String key = use.connection().get();
+                String system;
+                try {
+                    system = Keys.systemOf(key);
+                } catch (IllegalArgumentException malformed) {   // the dry build says why
+                    continue;
+                }
+                if (pkg.systems().containsKey(system)) continue;
+                JsonObject doc = systems.get(system);
+                if (doc == null) {
+                    noted.add(key + ": not defined in this package or its dependencies; checked at deploy");
+                    continue;
+                }
+                String where = "flow '" + flow.getKey() + "' " + use.label() + " connection '" + key + "'";
+                String name = key.substring(system.length() + 1);
+                Optional<String> adapter = doc.getValue("connections") instanceof JsonObject defined && defined.getValue(name) instanceof JsonObject c
+                        ? Optional.ofNullable(c.getString("adapter")) : Optional.empty();
+                if (adapter.isEmpty()) problems.add(where + ": the system '" + system + "' of a dependency defines no connection '" + name + "'");
+                else if (!adapter.get().equals(use.adapter())) {
+                    problems.add(where + ": its system file names the adapter '" + adapter.get() + "', the step '" + use.adapter() + "'");
+                }
+            }
+        }
+        notes.addAll(noted);
+    }
+
+    /** {@code document} as plain maps and lists, at any depth. */
+    private static Map<String, Object> plain(JsonObject document) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        document.forEach(e -> map.put(e.getKey(), plainValue(e.getValue())));
+        return map;
+    }
+
+    private static Object plainValue(Object value) {
+        if (value instanceof JsonObject o) return plain(o);
+        if (value instanceof io.vertx.core.json.JsonArray a) return a.stream().map(Validate::plainValue).toList();
+        return value;
     }
 
     /**

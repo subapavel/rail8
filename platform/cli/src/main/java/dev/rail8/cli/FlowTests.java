@@ -1,6 +1,7 @@
 package dev.rail8.cli;
 
 import dev.rail8.api.Ack;
+import dev.rail8.api.Call;
 import dev.rail8.api.Component;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Expressions;
@@ -13,9 +14,12 @@ import dev.rail8.api.plugin.HttpIngress;
 import dev.rail8.components.mock.Behaviour;
 import dev.rail8.components.mock.MockComponent;
 import dev.rail8.core.dlq.InMemoryDlq;
+import dev.rail8.core.key.Keys;
 import dev.rail8.core.queue.InMemoryWorkQueue;
 import dev.rail8.core.record.InMemoryMessageStore;
 import dev.rail8.core.record.Meter;
+import dev.rail8.runtime.config.ConnectionState;
+import dev.rail8.runtime.config.Environment;
 import dev.rail8.runtime.deploy.DeployRefusedException;
 import dev.rail8.runtime.deploy.Deployments;
 import dev.rail8.runtime.deploy.Secrets;
@@ -68,7 +72,9 @@ import java.util.stream.Stream;
  *
  * <p>Then every {@code kind: test} document in path order, its cases in order, one at a time, each on a world of its own: a
  * fresh fake runtime (clock, timer, ids, blobs), one {@link MockComponent} per scheme, a plugin's included, bound to the document's
- * {@code mocks} — a case's entry for an endpoint replaces the document's whole —, the real {@code direct} component (the direct
+ * {@code mocks} — a case's entry for an endpoint or a connection replaces the document's whole; a test of a flow of
+ * {@code schemaVersion: 2} keys them by connection key, and its node's environment serves every connection a flow names
+ * through the mock of its adapter —, the real {@code direct} component (the direct
  * module's, built over the case's runtime and the run's one Vert.x) in front of
  * the {@code direct} mock ({@link Calls}: a call to a flow of the package or of a dependency runs that flow, unless the case's
  * mocks name its endpoint), in-memory stores, and a node
@@ -125,12 +131,15 @@ final class FlowTests {
     /** The run's copies of the dependencies' folders, leaves first. */
     private List<Copy> dependencies;
     private Vertx vertx;
+    /** The adapter of each connection a flow of {@code schemaVersion: 2} of the package or of a dependency names, by key. */
+    private final Map<String, String> adapters;
 
-    private FlowTests(Package pkg, Path root, List<String> schemes, Plugins plugins) {
+    private FlowTests(Package pkg, Path root, List<String> schemes, Plugins plugins, Map<String, String> adapters) {
         this.pkg = pkg;
         this.root = root;
         this.schemes = schemes;
         this.plugins = plugins;
+        this.adapters = Map.copyOf(adapters);
     }
 
     /** One test document: its path from the package root, its flow, its {@code mocks} and its cases. */
@@ -152,7 +161,8 @@ final class FlowTests {
             Validate.Checked checked = Validate.check(dir, ENV, deps, plugins);
             if (!checked.problems().isEmpty()) return problems(checked.problems(), out);
             Package pkg = checked.pkg().orElseThrow();
-            FlowTests run = new FlowTests(pkg, dir.toAbsolutePath().normalize(), checked.schemes().stream().sorted().toList(), plugins);
+            FlowTests run = new FlowTests(pkg, dir.toAbsolutePath().normalize(), checked.schemes().stream().sorted().toList(), plugins,
+                    adapters(pkg, checked.dependencies()));
             List<Doc> docs = run.docs(dir);
             List<String> problems = run.problems(docs);
             if (!problems.isEmpty()) return problems(problems, out);
@@ -198,6 +208,43 @@ final class FlowTests {
         return passed == cases ? 0 : 1;
     }
 
+    /** The adapter of each connection the flows of {@code schemaVersion: 2} of {@code pkg} and of {@code closure} name, by key. */
+    private static Map<String, String> adapters(Package pkg, List<Dependencies.Found> closure) throws IOException {
+        Map<String, String> adapters = new TreeMap<>();
+        List<Package> packages = new ArrayList<>(List.of(pkg));
+        for (Dependencies.Found found : closure) packages.add(Package.load(found.dir()));
+        for (Package p : packages) {
+            for (JsonObject flow : p.flows().values()) {
+                if (Package.schemaVersion(flow) != 2) continue;
+                if (flow.getValue("from") instanceof JsonObject from && from.getValue("connection") instanceof String key
+                        && from.getValue("adapter") instanceof String adapter) {
+                    adapters.putIfAbsent(key, adapter);
+                }
+                for (Package.WrittenStep step : Package.writtenSteps(flow)) {
+                    JsonObject entry = step.entry();
+                    if ("to".equals(entry.getValue("type")) && entry.getValue("connection") instanceof String key && entry.getValue("adapter") instanceof String adapter) {
+                        adapters.putIfAbsent(key, adapter);
+                    }
+                }
+            }
+        }
+        return adapters;
+    }
+
+    /**
+     * The environment of a case's node: every connection of {@link #adapters} set for its adapter with no value — its mock
+     * describes none —, and every system of one with an instance name, so the deploy finds each connection served.
+     */
+    private Environment environment() {
+        Map<String, ConnectionState> connections = new TreeMap<>();
+        Map<String, String> names = new TreeMap<>();
+        adapters.forEach((key, adapter) -> {
+            connections.put(key, new ConnectionState.Values(adapter, 1, Map.of(), Optional.empty()));
+            names.put(Keys.systemOf(key), NODE_ID);   // a malformed key is one of the package's problems: no case runs
+        });
+        return Environment.fixed(ENV, new Environment.Snapshot(1, false, connections, names, Map.of(), 0));
+    }
+
     private static int problems(List<String> problems, PrintStream out) {
         problems.forEach(p -> out.println("problem: " + p));
         return 1;
@@ -229,6 +276,10 @@ final class FlowTests {
         for (Doc doc : docs) {
             notYet(problems, doc.path() + ": ", doc.mocks());
             String from = from(doc.flow());
+            if (from == null) {
+                problems.add(doc.path() + ": flow '" + doc.flow() + "' has a sender without a connection, which rail8 test does not run yet");
+                continue;
+            }
             String scheme = scheme(from);
             for (JsonObject c : doc.cases()) {
                 String where = doc.path() + ": case '" + c.getString("name") + "' ";
@@ -254,18 +305,29 @@ final class FlowTests {
 
     private static void notYet(List<String> problems, String where, JsonObject mocks) {
         for (String endpoint : mocks.fieldNames()) {
+            if (endpoint.startsWith(DIRECT + ":")) {
+                problems.add(where + "mock '" + endpoint + "': a call of another flow from a flow of schemaVersion 2 is not run by rail8 test yet");
+                continue;
+            }
             JsonObject behaviour = mocks.getJsonObject(endpoint);
             NOT_YET.stream().filter(behaviour::containsKey).forEach(b -> problems.add(where + "mock '" + endpoint + "': " + b + " is not implemented yet"));
         }
     }
 
-    /** The from endpoint of the flow {@code flow}. */
+    /**
+     * What the mocks key the sender of the flow {@code flow} by: its from endpoint, or for a flow of {@code schemaVersion: 2} its
+     * connection; null for a sender of {@code schemaVersion: 2} without one.
+     */
     private String from(String flow) {
-        return pkg.flows().get(flow).getJsonObject("from").getString("endpoint");
+        JsonObject doc = pkg.flows().get(flow);
+        JsonObject from = doc.getJsonObject("from");
+        return Package.schemaVersion(doc) == 2 ? from.getString("connection") : from.getString("endpoint");
     }
 
-    private String scheme(String endpoint) {
-        return pkg.endpoints().get(endpoint).getString("scheme");
+    /** The scheme of the endpoint {@code key}, or the adapter of the connection {@code key}. */
+    private String scheme(String key) {
+        JsonObject endpoint = pkg.endpoints().get(key);
+        return endpoint != null ? endpoint.getString("scheme") : adapters.get(key);
     }
 
     /**
@@ -315,7 +377,7 @@ final class FlowTests {
             NodeConfig config = NodeConfig.from(Map.of("RAIL8_ENV", ENV, "RAIL8_NODE_ID", NODE_ID, "RAIL8_DATA_DIR", data.toString()))
                     .withSecrets(Secrets.placeholder());   // no secret off the node: every reference resolves to the placeholder
             Deployments node = new Deployments(config, new Runtime(rt.clock(), timer, rt.ids(), rt.blobs(), rt.hasher(), components), components,
-                    rt.clock(), timer, plugins.steps(), plugins.languages(), messages, dlq, queue, Meter.system());
+                    rt.clock(), timer, plugins.steps(), plugins.languages(), messages, dlq, queue, Meter.system(), environment());
             try {
                 for (Copy dep : dependencies) node.deploy(dep.name(), dep.dir());   // leaves first
                 node.deploy(pkg.name(), copy);
@@ -333,7 +395,8 @@ final class FlowTests {
                 Optional<String> first = taken.stream().findFirst().map(Envelope::id);   // none: a feed whose glob matched no file
                 Expectations.Observed observed = new Expectations.Observed(first, answer.result(), answer.cause(), messages, dlq.size(),
                         sends(mocks.values(), calls), endpoint -> calls != null && scheme(endpoint).equals(DIRECT) ? calls.sentTo(endpoint)
-                        : mocks.get(scheme(endpoint)).sentTo(endpoint), xpaths);
+                        : mocks.get(scheme(endpoint)).sentTo(endpoint), endpoint -> calls != null && scheme(endpoint).equals(DIRECT) ? List.of()
+                        : mocks.get(scheme(endpoint)).callsTo(endpoint).stream().map(Call::settings).toList(), xpaths);
                 List<String> failed = Expectations.failed(c.getJsonObject("expect"), observed);
                 return new Verdict(failed.isEmpty(), outcome.flowTime(), failed);
             } catch (DeployRefusedException refused) {
