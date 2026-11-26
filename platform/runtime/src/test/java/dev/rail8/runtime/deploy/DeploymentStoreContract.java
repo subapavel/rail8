@@ -438,6 +438,22 @@ public abstract class DeploymentStoreContract {
                 "a delete keeps the uses of each flow it ran under the flow's id");
     }
 
+    /** The pool's lock reads the systems and the connection uses the pool's records hold, as the store does. */
+    @Test
+    void theLockReadsTheSystemsAndUsesTheRecordsHold() {
+        DeploymentStore.DeployedSystem erp = system("shop", "erp");
+        DeploymentStore.ConnectionUse orders = use("shop", "shop/orders", "from", "erp/inbox", "in", Optional.of("/orders"));
+        save(record("shop", "1.0.0", C_1, SHA_1, AT), configuration(List.of(erp), List.of(orders)));
+
+        PoolLock lock = lock();
+        try {
+            assertEquals(List.of(erp), lock.systems().await(), "the lock reads the systems");
+            assertEquals(List.of(orders), lock.connectionUses().await(), "the lock reads the connection uses");
+        } finally {
+            lock.close().await();
+        }
+    }
+
     static DeploymentStore.DeployedSystem system(String deployment, String key) {
         return new DeploymentStore.DeployedSystem(deployment, key, new JsonObject().put("name", key)
                 .put("connections", new JsonObject().put("api", new JsonObject().put("adapter", "http"))));

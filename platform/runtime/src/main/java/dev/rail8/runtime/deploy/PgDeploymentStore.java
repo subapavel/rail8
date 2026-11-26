@@ -186,23 +186,29 @@ public final class PgDeploymentStore implements DeploymentStore {
 
     @Override
     public Future<List<DeployedSystem>> systems() {
-        return pool.query(SYSTEMS).execute().map(rows -> {
-            List<DeployedSystem> systems = new ArrayList<>();
-            for (Row r : rows) systems.add(new DeployedSystem(r.getString("deployment"), r.getString("system"), (JsonObject) r.getValue("definition")));
-            return systems;
-        });
+        return pool.query(SYSTEMS).execute().map(PgDeploymentStore::systems);
     }
 
     @Override
     public Future<List<ConnectionUse>> connectionUses() {
-        return pool.query(CONNECTION_USES).execute().map(rows -> {
-            List<ConnectionUse> uses = new ArrayList<>();
-            for (Row r : rows) {
-                uses.add(new ConnectionUse(r.getString("deployment"), r.getString("flow"), r.getString("step"), r.getString("connection"),
-                        r.getString("adapter"), r.getString("direction"), r.getBoolean("address"), Optional.ofNullable(r.getString("polled"))));
-            }
-            return uses;
-        });
+        return pool.query(CONNECTION_USES).execute().map(PgDeploymentStore::uses);
+    }
+
+    /** The systems of the rows of {@link #SYSTEMS}. */
+    private static List<DeployedSystem> systems(RowSet<Row> rows) {
+        List<DeployedSystem> systems = new ArrayList<>();
+        for (Row r : rows) systems.add(new DeployedSystem(r.getString("deployment"), r.getString("system"), (JsonObject) r.getValue("definition")));
+        return systems;
+    }
+
+    /** The connection uses of the rows of {@link #CONNECTION_USES}. */
+    private static List<ConnectionUse> uses(RowSet<Row> rows) {
+        List<ConnectionUse> uses = new ArrayList<>();
+        for (Row r : rows) {
+            uses.add(new ConnectionUse(r.getString("deployment"), r.getString("flow"), r.getString("step"), r.getString("connection"),
+                    r.getString("adapter"), r.getString("direction"), r.getBoolean("address"), Optional.ofNullable(r.getString("polled"))));
+        }
+        return uses;
     }
 
     @Override
@@ -313,6 +319,16 @@ public final class PgDeploymentStore implements DeploymentStore {
         @Override
         public Snapshot snapshot() {
             return snapshot;
+        }
+
+        @Override
+        public Future<List<DeployedSystem>> systems() {
+            return conn.query(SYSTEMS).execute().map(PgDeploymentStore::systems);
+        }
+
+        @Override
+        public Future<List<ConnectionUse>> connectionUses() {
+            return conn.query(CONNECTION_USES).execute().map(PgDeploymentStore::uses);
         }
 
         @Override
