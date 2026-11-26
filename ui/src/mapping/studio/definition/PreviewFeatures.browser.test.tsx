@@ -12,6 +12,7 @@ import type { MappingModel } from '../../generated/mapping-model';
 import { definitionPreviewKey } from '../mock/definition-preview';
 import { studioStore } from '../Studio';
 import { StudioFrame } from '../StudioFrame';
+import { opened } from '../../../motion-test';
 
 const ORDER = 'Q{urn:rail8:corpus:skeleton}Order';
 const ORDER_ID = `/${ORDER}/OrderId`;
@@ -87,9 +88,11 @@ async function save() {
 
 async function addVariable(parent: string, name: string) {
   await field(parent).click({ button: 'right' });
+  await opened(menuItem('Add Variable'));
   await menuItem('Add Variable').click();
   const dialog = page.getByRole('dialog', { name: 'Add Variable' });
   await dialog.getByRole('textbox', { name: 'Variable name' }).fill(name);
+  await opened(dialog.getByRole('button', { name: 'Create' }));
   await dialog.getByRole('button', { name: 'Create' }).click();
 }
 
@@ -128,10 +131,12 @@ describe('mapping variables, a preview feature', () => {
     expect(store.getState().workingCopy).toEqual(original);
     // a parent takes a name once
     await field('Order').click({ button: 'right' });
+    await opened(menuItem('Add Variable'));
     await menuItem('Add Variable').click();
     const again = page.getByRole('dialog', { name: 'Add Variable' });
     await again.getByRole('textbox', { name: 'Variable name' }).fill('total');
     await expect.element(again.getByRole('button', { name: 'Create' })).toBeDisabled();
+    await opened(again.getByRole('button', { name: 'Cancel' }));
     await again.getByRole('button', { name: 'Cancel' }).click();
     await save();
     expect(browserState.values.get(KEY)).toMatchObject({ variables: [`/${ORDER}/$total`] });
@@ -156,6 +161,7 @@ describe('mapping variables, a preview feature', () => {
     const parameters = page.getByRole('dialog', { name: 'Function parameters · substring' });
     await parameters.getByLabelText('Start Position').fill('2');
     await parameters.getByLabelText('Character Count').fill('3');
+    await opened(parameters.getByRole('button', { name: 'Apply' }));
     await parameters.getByRole('button', { name: 'Apply' }).click();
     await expect.element(node(/^Node function substring/)).toMatchTextContent('start 2 · length 3');
     expect(store.getState().workingCopy).toEqual(original);
@@ -164,6 +170,7 @@ describe('mapping variables, a preview feature', () => {
     await tool('Add node').click();
     const dialog = page.getByRole('dialog', { name: 'Add node' });
     await expect.element(dialog.getByRole('region', { name: 'Variables' }).getByText('Preview')).toBeVisible();
+    await opened(dialog.getByRole('button', { name: /^total\b/ }));
     await dialog.getByRole('button', { name: /^total\b/ }).click();
 
     await expect.element(node(/^Mapping variable total/)).toBeVisible();
@@ -178,13 +185,16 @@ describe('mapping variables, a preview feature', () => {
     await field('Variable total').click();
 
     await field('Variable total').click({ button: 'right' });
+    await opened(flyoutItem('Add variable to expression'));
     await flyoutItem('Add variable to expression').click();
+    await opened(menuItem(`/Order/OrderId`));
     await menuItem(`/Order/OrderId`).click();
     await expect.element(node(/^Mapping variable total/)).toBeVisible();
     await expect.element(node(/^Target field OrderId/)).toBeVisible();
 
     await field('Variable total').click();
     await studioButton('Cancel').click();
+    await opened(page.getByRole('dialog', { name: 'Discard changes?' }).getByRole('button', { name: 'Discard changes' }));
     await page.getByRole('dialog', { name: 'Discard changes?' }).getByRole('button', { name: 'Discard changes' }).click();
     await expect.element(field('Variable total')).not.toBeInTheDocument();
     await expect.element(page.getByText('Select a target field to see its mapping expression.')).toBeVisible();
@@ -199,10 +209,12 @@ describe('a field named like a variable', () => {
     await renderDefinition({ loadStructure: () => Promise.resolve(structure) });
 
     await field('Order').click({ button: 'right' });
+    await opened(menuItem('Add Variable'));
     await menuItem('Add Variable').click();
     const dialog = page.getByRole('dialog', { name: 'Add Variable' });
     await dialog.getByRole('textbox', { name: 'Variable name' }).fill('total');
     await expect.element(dialog.getByRole('button', { name: 'Create' })).toBeDisabled();
+    await opened(dialog.getByRole('button', { name: 'Cancel' }));
     await dialog.getByRole('button', { name: 'Cancel' }).click();
 
     await field('$total').click();
@@ -215,6 +227,7 @@ describe('grouped expressions, a preview feature', () => {
     const { store, sent, original } = await renderDefinition();
     await field('Note').click({ button: 'right' });
 
+    await opened(menuItem('Add target to expression'));
     await menuItem('Add target to expression').click();
 
     await expect.element(node(/^Target field Note/)).toBeVisible();
@@ -232,6 +245,7 @@ describe('grouped expressions, a preview feature', () => {
     expect(sent()).not.toMatch(/preview/);
 
     await node(/^Target field Note/).click({ button: 'right' });
+    await opened(menuItem('Ungroup'));
     await menuItem('Ungroup').click();
     await expect.element(node(/^Target field Note/)).not.toBeInTheDocument();
     await expect.element(studioButton('Save')).toBeEnabled();
@@ -251,6 +265,7 @@ describe('value mapping and lookups, preview functions', () => {
     const dialog = page.getByRole('dialog', { name: 'Value Mapping Properties' });
     // no SAP namespace by default
     await expect.element(dialog.getByRole('textbox', { name: 'Value-Mapping Context' })).toHaveValue('');
+    await opened(dialog.getByRole('radio', { name: 'Use Default Value' }));
     await dialog.getByRole('radio', { name: 'Use Default Value' }).click();
     await dialog.getByRole('textbox', { name: 'Default Value' }).fill('unknown');
     await dialog.getByRole('button', { name: 'Apply' }).click();
@@ -264,7 +279,9 @@ describe('value mapping and lookups, preview functions', () => {
     await expect.element(tool('Copy')).toBeDisabled();
 
     await node(/^Source field OrderId/).click({ button: 'right' });
+    await opened(flyoutItem('Connect to'));
     await flyoutItem('Connect to').click();
+    await opened(menuItem('Value mapping · a'));
     await menuItem('Value mapping · a').click();
     await expect.element(node(/^Node function Value mapping/)).not.toMatchTextContent(/Missing/);
     expect(store.getState().workingCopy).toEqual(original);
@@ -280,9 +297,11 @@ describe('value mapping and lookups, preview functions', () => {
     const dialog = page.getByRole('dialog', { name: 'RFC Lookup' });
     await expect.element(dialog.getByRole('combobox', { name: 'Communication Channel' })).toBeDisabled();
 
+    await opened(dialog.getByRole('button', { name: 'Choose RFC module' }));
     await dialog.getByRole('button', { name: 'Choose RFC module' }).click();
     const picker = page.getByRole('dialog', { name: 'Choose Function Module' });
     await expect.element(picker.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await opened(picker.getByRole('button', { name: 'SXIDEMO_AIRL_FLIGHT_CHECKAVAIL' }));
     await picker.getByRole('button', { name: 'SXIDEMO_AIRL_FLIGHT_CHECKAVAIL' }).click();
     await picker.getByRole('button', { name: 'Apply' }).click();
     await expect.element(page.getByRole('dialog', { name: 'RFC Lookup' })).toMatchTextContent(/SXIDEMO_AIRL_FLIGHT_CHECKAVAIL/);
@@ -290,6 +309,7 @@ describe('value mapping and lookups, preview functions', () => {
 
     await catalogue().getByRole('button', { name: /^JDBC Lookup/ }).click();
     await node(/^Node function JDBC Lookup/).dblClick();
+    await opened(page.getByRole('dialog', { name: 'JDBC Lookup' }).getByRole('button', { name: 'Choose database table' }));
     await page.getByRole('dialog', { name: 'JDBC Lookup' }).getByRole('button', { name: 'Choose database table' }).click();
     await expect.element(page.getByRole('dialog', { name: 'Choose External Definition' })).toMatchTextContent(/No Suitable Data Found/);
     expect(store.getState().workingCopy).toEqual(original);

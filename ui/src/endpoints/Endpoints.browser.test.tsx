@@ -195,6 +195,7 @@ describe('Endpoints', () => {
     await settingsTab('Polling').click();
     await expect.element(text('Where a delivered file goes.')).not.toBeInTheDocument();
     await field('After success').click();
+    await opened(page.getByRole('option', { name: 'Move', exact: true }));
     await page.getByRole('option', { name: 'Move', exact: true }).click();
     await expect.element(field('Move to')).toBeVisible();
     await button('Check').click();
@@ -228,6 +229,7 @@ describe('Endpoints', () => {
     await field('Host').fill('other');
     await button('Save').click();
     await expect.element(text('The file changed on disk')).toBeVisible();
+    await opened(button('Reload'));
     await button('Reload').click();
     await expect.element(field('Host')).toHaveValue('elsewhere');
     await expect.element(button('Edit')).toBeVisible();
@@ -247,6 +249,7 @@ describe('Endpoints', () => {
     expect(api.read).toHaveBeenCalledTimes(1);
 
     await button('Cancel').click();
+    await opened(button('Discard changes'));
     await button('Discard changes').click();
     working!.reload(['demo/endpoints/inbox.yaml']);
     await expect.element(field('Host')).toHaveValue('elsewhere');
@@ -308,6 +311,7 @@ describe('Endpoints', () => {
     await button('Edit').click();
     await field('Host').fill('other');
     await button('Close inbox').click();
+    await opened(button('Save and close'));
     await button('Save and close').click();
     await expect.element(page.getByRole('heading', { name: 'inbox', level: 1 })).not.toBeInTheDocument();
     expect(api.save).toHaveBeenCalledWith('demo/endpoints/inbox.yaml', expect.objectContaining({ host: 'other' }), '"v1"');
@@ -318,6 +322,7 @@ describe('Endpoints', () => {
     await button('Edit').click();
     await field('Host').fill('other');
     await button('Close inbox').click();
+    await opened(button('Save and close'));
     await button('Save and close').click();
     await expect.element(text('The file was not saved')).toBeVisible();
     await expect.element(text('the disk is full')).toBeVisible();
@@ -395,6 +400,7 @@ describe('Endpoints', () => {
     await field('Settings').fill('{"a": 2}');
     await field('Settings').fill('{"a": ');
     await button('Close raw-in').click();
+    await opened(button('Save and close'));
     await button('Save and close').click();
     await expect.element(text('Some settings are not valid. Correct them, then save.')).toBeVisible();
     await expect.element(page.getByRole('tab', { name: 'raw-in', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -446,6 +452,7 @@ describe('the endpoint editor in another language', () => {
     render(fakeApi());
     await expect.element(button('inbox')).toBeVisible();
     await page.getByRole('button', { name: 'Language: English' }).click();
+    await opened(page.getByRole('menuitem', { name: 'Čeština' }));
     await page.getByRole('menuitem', { name: 'Čeština' }).click();
     expect(currentLanguage()).toBe('cs');
 

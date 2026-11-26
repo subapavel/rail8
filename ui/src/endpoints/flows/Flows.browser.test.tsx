@@ -347,11 +347,13 @@ describe('Editing a flow', () => {
     await open(fakeFlows({ 'demo/flows/invoice.yaml': yaml }));
     await button('Edit').click();
     await button('Actions before second').click();
+    await opened(page.getByRole('menuitem', { name: 'Set simulation start here' }));
     await page.getByRole('menuitem', { name: 'Set simulation start here' }).click();
     await nodeOf('second').click();
     await button('Move up').click();
     await expect.element(button('Actions before first')).toHaveAttribute('title', 'Actions before first');
     await button('Actions before second').click();
+    await opened(page.getByRole('menuitem', { name: 'Set simulation start here' }));
     await page.getByRole('menuitem', { name: 'Set simulation start here' }).click();
     await button('Undo').click();
     await expect.element(button('Actions before first')).toHaveAttribute('title', 'Actions before first');
@@ -362,6 +364,7 @@ describe('Editing a flow', () => {
     await button('Edit').click();
     await nodeOf('validate').click();
     await button('Add step').click();
+    await opened(page.getByRole('menuitem', { name: /^filter/ }));
     await page.getByRole('menuitem', { name: /^filter/ }).click();
     await expect.element(page.getByRole('heading', { name: 'filter', level: 2 })).toBeVisible();
     await button('Delete selected step').click();
@@ -375,6 +378,7 @@ describe('Editing a flow', () => {
     await open(flows);
     await button('Edit').click();
     await button('Add a step at steps[1]').click();
+    await opened(page.getByRole('menuitem', { name: /^filter/ }));
     await page.getByRole('menuitem', { name: /^filter/ }).click();
     await expect.element(nodeOf('filter')).toBeVisible();
     await expect.element(page.getByRole('heading', { name: 'filter', level: 2 })).toBeVisible();
@@ -444,6 +448,7 @@ describe('Editing a flow', () => {
     await open();
     await button('Edit').click();
     await button('Add a step at steps[4]').click();
+    await opened(page.getByRole('menuitem', { name: /^filter/ }));
     await page.getByRole('menuitem', { name: /^filter/ }).click();
     await expect.element(page.getByRole('heading', { name: 'filter', level: 2 })).toBeVisible();
     await button('Undo').click();
@@ -526,6 +531,7 @@ describe('Editing a flow', () => {
     await flows.save('demo/flows/invoice.yaml', invoice.replace('name: validate', 'name: check'), '"v1"');
     await button('Save').click();
     await expect.element(text('The file changed on disk')).toBeVisible();
+    await opened(button('Reload'));
     await button('Reload').click();
     await expect.element(nodeOf('check')).toBeVisible();
     await expect.element(button('Edit')).toBeVisible();
@@ -592,6 +598,7 @@ describe('Editing a flow', () => {
     await nodeOf('validate').click();
     await button('Delete').click();
     await button('Close invoice').click();
+    await opened(button('Save and close'));
     await button('Save and close').click();
     await expect.element(page.getByRole('heading', { name: 'invoice', level: 1 })).not.toBeInTheDocument();
     expect(flows.save).toHaveBeenCalledOnce();
@@ -618,9 +625,11 @@ describe('Editing a flow', () => {
     await nodeOf('validate').click();
     await button('Delete').click();
     await button('Cancel').click();
+    await opened(button('Keep editing'));
     await button('Keep editing').click();
     await expect.element(nodeOf('validate')).not.toBeInTheDocument();
     await button('Cancel').click();
+    await opened(button('Discard changes'));
     await button('Discard changes').click();
     await expect.element(nodeOf('validate')).toBeVisible();
     await button('Edit').click();
@@ -704,6 +713,7 @@ describe('Editing the rest of a flow', () => {
     await button('Properties').click();
     await page.getByRole('textbox', { name: 'description' }).fill('Send an invoice on.');
     await page.getByRole('combobox', { name: 'delivery.mode' }).click();
+    await opened(page.getByRole('option', { name: 'at-least-once', exact: true }));
     await page.getByRole('option', { name: 'at-least-once', exact: true }).click();
     await button('Save').click();
     expect(lastSave(flows)).toBe(invoice.replace('Validate an invoice and send it on.', 'Send an invoice on.').replace('{ mode: sync }', '{ mode: at-least-once }'));
@@ -715,12 +725,14 @@ describe('Editing the rest of a flow', () => {
     await button('Edit').click();
     await button('Properties').click();
     await button('Add a process').click();
+    await opened(page.getByRole('dialog'));
     // a refused name says why in the dialog
     await page.getByRole('textbox', { name: 'Name' }).fill('enrich');
     await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
     await expect.element(text('the flow has a process enrich already')).toBeVisible();
     await page.getByRole('textbox', { name: 'Name' }).fill('audit');
     await page.getByRole('combobox', { name: 'First step' }).click();
+    await opened(page.getByRole('option', { name: 'validate', exact: true }));
     await page.getByRole('option', { name: 'validate', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: 'Add', exact: true }).click();
     await expect.element(canvas().getByText('process audit')).toBeVisible();
@@ -733,6 +745,7 @@ describe('Editing the rest of a flow', () => {
     await expect.element(canvas().getByText('process lookup')).toBeVisible();
     await nodeOf('to').click();
     await page.getByRole('combobox', { name: 'Move to the end of' }).click();
+    await opened(page.getByRole('option', { name: 'process audit', exact: true }));
     await page.getByRole('option', { name: 'process audit', exact: true }).click();
     await button('Save').click();
     expect(lastSave(flows)).toBe(`${processes.replace('  - type: process\n    process: enrich\n  - type: to\n    endpoint: partner-domestic\n', '  - type: process\n    process: lookup\n').replace('  enrich:\n', '  lookup:\n')}  audit:
@@ -777,12 +790,14 @@ describe('Editing the rest of a flow', () => {
     await open(flows, endpoints);
     await button('Edit').click();
     await button('Add a step at steps[4]').click();
+    await opened(page.getByRole('menuitem', { name: /^order/ }));
     await page.getByRole('menuitem', { name: /^order/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to', level: 2 })).toBeVisible();
     expect(endpoints.create).not.toHaveBeenCalled();
     const append = button('Add a step at steps[5]');
     await expect.poll(() => insideCanvas(append.element())).toBe(true);
     await append.click();
+    await opened(page.getByRole('menuitem', { name: /^payment/ }));
     await page.getByRole('menuitem', { name: /^payment/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to-2', level: 2 })).toBeVisible();
     expect(endpoints.create).toHaveBeenCalledWith(
@@ -792,6 +807,7 @@ describe('Editing the rest of a flow', () => {
     // the picture knows the new endpoint: the step names one, and a second call goes through it
     await expect.element(page.getByText(/^\d+ problems?$/)).not.toBeInTheDocument();
     await button('Add a step at steps[6]').click();
+    await opened(page.getByRole('menuitem', { name: /^payment/ }));
     await page.getByRole('menuitem', { name: /^payment/ }).click();
     await expect.element(page.getByRole('heading', { name: 'to-3', level: 2 })).toBeVisible();
     expect(endpoints.create).toHaveBeenCalledTimes(1);
@@ -879,6 +895,7 @@ steps:
     const mark = async (target: string, action: string) => {
       const name = `Actions before ${target}`;
       await button(name).click();
+      await opened(page.getByRole('menu', { name }).getByRole('menuitem', { name: action }));
       await page.getByRole('menu', { name }).getByRole('menuitem', { name: action }).click();
     };
     await expect.element(simulate).toBeDisabled();
@@ -923,6 +940,7 @@ describe('the flow editor in another language', () => {
     render(fakeFlows());
     await expect.element(button('invoice')).toBeVisible();
     await page.getByRole('button', { name: 'Language: English' }).click();
+    await opened(page.getByRole('menuitem', { name: 'Čeština' }));
     await page.getByRole('menuitem', { name: 'Čeština' }).click();
     expect(currentLanguage()).toBe('cs');
 

@@ -1,9 +1,11 @@
 import { expect } from 'vitest';
 import { page, userEvent, type Locator } from 'vitest/browser';
+import { opened } from '../../motion-test';
 
 /** Chooses the visible option in an openable combobox. */
 export async function chooseOption(control: Locator, label: string) {
   await control.click();
+  await opened(page.getByRole('listbox').getByRole('option', { name: label, exact: true }));
   await page.getByRole('listbox').getByRole('option', { name: label, exact: true }).click();
 }
 
