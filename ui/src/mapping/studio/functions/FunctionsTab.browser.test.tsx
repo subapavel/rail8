@@ -120,6 +120,7 @@ describe('the Functions tab, a preview kept in the browser', () => {
     await expect.element(button('Select function calculate2')).toBeVisible();
 
     await button('Cancel').click();
+    await opened(page.getByRole('dialog', { name: 'Discard changes?' }).getByRole('button', { name: 'Discard changes' }));
     await page.getByRole('dialog', { name: 'Discard changes?' }).getByRole('button', { name: 'Discard changes' }).click();
 
     await expect.element(button('Edit')).toBeVisible();
@@ -418,6 +419,7 @@ describe('Export and Import Source Text', () => {
       expect(text).toMatch(/^package mappings;/);
       expect(text).toContain('public class order_id_copy {');
       expect(text).toContain('return in0;');
+      await opened(dialog.getByRole('button', { name: 'Close', exact: true }).last());
       await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
       await expect.element(dialog).not.toBeInTheDocument();
       await expect.element(page.getByRole('heading', { name: 'Processing Log' })).toBeVisible();
@@ -447,6 +449,7 @@ describe('Export and Import Source Text', () => {
     await input.upload(new File([exported], 'order_id_copy.java', { type: 'text/plain' }));
 
     await expect.element(dialog.getByText('Imported source text from order_id_copy.java')).toBeVisible();
+    await opened(dialog.getByRole('button', { name: 'Close', exact: true }).last());
     await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
     await button('Select function calculate1').click();
     await expect.element(source('calculate1')).toHaveValue('return in0.trim();');
@@ -454,6 +457,7 @@ describe('Export and Import Source Text', () => {
     await input.upload(new File(['class Other {}'], 'Other.java', { type: 'text/plain' }));
 
     await expect.element(dialog.getByText('Import failed. Choose a source file exported for these functions. Check its section markers.')).toBeVisible();
+    await opened(dialog.getByRole('button', { name: 'Close', exact: true }).last());
     await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
     await expect.element(source('calculate1')).toHaveValue('return in0.trim();');
   });
@@ -530,14 +534,17 @@ describe('import instructions and archives', () => {
     await page.getByRole('button', { name: 'Choose archive namespace 2' }).click();
     const namespaces = page.getByRole('dialog', { name: 'Choose Namespace' });
     await expect.element(namespaces.getByRole('row').first()).toHaveTextContent('Namespace');
+    await opened(namespaces.getByRole('cell', { name: 'urn:example:common:mappings' }));
     await namespaces.getByRole('cell', { name: 'urn:example:common:mappings' }).dblClick();
     await expect.poll(() => archives()[1]).toEqual({ name: '', namespace: 'urn:example:common:mappings' });
     await page.getByRole('button', { name: 'Choose archive name 2' }).click();
+    await opened(page.getByRole('dialog', { name: 'Choose Imported Archive' }).getByRole('button', { name: 'Cancel' }));
     await page.getByRole('dialog', { name: 'Choose Imported Archive' }).getByRole('button', { name: 'Cancel' }).click();
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
 
     await expect.element(actions.getByRole('button', { name: 'Move up' })).toBeEnabled();
     await page.getByRole('button', { name: 'Choose archive name 1' }).click();
+    await opened(page.getByRole('dialog').getByRole('button', { name: 'Cancel' }));
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
     await expect.element(actions.getByRole('button', { name: 'Paste Object' })).toBeDisabled();
     await actions.getByRole('button', { name: 'Cut Object' }).click();
@@ -546,6 +553,7 @@ describe('import instructions and archives', () => {
     await expect.poll(() => archives()[0]).toEqual({ name: 'JAVA_JSONXML', namespace: 'urn:example:common:functions' });
     await actions.getByRole('button', { name: 'Copy Object' }).click();
     await page.getByRole('button', { name: 'Choose archive namespace 2' }).click();
+    await opened(page.getByRole('dialog').getByRole('button', { name: 'Cancel' }));
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
     await actions.getByRole('button', { name: 'Paste Object' }).click();
     await expect.poll(archives).toEqual([

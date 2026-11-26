@@ -366,12 +366,14 @@ describe('Shell', () => {
       render([...plain('Home'), packages], 'home', async () => [invoice, test]);
       await quickOpen();
       await search().fill('order-test');
+      await opened(choice('order-test'));
       await choice('order-test').click();
       await expect.element(tab('demo')).toHaveAttribute('aria-selected', 'true');
       await quickOpen();
       await search().fill('order-test');
       await expect.element(choice('order-test')).toHaveTextContent('order-testTest · demo/tests/order-test.yaml');
       await search().fill('invoice');
+      await opened(choice('invoice'));
       await choice('invoice').click();
       await quickOpen();
       await search().fill('invoice');
@@ -489,6 +491,7 @@ describe('Shell', () => {
     for (const name of ['Close other tabs', 'Close tabs to the left', 'Close tabs to the right', 'Close all but pinned']) {
       await expect.element(item(name)).toHaveAttribute('aria-disabled', 'true');
     }
+    await opened(item('Close'));
     await item('Close').click();
     await expect.element(page.getByRole('heading', { name: 'No screen open' })).toBeVisible();
   });
@@ -547,6 +550,7 @@ describe('Shell', () => {
 
     await button('Close Draft').click();
     await expect.element(question).toMatchTextContent(/Draft has unsaved changes\./);
+    await opened(question.getByRole('button', { name: 'Cancel' }));
     await question.getByRole('button', { name: 'Cancel' }).click();
     await expect.element(question).not.toBeInTheDocument();
     await expect.poll(titles).toEqual(['A', 'Draft']);
@@ -561,6 +565,7 @@ describe('Shell', () => {
     const draft = edited('Draft');
     await renderOpen([...plain('A'), draft.screen]);
     await button('Close Draft').click();
+    await opened(page.getByRole('dialog', { name: 'Save changes to Draft?' }).getByRole('button', { name: 'Save and close' }));
     await page.getByRole('dialog', { name: 'Save changes to Draft?' }).getByRole('button', { name: 'Save and close' }).click();
     await expect.poll(titles).toEqual(['A']);
     expect(draft.save).toHaveBeenCalledOnce();
@@ -575,6 +580,7 @@ describe('Shell', () => {
     await fromMenu('A', 'Close other tabs');
     await expect.element(question.getByRole('list', { name: 'Tabs with unsaved changes' })).toMatchTextContent('OneTwo');
     await expect.poll(titles).toEqual(['A', 'One', 'Two']);
+    await opened(question.getByRole('button', { name: 'Cancel' }));
     await question.getByRole('button', { name: 'Cancel' }).click();
     await expect.poll(titles).toEqual(['A', 'One', 'Two']);
 
@@ -590,6 +596,7 @@ describe('Shell', () => {
     const two = edited('Two');
     await renderOpen([...plain('A'), one.screen, two.screen]);
     await fromMenu('A', 'Close all but pinned');
+    await opened(page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }));
     await page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }).click();
     await expect.element(page.getByRole('heading', { name: 'No screen open' })).toBeVisible();
     expect(one.save).toHaveBeenCalledOnce();
@@ -601,12 +608,14 @@ describe('Shell', () => {
     const fine = edited('Fine');
     await renderOpen([...plain('A'), failing.screen, fine.screen]);
     await fromMenu('A', 'Close tabs to the right');
+    await opened(page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }));
     await page.getByRole('dialog', { name: 'Save changes to 2 tabs?' }).getByRole('button', { name: 'Save all and close' }).click();
     await expect.element(tab('Failing')).toHaveAttribute('aria-selected', 'true');
     await expect.element(page.getByText('Failing was not saved: the disk is full')).toBeVisible();
     await expect.poll(titles).toEqual(['A', 'Failing']);
 
     await button('Close Failing').click();
+    await opened(page.getByRole('dialog', { name: 'Save changes to Failing?' }).getByRole('button', { name: 'Save and close' }));
     await page.getByRole('dialog', { name: 'Save changes to Failing?' }).getByRole('button', { name: 'Save and close' }).click();
     await expect.element(page.getByRole('dialog')).not.toBeInTheDocument();
     await expect.poll(titles).toEqual(['A', 'Failing']);

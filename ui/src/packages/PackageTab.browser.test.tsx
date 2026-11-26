@@ -436,6 +436,7 @@ describe('the tab of a package', () => {
     const result = page.getByRole('dialog', { name: 'Committed' });
     await expect.element(result.getByText('A hook changed files you chose on disk')).toBeVisible();
     await expect.element(result.getByText("The commit holds the version of flows/orders.yaml you reviewed; the file on disk holds the hook's, which is not committed.")).toBeVisible();
+    await opened(result.getByRole('button', { name: 'Close' }).last());
     await result.getByRole('button', { name: 'Close' }).last().click();
     await expect.element(page.getByRole('tab', { name: 'Changes (1)' })).toBeVisible();
 
@@ -563,6 +564,7 @@ describe('the tab of a package', () => {
     await expect.element(result.getByText('The commit also changes flows/orders.yaml, which you did not choose.')).toBeVisible();
     await expect.element(result.getByText("The commit holds the hook's version of notes.txt, not the one you reviewed.")).toBeVisible();
     await expect.element(result.getByLabelText('What git and the hooks said')).toMatchTextContent(/^formatted the flow\s*\[main [0-9a-f]{7}\] Edit the notes$/);
+    await opened(result.getByRole('button', { name: 'Close' }).last());
     await result.getByRole('button', { name: 'Close' }).last().click();
 
     await page.getByRole('tab', { name: /^Flow / }).click();
@@ -634,6 +636,7 @@ describe('discarding changes of a package', () => {
     await expect.element(listed('notes.txt')).toMatchTextContent('gets the last commit’s version');
     await expect.element(listed('other.txt')).not.toBeInTheDocument();
     await expect.element(discardButton('1 file')).toBeDisabled();
+    await opened(tick());
     await tick().click();
     await discardButton('1 file').click();
 
@@ -672,6 +675,7 @@ describe('discarding changes of a package', () => {
     await count.fill('6');
     await expect.element(discardButton('6 files')).toBeEnabled();
 
+    await opened(count);
     await count.click();
     await userEvent.keyboard('{Enter}');
     await expect.element(discardDialog()).toBeVisible();
@@ -697,10 +701,12 @@ describe('discarding changes of a package', () => {
     window.dispatchEvent(new Event('focus'));
     await expect.element(count).toHaveValue('');
     await expect.element(discardButton('2 files')).toBeDisabled();
+    await opened(discardDialog().getByRole('button', { name: 'Cancel' }));
     await discardDialog().getByRole('button', { name: 'Cancel' }).click();
 
     await pick('b.txt').click();
     await button('Discard changes…').click();
+    await opened(tick());
     await tick().click();
     await expect.element(discardButton('1 file')).toBeEnabled();
     folder.disk['a.txt'] = 'a, edited once more\n';
@@ -717,6 +723,7 @@ describe('discarding changes of a package', () => {
 
     const unsaved = discardDialog().getByRole('alert').filter({ hasText: 'flows/orders.yaml is unsaved in an open tab' });
     await expect.element(unsaved).toMatchTextContent('The tab keeps its unsaved edits. When it saves them after the discard, the editor finds the file changed on disk, unless the discard left its bytes as they were.');
+    await opened(tick());
     await tick().click();
     await discardButton('1 file').click();
     await expect.element(discardDialog()).not.toBeInTheDocument();
@@ -730,6 +737,7 @@ describe('discarding changes of a package', () => {
     await pick('flows/orders.yaml').click();
     await button('Discard changes…').click();
     await expect.element(discardDialog().getByRole('alert')).not.toBeInTheDocument();
+    await opened(tick());
     await tick().click();
     await discardButton('1 file').click();
     await expect.element(discardDialog()).not.toBeInTheDocument();
@@ -764,6 +772,7 @@ describe('discarding changes of a package', () => {
     await pick('notes.txt').click();
     await button('Discard changes…').click();
     folder.disk['notes.txt'] = 'three\n';
+    await opened(tick());
     await tick().click();
     await discardButton('1 file').click();
 
@@ -783,6 +792,7 @@ describe('discarding changes of a package', () => {
       await openOrders({ clones: [{ folder: 'orders', files: { 'notes.txt': 'one\n' }, edits: { 'notes.txt': 'two\n' } }] }, scripted);
       await pick('notes.txt').click();
       await button('Discard changes…').click();
+      await opened(tick());
       await tick().click();
       await discardButton('1 file').click();
       const shown = page.getByRole('dialog', { name: title, exact: true });
