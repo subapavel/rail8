@@ -1,10 +1,10 @@
 readable: true
 nodes:
-  {"runsAs":[],"runs":0,"defaultName":false,"id":"/from","kind":"from","path":["from"],"label":"sftp-inbox","detail":"sftp","opens":{"endpoint":"demo/endpoints/sftp-inbox.yaml"},"width":240,"height":56,"x":0,"y":0}
+  {"runsAs":[],"runs":0,"defaultName":false,"id":"/from","kind":"from","path":["from"],"label":"billing/sftp","detail":"sftp","width":240,"height":56,"x":0,"y":0}
   {"runsAs":["validate"],"runs":1,"defaultName":false,"id":"/steps/0","kind":"step","path":["steps",0],"label":"validate","type":"xsd","form":{"path":["steps",0],"fields":["schema"]},"width":240,"height":56,"detail":"flows/invoice.xsd","x":0,"y":96}
   {"runsAs":["extractKey"],"runs":1,"defaultName":false,"id":"/steps/1","kind":"step","path":["steps",1],"label":"extractKey","type":"extractKey","form":{"path":["steps",1],"fields":["key","xpath","language"]},"width":240,"height":56,"detail":"invoiceId","x":0,"y":192}
   {"runsAs":["toPartner"],"runs":1,"defaultName":false,"id":"/steps/2","kind":"step","path":["steps",2],"label":"toPartner","type":"xslt","form":{"path":["steps",2],"fields":["stylesheet"]},"width":240,"height":56,"detail":"flows/invoice-to-partner.xsl","x":0,"y":288}
-  {"runsAs":["partner"],"runs":1,"defaultName":false,"id":"/steps/3","kind":"step","path":["steps",3],"label":"partner","type":"to","form":{"path":["steps",3],"fields":["endpoint","byProp","endpoints"]},"width":240,"height":56,"detail":"partner-domestic · http","opens":{"endpoint":"demo/endpoints/partner-domestic.yaml"},"x":0,"y":384}
+  {"runsAs":["partner"],"runs":1,"defaultName":false,"id":"/steps/3","kind":"step","path":["steps",3],"label":"partner","type":"to","form":{"path":["steps",3],"fields":["adapter","connection","settings","maxReplyBytes"]},"width":240,"height":56,"detail":"acme/erp/rest · http","x":0,"y":384}
   {"runsAs":[],"runs":0,"defaultName":false,"id":"/steps#end","kind":"end","path":["steps"],"label":"end","width":120,"height":32,"x":60,"y":480}
 edges:
   {"id":"/from->/steps/0","source":"/from","target":"/steps/0","kind":"next","insertAt":["steps",0]}
