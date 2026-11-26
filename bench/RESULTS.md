@@ -60,6 +60,32 @@ minute of arrival, summed over the range, 0.2 ms. A synthetic week of 30 M arriv
 vacuumed: an index-only count of the seven days 1 158 ms for every flow and 89 ms for one; counters per flow and minute
 (201 600 rows) 15 ms for every flow and 1.3 ms for one.
 
+What counts by status cost if they read the messages of small sets instead of every arrival
+(`bench/sql/messages-status-sets.sql`), on the same rows and the same range. The node's `work` and `dlq` are empty. The
+script stands in for them with a backlog of the newest 200 000 arrivals, 2 000 of them also parked, and builds two indexes
+on `messages`: one on the arrival with its flow and step name, which joins each candidate to its arrival index-only, and
+one on the failed rows. Warm is the median of three runs on one connection after a first run. Cold is one read after
+Postgres was restarted and the page cache dropped.
+
+| read | warm ms | cold ms | answered |
+| --- | --- | --- | --- |
+| the newest 20 001 rows of the backlog, each joined to its arrival and checked against the DLQ by its id | 40.2 | 128.3 | 18 001 running of 20 001 |
+| the same, every backlog row rewritten so that its page is not all-visible (38 813 heap fetches) | 62.3 | 118.7 | the same |
+| the whole backlog, 200 000 rows | 613.0 | 929.0 | 198 000 running of 200 000 |
+| 2 001 candidates from the backlog, 1 001 of them parked, each status by the list's rule | 10.9 | 53.4 | failed 1 001, running 1 000 |
+| the same, the backlog rewritten | 19.4 | 96.1 | the same |
+| 2 001 arrivals older than the backlog: every probe of the rule runs | 14.5 | 39.7 | completed 2 001 |
+
+The same 2 001 candidates joined to their arrivals by id alone, through `messages_pkey`, read each arrival from the heap:
+21 ms warm, 0.9 s to 8.7 s on a first read.
+
+What a statement trigger on the insert costs, one that writes one delta per (flow, minute) of the arrivals a statement
+inserted (`bench/sql/arrivals-delta-trigger.sql`). One run is 3 000 statements of 300 rows into an empty table shaped like
+`messages`, in one transaction: the inserts alone, without commits. Seven rounds alternated a plain run and a run with the
+trigger. The medians are 9 231 ms plain and 9 956 ms with the trigger, +7.9 %, and the rounds range from −3.2 % to +18.1 %.
+An earlier run of two rounds gave +1.1 % and +1.4 %; the seven rounds do not hold that up. The same rows sent again, every
+one a conflict, write no delta.
+
 ## The platform's speed by delivery mode — cloud VM, 4 vCPU @ 2.10 GHz (a direction, not a target)
 
 Date 2026-11-18. What each delivery mode gives: messages per second, the time until the sender has its answer, and what a
