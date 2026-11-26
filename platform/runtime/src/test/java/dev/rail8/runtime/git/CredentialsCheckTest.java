@@ -83,6 +83,11 @@ class CredentialsCheckTest {
         assertEquals(new Outcome(State.REFUSED, "orders", "orders at refs/heads/release: not found", clock.instant()), check.last().orElseThrow(),
                 "a repository the node runs that the host no longer shows: the token no longer reaches it");
 
+        answer.set(Reason.CREDENTIALS_UNREADABLE);
+        clock.advance(EVERY);
+        assertEquals(new Outcome(State.REFUSED, "orders", "orders at refs/heads/release: the secret store's rail8.git is unreadable", clock.instant()),
+                check.last().orElseThrow(), "no credentials can be sent: the same as refused, not a host out of reach");
+
         answer.set(Reason.TRANSPORT_FAILED);
         clock.advance(EVERY);
         assertEquals(new Outcome(State.UNREACHABLE, "orders", "orders at refs/heads/release: the transport failed", clock.instant()), check.last().orElseThrow());
