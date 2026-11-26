@@ -92,8 +92,9 @@ export function SecretList({ api }: { api: SecretsApi }) {
           ]}
           expandable={{ rowExpandable: (entry) => entry.keyPair !== undefined, expandedRowRender: (entry) => <KeyPairFacts entry={entry} /> }}
           columns={[
-            { title: t('secrets.name'), dataIndex: 'name', render: (_, entry) => <Typography.Text code>{entry.name}</Typography.Text> },
+            { title: t('secrets.name'), dataIndex: 'name', width: 220, render: (_, entry) => <Typography.Text code>{entry.name}</Typography.Text> },
             { title: t('secrets.kind'), dataIndex: 'kind', width: 150, render: (_, entry) => kindWords(texts, entry.kind) },
+            { title: t('secrets.scope'), dataIndex: 'scope', width: 110, render: (_, entry) => (entry.scope === 'installation' ? t('secrets.scope.installation') : entry.scope) },
             { title: t('secrets.usedBy'), key: 'usedBy', render: (_, entry) => <UsedBy usedBy={entry.usedBy} users={entry.users} /> },
             {
               title: t('secrets.state'),
@@ -155,7 +156,7 @@ export function SecretList({ api }: { api: SecretsApi }) {
             ]}
           />
         </ProCard>
-        <KeyCard state={list.key} />
+        <KeyCards state={list.key} />
       </Flex>
     );
   }
@@ -208,13 +209,13 @@ function KeyPairFacts({ entry }: { entry: SecretEntry }) {
   );
 }
 
-/** The key's state: each live node's key ids, the rows under another key than the common one, and whether a previous key is still set. */
-function KeyCard({ state }: { state: KeyState }) {
+/** The key's state: whether every live node names one key, the rows under another key, and whether a previous key is still set; then each live node's key ids. */
+function KeyCards({ state }: { state: KeyState }) {
   const { t } = useText();
   const keyId = (id: string | null) => (id === null ? '-' : <Typography.Text code>{id}</Typography.Text>);
   return (
-    <ProCard title={<h2>{t('secrets.key')}</h2>} headerBordered>
-      <Flex vertical gap="middle">
+    <>
+      <ProCard title={<h2>{t('secrets.key')}</h2>} headerBordered>
         <Descriptions
           size="small"
           column={3}
@@ -241,6 +242,8 @@ function KeyCard({ state }: { state: KeyState }) {
             },
           ]}
         />
+      </ProCard>
+      <ProCard title={<h2>{t('secrets.key.nodes')}</h2>} headerBordered>
         <Table<NodeKeys>
           aria-label={t('secrets.key.nodes')}
           rowKey="node"
@@ -254,7 +257,7 @@ function KeyCard({ state }: { state: KeyState }) {
             { title: t('secrets.key.previousOf'), key: 'previous', render: (_, node) => keyId(node.previous) },
           ]}
         />
-      </Flex>
-    </ProCard>
+      </ProCard>
+    </>
   );
 }

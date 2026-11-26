@@ -135,7 +135,7 @@ describe('the Secrets screen', () => {
   test('shows a developer each secret with its kind, users, state and last change, a key pair’s facts, the names not stored, the key and the node, and no write', async () => {
     render(seed(), DEVELOPER);
     await expect.element(page.getByRole('heading', { level: 1, name: 'Secrets' })).toBeVisible();
-    await expect.element(rowOf('erp.token')).toMatchTextContent(/Plain value.*Flow orders\/order-in.*Readable.*sam, Nov 20, 2026, 09:00 UTC/);
+    await expect.element(rowOf('erp.token')).toMatchTextContent(/Plain value.*Installation.*Flow orders\/order-in.*Readable.*sam, Nov 20, 2026, 09:00 UTC/);
     await expect.element(rowOf('partner.sftp')).toMatchTextContent(/Key pair.*Connection partner-sftp/);
     await expect.element(rowOf('rail8.git')).toMatchTextContent(/Credentials.*Platform \(git\).*import/);
     await expect.element(rowOf('old.token')).toMatchTextContent(/Plain value.*-.*Unreadable/);

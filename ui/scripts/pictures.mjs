@@ -184,7 +184,7 @@ const SCENES = {
   'canvas-cs': [...studio, tab('Definition'), target('OrderId'), speak('Čeština')],
   'canvas-ru': [...studio, tab('Definition'), target('OrderId'), speak('Русский')],
   secrets: [visit('developer'), menu('Secrets'), expand('Secrets', 'partner.sftp')],
-  'secrets-key': [visit('developer'), menu('Secrets'), reveal("The store's key")],
+  'secrets-key': [visit('developer'), menu('Secrets'), reveal('Keys of the live nodes')],
   'secrets-new-value': [...secrets, press('New secret'), fill('Name', 'billing.api'), fill('Value', 'picture only')],
   'secrets-new-credentials': [...secrets, press('New secret'), fill('Name', 'crm.login'), kind('Credentials'), fill('User', 'rail8-integration'), fill('Password', 'picture only')],
   'secrets-new-key-pair': [...secrets, press('New secret'), fill('Name', 'bank.tls'), kind('Key pair'), fill('Private key', PEM_KEY), fill('Certificates', PEM_CERTIFICATE)],

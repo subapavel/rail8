@@ -2,7 +2,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, test } from 'vitest';
 import { page } from 'vitest/browser';
 import { opened } from '../motion-test';
-import { httpSecretsApi, type SecretEntry, type SecretKind } from './api';
+import { httpSecretsApi, SecretsError, type SecretEntry, type SecretKind, type SecretsApi } from './api';
 import { fakeSecretsNode, type FakeSecrets } from './fake';
 import { SecretDialog } from './SecretDialog';
 
@@ -26,12 +26,12 @@ afterEach(() => {
 });
 
 /** The dialog alone, as a connection's form opens it, over a fake node holding `state`; gives what it was closed with. */
-function show(state: FakeSecrets, props: { name?: string; kinds?: readonly SecretKind[] } = {}) {
+function show(state: FakeSecrets, props: { name?: string; kinds?: readonly SecretKind[] } = {}, api: SecretsApi = httpSecretsApi(fakeSecretsNode(state, 'sam', () => NOW))) {
   const closed: (SecretEntry | null)[] = [];
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  root.render(<SecretDialog api={httpSecretsApi(fakeSecretsNode(state, 'sam', () => NOW))} {...props} onClose={(written) => closed.push(written)} />);
+  root.render(<SecretDialog api={api} {...props} onClose={(written) => closed.push(written)} />);
   return closed;
 }
 
@@ -86,5 +86,18 @@ describe('the form that creates a secret', () => {
     await expect.element(dialog().getByText('The value\'s fields are emptied once the form is sent: enter the value again.')).toBeVisible();
     await expect.element(dialog().getByLabelText('Private key')).toHaveValue('');
     expect(dialog().getByLabelText('Private key').element().closest('.ant-form-item')?.classList.contains('ant-form-item-has-error')).toBe(true);
+  });
+
+  test('after a write the node committed but could not read back, it does not ask for the value again', async () => {
+    const body = { error: 'the change is written, but this node could not read it back', code: 'written-unread', values: {} };
+    const unread = async () => {
+      throw new SecretsError(503, 'written-unread', 'The change is written, but this node could not read it back: it takes effect shortly. Do not send it again.', body);
+    };
+    show(empty(), { name: 'erp.token', kinds: ['value'] }, { ...httpSecretsApi(fakeSecretsNode(empty(), 'sam', () => NOW)), create: unread });
+    await opened(dialog());
+    await dialog().getByLabelText('Value').fill('v');
+    await create().click();
+    await expect.element(dialog().getByText(/Do not send it again\./)).toBeVisible();
+    expect(dialog().getByText(/enter the value again/).query()).toBeNull();
   });
 });
