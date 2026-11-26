@@ -1,0 +1,46 @@
+{
+  "format" : 2,
+  "reach" : {
+    "in" : "none",
+    "out" : "none"
+  },
+  "described" : {
+    "connection" : true,
+    "flow" : true
+  },
+  "tabs" : [ {
+    "id" : "general",
+    "label" : "General",
+    "labelKey" : "rail8.tab.general",
+    "common" : true
+  }, {
+    "id" : "retry",
+    "label" : "Retry",
+    "labelKey" : "rail8.tab.retry",
+    "common" : true
+  }, {
+    "id" : "recording",
+    "label" : "Recording",
+    "labelKey" : "rail8.tab.recording",
+    "common" : true
+  }, {
+    "id" : "security",
+    "label" : "Security",
+    "labelKey" : "rail8.tab.security",
+    "common" : true
+  } ],
+  "connection" : [ ],
+  "flow" : [ {
+    "name" : "address",
+    "type" : "text",
+    "label" : "Address",
+    "labelKey" : "direct.field.address.label",
+    "help" : "The address in this node: a sender serves it, a send calls the flow serving it. A path such as /orders, matched exactly.",
+    "helpKey" : "direct.field.address.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "in", "out" ],
+    "pattern" : "^(?=.{2,256}$)/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*$"
+  } ],
+  "rules" : [ ]
+}

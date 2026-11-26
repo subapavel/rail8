@@ -78,10 +78,11 @@ public final class Field {
     private final Escape escape;
     /** The kinds a secret field takes, in the order it names them; empty for any other field. */
     private final Set<Secret.Kind> kinds;
+    private final boolean server;
 
     private Field(Type type, String name, String label, String help, boolean required, Object byDefault, Tab tab, Set<Direction> directions,
                   String shownBy, List<Object> shownFor, Long min, Long max, String pattern, List<Choice> choiceList, Escape escape,
-                  Set<Secret.Kind> kinds) {
+                  Set<Secret.Kind> kinds, boolean server) {
         this.type = type;
         this.name = name;
         this.label = label;
@@ -98,6 +99,7 @@ public final class Field {
         this.choices = choiceList == null ? null : choiceList.stream().map(Choice::value).toList();
         this.escape = escape;
         this.kinds = kinds;
+        this.server = server;
         this.compiled = validate();
         this.byDefault = byDefault == null ? null : normalDefault(byDefault);
     }
@@ -110,7 +112,7 @@ public final class Field {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(label, "label");
         Objects.requireNonNull(help, "help");
-        return new Field(type, name, label, help, false, null, Tab.GENERAL, EnumSet.allOf(Direction.class), null, null, null, null, null, choices, null, kinds);
+        return new Field(type, name, label, help, false, null, Tab.GENERAL, EnumSet.allOf(Direction.class), null, null, null, null, null, choices, null, kinds, false);
     }
 
     /** A string; {@code label} is what the form names it, 1 to 64 characters, and {@code help} what it says of it, 1 to 1000. */
@@ -158,7 +160,7 @@ public final class Field {
 
     private Field with(boolean required, Object byDefault, Tab tab, Set<Direction> directions, String shownBy, List<Object> shownFor,
                        Long min, Long max, String pattern) {
-        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds);
+        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds, server);
     }
 
     /** A field the endpoint must set; it has no default. While hidden by {@link #visibleWhen} it is not required. */
@@ -223,8 +225,28 @@ public final class Field {
      */
     public Field expression(Escape escape) {
         Objects.requireNonNull(escape, "escape");
-        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds);
+        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds, server);
     }
+
+    /**
+     * A field of the connection form that names the server the connection connects to: a URL, a host, a port. Only such
+     * fields count as the server a connection's secrets go to, by their effective values; a path, a time limit, a proxy or
+     * a trust never does. {@link Forms} takes it on a text or an integer field of the connection form that is no secret, and
+     * refuses a connection form that holds a secret field and no such field. The description serves it as
+     * {@code "server": true}.
+     *
+     * @since 0.4
+     */
+    public Field server() {
+        return new Field(type, name, label, help, required, byDefault, tab, directions, shownBy, shownFor, min, max, pattern, choiceList, escape, kinds, true);
+    }
+
+    /**
+     * Whether the field names the server the connection connects to ({@link #server()}).
+     *
+     * @since 0.4
+     */
+    public boolean isServer() { return server; }
 
     /** The key of the setting. */
     public String name() { return name; }
@@ -403,6 +425,7 @@ public final class Field {
         }
         if (escape != null) m.put("expression", escape.name().toLowerCase(Locale.ROOT));
         if (type == Type.SECRET) m.put("kinds", kinds.stream().map(Secret.Kind::id).toList());
+        if (server) m.put("server", true);
         if (shownBy != null) {
             Map<String, Object> when = new LinkedHashMap<>();
             when.put("field", shownBy);

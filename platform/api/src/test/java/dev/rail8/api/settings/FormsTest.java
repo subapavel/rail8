@@ -27,7 +27,7 @@ class FormsTest {
 
     /** A drop-like adapter that polls in from a connection and sends out to one: the forms every case below breaks once. */
     static final Settings CONNECTION_FORM = Settings.of(
-            Field.text("url", "URL", "Where the system is.").required(),
+            Field.text("url", "URL", "Where the system is.").required().server(),
             Field.secret("password", "Password", "The login's password.").tab(Tab.SECURITY));
     static final Settings FLOW_FORM = Settings.of(
             Field.text("dir", "Directory", "Where the files are.").in(),
@@ -61,6 +61,31 @@ class FormsTest {
     void aSecretBelongsToTheConnectionForm() {
         Settings flow = Settings.of(Field.secret("token", "Token", "A key.").out());
         refused(() -> new Forms(CONNECTION_FORM, flow, BOTH), "field 'token': a secret belongs to the connection form");
+    }
+
+    @Test
+    void theServerIsNamedByATextOrAnIntegerFieldOfTheConnectionFormThatIsNoSecret() {
+        Settings flow = Settings.of(Field.text("dir", "Directory", "Where the files are.").in().server());
+        refused(() -> new Forms(CONNECTION_FORM, flow, BOTH), "field 'dir': the server belongs to the connection form");
+        Settings secret = Settings.of(Field.text("url", "URL", "Where.").server(), Field.secret("password", "Password", "A key.").server());
+        refused(() -> new Forms(secret, FLOW_FORM, BOTH), "field 'password': a secret names no server");
+        Settings bool = Settings.of(Field.text("url", "URL", "Where.").server(), Field.bool("tls", "TLS", "Whether.").server());
+        refused(() -> new Forms(bool, FLOW_FORM, BOTH), "field 'tls': a server is named by a text or an integer field");
+        Settings choice = Settings.of(Field.choice("region", "Region", "Which.", Choice.of("eu", "EU")).server());
+        refused(() -> new Forms(choice, FLOW_FORM, BOTH), "field 'region': a server is named by a text or an integer field");
+        Settings marked = Settings.of(Field.text("host", "Host", "Where.").server(), Field.integer("port", "Port", "Which.").byDefault(22).server(),
+                Field.integer("timeoutMs", "Timeout", "How long."));
+        assertEquals(List.of("host", "port"), new Forms(marked, FLOW_FORM, BOTH).connection().servers(), "in the form's order");
+    }
+
+    @Test
+    void aConnectionFormThatHoldsASecretNamesItsServer() {
+        Settings unnamed = Settings.of(Field.text("url", "URL", "Where the system is.").required(),
+                Field.secret("password", "Password", "The login's password."), Field.secret("token", "Token", "A key."));
+        refused(() -> new Forms(unnamed, FLOW_FORM, BOTH),
+                "field 'password': a secret goes to a server, but no field of the connection form names one (Field.server())");
+        Settings noSecret = Settings.of(Field.text("url", "URL", "Where the system is.").required());
+        assertDoesNotThrow(() -> new Forms(noSecret, FLOW_FORM, BOTH), "a form that sends no secret needs no server");
     }
 
     @Test
@@ -128,7 +153,7 @@ class FormsTest {
         Tab polling = Tab.of("polling", "Polling");
         Tab files = Tab.of("files", "Files");
         Settings connection = Settings.of(
-                        Field.text("host", "Host", "The server.").required().in(),
+                        Field.text("host", "Host", "The server.").required().in().server(),
                         Field.secret("password", "Password", "The password.").tab(Tab.SECURITY).in(),
                         Field.secret("privateKey", "Private key", "The key.").tab(Tab.SECURITY).in(),
                         Field.integer("retries", "Retries", "How often.").tab(files).in())
@@ -161,8 +186,8 @@ class FormsTest {
         List<?> connectionFields = (List<?>) json.get("connection");
         assertEquals(List.of("host", "password", "privateKey", "retries"), connectionFields.stream().map(f -> ((Map<?, ?>) f).get("name")).toList());
         assertEquals(Map.of("name", "host", "type", "text", "label", "Host", "labelKey", "drop.field.host.label", "help", "The server.",
-                "helpKey", "drop.field.host.help", "tab", "general", "required", true, "directions", List.of("in")), connectionFields.get(0));
-        assertEquals(List.of("name", "type", "label", "labelKey", "help", "helpKey", "tab", "required", "directions"),
+                "helpKey", "drop.field.host.help", "tab", "general", "required", true, "directions", List.of("in"), "server", true), connectionFields.get(0));
+        assertEquals(List.of("name", "type", "label", "labelKey", "help", "helpKey", "tab", "required", "directions", "server"),
                 List.copyOf(((Map<?, ?>) connectionFields.get(0)).keySet()), "each text key follows its text");
 
         List<?> flowFields = (List<?>) json.get("flow");
@@ -172,6 +197,7 @@ class FormsTest {
         assertEquals(List.of(Map.of("value", "delete", "label", "Delete", "labelKey", "drop.field.afterSuccess.choice.delete"),
                 Map.of("value", "move", "label", "Move", "labelKey", "drop.field.afterSuccess.choice.move")), afterSuccess.get("choices"));
         assertEquals("query", ((Map<?, ?>) flowFields.get(2)).get("expression"));
+        assertFalse(((Map<?, ?>) connectionFields.get(3)).containsKey("server"), "a field not marked has no key server");
         assertEquals(Map.of("field", "afterSuccess", "values", List.of("move")), ((Map<?, ?>) flowFields.get(1)).get("visibleWhen"));
 
         assertEquals(List.of(Map.of("kind", "exactlyOne", "fields", List.of("password", "privateKey")),

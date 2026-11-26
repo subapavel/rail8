@@ -88,8 +88,8 @@ class AdminServerComponentsTest {
         @Override public String scheme() { return "drop"; }
         @Override public Forms forms() {
             return new Forms(Settings.of(
-                            Field.text("host", "Host", "The server.").in(),
-                            Field.integer("port", "Port", "The port.").range(1, 65535).byDefault(22).in(),
+                            Field.text("host", "Host", "The server.").in().server(),
+                            Field.integer("port", "Port", "The port.").range(1, 65535).byDefault(22).in().server(),
                             Field.secret("password", "Password", "The password.").tab(Tab.SECURITY).in(),
                             Field.secret("privateKey", "Private key", "The key.").tab(Tab.SECURITY).in())
                     .exactlyOne("password", "privateKey"),
@@ -198,9 +198,9 @@ class AdminServerComponentsTest {
                              {"id": "security", "label": "Security", "labelKey": "rail8.tab.security", "common": true}],
                     "connection": [
                       {"name": "host", "type": "text", "label": "Host", "labelKey": "drop.field.host.label", "help": "The server.",
-                       "helpKey": "drop.field.host.help", "tab": "general", "required": false, "directions": ["in"]},
+                       "helpKey": "drop.field.host.help", "tab": "general", "required": false, "directions": ["in"], "server": true},
                       {"name": "port", "type": "integer", "label": "Port", "labelKey": "drop.field.port.label", "help": "The port.",
-                       "helpKey": "drop.field.port.help", "tab": "general", "required": false, "directions": ["in"], "default": 22, "min": 1, "max": 65535},
+                       "helpKey": "drop.field.port.help", "tab": "general", "required": false, "directions": ["in"], "default": 22, "min": 1, "max": 65535, "server": true},
                       {"name": "password", "type": "secret", "label": "Password", "labelKey": "drop.field.password.label", "help": "The password.",
                        "helpKey": "drop.field.password.help", "tab": "security", "required": false, "directions": ["in"], "kinds": ["value"]},
                       {"name": "privateKey", "type": "secret", "label": "Private key", "labelKey": "drop.field.privateKey.label", "help": "The key.",

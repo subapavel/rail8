@@ -115,7 +115,7 @@ public final class HttpComponent implements Component {
     static final Forms FORMS = new Forms(
             Settings.of(
                     Field.text("url", "URL", "The http or https URL requests are posted to: scheme, host, port and a path prefix, "
-                            + "such as https://partner.example/api. No user name or password in it.").required().pattern(NO_USER_INFO).out(),
+                            + "such as https://partner.example/api. No user name or password in it.").required().pattern(NO_USER_INFO).out().server(),
                     Field.integer("timeoutMs", "Timeout (ms)", "How long a request may take, in milliseconds.")
                             .range(1, Integer.MAX_VALUE).byDefault(30_000).out(),
                     Field.integer("poolSize", "Pool size", "How many connections to the partner are kept open at most.")

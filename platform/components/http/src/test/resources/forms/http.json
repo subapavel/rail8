@@ -1,0 +1,96 @@
+{
+  "format" : 2,
+  "reach" : {
+    "in" : "none",
+    "out" : "connection"
+  },
+  "described" : {
+    "connection" : true,
+    "flow" : true
+  },
+  "tabs" : [ {
+    "id" : "general",
+    "label" : "General",
+    "labelKey" : "rail8.tab.general",
+    "common" : true
+  }, {
+    "id" : "retry",
+    "label" : "Retry",
+    "labelKey" : "rail8.tab.retry",
+    "common" : true
+  }, {
+    "id" : "recording",
+    "label" : "Recording",
+    "labelKey" : "rail8.tab.recording",
+    "common" : true
+  }, {
+    "id" : "security",
+    "label" : "Security",
+    "labelKey" : "rail8.tab.security",
+    "common" : true
+  } ],
+  "connection" : [ {
+    "name" : "url",
+    "type" : "text",
+    "label" : "URL",
+    "labelKey" : "http.field.url.label",
+    "help" : "The http or https URL requests are posted to: scheme, host, port and a path prefix, such as https://partner.example/api. No user name or password in it.",
+    "helpKey" : "http.field.url.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "out" ],
+    "pattern" : "[A-Za-z][A-Za-z0-9+.-]*://[^/?#@]+([/?#].*)?",
+    "server" : true
+  }, {
+    "name" : "timeoutMs",
+    "type" : "integer",
+    "label" : "Timeout (ms)",
+    "labelKey" : "http.field.timeoutMs.label",
+    "help" : "How long a request may take, in milliseconds.",
+    "helpKey" : "http.field.timeoutMs.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "out" ],
+    "default" : 30000,
+    "min" : 1,
+    "max" : 2147483647
+  }, {
+    "name" : "poolSize",
+    "type" : "integer",
+    "label" : "Pool size",
+    "labelKey" : "http.field.poolSize.label",
+    "help" : "How many connections to the partner are kept open at most.",
+    "helpKey" : "http.field.poolSize.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "out" ],
+    "default" : 8,
+    "min" : 1,
+    "max" : 2147483647
+  } ],
+  "flow" : [ {
+    "name" : "address",
+    "type" : "text",
+    "label" : "Address",
+    "labelKey" : "http.field.address.label",
+    "help" : "The path under the adapter's prefix on the node's HTTP port that senders call, such as /orders; matched exactly.",
+    "helpKey" : "http.field.address.help",
+    "tab" : "general",
+    "required" : true,
+    "directions" : [ "in" ],
+    "pattern" : "^(?=.{2,256}$)(/(?!\\.\\.?(/|$))[A-Za-z0-9._~-]+)+$"
+  }, {
+    "name" : "path",
+    "type" : "text",
+    "label" : "Path",
+    "labelKey" : "http.field.path.label",
+    "help" : "The path a send goes to, joined to the path of the connection's url, such as /orders. None: the url as it is.",
+    "helpKey" : "http.field.path.help",
+    "tab" : "general",
+    "required" : false,
+    "directions" : [ "out" ],
+    "pattern" : "/.*",
+    "expression" : "path"
+  } ],
+  "rules" : [ ]
+}

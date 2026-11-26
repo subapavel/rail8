@@ -52,7 +52,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * files for a fresh consumer of the inbound, which delivers them once the partner is back; a stop is not a break.
  * A consumer's successor, started once it stopped, delivers what it left and never a file it acknowledged. Health is up
  * only while a consumer runs. The forms are the same on every call, serve the in direction and are labelled, with their
- * text keys; {@link #inbound()} passes them; building a consumer reads no secret.
+ * text keys; the connection form only adds to the one recorded in the test resources' {@code forms/<scheme>.json};
+ * {@link #inbound()} passes them; building a consumer reads no secret.
  *
  * @since 0.1
  */
@@ -235,6 +236,17 @@ public abstract class PollingConsumerContract {
     public void everyFieldChoiceAndTabHasALabelAndItsTextKeys() {
         Component component = component();
         ComponentContract.assertLabelled(component.scheme(), component.forms());
+    }
+
+    /**
+     * The connection form only adds to the one recorded in the test resources, {@code forms/<scheme>.json}: no field gone,
+     * retyped, marked or unmarked {@code server()}, with its default changed, become required or narrowed, and no new field
+     * required. A connection form that describes nothing needs no recorded form.
+     */
+    @Test
+    public void theConnectionFormOnlyAddsToTheRecordedOne() {
+        Component component = component();
+        RecordedForm.assertOnlyAdds(getClass(), component.scheme(), component.forms());
     }
 
     @Test

@@ -51,6 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class PollingConsumerContractSelfTest {
 
     static final Set<String> CASES = Set.of("theSchemeIsNamedAndNotThePlatforms", "theFormsAreTheSameOnEveryCallAndServeTheInDirection",
+            "theConnectionFormOnlyAddsToTheRecordedOne",
             "everyFieldChoiceAndTabHasALabelAndItsTextKeys", "theInboundPassesTheForms", "noSecretHandleIsReadWhileAConsumerIsBuilt",
             "aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged",
             "aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted", "theFileStaysWhileTheAnswerIsPending",
@@ -78,6 +79,7 @@ class PollingConsumerContractSelfTest {
     static final String SCHEME = "theSchemeIsNamedAndNotThePlatforms";
     static final String SAME_FORMS = "theFormsAreTheSameOnEveryCallAndServeTheInDirection";
     static final String INBOUND = "theInboundPassesTheForms";
+    static final String RECORDED = "theConnectionFormOnlyAddsToTheRecordedOne";
     static final String SECRET = "noSecretHandleIsReadWhileAConsumerIsBuilt";
 
     /** The forms of the correct variant: nothing described, the in direction reaching a connection. */
@@ -386,6 +388,20 @@ class PollingConsumerContractSelfTest {
         assertEquals(Set.of(), failing(v -> v.scheme = "other"), "another scheme");
         assertEquals(Set.of(SCHEME), failing(v -> v.scheme = " "));
         assertEquals(Set.of(SCHEME), failing(v -> v.scheme = Forms.PLATFORM));
+    }
+
+    @Test
+    void aConnectionFormThatDoesNotOnlyAddToTheRecordedOneFailsOnlyItsCase() {
+        assertEquals(Set.of(), failing(v -> {
+            v.scheme = "partner";
+            v.forms = () -> new Forms(RecordedFormTest.partner(true, 22), Settings.NONE, FORMS.reach());
+        }), "described as forms/partner.json records it");
+        assertEquals(Set.of(RECORDED), failing(v -> {
+            v.scheme = "partner";
+            v.forms = () -> new Forms(RecordedFormTest.partner(true, 2222), Settings.NONE, FORMS.reach());
+        }), "the port's default changed");
+        assertEquals(Set.of(RECORDED), failing(v -> v.forms = () -> new Forms(RecordedFormTest.partner(true, 22), Settings.NONE, FORMS.reach())),
+                "described, and no form recorded for its scheme");
     }
 
     @Test

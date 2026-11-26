@@ -97,7 +97,7 @@ public final class WebhookComponent implements Component {
     static final Forms FORMS = new Forms(
             Settings.of(
                     Field.text("url", "URL", "The URL each message is posted to, such as https://partner.example/hook. "
-                            + "No user name or password in it.").required().pattern(NO_USER_INFO).out(),
+                            + "No user name or password in it.").required().pattern(NO_USER_INFO).out().server(),
                     Field.integer("timeoutMs", "Timeout (ms)", "How long a request may take, in milliseconds.").min(1).byDefault(30_000).out()),
             Settings.of(HttpIngress.ADDRESS),
             Map.of(Direction.IN, Forms.Reach.NO_CONNECTION, Direction.OUT, Forms.Reach.CONNECTION));

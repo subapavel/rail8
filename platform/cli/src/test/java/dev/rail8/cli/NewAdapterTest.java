@@ -75,7 +75,8 @@ class NewAdapterTest {
                 "src/main/resources/META-INF/services/dev.rail8.api.plugin.Plugin",
                 "src/test/java/org/acme/rail8/adapter/AcmeComponentContractTest.java",
                 "src/test/java/org/acme/rail8/adapter/AcmeComponentTest.java",
-                "src/test/java/org/acme/rail8/adapter/AcmeMockContractTest.java"), files);
+                "src/test/java/org/acme/rail8/adapter/AcmeMockContractTest.java",
+                "src/test/resources/forms/acme.json"), files);
         assertTrue(ran.outLines().containsAll(files.stream().map(f -> "  " + f).toList()), "every file written is named: " + ran);
         for (String file : files) {
             String text = Files.readString(dir.resolve(file)).toLowerCase(Locale.ROOT);
@@ -130,6 +131,7 @@ class NewAdapterTest {
         Path tests = compile(dir.resolve("src/test/java"), temp.resolve("test-classes"), List.of(main));
         Files.copy(dir.resolve("src/main/resources/META-INF/services/dev.rail8.api.plugin.Plugin"),
                 Files.createDirectories(main.resolve("META-INF/services")).resolve("dev.rail8.api.plugin.Plugin"));
+        Files.copy(dir.resolve("src/test/resources/forms/acme.json"), Files.createDirectories(tests.resolve("forms")).resolve("acme.json"));
 
         try (URLClassLoader loader = new URLClassLoader(new URL[] {main.toUri().toURL(), tests.toUri().toURL()}, getClass().getClassLoader())) {
             List<String> classes = List.of("AcmeComponentContractTest", "AcmeMockContractTest", "AcmeComponentTest");
