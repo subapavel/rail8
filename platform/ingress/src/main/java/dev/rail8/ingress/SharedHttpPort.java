@@ -24,7 +24,6 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
@@ -346,10 +345,9 @@ public final class SharedHttpPort implements HttpIngress {
 
     /** Whether {@code address}, a literal IPv4 or IPv6 address, is a loopback address; false for anything else. */
     static boolean loopback(String address) {
-        if (address.isEmpty() || !address.matches("[0-9A-Fa-f:.%]+")) return false;   // a literal only: nothing is resolved
         try {
-            return InetAddress.getByName(address).isLoopbackAddress();
-        } catch (UnknownHostException unformed) {
+            return InetAddress.ofLiteral(address).isLoopbackAddress();   // a literal only: nothing is resolved
+        } catch (IllegalArgumentException notALiteral) {
             return false;
         }
     }

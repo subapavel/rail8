@@ -139,6 +139,7 @@ class SharedHttpPortEntryTest {
         assertTrue(SharedHttpPort.loopback("::1"));
         assertTrue(SharedHttpPort.loopback("0:0:0:0:0:0:0:1"));
         assertFalse(SharedHttpPort.loopback("localhost"), "a name is never resolved");
+        assertFalse(SharedHttpPort.loopback("cafe"), "a name of hex letters is a name, never resolved");
         assertFalse(SharedHttpPort.loopback("10.0.0.1"));
         assertFalse(SharedHttpPort.loopback("::ffff:10.0.0.1"));
         assertFalse(SharedHttpPort.loopback(""));

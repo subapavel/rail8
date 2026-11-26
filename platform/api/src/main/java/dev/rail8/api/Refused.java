@@ -38,7 +38,7 @@ public final class Refused extends RuntimeException {
     }
 
     private final Reason reason;
-    private final transient Optional<Duration> retryAfter;
+    private final Duration retryAfter;   // null for a reason that does not wait
 
     /**
      * A refusal for {@code reason}; for the platform and the testkit.
@@ -57,7 +57,7 @@ public final class Refused extends RuntimeException {
             throw new IllegalArgumentException("the time to try again after is not positive: " + retryAfter.get());
         }
         this.reason = reason;
-        this.retryAfter = retryAfter;
+        this.retryAfter = retryAfter.orElse(null);
     }
 
     public Reason reason() { return reason; }
@@ -75,7 +75,7 @@ public final class Refused extends RuntimeException {
     }
 
     /** When the caller may try again: for {@link Reason#TOO_MANY} and {@link Reason#BUSY}. */
-    public Optional<Duration> retryAfter() { return retryAfter; }
+    public Optional<Duration> retryAfter() { return Optional.ofNullable(retryAfter); }
 
     /** The fixed English text of {@code reason}'s code. */
     static String text(Reason reason) {
@@ -91,6 +91,6 @@ public final class Refused extends RuntimeException {
 
     @Override
     public String toString() {
-        return "Refused[" + code() + retryAfter.map(wait -> ", retry after " + wait.toString().toLowerCase(Locale.ROOT)).orElse("") + "]";
+        return "Refused[" + code() + retryAfter().map(wait -> ", retry after " + wait.toString().toLowerCase(Locale.ROOT)).orElse("") + "]";
     }
 }

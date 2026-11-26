@@ -348,7 +348,7 @@ public final class MockComponent implements Component {
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         Objects.requireNonNull(h, "handler");
-        return consumer(in, (headers, track) -> Future.succeededFuture(track.apply(h)));
+        return consumer(in, Entry.of(presented -> Future.succeededFuture(h)));
     }
 
     /**
@@ -359,21 +359,6 @@ public final class MockComponent implements Component {
     @Override
     public Consumer consumer(Inbound in, Entry entry) {
         Objects.requireNonNull(entry, "entry");
-        return consumer(in, (headers, track) -> entry.enter(presented(headers)).transform(entered -> {
-            if (entered.succeeded()) return Future.succeededFuture(track.apply(entered.result()));
-            if (entered.cause() instanceof Refused r) {
-                return Future.failedFuture(new NackException(r.code() + ": " + r.getMessage(), r.retryAfter().isPresent()));
-            }
-            return Future.failedFuture(entered.cause());
-        }));
-    }
-
-    /**
-     * The consumer of {@code in}, which enters each message with {@code enter}: given the headers it arrives with and the
-     * tracking of a handler, the tracked handler of that one message, or a failure that refuses it.
-     */
-    private Consumer consumer(Inbound in, java.util.function.BiFunction<Headers, Function<Function<Envelope, Future<Ack>>, Function<Envelope, Future<Ack>>>,
-            Future<Function<Envelope, Future<Ack>>>> enter) {
         Objects.requireNonNull(in, "in");
         String endpoint = in.connection().map(Connection::key).orElse(in.flow());
         Drain drain = new Drain();
@@ -383,7 +368,13 @@ public final class MockComponent implements Component {
             given.add(entered);   // recorded before the handler runs: whoever reads its answer finds it
             return drain.deliver(h, entered).map(this::leaving);
         };
-        Running running = new Running(in, headers -> enter.apply(headers, track));
+        Running running = new Running(in, headers -> entry.enter(presented(headers)).transform(entered -> {
+            if (entered.succeeded()) return Future.succeededFuture(track.apply(entered.result()));
+            if (entered.cause() instanceof Refused r) {
+                return Future.failedFuture(new NackException(r.code() + ": " + r.getMessage(), r.retryAfter().isPresent()));
+            }
+            return Future.failedFuture(entered.cause());
+        }));
         Poller poller = new Poller(endpoint, running, drain);
         return new Consumer() {
             /** Registers the handler, feeds the behaviour's {@code files} and schedules round 0; fails when a fixture cannot be read. */
