@@ -65,13 +65,42 @@ steps:
   - type: to
     endpoint: partner-foreign
 `;
-const FLOWS: Record<string, string> = { 'orders/flows/orders.yaml': ORDERS, 'orders/flows/invoices.yaml': INVOICES };
+/** A flow of schemaVersion 2: it polls the billing system's SFTP server and sends to the partner's ERP by connection. */
+export const INVOICE_OUT = `schemaVersion: 2
+kind: flow
+id: invoice-out
+version: 1.1.0
+description: Take each invoice file from the billing system and send it to the partner's ERP.
+from:
+  adapter: sftp
+  connection: billing/sftp
+  settings: { dir: /outbox/invoices, afterSuccess: delete }
+delivery: { mode: at-least-once }
+limits: { maxBodyBytes: 1048576 }
+steps:
+  - type: extractKey
+    name: extractKey
+    key: invoiceId
+    xpath: /Invoice/Id
+  - type: to
+    name: partner
+    retryable: true
+    adapter: http
+    connection: acme/erp/rest
+    settings: { path: /invoices }
+`;
+const FLOWS: Record<string, string> = {
+  'orders/flows/orders.yaml': ORDERS,
+  'orders/flows/invoices.yaml': INVOICES,
+  'orders/billing/invoices/invoice-out.yaml': INVOICE_OUT,
+};
 
 const context: FlowFile['context'] = {
   endpoints: ENDPOINTS.map(({ id, scheme, direction, address }) => ({ id, path: pathOf(id), scheme, direction, address })),
   flows: [
     { path: 'orders/flows/orders.yaml', id: 'orders', mode: 'sync', address: '/orders' },
     { path: 'orders/flows/invoices.yaml', id: 'invoices', mode: 'at-least-once' },
+    { path: 'orders/billing/invoices/invoice-out.yaml', id: 'invoice-out', mode: 'at-least-once' },
   ],
   partial: false,
 };
@@ -87,7 +116,8 @@ export function pictureFlows(): FlowsApi {
       truncated: false,
       items: Object.keys(FLOWS).map((path) => ({ path, id: path.split('/').at(-1)!.replace('.yaml', '') })),
     }),
-    read: async (path) => ({ file: { path, text: FLOWS[path] ?? '', editable: false, context }, etag: '"1"' }),
+    // the flow of schemaVersion 2 as a folder that could be written shows it, so the editor says why it shows it read-only
+    read: async (path) => ({ file: { path, text: FLOWS[path] ?? '', editable: FLOWS[path] === INVOICE_OUT, context }, etag: '"1"' }),
     save: refused,
     steps: async () => [],
     ingress: async () => undefined,

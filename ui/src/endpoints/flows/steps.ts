@@ -97,6 +97,24 @@ export const BUILT_IN: Readonly<Record<string, StepType>> = {
   },
 };
 
+/** An adapter's name, as the flow schema writes it. */
+export const ADAPTER = '[a-z][a-z0-9+.-]{0,31}';
+/** A connection key of two or three segments, as the flow schema writes it. */
+export const CONNECTION_KEY = '(?!(rail8|subscribers|by-agreement)/)[a-z][a-z0-9-]{0,63}(/[a-z][a-z0-9-]{0,63}){1,2}';
+
+/**
+ * The `to` step of a flow of schemaVersion 2: its receiver's adapter and the connection it sends through, or none for the
+ * platform's own `direct`, with the settings in the flow.
+ */
+export const NAMED_TO: StepType = {
+  fields: [
+    field('adapter', 'text', msg('flows.help.to.adapter'), { required: true, pattern: ADAPTER }),
+    field('connection', 'text', msg('flows.help.to.connection'), { pattern: CONNECTION_KEY }),
+    field('settings', 'raw', msg('flows.help.to.settings')),
+    field('maxReplyBytes', 'integer', msg('flows.help.to.maxReplyBytes'), { min: 1 }),
+  ],
+};
+
 const duration = { pattern: '\\d+(ms|s|m|h)' };
 
 /**
@@ -122,6 +140,20 @@ export const FLOW_FIELDS: StepField[] = [
   field('forwardHeaders', 'raw', msg('flows.help.flow.forwardHeaders')),
   field('retry', 'raw', msg('flows.help.flow.retry')),
 ];
+
+/**
+ * The flow's own settings in a flow of schemaVersion 2: its sender is an adapter, the connection it polls or none, and the
+ * settings in the flow, in place of an endpoint.
+ */
+export const NAMED_FLOW_FIELDS: StepField[] = FLOW_FIELDS.flatMap((f) =>
+  f.name === 'from.endpoint'
+    ? [
+        field('from.adapter', 'text', msg('flows.help.flow.fromAdapter'), { required: true, pattern: ADAPTER }),
+        field('from.connection', 'text', msg('flows.help.flow.fromConnection'), { pattern: CONNECTION_KEY }),
+        field('from.settings', 'raw', msg('flows.help.flow.fromSettings')),
+      ]
+    : [f],
+);
 
 /** The top-level keys of a flow file that are not among its own settings. */
 export const FLOW_PARTS = new Set(['schemaVersion', 'kind', 'steps', 'processes']);

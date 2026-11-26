@@ -72,6 +72,7 @@
   "messages.status.failed": "Failed",
   "messages.status.running": "Running",
   "messages.step": "Step",
+  "messages.step.connection": "through {connection}",
   "messages.step.failed": "Step {step} ({name}) of attempt {attempt} failed",
   "messages.step.name": "Step name",
   "messages.step.noError": "The step recorded no error message.",

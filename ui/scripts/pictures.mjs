@@ -164,6 +164,7 @@ const SCENES = {
   'endpoint-sftp-in': endpointOf('invoice-files'),
   'endpoint-sftp-in-polling': [...endpointOf('invoice-files'), tab('Polling')],
   flow: orders,
+  'flow-named': [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('invoice-out')],
   'flow-de': [...orders, speak('Deutsch')],
   'flow-cs': [...orders, speak('Čeština')],
   'flow-ru': [...orders, speak('Русский')],

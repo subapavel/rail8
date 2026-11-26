@@ -2,7 +2,7 @@ import { isSeq } from 'yaml';
 import { matching, placeOf } from './edit';
 import { readFlow, yamlFindings } from './flowYaml';
 import { layout, type Block } from './layout';
-import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, settingsOf, UNDESCRIBED, type StepType } from './steps';
+import { BUILT_IN, checkFields, checkStep, checkStepTab, describeSchema, FLOW_FIELDS, NAMED_FLOW_FIELDS, NAMED_TO, settingsOf, UNDESCRIBED, type StepType } from './steps';
 import { inboundAddress } from '../inbound';
 import type { Texts } from '../../language';
 import type { FlowContext, FlowEdge, FlowNode, FlowProblem, FlowView, Path, StepField, StepForm } from './types';
@@ -60,12 +60,15 @@ interface Entry {
 /**
  * Draws `text`, a flow file, in `context`: its nodes with their positions, its edges and its problems, as the flow screen
  * shows them, with the words of `texts`' language. The same text, context and language always give the same view.
- * `types` are the built-in step types; a test may give more. A file that is no flow, or that would be drawn with more
+ * `given` are the built-in step types; a test may give more. A flow of schemaVersion 2 takes its `to` by adapter and connection. A file that is no flow, or that would be drawn with more
  * than {@link MAX_NODES} nodes, is not readable.
  */
-export function view(text: string, context: FlowContext, texts: Texts, types: Readonly<Record<string, StepType>> = BUILT_IN): FlowView {
+export function view(text: string, context: FlowContext, texts: Texts, given: Readonly<Record<string, StepType>> = BUILT_IN): FlowView {
   const { t } = texts;
   const read = readFlow(text);
+  // a flow of schemaVersion 2 names its sender and receivers by adapter and connection, and is drawn read-only
+  const named = read.kind === 'flow' && read.value.schemaVersion === 2;
+  const types = named ? { ...given, to: NAMED_TO } : given;
   if (read.kind !== 'flow') {
     return { readable: false, nodes: [], edges: [], problems: [{ path: [], message: read.kind === 'problem' ? read.message : t('flows.change.notFlow') }] };
   }
@@ -80,7 +83,8 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
   if (read.documents > 1) problems.push({ path: [], message: t('flows.view.secondDocument'), warning: true });
   // why the editor shows the flow read-only, when it does
   let readOnly: string | undefined;
-  if (flow.schemaVersion !== 1) {
+  if (named) readOnly = t('flows.view.named');
+  else if (flow.schemaVersion !== 1) {
     const version = JSON.stringify(flow.schemaVersion ?? null);
     readOnly = t('flows.view.schemaVersion', { version });
     problems.push({ path: ['schemaVersion'], message: t('flows.view.schemaVersion.readOnly', { version }) });
@@ -252,7 +256,7 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
   const outEndpoints = context.endpoints.filter((e) => e.direction === 'out').map((e) => e.id);
 
   // the flow's own settings, checked as a form checks them, but a value whose YAML is a problem already
-  const flowFields = FLOW_FIELDS.map((f) => (f.name === 'from.endpoint' ? { ...f, choices: context.endpoints.filter((e) => e.direction === 'in').map((e) => e.id) } : f));
+  const flowFields = (named ? NAMED_FLOW_FIELDS : FLOW_FIELDS).map((f) => (f.name === 'from.endpoint' ? { ...f, choices: context.endpoints.filter((e) => e.direction === 'in').map((e) => e.id) } : f));
   const settings: StepForm = { path: [], settings: settingsOf(flowFields), values: flow };
   const found = new Set(problems.map((p) => pointer(p.path)));
   problems.push(...checkFields(texts, flowFields, flow, []).filter((p) => !found.has(pointer(p.path))));
@@ -264,9 +268,13 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
     if (endpoint === undefined || endpoint.scheme !== 'direct' || endpoint.direction !== 'out') return { detail: undefined, flow: undefined };
     if (endpoint.overlaid === true) return { detail: t('flows.view.overlaid'), flow: undefined };
     if (endpoint.address === undefined) return { detail: undefined, flow: undefined };
-    const serving = context.flows.filter((f) => f.address === endpoint.address);
+    return servedFlow(endpoint.address, at);
+  };
+
+  /** The flow that serves the direct `address`, with a problem at `at` when none or more than one does. */
+  const servedFlow = (address: string, at: Path) => {
+    const serving = context.flows.filter((f) => f.address === address);
     if (serving.length === 1) return { detail: undefined, flow: serving[0] };
-    const address = endpoint.address;
     if (serving.length === 0) problems.push({ path: at, ...notFound(t('flows.view.unserved', { address }), t('flows.view.unserved.inPart', { address })) });
     else problems.push({ path: at, message: t('flows.view.servedTwice', { address, flows: texts.intl.formatList(serving.map((f) => f.id), { type: 'conjunction' }) }), warning: true });
     return { detail: undefined, flow: undefined };
@@ -399,6 +407,17 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
         continue;
       }
 
+      if (type === 'to' && named) {
+        const settings = isRecord(value.settings) ? value.settings : {};
+        const address = value.adapter === 'direct' && typeof settings.address === 'string' ? settings.address : undefined;
+        const call = address === undefined ? { flow: undefined } : servedFlow(address, path);
+        const detail = typeof value.connection === 'string' ? `${value.connection} · ${String(value.adapter ?? '?')}` : address === undefined ? value.adapter : `direct · ${address}`;
+        const n = node({ ...base, ...(typeof detail === 'string' ? { detail: cut(detail) } : {}) });
+        blocks.push(call.flow === undefined ? { kind: 'node', node: n } : { kind: 'beside', main: n, side: calls(n, call.flow, path, parent) });
+        into = [{ from: n.id, kind: 'next' }];
+        continue;
+      }
+
       if (type === 'to') {
         const endpoint = referTo(value.endpoint, [...path, 'endpoint'], 'out');
         const call = typeof value.endpoint === 'string' ? calledFlow(value.endpoint, path) : { detail: undefined, flow: undefined };
@@ -483,7 +502,7 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
   };
 
   const from = isRecord(flow.from) ? flow.from : {};
-  const inbound = referTo(from.endpoint, ['from', 'endpoint'], 'in');
+  const inbound = named ? undefined : referTo(from.endpoint, ['from', 'endpoint'], 'in');
   /** Where messages arrive: a `direct` address, or a preview of the URL senders call, built from the working folder. */
   const arrival = (endpoint: FlowContext['endpoints'][number]): string => {
     if (endpoint.scheme === 'direct') return endpoint.address === undefined ? 'direct' : `direct · ${endpoint.address}`;
@@ -499,8 +518,8 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
     id: pointer(['from']),
     kind: 'from',
     path: ['from'],
-    label: typeof from.endpoint === 'string' ? from.endpoint : t('flows.view.noFrom'),
-    ...(inbound === undefined ? {} : { detail: arrival(inbound), opens: { endpoint: inbound.path } }),
+    label: named ? fromLabel(from) ?? t('flows.view.noSender') : typeof from.endpoint === 'string' ? from.endpoint : t('flows.view.noFrom'),
+    ...(named ? fromDetail(from) : inbound === undefined ? {} : { detail: arrival(inbound), opens: { endpoint: inbound.path } }),
     ...SIZE.from,
   });
   const main = lists.find((l) => l.owner === null && l.path.length === 1);
@@ -523,6 +542,20 @@ export function view(text: string, context: FlowContext, texts: Texts, types: Re
   const order = (n: FlowNode) => (n.kind === 'lane' ? 0 : n.kind === 'group' ? 1 : 2);
   const sorted = nodes.map((n, i) => ({ n, i })).sort((a, b) => order(a.n) - order(b.n) || a.i - b.i).map(({ n }) => n);
   return { readable: true, nodes: sorted, edges, problems, settings, ...(readOnly === undefined ? {} : { readOnly }) };
+}
+
+/** The label of a sender of schemaVersion 2: the connection it polls, else its adapter. */
+function fromLabel(from: Record<string, unknown>): string | undefined {
+  if (typeof from.connection === 'string') return from.connection;
+  return typeof from.adapter === 'string' ? from.adapter : undefined;
+}
+
+/** The detail of a sender of schemaVersion 2: its adapter beside its connection, or the address a sender without one serves. */
+function fromDetail(from: Record<string, unknown>): { detail?: string } {
+  const address = isRecord(from.settings) && typeof from.settings.address === 'string' ? from.settings.address : undefined;
+  if (typeof from.connection === 'string') return typeof from.adapter === 'string' ? { detail: from.adapter } : {};
+  if (typeof from.adapter === 'string' && address !== undefined) return { detail: cut(`${from.adapter} · ${address}`) };
+  return {};
 }
 
 /** `field` with the choices of the references it makes: the out endpoints of the package, or the processes of the flow. */

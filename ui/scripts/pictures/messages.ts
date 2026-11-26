@@ -1,6 +1,6 @@
 import type { AdminApi, Audited, Listed, StepRecord, Timeline } from '../../src/messages/admin';
 
-const step = (n: number, name: string, startedAt: string, outcome: StepRecord['outcome'] = 'OK', error: string | null = null): StepRecord => ({
+const step = (n: number, name: string, startedAt: string, outcome: StepRecord['outcome'] = 'OK', error: string | null = null, connection?: string): StepRecord => ({
   step: n,
   attempt: 1,
   name,
@@ -10,6 +10,7 @@ const step = (n: number, name: string, startedAt: string, outcome: StepRecord['o
   wallNanos: 1_800_000 + n * 400_000,
   cpuNanos: n === 0 ? null : 900_000 + n * 100_000,
   body: { hash: `sha256:${'4f1c9a'.repeat(2)}${n}`, size: 412 + n * 37, kept: true },
+  versions: connection === undefined ? {} : { connection },
 });
 
 const orders: Timeline = {
@@ -19,7 +20,7 @@ const orders: Timeline = {
     step(0, 'ingress', '2026-11-23T09:50:00Z'),
     step(1, 'orders/validate', '2026-11-23T09:50:00.004Z'),
     step(2, 'orders/map', '2026-11-23T09:50:00.009Z'),
-    step(3, 'orders/send', '2026-11-23T09:50:00.015Z', 'FAILED', 'the partner answered 503'),
+    step(3, 'orders/send', '2026-11-23T09:50:00.015Z', 'FAILED', "connection 'acme/erp/rest' cannot serve the send: stopped by dirk at 2026-11-23T09:48:31Z", 'acme/erp/rest'),
   ],
 };
 
@@ -31,7 +32,7 @@ const delivered: Timeline = {
     step(0, 'ingress', '2026-11-23T09:42:10Z'),
     step(1, 'orders/validate', '2026-11-23T09:42:10.004Z'),
     step(2, 'orders/map', '2026-11-23T09:42:10.009Z'),
-    step(3, 'orders/send', '2026-11-23T09:42:10.015Z'),
+    step(3, 'orders/send', '2026-11-23T09:42:10.015Z', 'OK', null, 'acme/erp/rest'),
   ],
 };
 

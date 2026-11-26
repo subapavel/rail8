@@ -88,6 +88,23 @@ steps:
   });
 });
 
+describe('the flow canvas graph of a flow of schemaVersion 2', () => {
+  it('draws each receiver by its connection and adapter, and a direct call by the flow it calls', () => {
+    const picture = view(`schemaVersion: 2
+kind: flow
+id: invoices
+from: { adapter: sftp, connection: billing/sftp }
+steps:
+  - { type: to, name: partner, adapter: http, connection: acme/erp/rest }
+  - { type: to, name: order, adapter: direct, settings: { address: /orders } }
+`, { endpoints: [], flows: [{ path: 'demo/flows/orders.yaml', id: 'orders', mode: 'sync', address: '/orders' }], steps: [] }, en);
+    const graph = canvasGraph(picture, false, false);
+    const receivers = graph.nodes.filter(n => n.role === 'receiver').map(n => ({ label: n.label, detail: n.detail }));
+    expect(receivers).toEqual([{ label: 'acme/erp/rest', detail: 'http' }, { label: 'orders', detail: '/orders' }]);
+    expect(graph.nodes.find(n => n.role === 'sender')).toMatchObject({ label: 'billing/sftp', detail: 'sftp' });
+  });
+});
+
 describe('the flow canvas graph in another language', () => {
   it('names the edge to a receiver that ends the flow in the language of the view', () => {
     const ending = (language: 'en' | 'cs') => canvasGraph(view(`schemaVersion: 1

@@ -72,6 +72,7 @@
   "messages.status.failed": "Fehlgeschlagen",
   "messages.status.running": "Läuft",
   "messages.step": "Schritt",
+  "messages.step.connection": "über {connection}",
   "messages.step.failed": "Schritt {step} ({name}) von Versuch {attempt} ist fehlgeschlagen",
   "messages.step.name": "Schrittname",
   "messages.step.noError": "Der Schritt hat keine Fehlermeldung aufgezeichnet.",

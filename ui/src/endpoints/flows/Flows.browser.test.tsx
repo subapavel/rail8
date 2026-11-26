@@ -658,6 +658,27 @@ describe('Editing a flow', () => {
     await expect.element(text('The editor shows this flow read-only: steps is written on one line ([ … ]).')).toBeVisible();
     expect(button('Edit').elements()).toHaveLength(0);
   });
+
+  test('a flow of schemaVersion 2 is drawn by its connections, read-only, saying why', async () => {
+    const named = `schemaVersion: 2
+kind: flow
+id: invoice
+version: 0.2.0
+from: { adapter: sftp, connection: billing/sftp, settings: { dir: /inbox } }
+delivery: { mode: at-least-once }
+limits: { maxBodyBytes: 1048576 }
+steps:
+  - { type: to, name: partner, adapter: http, connection: acme/erp/rest, settings: { path: /invoices } }
+`;
+    await open(fakeFlows({ 'demo/flows/invoice.yaml': named }));
+    await expect.element(page.getByText('Read-only', { exact: true })).toBeVisible();
+    await expect
+      .element(text('The editor shows this flow read-only: it names its sender and receivers by connection (schemaVersion 2), and the editor changes flows of schemaVersion 1 only.'))
+      .toBeVisible();
+    await expect.element(nodeOf('billing/sftp')).toBeVisible();
+    await expect.element(nodeOf('acme/erp/rest')).toBeVisible();
+    expect(button('Edit').elements()).toHaveLength(0);
+  });
 });
 
 const processes = `schemaVersion: 1

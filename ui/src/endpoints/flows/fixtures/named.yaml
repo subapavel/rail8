@@ -1,0 +1,27 @@
+# A flow of schemaVersion 2: its sender and its receivers named by adapter and connection, and a call of another flow.
+schemaVersion: 2
+kind: flow
+id: sftp-invoice
+version: 0.2.0
+from:
+  adapter: sftp
+  connection: billing/sftp
+  settings: { dir: /inbox, afterSuccess: delete }
+delivery:
+  mode: at-least-once
+limits:
+  maxBodyBytes: 1048576
+steps:
+  - type: xsd
+    name: validate
+    schema: flows/invoice.xsd
+  - type: to
+    name: partner
+    retryable: true
+    adapter: http
+    connection: acme/erp/rest
+    settings: { path: /invoices }
+  - type: to
+    name: order
+    adapter: direct
+    settings: { address: /orders/partner }

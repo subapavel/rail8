@@ -8,7 +8,8 @@ export type FlowItem = { path: string; id: string } | { path: string; problem: s
  * What a flow refers to in the working folder. `endpoints` are those of the flow's package, the nearest folder above the
  * file that holds `package.yaml`; `address` is the endpoint's own, `overlaid` says an environment changes it, and `addressIn`
  * holds what each environment that changes it sets it to.
- * `flows` are every flow of the working folder, `address` the one their inbound `direct` endpoint serves. `partial` is
+ * `flows` are every flow of the working folder, `address` the one their inbound `direct` endpoint serves, or their `direct`
+ * sender of schemaVersion 2. `partial` is
  * true when the walk stopped at its limit or a file of the package could not be read, so that what is not found may still
  * exist.
  */
@@ -27,7 +28,8 @@ const folderOf = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/
 
 /** The flows and endpoints of a set of YAML files, the package folder of each path, and the packages a file could not be read in. */
 export interface Survey {
-  flows: { item: FlowItem; from?: string; mode?: string; pkg: string }[];
+  /** Each flow: the endpoint it takes from, or the direct address a sender of schemaVersion 2 serves. */
+  flows: { item: FlowItem; from?: string; serves?: string; mode?: string; pkg: string }[];
   endpoints: { entry: FlowContext['endpoints'][number]; pkg: string }[];
   unreadable: Set<string>;
   /** The package folder of `path`: the nearest folder above it that holds `package.yaml`, else ''. */
@@ -49,9 +51,11 @@ export function surveyOf(files: readonly { path: string; text: string }[]): Surv
     const pkg = packageOf(path);
     const read = readFlow(text);
     if (read.kind === 'flow') {
-      const from = isRecord(read.value.from) && typeof read.value.from.endpoint === 'string' ? read.value.from.endpoint : undefined;
+      const sender = isRecord(read.value.from) ? read.value.from : {};
+      const from = typeof sender.endpoint === 'string' ? sender.endpoint : undefined;
+      const serves = read.value.schemaVersion === 2 && sender.adapter === 'direct' && isRecord(sender.settings) && typeof sender.settings.address === 'string' ? sender.settings.address : undefined;
       const mode = isRecord(read.value.delivery) && typeof read.value.delivery.mode === 'string' ? read.value.delivery.mode : undefined;
-      flows.push({ item: { path, id: read.id }, from, mode, pkg });
+      flows.push({ item: { path, id: read.id }, from, ...(serves === undefined ? {} : { serves }), mode, pkg });
       continue;
     }
     if (read.kind === 'problem') {
@@ -88,7 +92,7 @@ export function contextOf(survey: Survey, path: string, truncated: boolean): Flo
     flows: flows.flatMap((f) => {
       if (!('id' in f.item)) return [];
       const door = served(f);
-      const address = door !== undefined && door.overlaid === undefined ? door.address : undefined;
+      const address = f.serves ?? (door !== undefined && door.overlaid === undefined ? door.address : undefined);
       return [
         {
           path: f.item.path,

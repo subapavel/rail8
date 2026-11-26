@@ -47,6 +47,22 @@ const waited: Timeline = {
   ],
 };
 
+/** Sent through a connection: refused once while the connection was stopped, then delivered by the retry. */
+const throughConnection: Timeline = {
+  id: 'm-4',
+  flow: 'demo/sftp-invoice',
+  steps: [
+    step(1, 0, 'ingress'),
+    step(1, 1, 'partner', {
+      outcome: 'FAILED',
+      error: "connection 'acme/erp/rest' cannot serve the send: stopped by ops at 2026-11-17T09:58:00Z",
+      versions: { connection: 'acme/erp/rest' },
+    }),
+    step(2, 0, 'ingress'),
+    step(2, 1, 'partner', { versions: { connection: 'acme/erp/rest' } }),
+  ],
+};
+
 /** m-1's audit, newest first: a view of a payload by a session, a retry by a token, and on the next page a row from before users. */
 const audited: Audited[] = [
   { id: 9, at: '2026-11-17T10:05:00Z', action: 'message.body.view', actor: 'anna', via: 'session', credential: '0123456789abcdef', detail: { step: 1, remote: '10.0.0.7' } },
@@ -63,7 +79,7 @@ const NOW = new Date('2026-11-19T08:00:00Z');
 
 /** An admin API over the two messages above, listed newest first a page at a time; every call can be replaced in a test. */
 function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
-  const byId = new Map([failedTwice, delivered, waited].map((t) => [t.id, t]));
+  const byId = new Map([failedTwice, delivered, waited, throughConnection].map((t) => [t.id, t]));
   return {
     list: vi.fn(async (_query: ListQuery, after?: string) =>
       after === undefined
@@ -321,6 +337,17 @@ describe('Messages', () => {
 
     await expect.element(page.getByRole('tabpanel', { name: 'm-1' }).getByText('demo/orders')).toBeVisible();
     await expect.element(page.getByText('Step 1 (send) of attempt 2 failed', { exact: false })).toBeVisible();
+  });
+
+  test('names the connection a step sent through, and the reason a connection could not serve the send', async () => {
+    render(fakeApi());
+    await page.getByRole('textbox', { name: 'Message id' }).fill('m-4');
+    await page.getByRole('button', { name: 'Open', exact: true }).click();
+    const first = page.getByRole('table', { name: 'Steps of attempt 1' });
+    await expect.element(first.getByText('through acme/erp/rest')).toBeVisible();
+    await expect.element(first.getByText("connection 'acme/erp/rest' cannot serve the send: stopped by ops at 2026-11-17T09:58:00Z")).toBeVisible();
+    await expect.element(page.getByRole('table', { name: 'Steps of attempt 2' }).getByText('through acme/erp/rest')).toBeVisible();
+    expect(first.getByText('through', { exact: false }).elements()).toHaveLength(1);
   });
 
   test('shows the wait for a worker between two steps, so the rows add up to the duration in the list', async () => {

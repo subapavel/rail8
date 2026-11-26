@@ -1,6 +1,7 @@
 import type { PackagesApi } from '../../src/packages/api';
 import { fakeStateOf, type Seed } from '../../src/packages/contract/seed';
 import { fakePackagesApi } from '../../src/packages/fake';
+import { INVOICE_OUT } from './flows';
 
 /** The time the pictures are taken at: every age on the screens is told against it. */
 export const NOW = new Date('2026-11-23T10:00:00Z');
@@ -66,7 +67,7 @@ const SEED: Seed = {
         'flows/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders\ndescription: The flows of the orders package.\n',
         'billing/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders:billing\ndescription: What the orders bill.\n',
         'billing/invoices/folder.yaml': 'schemaVersion: 1\nkind: folder\nnamespace: urn:acme:orders:billing:invoices\n',
-        'billing/invoices/invoice-out.yaml': flow('invoice-out', 'erp-in', '  - type: to\n    name: partner\n    endpoint: partner-out\n'),
+        'billing/invoices/invoice-out.yaml': INVOICE_OUT,
         'billing/credit-notes/credit-note-out.yaml': flow('credit-note-out', 'erp-in', '  - type: to\n    name: partner\n    endpoint: partner-out\n'),
         'flows/orders.yaml': ORDERS,
         'flows/orders.xsl': XSL,
