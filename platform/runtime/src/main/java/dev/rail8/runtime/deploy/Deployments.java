@@ -1126,7 +1126,8 @@ public final class Deployments {
      * {@link #deploy(String, String, String, Actor)}: a bad name ({@link Kind#BAD_REQUEST}); a deployed environment ({@link Kind#FORBIDDEN}:
      * a deploy with no origin is dev and ci only); a closing node ({@link Kind#STOPPING}); another deploy holding the lock
      * ({@link Kind#CONFLICT}); then the copy, in which anything but a regular file or a directory is {@link Kind#BAD_REQUEST}; then
-     * the checks, the build and the swap. Blocking: on a virtual thread.
+     * the checks, the build and the swap. The checks of its systems and connections are those of the package alone, as a validate
+     * makes them: the pool holds no record of its dependencies, and the environment is not checked. Blocking: on a virtual thread.
      *
      * @return the package deployed and the flows added, swapped and removed
      * @throws DeployRefusedException as {@link #deploy(String, String, String, Actor)}
@@ -1905,8 +1906,9 @@ public final class Deployments {
                 Files.move(folder, dir, StandardCopyOption.ATOMIC_MOVE);
             }
             Package pkg = load(name, dir);
-            // only a deploy checks the environment, against the pool's committed systems; a restore and a follow install what it checked
-            Optional<NamedChecks.Pooled> pooled = restoring == null ? Optional.of(pooled()) : Optional.empty();
+            // only a deploy of a commit checks the environment, against the pool's committed systems; a restore and a follow install
+            // what it checked, and a deploy of a folder (rail8 test) writes no record, so the pool names none of its dependencies' systems
+            Optional<NamedChecks.Pooled> pooled = restoring == null && origin.isPresent() ? Optional.of(pooled()) : Optional.empty();
             Checked checked = check(name, pkg, dir, before, List.of(), commits, written, pooled);
             if (fetching != null) fetching.close();   // every pin is read: the fetches' deadline ends before a flow starts
             String version = pkg.manifest().getString("version");

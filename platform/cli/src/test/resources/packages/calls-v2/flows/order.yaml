@@ -1,0 +1,15 @@
+# An order over http, from a sender without a connection, checked by the flow check through a call of direct /check.
+schemaVersion: 2
+kind: flow
+id: order
+version: 0.1.0
+from:
+  adapter: http
+  settings: { address: /order }
+delivery: { mode: sync }
+limits: { maxBodyBytes: 1048576 }
+steps:
+  - type: to
+    name: check
+    adapter: direct
+    settings: { address: /check }

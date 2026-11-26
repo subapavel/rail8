@@ -11,6 +11,8 @@ import dev.rail8.api.StepResources;
 import dev.rail8.api.Timer;
 import dev.rail8.api.plugin.ComponentContext;
 import dev.rail8.api.plugin.HttpIngress;
+import dev.rail8.api.settings.Forms;
+import dev.rail8.api.settings.Settings;
 import dev.rail8.components.mock.Behaviour;
 import dev.rail8.components.mock.MockComponent;
 import dev.rail8.core.dlq.InMemoryDlq;
@@ -131,6 +133,11 @@ final class FlowTests {
     /** The run's copies of the dependencies' folders, leaves first. */
     private List<Copy> dependencies;
     private Vertx vertx;
+    /**
+     * The forms of each adapter of the run, by scheme, with a connection form that describes nothing, as the mock's: the mocks of
+     * a test of {@code schemaVersion: 2} take them, so each use reaches a connection, and its settings are checked, as on a node.
+     */
+    private Map<String, Forms> forms;
     /** The adapter of each connection a flow of {@code schemaVersion: 2} of the package or of a dependency names, by key. */
     private final Map<String, String> adapters;
 
@@ -142,8 +149,11 @@ final class FlowTests {
         this.adapters = Map.copyOf(adapters);
     }
 
-    /** One test document: its path from the package root, its flow, its {@code mocks} and its cases. */
-    private record Doc(String path, String flow, JsonObject mocks, List<JsonObject> cases) {}
+    /**
+     * One test document: its path from the package root, its flow, its {@code mocks} and its cases, and whether it is of
+     * {@code schemaVersion: 2}, which keys its mocks by connection key and its calls by {@code direct:<address>}.
+     */
+    private record Doc(String path, String flow, JsonObject mocks, List<JsonObject> cases, boolean byConnection) {}
 
     /** The run's copy of a dependency's folder and the name it is deployed as. */
     private record Copy(String name, Path dir) {}
@@ -192,6 +202,9 @@ final class FlowTests {
         int cases = 0;
         vertx = Vertx.vertx();   // the one each case's components are built over; it runs nothing of theirs
         try {
+            FakeRuntime rt = FakeRuntime.create();
+            forms = plugins.components(new ComponentContext(vertx, rt.blobs(), rt.ids(), rt.timer(), rt.clock(), HttpIngress.NONE)).stream()
+                    .collect(Collectors.toMap(Component::scheme, c -> new Forms(Settings.NONE, c.forms().flow(), c.forms().reach())));   // built, never started
             for (Doc doc : docs) {
                 for (JsonObject c : doc.cases()) {
                     Verdict verdict = play(doc, c);
@@ -233,7 +246,7 @@ final class FlowTests {
 
     /**
      * The environment of a case's node: every connection of {@link #adapters} set for its adapter with no value — its mock
-     * describes none —, and every system of one with an instance name, so the deploy finds each connection served.
+     * describes none —, and every system of one with an instance name, so each send finds its connection served.
      */
     private Environment environment() {
         Map<String, ConnectionState> connections = new TreeMap<>();
@@ -259,7 +272,7 @@ final class FlowTests {
             JsonArray listed = d.getJsonArray("cases");
             List<JsonObject> cases = new ArrayList<>();
             for (int i = 0; i < listed.size(); i++) cases.add(listed.getJsonObject(i));
-            docs.add(new Doc(a.path(), d.getString("flow"), d.getJsonObject("mocks", new JsonObject()), List.copyOf(cases)));
+            docs.add(new Doc(a.path(), d.getString("flow"), d.getJsonObject("mocks", new JsonObject()), List.copyOf(cases), Package.schemaVersion(d) == 2));
         }
         return docs;
     }
@@ -276,11 +289,7 @@ final class FlowTests {
         for (Doc doc : docs) {
             notYet(problems, doc.path() + ": ", doc.mocks());
             String from = from(doc.flow());
-            if (from == null) {
-                problems.add(doc.path() + ": flow '" + doc.flow() + "' has a sender without a connection, which rail8 test does not run yet");
-                continue;
-            }
-            String scheme = scheme(from);
+            String scheme = sender(doc.flow());
             for (JsonObject c : doc.cases()) {
                 String where = doc.path() + ": case '" + c.getString("name") + "' ";
                 notYet(problems, where, c.getJsonObject("mocks", new JsonObject()));
@@ -305,10 +314,6 @@ final class FlowTests {
 
     private static void notYet(List<String> problems, String where, JsonObject mocks) {
         for (String endpoint : mocks.fieldNames()) {
-            if (endpoint.startsWith(DIRECT + ":")) {
-                problems.add(where + "mock '" + endpoint + "': a call of another flow from a flow of schemaVersion 2 is not run by rail8 test yet");
-                continue;
-            }
             JsonObject behaviour = mocks.getJsonObject(endpoint);
             NOT_YET.stream().filter(behaviour::containsKey).forEach(b -> problems.add(where + "mock '" + endpoint + "': " + b + " is not implemented yet"));
         }
@@ -316,16 +321,27 @@ final class FlowTests {
 
     /**
      * What the mocks key the sender of the flow {@code flow} by: its from endpoint, or for a flow of {@code schemaVersion: 2} its
-     * connection; null for a sender of {@code schemaVersion: 2} without one.
+     * connection; for a sender of {@code schemaVersion: 2} without one, {@code direct:<address>} when it is fed by calls, else
+     * the flow's qualified id.
      */
     private String from(String flow) {
         JsonObject doc = pkg.flows().get(flow);
         JsonObject from = doc.getJsonObject("from");
-        return Package.schemaVersion(doc) == 2 ? from.getString("connection") : from.getString("endpoint");
+        if (Package.schemaVersion(doc) != 2) return from.getString("endpoint");
+        if (from.getString("connection") != null) return from.getString("connection");
+        if (DIRECT.equals(from.getString("adapter"))) return Calls.BY_ADDRESS + from.getJsonObject("settings", new JsonObject()).getString("address");
+        return pkg.name() + "/" + flow;
     }
 
-    /** The scheme of the endpoint {@code key}, or the adapter of the connection {@code key}. */
+    /** The scheme of the sender of the flow {@code flow}: its from endpoint's, or the adapter of a flow of {@code schemaVersion: 2}. */
+    private String sender(String flow) {
+        JsonObject doc = pkg.flows().get(flow);
+        return Package.schemaVersion(doc) == 2 ? doc.getJsonObject("from").getString("adapter") : scheme(from(flow));
+    }
+
+    /** The scheme of the endpoint {@code key}, or the adapter of the connection {@code key}; {@code direct} for a call's key. */
     private String scheme(String key) {
+        if (key.startsWith(Calls.BY_ADDRESS)) return DIRECT;
         JsonObject endpoint = pkg.endpoints().get(key);
         return endpoint != null ? endpoint.getString("scheme") : adapters.get(key);
     }
@@ -350,16 +366,20 @@ final class FlowTests {
         Watched watched = new Watched();
         Timer timer = watched.timer(rt.timer());
         Map<String, MockComponent> mocks = new TreeMap<>();
-        for (String s : schemes) mocks.put(s, new MockComponent(s, rt.blobs(), timer, rt.ids()));
+        for (String s : schemes) {
+            mocks.put(s, doc.byConnection() && forms.containsKey(s) ? new MockComponent(s, rt.blobs(), timer, rt.ids(), forms.get(s))
+                    : new MockComponent(s, rt.blobs(), timer, rt.ids()));
+        }
         JsonObject behaviours = doc.mocks().copy();
         c.getJsonObject("mocks", new JsonObject()).forEach(entry -> behaviours.put(entry.getKey(), entry.getValue()));   // whole entries
         for (String endpoint : behaviours.fieldNames()) {
             mocks.get(scheme(endpoint)).bind(endpoint, Behaviour.from(behaviours.getJsonObject(endpoint).getMap(), copy));
         }
-        Calls calls = mocks.containsKey(DIRECT) ? new Calls(direct(rt, timer), mocks.get(DIRECT),
+        Calls calls = mocks.containsKey(DIRECT) ? new Calls(direct(rt, timer), doc.byConnection(), mocks.get(DIRECT),
                 behaviours.fieldNames().stream().filter(endpoint -> scheme(endpoint).equals(DIRECT)).collect(Collectors.toSet()), rt.blobs(), rt.ids()) : null;
         String from = from(doc.flow());
-        Door door = calls != null && scheme(from).equals(DIRECT) ? calls : Door.of(mocks.get(scheme(from)));
+        String scheme = sender(doc.flow());
+        Door door = calls != null && scheme.equals(DIRECT) ? calls : Door.of(mocks.get(scheme));
         String sends = c.getString("send");
         byte[] send = sends == null ? null : Files.readAllBytes(copy.resolve(sends));
         Map<String, String> headers = new LinkedHashMap<>();

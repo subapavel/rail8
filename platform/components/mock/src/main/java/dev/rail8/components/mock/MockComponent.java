@@ -50,8 +50,9 @@ import java.util.stream.Stream;
  * The in-process mock of any scheme: it records what it was sent and replies from fixtures. It is bound to the scheme it
  * stands in for, so the flow file stays byte-identical, with one
  * {@link Behaviour} per endpoint from the flow's {@code *.test.yaml}. Its forms describe nothing and both directions reach
- * a connection, so every use names one, and the mock keys everything by that connection's key: for an endpoint file, the
- * endpoint's id, called the endpoint below. A producer records every envelope per endpoint and
+ * a connection, unless it is built with the forms of the adapter it stands in for; the mock keys everything by the use's
+ * connection key: for an endpoint file, the endpoint's id, called the endpoint below. A consumer without a connection is
+ * keyed by its flow's qualified id, and a producer without one is refused. A producer records every envelope per endpoint and
  * answers with the reply of the consumer running on that same endpoint when there is one, else per behaviour: the fixture as
  * the next body (or the request echoed; a fixture above the call's {@code maxReplyBytes} fails the send with the store's
  * {@code BodyTooLargeException}), after the delay through the injected timer, or a failure — a status or fault
@@ -84,6 +85,7 @@ public final class MockComponent implements Component {
     private static final String HTTP_PREFIX = "/http";
 
     private final String scheme;
+    private final Forms forms;
     private final BlobStore blobs;
     private final Timer timer;
     private final IdGenerator ids;
@@ -106,7 +108,16 @@ public final class MockComponent implements Component {
 
     /** A mock whose consumers take the ids of the deliveries they poll from {@code ids} (the runtime's). */
     public MockComponent(String scheme, BlobStore blobs, Timer timer, IdGenerator ids) {
+        this(scheme, blobs, timer, ids, FORMS);
+    }
+
+    /**
+     * A mock as {@link #MockComponent(String, BlobStore, Timer, IdGenerator)}, with {@code forms}: those of the adapter it stands
+     * in for, so a deploy checks the settings and the connections of each use as a node does.
+     */
+    public MockComponent(String scheme, BlobStore blobs, Timer timer, IdGenerator ids, Forms forms) {
         this.scheme = Objects.requireNonNull(scheme, "scheme");
+        this.forms = Objects.requireNonNull(forms, "forms");
         this.blobs = Objects.requireNonNull(blobs, "blobs");
         this.timer = Objects.requireNonNull(timer, "timer");
         this.ids = Objects.requireNonNull(ids, "ids");
@@ -230,7 +241,7 @@ public final class MockComponent implements Component {
         return v != null ? v : in.connection().map(c -> c.values().get(name)).orElse(null);
     }
 
-    /** The key of the connection {@code connection}, by which the mock keys a use; a use without one is refused. */
+    /** The key of the connection {@code connection}, by which the mock keys a producer; a producer without one is refused. */
     private String key(Optional<Connection> connection) {
         return connection.map(Connection::key).orElseThrow(() -> new IllegalArgumentException(
                 "the " + scheme + " mock keys each use by its connection, and this one names none"));
@@ -238,13 +249,13 @@ public final class MockComponent implements Component {
 
     @Override public String scheme() { return scheme; }
 
-    @Override public Forms forms() { return FORMS; }
+    @Override public Forms forms() { return forms; }
 
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> h) {
         Objects.requireNonNull(h, "handler");
         Objects.requireNonNull(in, "in");
-        String endpoint = key(in.connection());
+        String endpoint = in.connection().map(Connection::key).orElse(in.flow());
         Drain drain = new Drain();
         List<Envelope> given = delivered.computeIfAbsent(endpoint, k -> new CopyOnWriteArrayList<>());
         Running running = new Running(in, e -> {

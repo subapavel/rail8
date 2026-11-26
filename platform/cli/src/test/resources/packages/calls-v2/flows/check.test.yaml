@@ -1,0 +1,12 @@
+# check's own case: its fixture is sent on direct:/check as a caller would.
+schemaVersion: 2
+kind: test
+flow: check
+mocks:
+  acme/erp/rest: { reply: fixtures/ack.xml }
+cases:
+  - name: called
+    send: fixtures/order.xml
+    expect:
+      sent:
+        acme/erp/rest: { count: 1, contains: "<Id>42</Id>" }

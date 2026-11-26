@@ -293,9 +293,21 @@ class MockComponentTest {
         } finally {
             consumer.stop().await();
         }
+        assertThrows(IllegalArgumentException.class, () -> http.producer(new Outbound(Optional.empty())), "a producer without a connection has no key");
+    }
+
+    /** A consumer without a connection, as a sender of an adapter that connects to receive nothing, is keyed by its flow's qualified id. */
+    @Test
+    void aConsumerWithoutAConnectionIsKeyedByItsFlow() {
         Inbound none = new Inbound("shop/orders", Optional.empty(), Map.of(), Uses.LIMIT);
-        assertThrows(IllegalArgumentException.class, () -> http.consumer(none, e -> Future.succeededFuture(new Ack.Accepted(e.id()))));
-        assertThrows(IllegalArgumentException.class, () -> http.producer(new Outbound(Optional.empty())), "a use without a connection has no key");
+        var consumer = http.consumer(none, e -> Future.succeededFuture(new Ack.Accepted(e.id())));
+        consumer.start().await();
+        try {
+            http.ingest("shop/orders", Headers.empty(), Buffer.buffer("<order/>")).await();
+            assertEquals(1, http.delivered("shop/orders").size(), "recorded under the flow's qualified id");
+        } finally {
+            consumer.stop().await();
+        }
     }
 
     @Test

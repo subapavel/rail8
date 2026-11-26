@@ -832,6 +832,54 @@ class TestCommandTest {
         assertEquals(0, ran.exit(), ran.toString());
     }
 
+    /**
+     * A flow of {@code schemaVersion: 2} sends through a connection of a system its dependency defines, from a sender without a
+     * connection: its case runs, the mock of that connection key took the send; exit 0.
+     */
+    @Test
+    @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    void aFlowSendsThroughASystemItsDependencyDefines() throws Exception {
+        Path deps = tmp.resolve("deps");
+        Path common = DepsFixture.copy("common", deps.resolve("common"));
+        Files.createDirectories(common.resolve("systems"));
+        Files.writeString(common.resolve("systems/acme-erp.yaml"), "schemaVersion: 1\nkind: system\npartner: acme\nname: erp\n"
+                + "connections:\n  rest: { adapter: http }\n");
+        DepsFixture.commit(common);
+        Path invoice = DepsFixture.copy("invoice", deps.resolve("invoice"));
+        Files.writeString(invoice.resolve("flows/to-partner.yaml"), """
+                schemaVersion: 2
+                kind: flow
+                id: to-partner
+                version: 1.0.0
+                from: { adapter: http, settings: { address: /invoice } }
+                delivery: { mode: sync }
+                limits: { maxBodyBytes: 1048576 }
+                steps:
+                  - { type: xslt, name: map, stylesheet: "common:xslt/to-partner.xsl" }
+                  - { type: to, name: partner, adapter: http, connection: acme/erp/rest, settings: { path: /invoices } }
+                """);
+        Files.writeString(invoice.resolve("flows/to-partner.test.yaml"), """
+                schemaVersion: 2
+                kind: test
+                flow: to-partner
+                mocks:
+                  acme/erp/rest: { reply: fixtures/ack.xml, delay: 20ms }
+                cases:
+                  - name: maps with common
+                    send: fixtures/invoice.xml
+                    expect:
+                      status: 200
+                      sent:
+                        acme/erp/rest: { count: 1, settings: { path: /invoices }, xpath: /PartnerInvoice/@by, equals: common 1.2.0 }
+                """);
+        DepsFixture.lock(invoice, common);
+
+        Ran ran = run("test", invoice.toString());
+
+        assertEquals(INVOICE_PASSES, ran.outLines(), ran.toString());
+        assertEquals(0, ran.exit(), ran.toString());
+    }
+
     /** invoice pins common 1.2.0 (the parent holds it and common 1.3.0): its case passes, common 1.2.0's XSLT and include ran. */
     @Test
     @Timeout(value = 120, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)

@@ -1,0 +1,7 @@
+# The partner's ERP, which checks the orders.
+schemaVersion: 1
+kind: system
+partner: acme
+name: erp
+connections:
+  rest: { adapter: http }

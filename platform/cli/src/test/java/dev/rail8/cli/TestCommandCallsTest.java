@@ -46,7 +46,24 @@ class TestCommandCallsTest {
                 "PASS order: the chain (flow time 50ms)",
                 "PASS order: archive down (flow time 2400ms)",
                 "PASS order: check mocked (flow time 50ms)",
-                "4 cases: 4 passed, 0 failed"), ran.outLines(), ran.toString());
+                "3 cases: 3 passed, 0 failed"), ran.outLines(), ran.toString());
+        assertEquals(0, ran.exit(), ran.toString());
+    }
+
+    /**
+     * Flows of {@code schemaVersion: 2}: a sender without a connection takes the case's send, a call of another flow is keyed
+     * {@code direct:<address>} and runs for real, or the mock of that key stands in for it, and a send through a connection is
+     * keyed by the connection's key.
+     */
+    @Test
+    void flowsOfSchemaVersion2CallByAddressAndSendByConnection() {
+        Ran ran = run("test", FIXTURES.resolve("calls-v2").toString());
+
+        assertEquals(List.of(
+                "PASS check: called (flow time 0ms)",
+                "PASS order: the chain (flow time 0ms)",
+                "PASS order: check mocked (flow time 0ms)",
+                "3 cases: 3 passed, 0 failed"), ran.outLines(), ran.toString());
         assertEquals(0, ran.exit(), ran.toString());
     }
 

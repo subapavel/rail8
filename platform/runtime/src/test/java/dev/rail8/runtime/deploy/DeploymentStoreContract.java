@@ -438,6 +438,33 @@ public abstract class DeploymentStoreContract {
                 "a delete keeps the uses of each flow it ran under the flow's id");
     }
 
+    /**
+     * A flow that a new version still runs, though no longer at-least-once, keeps its new uses under its package while its earlier
+     * ones drain under its qualified id; a later save or a delete moves only the uses of the flows the replaced row ran
+     * at-least-once, so the drain's uses stay one set and the running flow's go with its package.
+     */
+    @Test
+    void aFlowRunInAnotherModeKeepsItsUsesUnderItsPackageWhileItsEarlierOnesDrain() {
+        DeploymentStore.DeployedSystem erp = system("shop", "erp");
+        DeploymentStore.ConnectionUse orders = use("shop", "shop/orders", "from", "erp/inbox", "in", Optional.of("/orders"));
+        DeploymentStore.ConnectionUse audit = use("shop", "shop/audit", "post", "erp/api", "out", Optional.empty());
+        DeploymentStore.ConnectionUse draining = use("shop/audit", "shop/audit", "post", "erp/api", "out", Optional.empty());
+        save(record("shop", "1.0.0", C_1, SHA_1, AT), configuration(List.of(erp), List.of(orders, audit)));   // both at-least-once
+
+        DeploymentRecord sync = new DeploymentRecord("shop", "2.0.0", "shop", C_2, SHA_2, AT, List.of(), List.of("shop/orders"));
+        save(sync, configuration(List.of(erp), List.of(orders, audit)));   // shop/audit runs sync from now on
+        assertEquals(sorted(List.of(orders, audit, draining)), sorted(store.connectionUses().await()), "the sync flow's uses and its drain's");
+
+        DeploymentRecord again = new DeploymentRecord("shop", "2.0.1", "shop", C_3, SHA_3, AT, List.of(), List.of("shop/orders"));
+        save(again, configuration(List.of(erp), List.of(orders, audit)));
+        assertEquals(sorted(List.of(orders, audit, draining)), sorted(store.connectionUses().await()),
+                "a save that does not retire the sync flow again leaves its drain's uses as they are");
+
+        delete("shop");
+        assertEquals(sorted(List.of(use("shop/orders", "shop/orders", "from", "erp/inbox", "in", Optional.of("/orders")), draining)),
+                sorted(store.connectionUses().await()), "a delete keeps the drains, and the sync flow's uses go with the package");
+    }
+
     /** The pool's lock reads the systems and the connection uses the pool's records hold, as the store does. */
     @Test
     void theLockReadsTheSystemsAndUsesTheRecordsHold() {

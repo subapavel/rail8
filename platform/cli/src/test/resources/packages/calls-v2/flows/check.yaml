@@ -1,0 +1,16 @@
+# The check of an order, called on direct /check: sent to the partner through acme/erp/rest, its reply the answer.
+schemaVersion: 2
+kind: flow
+id: check
+version: 0.1.0
+from:
+  adapter: direct
+  settings: { address: /check }
+delivery: { mode: sync }
+limits: { maxBodyBytes: 1048576 }
+steps:
+  - type: to
+    name: partner
+    adapter: http
+    connection: acme/erp/rest
+    settings: { path: /check }

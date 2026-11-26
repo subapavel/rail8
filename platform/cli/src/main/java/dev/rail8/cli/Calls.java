@@ -36,9 +36,13 @@ import java.util.function.Function;
  * The {@code direct} component of a {@code rail8 test} node. A call between flows runs for real, on the direct module's
  * component: a call to an address a flow of the package or of a dependency serves runs that flow. An endpoint the case's mocks
  * name is the mock's instead, in and out, as any other endpoint a case mocks. The flow form, the internal address and the health are the
- * real component's, so the deploy checks the addresses and the cycles of calls as a node does. Its forms reach a connection both ways,
- * one that describes nothing, so every consumer and producer is built for a connection whose key is the endpoint's id: the
- * mock's get it as it is, the real component's without it, as a node builds them.
+ * real component's, so the deploy checks the addresses and the cycles of calls as a node does. For a test of
+ * {@code schemaVersion: 1}, its forms reach a connection both ways, one that describes nothing, so every consumer and producer
+ * is built for a connection whose key is the endpoint's id: the mock's get it as it is, the real component's without it, as a
+ * node builds them. For a test of {@code schemaVersion: 2}, its forms are the real component's, which reach no connection,
+ * and each use is keyed {@code direct:<address>}, by the address of its settings or of its call. A key names both sides of a
+ * call there, and its mock stands in for the flow called: a send to it is the mock's, built for a connection of that key, and
+ * every consumer is the real component's.
  *
  * <p>What a real endpoint saw is recorded as the mock records it: every envelope sent on an out endpoint ({@link #sent},
  * {@link #sentTo}), retries included, and every envelope an in endpoint's handler was given ({@link #delivered}). The lists are
@@ -51,7 +55,11 @@ final class Calls implements Component, FlowTests.Door {
     /** The flow of the caller that sends a case's fixture: the test itself, named nowhere in the output. */
     static final String CALLER = "rail8-test";
 
+    /** What the key of a use of a test of {@code schemaVersion: 2} starts with, before its address. */
+    static final String BY_ADDRESS = "direct:";
+
     private final Component real;
+    private final boolean byAddress;
     private final MockComponent mock;
     private final Set<String> mocked;
     private final BlobStore blobs;
@@ -63,13 +71,15 @@ final class Calls implements Component, FlowTests.Door {
 
     /**
      * @param real the calls that run: the direct module's component
+     * @param byAddress whether the case is of a test of {@code schemaVersion: 2}: each use keyed by its address
      * @param mock the {@code direct} mock, bound to the case's behaviours
      * @param mocked the endpoints the case's mocks name: the mock's
      * @param blobs where {@link #ingest} stores a fixture's bytes
      * @param ids the ids of the callers {@link #ingest} plays
      */
-    Calls(Component real, MockComponent mock, Set<String> mocked, BlobStore blobs, IdGenerator ids) {
+    Calls(Component real, boolean byAddress, MockComponent mock, Set<String> mocked, BlobStore blobs, IdGenerator ids) {
         this.real = Objects.requireNonNull(real, "real");
+        this.byAddress = byAddress;
         this.mock = Objects.requireNonNull(mock, "mock");
         this.mocked = Set.copyOf(mocked);
         this.blobs = Objects.requireNonNull(blobs, "blobs");
@@ -81,6 +91,7 @@ final class Calls implements Component, FlowTests.Door {
     /** The real component's flow form, its directions reaching a connection that describes nothing: the endpoint's id as its key. */
     @Override
     public Forms forms() {
+        if (byAddress) return real.forms();
         Map<Direction, Forms.Reach> reach = new java.util.EnumMap<>(Direction.class);
         for (Direction d : Direction.values()) if (real.forms().serves(d)) reach.put(d, Forms.Reach.CONNECTION);
         return new Forms(Settings.NONE, real.forms().flow(), reach);
@@ -94,8 +105,8 @@ final class Calls implements Component, FlowTests.Door {
     @Override
     public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
         Objects.requireNonNull(handler, "handler");
-        String endpoint = endpoint(in.connection());
-        if (mocked.contains(endpoint)) return mock.consumer(in, handler);
+        String endpoint = byAddress ? BY_ADDRESS + in.settings().get("address") : endpoint(in.connection());
+        if (mocksIn(endpoint)) return mock.consumer(in, handler);
         List<Envelope> given = delivered.computeIfAbsent(endpoint, k -> new CopyOnWriteArrayList<>());
         Inbound unconnected = new Inbound(in.flow(), Optional.empty(), in.settings(), in.maxBodyBytes());
         Consumer consumer = real.consumer(unconnected, e -> {
@@ -111,8 +122,19 @@ final class Calls implements Component, FlowTests.Door {
         return connection.orElseThrow(() -> new IllegalArgumentException("a direct endpoint of a test reaches a connection")).key();
     }
 
+    /** Whether the consumers on {@code endpoint} are the mock's: an endpoint the case mocks, in a test of {@code schemaVersion: 1}. */
+    private boolean mocksIn(String endpoint) {
+        return !byAddress && mocked.contains(endpoint);
+    }
+
+    /** A connection of the key {@code key} that holds nothing: what the mock keys a send by. */
+    private static Connection keyed(String key) {
+        return new Connection(key, Map.of(), Map.of());
+    }
+
     @Override
     public Producer producer(Outbound out) {
+        if (byAddress) return byAddress();
         String endpoint = endpoint(out.connection());
         if (mocked.contains(endpoint)) return mock.producer(out);
         Producer producer = real.producer(new Outbound(Optional.empty()));
@@ -137,6 +159,39 @@ final class Calls implements Component, FlowTests.Door {
         };
     }
 
+    /**
+     * The producer of a use of a test of {@code schemaVersion: 2}, which names no connection: each send goes by the address of
+     * its call, to the mock's producer of that key when the case mocks it, else through the real component, recorded.
+     */
+    private Producer byAddress() {
+        Producer producer = real.producer(new Outbound(Optional.empty()));
+        Map<String, Producer> mocks = new ConcurrentHashMap<>();
+        return new Producer() {
+            @Override public Future<Envelope> send(Envelope e, Call call) {
+                String key = BY_ADDRESS + call.settings().get("address");
+                if (mocked.contains(key)) return mocks.computeIfAbsent(key, k -> mock.producer(new Outbound(Optional.of(keyed(k))))).send(e, call);
+                record(key, e);
+                return producer.send(e, call);
+            }
+
+            @Override public Future<Envelope> send(Envelope e, Call call, Deadline d) {
+                String key = BY_ADDRESS + call.settings().get("address");
+                if (mocked.contains(key)) return mocks.computeIfAbsent(key, k -> mock.producer(new Outbound(Optional.of(keyed(k))))).send(e, call, d);
+                record(key, e);
+                return producer.send(e, call, d);
+            }
+
+            @Override public Future<Void> close() {
+                return Future.all(mocks.values().stream().map(Producer::close).toList()).compose(closed -> producer.close());
+            }
+
+            private void record(String key, Envelope e) {
+                sent.add(e);
+                sentTo.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(e);
+            }
+        };
+    }
+
     /** Every envelope sent on a real out endpoint, in order. */
     List<Envelope> sent() { return List.copyOf(sent); }
 
@@ -149,15 +204,15 @@ final class Calls implements Component, FlowTests.Door {
     /**
      * Sends {@code bytes} with {@code headers} to the flow served on the in endpoint named {@code endpoint} as a caller at depth 0
      * would: a message of a new id and of the flow {@value #CALLER}, its body stored under {@code BlobKey.body(id, 0)}, sent through
-     * a real producer to the endpoint's address, the reply taken up to the flow's limit. On an endpoint the case mocks, the mock's
-     * {@link MockComponent#ingest}.
+     * a real producer to the endpoint's address, the reply taken up to the flow's limit. On an endpoint the case mocks, in a
+     * test of {@code schemaVersion: 1}, the mock's {@link MockComponent#ingest}.
      *
      * @return what the call gave the caller as a {@link Ack.Reply}; failed as the call failed
      * @throws IllegalStateException no consumer was built on {@code endpoint}
      */
     @Override
     public Future<Ack> ingest(String endpoint, Headers headers, Buffer bytes) {
-        if (mocked.contains(endpoint)) return mock.ingest(endpoint, headers, bytes);
+        if (mocksIn(endpoint)) return mock.ingest(endpoint, headers, bytes);
         Inbound in = served.get(endpoint);
         if (in == null) throw new IllegalStateException("no consumer of direct runs on endpoint " + endpoint);
         Producer caller = real.producer(new Outbound(Optional.empty()));
@@ -170,19 +225,19 @@ final class Calls implements Component, FlowTests.Door {
 
     @Override
     public List<Envelope> delivered(String endpoint) {
-        if (mocked.contains(endpoint)) return mock.delivered(endpoint);
+        if (mocksIn(endpoint)) return mock.delivered(endpoint);
         return List.copyOf(delivered.getOrDefault(endpoint, List.of()));
     }
 
     /** The mock's for an endpoint the case mocks; none on a real one, which takes no file. */
     @Override
     public Collection<String> undelivered(String endpoint) {
-        return mocked.contains(endpoint) ? mock.undelivered(endpoint) : List.of();
+        return mocksIn(endpoint) ? mock.undelivered(endpoint) : List.of();
     }
 
     /** The mock's for an endpoint the case mocks; none on a real one, which takes no file. */
     @Override
     public Collection<String> remaining(String endpoint) {
-        return mocked.contains(endpoint) ? mock.remaining(endpoint) : List.of();
+        return mocksIn(endpoint) ? mock.remaining(endpoint) : List.of();
     }
 }
