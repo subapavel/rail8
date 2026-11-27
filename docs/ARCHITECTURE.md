@@ -275,6 +275,15 @@ The admin API checks users and sessions in a pool of two connections of its own,
 while the work pool is busy. The membership and the LISTEN connection have one connection each. Check `max_connections`
 against the number of nodes before upgrading.
 
+A pooled connection that reads and writes no byte for `RAIL8_PG_IDLE_TIMEOUT` (default one minute, from 1 ms to one
+hour) is closed by the client, in each of the three pools. This bounds a statement whose server went silent, when the
+network to Postgres was cut or its host froze: the caller gets a failure, and the pool opens a fresh connection for its
+next caller. Sessions still run with `statement_timeout=0`. The bound has two costs. A pooled connection left unused that
+long is closed too, and the next caller opens a new one. A caller whose connection is closed during a commit does not know
+whether the commit happened. A save whose answer does not come within the save timeout is in the same state today, and the
+sender's retry under at-least-once covers it. The membership, LISTEN and deploy connections are not pooled and do not
+have this bound.
+
 ### The body journal
 
 Bodies do not go into Postgres. Each node writes them to an append-only journal on its local disk:

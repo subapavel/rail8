@@ -193,6 +193,10 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
             throw new IllegalArgumentException("RAIL8_PG_POOL_QUEUE " + pg.poolQueue() + " must be from 1 to " + POOL_QUEUE_MAX
                     + ": the most callers waiting per pool (D-132)");
         }
+        if (pg.idleTimeout().compareTo(IDLE_TIMEOUT_MIN) < 0 || pg.idleTimeout().compareTo(IDLE_TIMEOUT_MAX) > 0) {
+            throw new IllegalArgumentException("RAIL8_PG_IDLE_TIMEOUT " + pg.idleTimeout() + " must be from " + IDLE_TIMEOUT_MIN + " to " + IDLE_TIMEOUT_MAX
+                    + ": the longest a pooled connection to Postgres goes without a byte read or written");
+        }
     }
 
     /** A node with no package repositories, as {@link #from} reads an env without {@code RAIL8_GIT_BASE}. */
@@ -384,13 +388,21 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
      *                 constructor, not here
      * @param poolQueue {@code RAIL8_PG_POOL_QUEUE}, 1 to 65536 (1024): the most callers waiting per pool; the next
      *                  one is refused at once; the range is checked by the {@link NodeConfig} constructor, not here
+     * @param idleTimeout {@code RAIL8_PG_IDLE_TIMEOUT}, PT0.001S to PT1H (PT1M): the longest a pooled connection goes without
+     *                    a byte read or written; then the client closes it, a statement in flight on it fails and the pool opens
+     *                    a fresh connection for its next caller. It bounds a statement whose server went silent (a cut network,
+     *                    a frozen host), and it closes a connection left unused as long too. The range is checked by the
+     *                    {@link NodeConfig} constructor, not here
      * @since 0.1
      */
     public record Pg(String host, int port, String database, String user, String password, int poolSize, SslMode sslMode, Optional<Path> sslRootCert,
-                     Durability durability, int intakePoolSize, Duration poolWait, int poolQueue) {
+                     Durability durability, int intakePoolSize, Duration poolWait, int poolQueue, Duration idleTimeout) {
 
         /** {@code RAIL8_PG_POOL_WAIT} unset: the save timeout. */
         public static final Duration POOL_WAIT_DEFAULT = Duration.ofSeconds(5);
+
+        /** {@code RAIL8_PG_IDLE_TIMEOUT} unset: far above any statement the node runs on its pools. */
+        public static final Duration IDLE_TIMEOUT_DEFAULT = Duration.ofMinutes(1);
 
         /** {@code RAIL8_PG_POOL_QUEUE} unset. */
         public static final int POOL_QUEUE_DEFAULT = 1024;
@@ -454,11 +466,34 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
             Objects.requireNonNull(sslRootCert, "sslRootCert");
             Objects.requireNonNull(durability, "durability");
             Objects.requireNonNull(poolWait, "poolWait");
+            Objects.requireNonNull(idleTimeout, "idleTimeout");
             if (sslMode != SslMode.DISABLE && sslRootCert.isEmpty()) {
                 throw new IllegalArgumentException("RAIL8_PG_SSL_MODE " + sslMode + " (RAIL8_PG_HOST " + host
                         + ") needs RAIL8_PG_SSL_ROOT_CERT, the PEM CA that signs the server's certificate: set it, or set RAIL8_PG_SSL_MODE=disable"
                         + " for a server reached in plaintext on purpose");
             }
+        }
+
+        /**
+         * The pools' idle timeout at its default ({@link #IDLE_TIMEOUT_DEFAULT}): in-process callers; env parsing never uses it.
+         *
+         * @param host the server's host
+         * @param port its port
+         * @param database the database
+         * @param user the user
+         * @param password the user's password
+         * @param poolSize the connections of both pools at most
+         * @param sslMode how the link is secured
+         * @param sslRootCert the CA of a verifying mode
+         * @param durability what an accepted message survives
+         * @param intakePoolSize the intake pool's share
+         * @param poolWait the longest wait for a pooled connection
+         * @param poolQueue the most callers waiting per pool
+         */
+        public Pg(String host, int port, String database, String user, String password, int poolSize, SslMode sslMode, Optional<Path> sslRootCert,
+                  Durability durability, int intakePoolSize, Duration poolWait, int poolQueue) {
+            this(host, port, database, user, password, poolSize, sslMode, sslRootCert, durability, intakePoolSize, poolWait, poolQueue,
+                    IDLE_TIMEOUT_DEFAULT);
         }
 
         /**
@@ -555,7 +590,7 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
         public String toString() {
             return "Pg[host=" + host + ", port=" + port + ", database=" + database + ", user=" + user + ", password=***, poolSize=" + poolSize
                     + ", sslMode=" + sslMode + ", sslRootCert=" + sslRootCert + ", durability=" + durability + ", intakePoolSize=" + intakePoolSize
-                    + ", poolWait=" + poolWait + ", poolQueue=" + poolQueue + "]";
+                    + ", poolWait=" + poolWait + ", poolQueue=" + poolQueue + ", idleTimeout=" + idleTimeout + "]";
         }
     }
 
@@ -696,6 +731,8 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
     private static final Duration POOL_WAIT_MIN = Duration.ofMillis(1);
     private static final Duration POOL_WAIT_MAX = Duration.ofMinutes(1);
     private static final int POOL_QUEUE_MAX = 65536;
+    private static final Duration IDLE_TIMEOUT_MIN = Duration.ofMillis(1);
+    private static final Duration IDLE_TIMEOUT_MAX = Duration.ofHours(1);
     private static final String PEER_BIND = "0.0.0.0";
     /** The most {@code RAIL8_JOURNAL_COPIES}: the owner's and one holder's. */
     private static final int COPIES_MAX = 2;
@@ -731,7 +768,8 @@ public record NodeConfig(String nodeId, String env, AdminServer.Config admin, Pa
                 env.getOrDefault("RAIL8_PG_DATABASE", "rail8"), env.getOrDefault("RAIL8_PG_USER", "rail8"),
                 env.getOrDefault("RAIL8_PG_PASSWORD", ""), poolSize, sslMode(env, pgHost), sslRootCert(env),
                 durability(env, deployed(name)), intakePoolSize, duration(env, "RAIL8_PG_POOL_WAIT", Pg.POOL_WAIT_DEFAULT),
-                (int) number(env, "RAIL8_PG_POOL_QUEUE", Pg.POOL_QUEUE_DEFAULT, 1, POOL_QUEUE_MAX));   // the constructor checks the range too (an in-process Pg)
+                (int) number(env, "RAIL8_PG_POOL_QUEUE", Pg.POOL_QUEUE_DEFAULT, 1, POOL_QUEUE_MAX),   // the constructor checks the range too (an in-process Pg)
+                duration(env, "RAIL8_PG_IDLE_TIMEOUT", Pg.IDLE_TIMEOUT_DEFAULT));
         long memoryTier = number(env, "RAIL8_BLOB_MEMORY_TIER", MIB, MEMORY_TIER_MIN, Integer.MAX_VALUE);
         long memoryBudget = number(env, "RAIL8_BLOB_MEMORY_BUDGET", 256 * MIB, 1, Long.MAX_VALUE);
         if (memoryTier > memoryBudget) {
