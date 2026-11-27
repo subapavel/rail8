@@ -14,7 +14,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -38,7 +37,8 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
     /** By name: sorted as {@link String#compareTo} sorts. Guarded by {@code this}, with the generation and the lock's holder. */
     private final Map<String, DeploymentRecord> rows = new TreeMap<>();
-    private final Set<String> marked = new TreeSet<>();
+    /** The marks, by flow, each with the copy of the record it ran under; guarded by {@code this}. */
+    private final SortedMap<String, DeploymentRecord> marks = new TreeMap<>();
     private long generation;
     private Held holder;
     private final List<Audited> audited = new CopyOnWriteArrayList<>();
@@ -72,7 +72,7 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
     }
 
     private Snapshot snapshot() {
-        return new Snapshot(generation, new ArrayList<>(rows.values()), new ArrayList<>(marked));
+        return new Snapshot(generation, new ArrayList<>(rows.values()), marks);
     }
 
     @Override
@@ -116,8 +116,8 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
 
     @Override
     public synchronized Future<Void> endMarks() {
-        uses.removeIf(u -> marked.contains(u.deployment()));
-        marked.clear();
+        uses.removeIf(u -> marks.containsKey(u.deployment()));
+        marks.clear();
         return Future.succeededFuture();
     }
 
@@ -206,8 +206,8 @@ public final class InMemoryDeploymentStore implements DeploymentStore {
                 DeploymentRecord replaced = record == null ? rows.remove(name) : rows.put(name, record);
                 List<String> runs = record == null ? List.of() : record.atLeastOnce();
                 List<String> retiring = replaced == null ? List.of() : replaced.atLeastOnce().stream().filter(flow -> !runs.contains(flow)).toList();
-                if (replaced != null) marked.addAll(retiring);
-                runs.forEach(marked::remove);
+                retiring.forEach(flow -> marks.putIfAbsent(flow, Snapshot.copy(replaced, flow)));
+                runs.forEach(marks::remove);
                 if (record == null || configuration != null) {
                     List<ConnectionUse> kept = new ArrayList<>();
                     for (ConnectionUse u : uses) {

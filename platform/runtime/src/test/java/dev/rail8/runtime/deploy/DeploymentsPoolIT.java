@@ -57,6 +57,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static dev.rail8.runtime.deploy.DeploymentsRedeployTest.reachedWhile;
+import static dev.rail8.runtime.deploy.DeploymentsDependenciesTest.deleteTree;
 import static dev.rail8.runtime.deploy.DeploymentsRedeployTest.untilWhile;
 import static dev.rail8.runtime.deploy.DeploymentsUndeployTest.children;
 import static dev.rail8.runtime.deploy.DeploymentsTest.joinRefused;
@@ -140,6 +141,8 @@ class DeploymentsPoolIT {
         final WorkQueue inner;
         final AtomicInteger issued = new AtomicInteger();
         final AtomicInteger answered = new AtomicInteger();
+        /** While set, no worker of the node takes an item: a claim answers none, and a hand-off appends a plain row. */
+        volatile boolean blind;
 
         Claims(WorkQueue inner) { this.inner = inner; }
 
@@ -148,10 +151,12 @@ class DeploymentsPoolIT {
 
         @Override public Future<List<Item>> claim(String workerId, String flow, int max, Duration lease) {
             issued.incrementAndGet();
-            return inner.claim(workerId, flow, max, lease).onComplete(done -> answered.incrementAndGet());
+            Future<List<Item>> claimed = blind ? Future.succeededFuture(List.of()) : inner.claim(workerId, flow, max, lease);
+            return claimed.onComplete(done -> answered.incrementAndGet());
         }
         @Override public Future<Void> enqueue(String messageId, String flow, int step, String partitionKey) { return inner.enqueue(messageId, flow, step, partitionKey); }
         @Override public Future<Optional<Item>> enqueueLeased(String messageId, String flow, int step, String partitionKey, String workerId, Duration lease) {
+            if (blind) return inner.enqueue(messageId, flow, step, partitionKey).map(Optional.empty());
             return inner.enqueueLeased(messageId, flow, step, partitionKey, workerId, lease);
         }
         @Override public Future<Boolean> complete(long seq, int attempts) { return inner.complete(seq, attempts); }
@@ -707,6 +712,98 @@ class DeploymentsPoolIT {
         assertEquals(List.of(), b.packageDirs("shop"), "node b's tick ends its drain and prunes the directory");
         assertEquals(Health.up(), a.deployments.health());
         assertEquals(Health.up(), b.deployments.health());
+    }
+
+    /**
+     * Node a accepts a message of an at-least-once flow that none of its workers takes, as a node that dies before one does,
+     * undeploys the flow's package, deploys another package that listens where the flow did, and stops. Its git cache and its
+     * package directories are gone when it starts again. Its restore installs the other package and builds the flow's drain from
+     * the pool's mark: the commit fetched, written and checked against the mark's content, and no consumer asked where it listens.
+     * The drain runs the message; the tick after it completed ends the mark and the drain, and prunes the package's directory.
+     */
+    @Test
+    void aRestartedNodeDrainsARetiredFlowFromItsMark() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        PackageDraft shop = pkg("shop", "1.0.0", "a").endpoint("keep-in", "in", new JsonObject().put("path", "/keep").put("port", 9100))
+                .flow("keep", "1.0.0", "at-least-once", "keep-in", 1024, PackageDraft.toPartner());
+        a.deploy("shop", repos.commit(shop));
+        List<String> dirs = a.packageDirs("shop");
+        a.claims.blind = true;
+        Envelope queued = a.accept("shop/keep");
+        a.undeploy("shop");
+        a.claims.blind = false;
+        a.deploy("store", repos.commit(pkg("store", "1.0.0").endpoint("take-in", "in", new JsonObject().put("path", "/take").put("port", 9100))
+                .flow("take", "1.0.0", "sync", "take-in", 1024, PackageDraft.toPartner())));
+        a.close();
+        assertEquals(1L, rows("shop/keep"), "fixture: the message waits in the work queue");
+        assertEquals(List.of("shop/keep"), marks(), "fixture: the pool marks the flow");
+        deleteTree(tmp.resolve("node-a").resolve("git"));
+        deleteTree(tmp.resolve("node-a").resolve("packages"));
+
+        Peer restarted = new Peer("node-a").restored();
+        restarted.doors.partner().awaitSent(1);
+        assertEquals(List.of(queued.id()), restarted.doors.partner().sent().stream().map(Envelope::id).toList(), "the drain runs the message");
+        assertEquals(List.of("store@1.0.0 RUNNING"), restarted.listed(), "the drain lists no package");
+        assertEquals(List.of(), restarted.live("shop/keep"), "and takes no message: it has no door");
+        until(() -> rows("shop/keep") == 0, "the message completes");
+        assertEquals(dirs, restarted.packageDirs("shop"), "the drain reads the directory its build wrote");
+
+        restarted.follow();
+        assertEquals(List.of(), marks(), "no row is left: the tick ends the mark");
+        assertEquals(List.of(), restarted.packageDirs("shop"), "and the drain: shop's directory is pruned");
+        assertEquals(Health.up(), restarted.deployments.health());
+    }
+
+    /**
+     * A restarted node whose drain of a marked flow does not build, its repository not answering, lists the flow UNDRAINED, one
+     * WARNING, and every tick tries again; once the repository answers, a tick builds the drain, which runs the waiting message.
+     */
+    @Test
+    void aDrainThatDoesNotBuildAtTheRestoreIsBuiltAtALaterTick() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        PackageDraft shop = pkg("shop", "1.0.0", "a").endpoint("keep-in", "in", new JsonObject().put("path", "/keep"))
+                .flow("keep", "1.0.0", "at-least-once", "keep-in", 1024, PackageDraft.toPartner());
+        a.deploy("shop", repos.commit(shop));
+        a.claims.blind = true;
+        Envelope queued = a.accept("shop/keep");
+        a.undeploy("shop");
+        a.close();
+        deleteTree(tmp.resolve("node-a").resolve("git"));
+        deleteTree(tmp.resolve("node-a").resolve("packages"));
+        Path away = tmp.resolve("away");
+        Files.move(repos.dir("shop"), away);
+
+        Peer restarted = new Peer("node-a").restored();
+        assertEquals(Health.Status.DEGRADED, restarted.deployments.health().status());
+        assertTrue(restarted.deployments.health().detail().contains("UNDRAINED: flow shop/keep"), restarted.deployments.health().detail());
+        restarted.follow();
+        assertEquals(1, warned("flow 'shop/keep' is retired, but its drain did not start").size(), "one WARNING: " + logged);
+        assertEquals(1L, rows("shop/keep"), "the message waits");
+
+        Files.move(away, repos.dir("shop"));
+        restarted.follow();
+        restarted.doors.partner().awaitSent(1);
+        assertEquals(List.of(queued.id()), restarted.doors.partner().sent().stream().map(Envelope::id).toList(), "the drain runs the message");
+        until(() -> rows("shop/keep") == 0, "the message completes");
+        restarted.follow();
+        assertEquals(List.of(), marks());
+        assertEquals(Health.up(), restarted.deployments.health());
+    }
+
+    /** A restarted node builds no drain of a marked flow whose work rows are gone: nothing of its package is written. */
+    @Test
+    void aRestartedNodeBuildsNoDrainOfAMarkWithoutItems() throws Exception {
+        Peer a = new Peer("node-a").restored();
+        a.deploy("shop", repos.commit(pkg("shop", "1.0.0", "a").endpoint("keep-in", "in", new JsonObject().put("path", "/keep"))
+                .flow("keep", "1.0.0", "at-least-once", "keep-in", 1024, PackageDraft.toPartner())));
+        a.undeploy("shop");
+        a.close();
+        assertEquals(List.of("shop/keep"), marks(), "fixture: no tick ended the mark");
+        deleteTree(tmp.resolve("node-a").resolve("packages"));
+
+        Peer restarted = new Peer("node-a").restored();
+        assertEquals(List.of(), restarted.packageDirs("shop"), "no drain was built");
+        assertEquals(Health.up(), restarted.deployments.health());
     }
 
     // --- what each node runs

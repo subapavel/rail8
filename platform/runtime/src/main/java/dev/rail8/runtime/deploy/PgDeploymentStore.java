@@ -12,6 +12,7 @@ import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.SqlConnection;
 import io.vertx.sqlclient.Tuple;
 
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -58,7 +59,10 @@ import java.util.function.Supplier;
  */
 public final class PgDeploymentStore implements DeploymentStore {
 
-    private static final String READ = "select p.generation, (select coalesce(array_agg(r.flow order by r.flow), '{}') from retiring r) as marked, "
+    /** The generation, every mark with its copy of the record as one JSON array, and each record, one per row. */
+    private static final String READ = "select p.generation, (select coalesce(jsonb_agg(jsonb_build_object('flow', r.flow, 'package', r.package, "
+            + "'version', r.version, 'repository', r.repository, 'commit', r.commit, 'content', r.content, 'dependencies', r.dependencies, "
+            + "'deployed_at', r.deployed_at)), '[]') from retiring r) as marks, "
             + "d.package, d.version, d.repository, d.commit, d.content, d.deployed_at, d.dependencies, d.at_least_once "
             + "from deploy_pool p left join deployments d on true";
     private static final String TRY_LOCK = "select pg_try_advisory_lock(294, 0)";
@@ -286,24 +290,38 @@ public final class PgDeploymentStore implements DeploymentStore {
     /** The generation of a {@link #READ} and its records, sorted by name; no row means no {@code deploy_pool} row: a failure. */
     private static Snapshot snapshot(RowSet<Row> rows) {
         Long generation = null;
-        List<String> marked = List.of();
+        SortedMap<String, DeploymentRecord> marks = new TreeMap<>();
         List<DeploymentRecord> records = new ArrayList<>();
         for (Row r : rows) {
-            generation = r.getLong("generation");
-            marked = List.of(r.getArrayOfStrings("marked"));
-            if (r.getString("package") == null) continue;   // the pool's row alone: no record
-            List<DeploymentRecord.Pin> pins = new ArrayList<>();
-            for (Object o : r.getJsonArray("dependencies")) {
-                JsonObject p = (JsonObject) o;
-                pins.add(new DeploymentRecord.Pin(p.getString("name"), p.getString("version"), p.getString("content"), p.getString("repository"),
-                        p.getString("commit")));
+            if (generation == null) {
+                for (Object o : (JsonArray) r.getValue("marks")) {
+                    JsonObject m = (JsonObject) o;
+                    DeploymentRecord ran = new DeploymentRecord(m.getString("package"), m.getString("version"), m.getString("repository"),
+                            m.getString("commit"), m.getString("content"), OffsetDateTime.parse(m.getString("deployed_at")).toInstant(),
+                            pins(m.getJsonArray("dependencies")), List.of());
+                    marks.put(m.getString("flow"), Snapshot.copy(ran, m.getString("flow")));
+                }
             }
+            generation = r.getLong("generation");
+            if (r.getString("package") == null) continue;   // the pool's row alone: no record
             records.add(new DeploymentRecord(r.getString("package"), r.getString("version"), r.getString("repository"), r.getString("commit"),
-                    r.getString("content"), r.getOffsetDateTime("deployed_at").toInstant(), pins, List.of(r.getArrayOfStrings("at_least_once"))));
+                    r.getString("content"), r.getOffsetDateTime("deployed_at").toInstant(), pins(r.getJsonArray("dependencies")),
+                    List.of(r.getArrayOfStrings("at_least_once"))));
         }
         if (generation == null) throw new IllegalStateException("the table deploy_pool has no row: the database is not migrated to V27");
         records.sort(Comparator.comparing(DeploymentRecord::name));
-        return new Snapshot(generation, records, marked);
+        return new Snapshot(generation, records, marks);
+    }
+
+    /** The pins of a record's {@code dependencies}: a JSON array of {@code {"name", "version", "content", "repository", "commit"}}. */
+    private static List<DeploymentRecord.Pin> pins(JsonArray dependencies) {
+        List<DeploymentRecord.Pin> pins = new ArrayList<>();
+        for (Object o : dependencies) {
+            JsonObject p = (JsonObject) o;
+            pins.add(new DeploymentRecord.Pin(p.getString("name"), p.getString("version"), p.getString("content"), p.getString("repository"),
+                    p.getString("commit")));
+        }
+        return pins;
     }
 
     /** The pool's lock on its own connection: each write one transaction on it. */

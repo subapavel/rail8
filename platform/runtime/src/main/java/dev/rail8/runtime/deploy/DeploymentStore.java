@@ -32,19 +32,32 @@ public interface DeploymentStore {
      * @param generation how many deploys and undeploys the pool committed
      * @param records every record, sorted by name as {@link String#compareTo} sorts ({@code Deployments} lists its packages so),
      *                whatever the database's collation
-     * @param marked the qualified ids of the flows the pool retires, sorted: each was run at-least-once by a record that a later write
-     *               replaced with one that does not run it so, or deleted; the work queue still takes messages for it, and its rows are
-     *               drained, until {@link #endMarks} ends its mark
+     * @param marks the flows the pool retires, by qualified id, sorted: each was run at-least-once by a record that a later write
+     *              replaced with one that does not run it so, or deleted; the work queue still takes messages for it, and its rows are
+     *              drained, until {@link #endMarks} ends its mark. Each maps to the copy of the record it ran under, which the mark
+     *              keeps: name, version, repository, commit, content, {@code deployedAt} and pins, its at-least-once flows the
+     *              marked one alone
      */
-    record Snapshot(long generation, List<DeploymentRecord> records, List<String> marked) {
+    record Snapshot(long generation, List<DeploymentRecord> records, SortedMap<String, DeploymentRecord> marks) {
         public Snapshot {
             records = List.copyOf(records);
-            marked = List.copyOf(marked);
+            marks = Collections.unmodifiableSortedMap(new TreeMap<>(marks));
         }
 
         /** A pool that retires no flow. */
         public Snapshot(long generation, List<DeploymentRecord> records) {
-            this(generation, records, List.of());
+            this(generation, records, new TreeMap<>());
+        }
+
+        /** The qualified ids of the flows the pool retires, sorted. */
+        public List<String> marked() {
+            return List.copyOf(marks.keySet());
+        }
+
+        /** The copy a mark keeps of {@code record}, the record {@code flow} ran under: its at-least-once flows {@code flow} alone. */
+        public static DeploymentRecord copy(DeploymentRecord record, String flow) {
+            return new DeploymentRecord(record.name(), record.version(), record.repository(), record.commit(), record.content(), record.deployedAt(),
+                    record.dependencies(), List.of(flow));
         }
     }
 

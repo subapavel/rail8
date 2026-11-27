@@ -600,11 +600,13 @@ directory, with no consumer, running what the work queue holds of it. A tick end
 with no work row left, under the flow's advisory lock that every admitted write holds until it
 commits, and stops a drain once no mark names its flow and the queue holds nothing of it; the
 package's directory goes then. A redeploy that runs the flow at-least-once again ends its mark and
-its drain.
+its drain. At its restore, and at each tick, a node builds the drain of each marked flow it runs no
+drain of and does not run at-least-once itself, unless the work queue holds nothing of it: a node that
+restarted while the flow drained, or one that never ran it. The mark's copy of the record is installed
+as a restore installs a record, and only that flow is built, with no consumer. A drain that does not
+build or start is a WARNING, `UNDRAINED` in `/health`, and every tick tries again.
 
 **Planned**
-- A node that restarts builds the drain of a retired flow from its mark's copy of the record. Today
-  it builds none, and what the flow left in the work queue waits there.
 - Systems and connections replace the endpoint files (#443). A package holds a system's file with
   the names of its connections; git holds nothing else of a connection. A flow names a system and a
   connection, and a deploy refuses a flow whose connections are not set, or not complete, in the
@@ -996,8 +998,8 @@ so it cannot act after others think it dead. A node replaced by a newer start of
   a dead node frees with its connection. Every node follows the records every 5 s and writes what it
   runs, which any node answers for the pool; a node whose lease ended drops out of that answer. A removed
   at-least-once flow stops taking messages on every node, and its items run on each node's drain of
-  it. A node that dies while a flow drains leaves its items in the work queue; restarted, it builds no
-  drain yet, so they wait.
+  it. A node that dies while a flow drains builds the drain again from the flow's mark once it
+  restarts, and runs what the flow left in the work queue.
 - **Second copy.** The receiving side of a copy of journal segments on another node exists, the
   sending side does not, and the setting `RAIL8_JOURNAL_COPIES` is read but has no effect. Every
   node warns at start that it keeps one copy.

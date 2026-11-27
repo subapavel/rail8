@@ -304,9 +304,13 @@ At its start, before its admin port opens, a node installs each record:
   from its directory, with no consumer, running what the work queue holds of it. Each tick ends the
   mark of a flow with no work row left, under that flow's advisory lock, which every admitted write
   holds until it commits; a drain stops at the tick after that once its queue holds nothing of the
-  flow, and the package's directory goes then. A drain takes as long as its items do. A node that dies
-  while a flow drains leaves its items in the work queue; a restarted node builds no drain yet, so they
-  wait for one.
+  flow, and the package's directory goes then. A drain takes as long as its items do. At its restore,
+  and at each tick, a node builds the drain of each marked flow it runs no drain of and does not run
+  at-least-once itself, unless the work queue holds nothing of it: a node that died while a flow
+  drained, or one that never ran it. It installs the mark's copy of the record as a restore installs a
+  record (the commit read from the cache, fetched when the cache lacks it, and the content checked
+  against the copy) and builds only that flow, with no consumer and no check of where one would listen.
+  A drain that does not build is a WARNING, `UNDRAINED` in `/health`, and every tick tries again.
 
 ## What each node runs
 
@@ -562,7 +566,10 @@ public interface Commit {
 - Several nodes over one Postgres, on a fake clock: a second deploy refused while one runs; a node
   behind the generation reconciling before it plans; the other node installing and undeploying at its
   next tick; a `FAILED` package restored at a later tick once its repository answers; a removed flow
-  that takes no new message on any node and drains before it stops.
+  that takes no new message on any node and drains before it stops; a restarted node that drains a
+  retired flow from its mark, the commit fetched, while another package listens where the flow did; a
+  drain that does not build at the restore, built at a later tick once its repository answers; no
+  drain for a mark whose work rows are gone.
 - What each node runs, on two nodes and a fake clock. The tests run on an in-memory membership whose leases end on the fake
   clock, and on Postgres with a lease ended by setting `lease_until` in the past:
   - a follower behind after a deploy, then caught up at its tick;
