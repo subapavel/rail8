@@ -719,7 +719,8 @@ class DeploymentsPoolIT {
      * undeploys the flow's package, deploys another package that listens where the flow did, and stops. Its git cache and its
      * package directories are gone when it starts again. Its restore installs the other package and builds the flow's drain from
      * the pool's mark: the commit fetched, written and checked against the mark's content, and no consumer asked where it listens.
-     * The drain runs the message; the tick after it completed ends the mark and the drain, and prunes the package's directory.
+     * The drain runs the message, and a tick while the message is held at the partner builds no second drain; the tick after the
+     * message completed ends the mark and the drain, and prunes the package's directory.
      */
     @Test
     void aRestartedNodeDrainsARetiredFlowFromItsMark() throws Exception {
@@ -740,11 +741,21 @@ class DeploymentsPoolIT {
         deleteTree(tmp.resolve("node-a").resolve("git"));
         deleteTree(tmp.resolve("node-a").resolve("packages"));
 
-        Peer restarted = new Peer("node-a").restored();
-        restarted.doors.partner().awaitSent(1);
-        assertEquals(List.of(queued.id()), restarted.doors.partner().sent().stream().map(Envelope::id).toList(), "the drain runs the message");
-        assertEquals(List.of("store@1.0.0 RUNNING"), restarted.listed(), "the drain lists no package");
-        assertEquals(List.of(), restarted.live("shop/keep"), "and takes no message: it has no door");
+        Peer restarted = new Peer("node-a");
+        CountDownLatch release = restarted.doors.partner().holdNext(1);
+        try {
+            restarted.restored();
+            restarted.doors.partner().awaitSent(1);
+            assertEquals(List.of(queued.id()), restarted.doors.partner().sent().stream().map(Envelope::id).toList(), "the drain runs the message");
+            assertEquals(List.of("store@1.0.0 RUNNING"), restarted.listed(), "the drain lists no package");
+            assertEquals(List.of(), restarted.live("shop/keep"), "and takes no message: it has no door");
+            until(restarted.claims::settled, "the drain's start claim has its answer");
+            int claimed = restarted.claims.issued.get();
+            restarted.follow();
+            assertEquals(claimed, restarted.claims.issued.get(), "a tick while the message is held builds no second drain: no worker claims at its start");
+        } finally {
+            release.countDown();
+        }
         until(() -> rows("shop/keep") == 0, "the message completes");
         assertEquals(dirs, restarted.packageDirs("shop"), "the drain reads the directory its build wrote");
 
