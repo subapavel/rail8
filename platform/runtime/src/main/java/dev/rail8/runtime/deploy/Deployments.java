@@ -203,8 +203,13 @@ import java.util.stream.Stream;
  * with no work row left ({@link DeploymentStore#endMarks}), then stops each drain whose flow no mark names and whose items the
  * work queue says are gone, and prunes its directories; a drain whose queue does not answer runs on. A drain that does not build
  * or start is a WARNING and is tried again at every tick, and {@link #health} is DEGRADED while one is (UNDRAINED). A deploy that
- * runs the flow at-least-once again ends its mark and stops its drain before the new flow starts. A node that restarts builds
- * no drain: what a retired flow left in the work queue waits there for one.
+ * runs the flow at-least-once again ends its mark and stops its drain before the new flow starts. At a restore, and at each tick
+ * after its drains settled, a node builds a drain from the mark of each flow the pool retires that it runs no drain of and does
+ * not run at-least-once itself, unless the work queue answers that it holds no item of the flow: a node that restarted while the
+ * flow drained, or one that never ran it. The mark's copy of the record is installed as a restore installs a record — its commit
+ * read from the git cache, fetched when the cache lacks it, and its content checked against the copy's — and only its flow is
+ * built, asked nothing about a consumer, its worker started; such a drain ends as any other. One that does not build or start is
+ * a WARNING once per reason, listed UNDRAINED, and every tick tries again.
  *
  * <p>A deploy is atomic to readers: while it runs, {@link #flows()} and {@link #packages()} answer what they
  * answered before it, phase A and B and a rollback included; the listing changes once, when the deploy returns (the new version)
@@ -399,6 +404,11 @@ public final class Deployments {
     private final Map<String, Flow> draining = new ConcurrentSkipListMap<>();
     /** The flows whose drain did not build or start, by qualified id: every tick tries again ({@link #settleDrains}); under {@link #deploying}. */
     private final Map<String, Flow> undrained = new ConcurrentSkipListMap<>();
+    /**
+     * The flows the pool marks whose drain this node could not build from the mark, by qualified id, each with why: every tick
+     * tries again ({@link #drainMarked}); written under {@link #deploying}, read by {@link #health}.
+     */
+    private final Map<String, String> unbuilt = new ConcurrentSkipListMap<>();
     /** Why the last end of the pool's marks failed ({@link DeploymentStore#endMarks}); null once one succeeded. Under {@link #deploying}. */
     private String unended;
     /**
@@ -1355,7 +1365,7 @@ public final class Deployments {
         List<Flow> built = new ArrayList<>();
         try {
             Package pkg = load(name, dir);
-            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>(), Optional.empty());
+            Checked checked = check(name, pkg, dir, before, versions, null, new ArrayList<>(), Optional.empty(), false);
             return build(name, Optional.empty(), pkg.manifest().getString("version"), "validate", pkg, dir, checked, built);
         } catch (DeployRefusedException refused) {
             if (refused.kind() == Kind.BUSY) throw new IOException(refused.error(), refused);   // a pool refusal lists no problem: the node's failure
@@ -1400,6 +1410,7 @@ public final class Deployments {
             deployed.clear();
             draining.clear();
             undrained.clear();
+            unbuilt.clear();
             Future<Void> stopped = stop(running, config.stopDeadline());   // every worker stopped first: no claim from here on
             Future<Void> drained = drain(running, stopped);                 // its bound runs from here, the start of the close
             stopped.eventually(() -> close(running)).eventually(() -> drained).eventually(sends::close).await();
@@ -1435,8 +1446,10 @@ public final class Deployments {
         deploying.lock();
         try {
             if (closing || !deployed.isEmpty()) throw new IllegalStateException("a restore runs at the node's start, before anything is deployed and before close");
-            reconcile(records.read().await());   // records that cannot be read: the node does not start
+            Snapshot pool = records.read().await();   // records that cannot be read: the node does not start
+            reconcile(pool);
             backfill();
+            drainMarked(pool.marks());
         } finally {
             unlock();
         }
@@ -1498,16 +1511,18 @@ public final class Deployments {
                 unread = null;
                 following = true;
                 try {
-                    reconcile(read.result());
-                    backfill();   // what was installed, and what a busy pool's lock held back at an earlier tick
-                    unreconciled = null;
-                } catch (IOException | RuntimeException failed) {
-                    unreconciled = reason(failed);
-                    throw failed;
+                    try {
+                        reconcile(read.result());
+                        backfill();   // what was installed, and what a busy pool's lock held back at an earlier tick
+                        unreconciled = null;
+                    } catch (IOException | RuntimeException failed) {
+                        unreconciled = reason(failed);
+                        throw failed;
+                    }
+                    settleDrains(read.result());
                 } finally {
                     following = false;
                 }
-                settleDrains(read.result().marked());
             } finally {
                 unlock();
             }
@@ -1585,11 +1600,12 @@ public final class Deployments {
 
     /**
      * Stops each drain whose flow is done — no mark of the pool names it ({@code marked}) and the work queue holds no item of it —
-     * and closes it, then prunes what it read; starts again each drain that did not start, unless its flow is done. A queue that
-     * cannot answer leaves the drain as it is until the next tick.
+     * and closes it, then prunes what it read; starts again each drain that did not start, unless its flow is done, and builds
+     * the drains of the pool's marks that this node runs none of ({@link #drainMarked}). A queue that cannot answer leaves the
+     * drain as it is until the next tick.
      */
-    private void settleDrains(List<String> marked) {
-        Set<String> held = Set.copyOf(marked);
+    private void settleDrains(Snapshot pool) {
+        Set<String> held = pool.marks().keySet();
         List<Flow> done = new ArrayList<>();
         for (Flow f : List.copyOf(draining.values())) {
             if (done(f, held)) done.add(draining.remove(f.id()));
@@ -1601,6 +1617,7 @@ public final class Deployments {
             else again.add(f);
         }
         startDrains(again);
+        drainMarked(pool.marks());
         Set<String> names = new HashSet<>();
         done.forEach(f -> {
             names.add(f.flow().pkg());
@@ -1637,6 +1654,120 @@ public final class Deployments {
                     log(System.Logger.Level.WARNING, "flow '" + f.id() + "' is retired, but its drain did not start; every tick tries again: " + reason(failed), failed);
                 }
             }
+        }
+    }
+
+    /**
+     * Builds a drain from its mark ({@link #drainOf}) for each flow of {@code marks} — the pool's marks, each with the copy of the
+     * record its flow ran under — that this node runs no drain of, has no drain to start again of, and does not run at-least-once
+     * itself, unless the work queue answers that it holds no item of the flow. One that does not build or start is a WARNING once
+     * per reason, listed UNDRAINED ({@link #unbuilt}), and every tick tries again; once a fetch of this pass could not reach the
+     * git host, the pass fetches nothing more. Under {@link #deploying}.
+     */
+    private void drainMarked(SortedMap<String, DeploymentRecord> marks) {
+        unbuilt.keySet().retainAll(marks.keySet());
+        try {
+            for (Map.Entry<String, DeploymentRecord> mark : marks.entrySet()) {
+                String id = mark.getKey();
+                if (draining.containsKey(id) || undrained.containsKey(id) || runsAtLeastOnce(id)
+                        || Boolean.FALSE.equals(bounded(queue.hasItems(id), "the work queue's answer for flow '" + id + "'").otherwiseEmpty().await())) {
+                    unbuilt.remove(id);
+                    continue;
+                }
+                try {
+                    draining.put(id, drainOf(id, mark.getValue()));
+                    unbuilt.remove(id);
+                } catch (DeployRefusedException refused) {
+                    unbuilt(id, String.join("; ", scrubber().texts(Stream.concat(Stream.of(refused.error()), refused.problems().stream()).toList())), refused);
+                } catch (IOException | RuntimeException failed) {
+                    unbuilt(id, reason(failed), failed);
+                }
+            }
+        } finally {
+            unreachable = null;
+        }
+    }
+
+    /** Lists {@code id} UNDRAINED for {@code why}, a WARNING when that is a new reason. */
+    private void unbuilt(String id, String why, Throwable failed) {
+        if (!why.equals(unbuilt.put(id, why))) {
+            log(System.Logger.Level.WARNING, "flow '" + id + "' is retired, but its drain did not start; every tick tries again: " + why, failed);
+        }
+    }
+
+    /** Whether this node runs the flow {@code id} at-least-once, as a deploy or an install listed it: its own worker runs its items. */
+    private boolean runsAtLeastOnce(String id) {
+        return deployed.values().stream().flatMap(d -> d.flows().stream()).anyMatch(f -> f.id().equals(id) && f.runs() && AT_LEAST_ONCE.equals(f.flow().delivery()));
+    }
+
+    /**
+     * The drain of the flow {@code id} built from {@code copy}, the record its mark keeps, its worker started. The copy is installed
+     * as a restore installs a record: {@code packages/<name>/<content hex>/} is used when it holds the copy's content; else the
+     * commit is read from the git cache, fetched when the cache lacks it, written into {@code .incoming}, its content checked
+     * against the copy's and moved there. The package is checked as a restore checks it, its pins read the same way, but no
+     * consumer is asked where it listens or what it serves: a drain has none. Only the flow is built — delivery, worker, no
+     * consumer — stamped with the copy's version and commit. Whatever refuses it stops what it built and deletes what it wrote
+     * that the node does not keep.
+     *
+     * @throws DeployRefusedException the commit cannot be read, its content is not the copy's, or the package or the flow does not
+     *                                check or build
+     * @throws IOException            the data directory cannot be written
+     * @throws IllegalStateException  the commit holds no at-least-once flow of the id
+     */
+    private Flow drainOf(String id, DeploymentRecord copy) throws DeployRefusedException, IOException {
+        GitCache cache = git.orElseThrow(() -> refused(Kind.FAILED, RefusalCode.NO_GIT_BASE, "the node has no RAIL8_GIT_BASE: it reads no commit", Map.of()));
+        String name = copy.name();
+        String hex = hex(copy.content());
+        Path dir = config.dataDir().resolve("packages").resolve(name).resolve(hex);
+        List<Path> written = new ArrayList<>();   // what this build wrote that the node does not keep: a refusal deletes it
+        List<Flow> built = new ArrayList<>();
+        Path folder = null;
+        boolean started = false;
+        try (PackageRepositories repos = fetching(cache.open())) {
+            Commits commits = (repository, commit) -> restored(cache, repos, repository, commit);
+            if (!holds(dir, copy.content())) {
+                Commit commit;
+                try {
+                    commit = commits.read(copy.repository(), copy.commit());
+                } catch (GitFailure failed) {
+                    throw refused(Kind.FAILED, code(failed), failed.getMessage(), Map.of());
+                }
+                folder = checkout(commit, "");
+                String content = Package.content(folder);
+                if (!content.equals(copy.content())) {
+                    throw refused(Kind.FAILED, RefusalCode.CONTENT_MISMATCH, copy.repository() + " at " + copy.commit() + " holds the content " + content
+                            + ", its mark " + copy.content() + ": the node reads another RAIL8_GIT_BASE or RAIL8_GIT_PATH than the deploy did",
+                            Map.of("repository", copy.repository(), "commit", copy.commit()));
+                }
+                if (!keeps(name, hex)) written.add(dir);
+                deleteTree(dir);   // what an earlier node left there is replaced, never merged
+                Files.createDirectories(dir.getParent());
+                Files.move(folder, dir, StandardCopyOption.ATOMIC_MOVE);
+                folder = null;
+            }
+            Package pkg = load(name, dir);
+            Checked checked = check(name, pkg, dir, List.of(), List.of(), commits, written, Optional.empty(), true);
+            String local = id.substring(name.length() + 1);
+            FlowDefinition def = checked.flows().get(local);
+            if (def == null || !AT_LEAST_ONCE.equals(def.deliveryMode())) {
+                throw new IllegalStateException(copy.repository() + " at " + copy.commit() + " runs no at-least-once flow '" + local + "'");
+            }
+            Checked one = new Checked(checked.schemes(), checked.configs(), checked.resolved(), Map.of(local, def), checked.leaving(), checked.listening(),
+                    checked.paths(), checked.calls(), checked.dependencies(), checked.configuration());
+            List<String> problems = build(name, Optional.of(copy.commit()), copy.version(), hex, pkg, dir, one, built);
+            if (!problems.isEmpty()) throw invalid(name, problems);
+            Flow drain = built.getFirst();
+            drain.worker().start();
+            started = true;
+            return drain;
+        } finally {
+            tickFetch = null;
+            if (!started) {
+                built.forEach(Deployments::dropBuilt);
+                for (Path w : written) quietly("the directory " + w + " a drain's build wrote could not be deleted", () -> deleteWritten(w));
+            }
+            Path left = folder;   // moved by now, unless the copy was refused
+            if (left != null) quietly("the folder " + left.getFileName() + " of .incoming could not be deleted", () -> deleteTree(left));
         }
     }
 
@@ -1698,7 +1829,9 @@ public final class Deployments {
         });
         List<String> detail = new ArrayList<>();
         if (!failed.isEmpty()) detail.add("FAILED: " + String.join(", ", failed));
-        if (!undrained.isEmpty()) detail.add("UNDRAINED: " + String.join(", ", undrained.keySet().stream().map(id -> "flow " + id).toList()));
+        Set<String> notDrained = new TreeSet<>(undrained.keySet());
+        notDrained.addAll(unbuilt.keySet());
+        if (!notDrained.isEmpty()) detail.add("UNDRAINED: " + String.join(", ", notDrained.stream().map(id -> "flow " + id).toList()));
         if (!waiting.isEmpty()) detail.add("RESTARTING: " + String.join(", ", waiting));
         if (!lagging.isEmpty()) detail.add("BEHIND: " + String.join(", ", lagging));
         return detail.isEmpty() ? Health.up() : Health.degraded(String.join("; ", detail));
@@ -1910,7 +2043,7 @@ public final class Deployments {
             // only a deploy of a commit checks the environment, against the pool's committed systems; a restore and a follow install
             // what it checked, and a deploy of a folder (rail8 test) writes no record, so the pool names none of its dependencies' systems
             Optional<NamedChecks.Pooled> pooled = restoring == null && origin.isPresent() ? Optional.of(pooled()) : Optional.empty();
-            Checked checked = check(name, pkg, dir, before, List.of(), commits, written, pooled);
+            Checked checked = check(name, pkg, dir, before, List.of(), commits, written, pooled, false);
             if (fetching != null) fetching.close();   // every pin is read: the fetches' deadline ends before a flow starts
             String version = pkg.manifest().getString("version");
             Optional<String> commit = origin.map(Origin::commit);
@@ -2268,10 +2401,11 @@ public final class Deployments {
      * — removed, or another delivery mode — are the ones leaving: the deploy drains them. Against the flows the node runs, each flow's consumer is asked where it
      * listens ({@link #listeners}), and each flow which node-local addresses it serves and calls ({@link #links}): one flow per address
      * and no cycle of calls ({@link Calls#check}, against {@link #others}). {@code held} holds the versions an off-node validate
-     * holds, empty otherwise; {@code commits} and {@code written} are as {@link #dependencies} takes them.
+     * holds, empty otherwise; {@code commits} and {@code written} are as {@link #dependencies} takes them. For a {@code drain}, no
+     * consumer is asked where it listens or what it serves: a drain has none.
      */
     private Checked check(String name, Package pkg, Path dir, List<Flow> running, List<Held> held, Commits commits, List<Path> written,
-                          Optional<NamedChecks.Pooled> pooled) throws DeployRefusedException, IOException {
+                          Optional<NamedChecks.Pooled> pooled, boolean drain) throws DeployRefusedException, IOException {
         List<String> problems = new ArrayList<>(pkg.problems());
         JsonObject manifest = pkg.manifest();
         if (!name.equals(manifest.getValue("name"))) problems.add("package.yaml names the package '" + manifest.getValue("name") + "', the deploy '" + name + "'");
@@ -2354,7 +2488,7 @@ public final class Deployments {
         Map<String, EndpointConfig> asked = new TreeMap<>();   // by the local id of the flow each feeds: a pair's line goes on the later one
         feeds.forEach((endpoint, fed) -> {
             if (fed.size() > 1) problems.add("endpoint '" + endpoint + "' is the from endpoint of the flows " + fed + ": an in endpoint feeds one flow");
-            if (ins.contains(endpoint)) asked.put(fed.getFirst(), endpoint(endpoint, schemes.get(endpoint), resolved.get(endpoint)));
+            if (ins.contains(endpoint) && !drain) asked.put(fed.getFirst(), endpoint(endpoint, schemes.get(endpoint), resolved.get(endpoint)));
         });
         Map<String, InetSocketAddress> listening = listeners(name, asked, flows, problems);
         Map<String, String> paths = paths(name, asked, configs, problems);

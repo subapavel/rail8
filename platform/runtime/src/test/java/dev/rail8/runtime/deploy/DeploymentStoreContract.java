@@ -391,6 +391,25 @@ public abstract class DeploymentStoreContract {
         assertEquals(List.of("billing"), after.records().stream().map(DeploymentRecord::name).toList(), "the other package's row stays");
     }
 
+    /**
+     * Each mark keeps a copy of the record its flow ran under, pins included, its at-least-once flows the marked one alone: a
+     * save's copy is the row it replaced, a delete's the row it deleted.
+     */
+    @Test
+    void aMarkKeepsACopyOfTheRecordItsFlowRanUnder() {
+        DeploymentRecord shop = new DeploymentRecord("shop", "1.0.0", "shop", C_1, SHA_1, AT, List.of(pin("tools", "1.2.0", SHA_3, C_3)),
+                List.of("shop/orders", "shop/audit"));
+        save(shop);
+        save(new DeploymentRecord("shop", "2.0.0", "shop", C_2, SHA_2, AT.plusSeconds(60), List.of(), List.of("shop/orders")));
+        assertEquals(Map.of("shop/audit", DeploymentStore.Snapshot.copy(shop, "shop/audit")), store.read().await().marks(), "the replaced row's copy");
+
+        DeploymentRecord billing = record("billing", "1.0.0", C_3, SHA_3, AT);
+        save(billing);
+        delete("billing");
+        assertEquals(DeploymentStore.Snapshot.copy(billing, "billing/orders"), store.read().await().marks().get("billing/orders"), "the deleted row's copy");
+        assertEquals(List.of("billing/audit", "billing/orders", "shop/audit"), store.read().await().marked());
+    }
+
     /** {@code endMarks} ends a mark whose flow has no work row left, and writes no record and no generation. */
     @Test
     void aMarkWithoutWorkRowsEnds() {
