@@ -1,4 +1,5 @@
 import type { EndpointFile, EndpointsApi } from '../../src/endpoints/api';
+import type { TextBundle } from '../../src/endpoints/componentTexts';
 import type { FlowFile, FlowsApi } from '../../src/endpoints/flows/api';
 import { DIRECT_FORMS, HTTP_FORMS, SFTP_FORMS } from '../../src/endpoints/fake/forms';
 import type { Options } from '../../src/endpoints/settings';
@@ -124,7 +125,26 @@ export function pictureFlows(): FlowsApi {
   };
 }
 
-/** The endpoints of the folder, and a node that serves the http, sftp and direct components as they describe themselves. */
+/** The adapters' and the platform's own translations, as their jars carry them, by their path. */
+const BUNDLES = import.meta.glob<Record<string, string>>(
+  ['../../../platform/components/*/src/main/resources/META-INF/rail8/texts/*/*.json', '../../../platform/runtime/src/main/resources/META-INF/rail8/texts/*/*.json'],
+  { eager: true, import: 'default' },
+);
+
+/** The fields whose texts the sftp adapter's translations lack here, so that the pictures show the English where one has none. */
+const UNTRANSLATED = ['sftp.field.user.', 'sftp.field.minAgeMs.'];
+
+/** The translations of `scheme` into `language` as the node serves them, or null when it has none. */
+function bundleOf(scheme: string, language: string): TextBundle | null {
+  const found = Object.entries(BUNDLES).find(([path]) => path.endsWith(`/texts/${scheme}/${language}.json`))?.[1];
+  if (found === undefined) return null;
+  return Object.fromEntries(Object.entries(found).filter(([key]) => !UNTRANSLATED.some((prefix) => key.startsWith(prefix))));
+}
+
+/**
+ * The endpoints of the folder, and a node that serves the http, sftp and direct components as they describe themselves,
+ * with their translations and the platform's.
+ */
 export function pictureEndpoints(): EndpointsApi {
   const file = (path: string): EndpointFile => {
     if (path === pathOf(INVOICE_FILES.id)) return { path, editable: false, ...INVOICE_FILES, description: 'The invoices the partner leaves on its server.', environments: [] };
@@ -150,5 +170,6 @@ export function pictureEndpoints(): EndpointsApi {
         { scheme: 'direct', httpPrefix: null, settings: DIRECT_FORMS },
       ],
     }),
+    texts: async (scheme, language) => bundleOf(scheme, language),
   };
 }

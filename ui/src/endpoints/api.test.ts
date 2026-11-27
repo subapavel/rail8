@@ -53,6 +53,24 @@ describe('httpEndpointsApi', () => {
     expect(send).toHaveBeenCalledWith('/admin/components', { headers: { accept: 'application/json' } });
   });
 
+  test("reads a component's texts in a language once while the page is open, and none for a language it lacks", async () => {
+    const send = vi.fn(async (url: RequestInfo | URL) => (String(url).endsWith('/cs') ? json(200, { 'http.field.url.label': 'Adresa URL', 'http.field.x.label': 7 }) : json(404, { error: 'no texts', code: 'no-texts', values: {} })));
+    const api = httpEndpointsApi(send);
+    expect(await api.texts('http', 'cs')).toEqual({ 'http.field.url.label': 'Adresa URL' });
+    expect(await api.texts('http', 'cs')).toEqual({ 'http.field.url.label': 'Adresa URL' });
+    expect(await api.texts('my adapter', 'de')).toBeNull();
+    expect(await api.texts('my adapter', 'de')).toBeNull();
+    expect(send.mock.calls.map(([url]) => url)).toEqual(['/admin/components/http/texts/cs', '/admin/components/my%20adapter/texts/de']);
+  });
+
+  test("a component's texts that fail to come are asked for again the next time", async () => {
+    const send = vi.fn(async () => json(502, { error: 'the node does not answer' }));
+    const api = httpEndpointsApi(send);
+    await expect(api.texts('http', 'cs')).rejects.toMatchObject({ status: 502 });
+    await expect(api.texts('http', 'cs')).rejects.toMatchObject({ status: 502 });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
   test("rejects with the server's status and error, or status 0 when it does not answer", async () => {
     await expect(httpEndpointsApi(async () => json(412, { error: 'the file changed' })).read('a.yaml')).rejects.toEqual(new EndpointsError(412, 'the file changed'));
   });

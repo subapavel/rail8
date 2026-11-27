@@ -1,4 +1,5 @@
 import { currentLanguage, textsIn } from '../language';
+import type { TextBundle } from './componentTexts';
 import type { NodeIngress } from './inbound';
 import type { ComponentForms, Options } from './settings';
 import { refusalText } from '../refusal';
@@ -57,6 +58,11 @@ export interface EndpointsApi {
   create(path: string, text: string): Promise<StoredEndpoint>;
   /** The components the node serves, and where it takes requests, from its admin API. */
   components(): Promise<NodeComponents>;
+  /**
+   * The translations of the texts of the component of `scheme`, or of the platform's own for `rail8`, into `language`:
+   * null when the node has none in that language, or knows no such scheme.
+   */
+  texts(scheme: string, language: string): Promise<TextBundle | null>;
 }
 
 /** A refusal: its HTTP status (0 when the server did not answer) and the error text it gave. */
@@ -81,11 +87,14 @@ async function refusal(res: Response): Promise<EndpointsError> {
 }
 
 /**
- * The working folder's endpoint files at `/files/endpoints`, and the node's components at `/admin/components`, of the
- * server that serves the UI, through `send` (the page's `uiFetch` by default).
+ * The working folder's endpoint files at `/files/endpoints`, and the node's components at `/admin/components` with their
+ * texts at `/admin/components/<scheme>/texts/<language>`, of the server that serves the UI, through `send` (the page's
+ * `uiFetch` by default). The texts of a scheme in a language are asked for once while the API lives, and again only
+ * after they failed to come.
  */
 export function httpEndpointsApi(send: typeof fetch = uiFetch): EndpointsApi {
   const fileUrl = (path: string) => `/files/endpoints/${path.split('/').map(encodeURIComponent).join('/')}`;
+  const bundles = new Map<string, Promise<TextBundle | null>>();
 
   async function call(url: string, init: RequestInit = {}): Promise<Response> {
     let res: Response;
@@ -122,5 +131,29 @@ export function httpEndpointsApi(send: typeof fetch = uiFetch): EndpointsApi {
     async components() {
       return (await (await call('/admin/components')).json()) as NodeComponents;
     },
+    texts(scheme, language) {
+      const url = `/admin/components/${encodeURIComponent(scheme)}/texts/${encodeURIComponent(language)}`;
+      let found = bundles.get(url);
+      if (found === undefined) {
+        found = readBundle(url);
+        bundles.set(url, found);
+        found.catch(() => bundles.delete(url));
+      }
+      return found;
+    },
   };
+
+  async function readBundle(url: string): Promise<TextBundle | null> {
+    let res: Response;
+    try {
+      res = await call(url);
+    } catch (refused) {
+      if (refused instanceof EndpointsError && refused.status === 404) return null;
+      throw refused;
+    }
+    const body: unknown = await res.json();
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) return null;
+    // a message is text: any other value stands for no text, and the English shows
+    return Object.fromEntries(Object.entries(body).filter(([, message]) => typeof message === 'string')) as TextBundle;
+  }
 }

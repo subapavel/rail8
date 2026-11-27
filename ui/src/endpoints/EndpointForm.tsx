@@ -10,6 +10,7 @@ import { useWorkingFile } from '../workingFiles';
 import { FieldControl } from './FieldControl';
 import { RawOptions } from './RawOptions';
 import type { EndpointsApi, StoredEndpoint } from './api';
+import { ENGLISH, PLATFORM, translatedSettings, type ComponentTexts, type TextBundle } from './componentTexts';
 import { inboundAddress, optionsIn, type NodeIngress } from './inbound';
 import { sameValue } from './same-value';
 import { checkOptions, endpointSettings, shownFields, type EndpointSettings, type Group, type Options, type Problem, type SettingsField } from './settings';
@@ -68,7 +69,9 @@ const GROUPS: { group: Group; title: string }[] = [
  * An endpoint's settings form, drawn from its component's two forms: the endpoint's id, scheme, direction and file; the
  * environments that override options; then the description's tabs, each with the fields it holds that serve the
  * endpoint's direction and are shown, in two titled groups, the connection's and the flow's, each shown when it has a
- * field, and the problems the check finds in them. It opens read-only; Edit, when
+ * field, and the problems the check finds in them. In a language other than English the tabs, labels, help texts and
+ * choices show the component's own translations and the platform's, asked of `api` once the scheme is known, and their
+ * English where a translation is missing or cannot be had. It opens read-only; Edit, when
  * the file may be edited and the description could be read, then Cancel, Check and Save. Save writes only `config`,
  * sending the version it read, and a file changed on disk since opens a dialog. Cancel with unsaved changes asks
  * first; while there are some, `guardClose` is given the form's save, and the page asks before it unloads. Without the
@@ -96,6 +99,8 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   // while a reload reads the file, Edit waits, so a draft always starts from the version it saves over
   const [reloading, setReloading] = useState(false);
   const tabsId = useId();
+  const { language } = texts;
+  const [translations, setTranslations] = useState<ComponentTexts>(ENGLISH);
 
   const startFrom = (next: StoredEndpoint) => {
     setStored(next);
@@ -142,6 +147,23 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
       current = false;
     };
   }, [api, scheme, direction]);
+
+  useEffect(() => {
+    if (scheme === undefined || language === 'en') return undefined;
+    let current = true;
+    // a bundle that cannot be had leaves its texts in English
+    const bundleOf = (of: string) => api.texts(of, language).catch(() => null);
+    void Promise.all([bundleOf(scheme), bundleOf(PLATFORM)]).then(([own, platform]) => {
+      if (!current) return;
+      const bundles = new Map<string, TextBundle>();
+      if (own !== null) bundles.set(scheme, own);
+      if (platform !== null) bundles.set(PLATFORM, platform);
+      setTranslations({ language, bundles });
+    });
+    return () => {
+      current = false;
+    };
+  }, [api, scheme, language]);
 
   // a control that holds text that is no value yet holds an unsaved change too
   const unsaved = editing && stored !== null && (invalid.size > 0 || !sameValue(present(draft), stored.file.config));
@@ -206,7 +228,10 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   }
 
   const { file } = stored;
-  const settings = described.kind === 'read' ? described.settings : null;
+  // the translations of another language than the one shown are not shown, while those of this one are asked for; the
+  // form waits for them unless it is being edited, so a draft keeps the controls that hold it
+  const translating = language !== 'en' && translations.language !== language;
+  const settings = described.kind === 'read' ? translatedSettings(described.settings, file.scheme, translating ? ENGLISH : translations) : null;
   const options = editing ? draft : file.config;
   const problems = settings === null ? [] : checkOptions(texts, settings, present(options), file.direction);
   const problemOf = new Map<string, string>();
@@ -346,7 +371,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
         />
       )}
       {saveFailure !== null && <Alert type="error" showIcon title={t('endpoints.form.notSaved')} description={say(texts, saveFailure)} />}
-      {described.kind === 'reading' ? (
+      {described.kind === 'reading' || (described.kind === 'read' && translating && !editing) ? (
         <ReadSpinner label={t('endpoints.form.describing')} />
       ) : settings === null || !settings.described || !settings.served ? (
         <Form layout="vertical">
