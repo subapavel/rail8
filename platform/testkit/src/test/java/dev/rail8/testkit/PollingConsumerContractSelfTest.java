@@ -53,6 +53,7 @@ class PollingConsumerContractSelfTest {
     static final Set<String> CASES = Set.of("theSchemeIsNamedAndNotThePlatforms", "theFormsAreTheSameOnEveryCallAndServeTheInDirection",
             "theConnectionFormOnlyAddsToTheRecordedOne",
             "everyFieldChoiceAndTabHasALabelAndItsTextKeys", "theInboundPassesTheForms", "noSecretHandleIsReadWhileAConsumerIsBuilt",
+            "thePolledPlaceIsAnsweredFromTheInboundAloneAndStable",
             "aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged",
             "aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted", "theFileStaysWhileTheAnswerIsPending",
             "aRetryableNackKeepsTheFileAndTheNextRoundDeliversItAgain", "aRetryableNackEndsTheRound", "aHandlerThatThrowsOrAnswersNullKeepsTheFile",
@@ -81,6 +82,7 @@ class PollingConsumerContractSelfTest {
     static final String INBOUND = "theInboundPassesTheForms";
     static final String RECORDED = "theConnectionFormOnlyAddsToTheRecordedOne";
     static final String SECRET = "noSecretHandleIsReadWhileAConsumerIsBuilt";
+    static final String PLACE = "thePolledPlaceIsAnsweredFromTheInboundAloneAndStable";
 
     /** The forms of the correct variant: nothing described, the in direction reaching a connection. */
     static final Forms FORMS = new Forms(Settings.NONE, Settings.NONE, Map.of(Direction.IN, Forms.Reach.CONNECTION));
@@ -116,6 +118,8 @@ class PollingConsumerContractSelfTest {
         String scheme = "polling";
         /** What {@link #forms} answers on each call; the correct variant's are {@link #FORMS}. */
         Supplier<Forms> forms = () -> FORMS;
+        /** What {@link #polledPlace} answers; the correct variant names the connection's key. */
+        Function<Inbound, Optional<String>> polledPlace = in -> in.connection().map(Connection::key);
         /** Broken: building a consumer reads every secret of this kind of its connection; null: none. */
         Secret.Kind readsSecretsAtBuild;
         /** Broken: health reports UP whether or not a consumer runs. */
@@ -183,6 +187,8 @@ class PollingConsumerContractSelfTest {
         @Override public String scheme() { return scheme; }
 
         @Override public Forms forms() { return forms.get(); }
+
+        @Override public Optional<String> polledPlace(Inbound in) { return polledPlace.apply(in); }
 
         @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) {
             if (readsSecretsAtBuild != null) in.connection().ifPresent(c -> ComponentContractSelfTest.read(c, readsSecretsAtBuild));
@@ -428,6 +434,19 @@ class PollingConsumerContractSelfTest {
         for (Secret.Kind kind : Secret.Kind.values()) {
             assertEquals(Set.of(SECRET), failing(v -> v.readsSecretsAtBuild = kind), "the secret of kind " + kind + " is read while the consumer is built");
         }
+    }
+
+    @Test
+    void aPolledPlaceNotAnsweredFromTheInboundAloneFailsOnlyItsCase() {
+        assertEquals(Set.of(), failing(v -> v.polledPlace = in -> Optional.empty()), "a consumer that polls no shared place");
+        assertEquals(Set.of(PLACE), failing(v -> v.polledPlace = in -> {
+            throw new IllegalStateException("no directory to poll");
+        }), "it throws");
+        assertEquals(Set.of(PLACE), failing(v -> v.polledPlace = in -> null), "it answers null");
+        assertEquals(Set.of(PLACE), failing(v -> v.polledPlace = in -> Optional.of(" ")), "it answers a blank place");
+        AtomicLong calls = new AtomicLong();
+        assertEquals(Set.of(PLACE), failing(v -> v.polledPlace = in -> Optional.of("inbox " + calls.incrementAndGet())), "another place on every call");
+        assertEquals(Set.of(PLACE), failing(v -> v.polledPlace = in -> Optional.of("inbox " + System.identityHashCode(in))), "the inbound's identity, not its contents");
     }
 
     @Test

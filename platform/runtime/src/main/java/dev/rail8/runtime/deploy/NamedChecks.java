@@ -93,6 +93,8 @@ final class NamedChecks {
      * The place the sender of {@code def}, through {@code component}, polls within its connection; empty when it does not poll.
      * Asked of a connection that holds no value of the environment: two senders on one connection poll one place when their
      * settings name one.
+     *
+     * @throws RuntimeException the adapter cannot say which place it polls: it threw, or answered null
      */
     static Optional<String> polled(Component component, FlowDefinition def, AdapterUse sender) {
         Settings form = component.forms().connection();
@@ -100,11 +102,7 @@ final class NamedChecks {
         for (String server : form.servers()) values.putIfAbsent(server, PROBE);
         Connection probe = new Connection(sender.connection().orElseThrow(), values, Map.of());
         Inbound in = new Inbound(def.id(), Optional.of(probe), sender.settings(), def.maxBodyBytes());
-        try {
-            return Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null");
-        } catch (RuntimeException unanswered) {
-            return Optional.empty();
-        }
+        return Objects.requireNonNull(component.polledPlace(in), "polledPlace answered null");
     }
 
     /**
@@ -152,7 +150,15 @@ final class NamedChecks {
                     problems.add(where + ": its system file names the adapter '" + adapter.get() + "', the step '" + use.adapter() + "'");
                 }
                 Component component = components.get(use.adapter());
-                Optional<String> polled = use.direction() == Direction.IN && component != null ? polled(component, def, use) : Optional.empty();
+                Optional<String> polled = Optional.empty();
+                if (use.direction() == Direction.IN && component != null) {
+                    try {
+                        polled = polled(component, def, use);
+                    } catch (RuntimeException unanswered) {
+                        problems.add(where + ": the adapter '" + use.adapter() + "' cannot say which place it polls: "
+                                + Objects.toString(unanswered.getMessage(), unanswered.toString()));
+                    }
+                }
                 uses.add(new ConnectionUse(name, def.id(), use.step(), key, use.adapter(), use.direction() == Direction.IN ? "in" : "out", false, polled));
             }
         });

@@ -360,6 +360,35 @@ class DeploymentsConnectionsTest {
                 + "never poll one place of a connection"), other.problems());
     }
 
+    /** {@link Doors} as an adapter that cannot say which place its sender polls: {@code polledPlace} throws. */
+    record Unplaced(Doors inner) implements Component {
+        @Override public String scheme() { return inner.scheme(); }
+        @Override public Forms forms() { return inner.forms(); }
+        @Override public Consumer consumer(Inbound in, Function<Envelope, Future<Ack>> handler) { return inner.consumer(in, handler); }
+        @Override public Producer producer(Outbound out) { return inner.producer(out); }
+        @Override public Future<Health> health() { return inner.health(); }
+        @Override public Optional<String> polledPlace(Inbound in) { throw new IllegalStateException("no directory to poll"); }
+    }
+
+    /**
+     * A sender whose adapter cannot say which place it polls refuses the deploy, with a line naming the flow, the connection
+     * and the adapter's message: neither the check of two senders on one place nor the poller's lease can do without it.
+     * Nothing is installed.
+     */
+    @Test
+    void aSenderWhoseAdapterCannotSayWhereItPollsRefusesTheDeploy() throws Exception {
+        adapter = new Unplaced(doors);
+        node();
+        serving();
+        deploy(erp());
+        DeployRefusedException refused = refused(shop());
+        assertEquals(List.of("flow 'orders' from connection 'acme/erp/inbox': the adapter '" + Doors.SCHEME + "' cannot say which place it "
+                + "polls: no directory to poll"), refused.problems());
+        assertEquals(List.of(), deployments.flows(), "no flow runs");
+        assertEquals(List.of("erp"), deployments.packages().stream().map(DeployedPackage::name).toList(), "only the package before");
+        assertEquals(List.of(), within(pool.connectionUses(), "uses"), "no use recorded");
+    }
+
     /** A first segment of a system key is a partner or a system without a partner across the installation, never both. */
     @Test
     void aFirstSegmentIsAPartnerOrASystemNeverBoth() throws Exception {
