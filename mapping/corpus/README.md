@@ -7,6 +7,7 @@ data, nothing extracted from a real system, ever (ADR-0002). Decided in ADR-0018
 
 ```
 corpus/
+  package.yaml                   the corpus as the package mapping-corpus of the quickstart's working folder
   structures/                    schema bundles (XSD, WSDL, JSON Schema 2020-12)
   mappings/<name>.mapping.json   synthetic mapping models (ADR-0010), referencing ../structures/
   udfs/<package path>/<Class>.java  UDF sources (ADR-0020), referenced as ../udfs/…#method;

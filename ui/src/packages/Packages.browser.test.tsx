@@ -29,6 +29,13 @@ const open = (seed: Seed) => {
 
 const packages = () => page.getByRole('table', { name: 'Packages' });
 const rowOf = (repository: string) => packages().getByRole('row').filter({ hasText: repository });
+/** The names the rows' links show, in their order. */
+/** Checks that the Last commit cell of the row `repository` shows, on hover, the commit `id` and its subject `subject`. */
+const subjectOf = async (repository: string, subject: string, id = '[0-9a-f]{7}') => {
+  await rowOf(repository).getByRole('cell').nth(3).getByText(/ ago$/).hover();
+  await expect.element(page.getByRole('tooltip').getByText(new RegExp(`^${id} ${subject}$`))).toBeVisible();
+};
+const listed = () => packages().getByRole('row').elements().slice(1).map((r) => r.querySelector('td button')?.textContent);
 
 afterEach(() => {
   root?.unmount();
@@ -39,7 +46,7 @@ afterEach(() => {
 });
 
 describe('the Packages screen', () => {
-  test('lists each package with its version, branch, last commit, upstream, changed files and what the node runs', async () => {
+  test('lists each package with its version, branch, last commit, changes and what the node runs, and no explaining text', async () => {
     open({
       clones: [
         { folder: 'orders', commits: ['first', 'second'], upstream: { at: 'first', more: ['theirs'] } },
@@ -57,47 +64,92 @@ describe('the Packages screen', () => {
     });
 
     await expect.element(page.getByRole('heading', { level: 1, name: 'Packages' })).toBeVisible();
-    await expect.element(page.getByText('Deployed state on the node at 127.0.0.1:8081')).toBeVisible();
-    expect(packages().getByRole('row').elements().slice(1).map((r) => r.querySelector('td')?.textContent)).toEqual(['billing', 'orders', 'returns', 'shipping', 'stock']);
+    await expect.element(page.getByRole('heading', { level: 2, name: 'Packages (5)' })).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Deployed state on the node|The packages of the working folder|127\.0\.0\.1:8081/);
+    expect(listed()).toEqual(['billing', 'orders', 'returns', 'shipping', 'stock']);
+    expect(packages().getByRole('columnheader').elements().map((h) => h.textContent)).toEqual(['Package', 'Description', 'Branch', 'Last commit', 'Changes', 'Deployed']);
 
     const orders = rowOf('orders');
-    await expect.element(orders).toMatchTextContent('orders 1.0.0');
+    await expect.element(orders).toMatchTextContent('orders1.0.0');
     await expect.element(orders).toMatchTextContent('main');
-    await expect.element(orders).toMatchTextContent('second');
     await expect.element(orders).toMatchTextContent('Seed Author, 22 days ago');
-    await expect.element(orders).toMatchTextContent('1 ahead, 1 behind origin/main');
-    await expect.element(orders).toMatchTextContent('as of the fetch 22 days ago');
+    expect(orders.element().textContent).not.toMatch(/ahead|behind|fetch/);
     await expect.element(orders.getByText('Deployed', { exact: true })).toBeVisible();
-    await expect.element(orders).toMatchTextContent('deployed 3 days ago');
+    await expect.element(orders).toMatchTextContent(/[0-9a-f]{7} 3 days ago/);
+    expect(orders.element().querySelectorAll('td')[4]?.textContent).toBe('-');
 
     await expect.element(rowOf('billing').getByText('Behind 2')).toBeVisible();
-    await expect.element(rowOf('billing')).toMatchTextContent('No upstream');
     await expect.element(rowOf('shipping').getByText('Deployed, with changes since')).toBeVisible();
+    await expect.element(rowOf('shipping').getByText('2 files', { exact: true })).toBeVisible();
     await expect.element(rowOf('stock').getByText('Failed')).toBeVisible();
-    await expect.element(rowOf('stock').getByText('flows/stock.yaml: no endpoint stock-in')).toBeVisible();
+    await rowOf('stock').getByText('Failed').hover();
+    await expect.element(page.getByRole('tooltip').getByText('flows/stock.yaml: no endpoint stock-in')).toBeVisible();
     await expect.element(rowOf('returns')).toMatchTextContent('No commit yet');
-    await expect.element(rowOf('returns').getByText('Not running on 127.0.0.1:8081')).toBeVisible();
+    await expect.element(rowOf('returns').getByText('Not running', { exact: true })).toBeVisible();
   });
 
-  test('marks a package that packages the node runs pin behind the commit it runs, with their number', async () => {
-    const pins = (commit: string) => [{ name: 'orders', repository: 'orders', commit, content: `sha256:${'1'.repeat(64)}` }];
+  test('shows a package whose folder is named otherwise with its folder, and one whose package.yaml cannot be read by its folder', async () => {
     open({
-      clones: [{ folder: 'orders', commits: ['first', 'second', 'third'] }, { folder: 'billing' }, { folder: 'shipping' }, { folder: 'stock' }],
-      node: [
-        { repository: 'orders', commit: 'third' },
-        { repository: 'billing', commit: 'first', dependencies: pins('first') },
-        { repository: 'shipping', commit: 'first', dependencies: pins('second') },
-        { repository: 'stock', commit: 'first', dependencies: pins('third') },
+      clones: [
+        { folder: 'orders-v2', manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 2.0.0\n' },
+        { folder: 'broken', manifest: 'name: [' },
       ],
     });
 
-    await expect.element(rowOf('orders').getByText('Pinned behind by 2')).toBeVisible();
-    await rowOf('orders').getByText('Pinned behind by 2').hover();
-    await expect.element(page.getByRole('tooltip')).toHaveTextContent('2 packages the node runs pin a commit of it behind the one it runs: see Used by in its tab.');
-    await expect.element(rowOf('billing').getByText(/Pinned behind/)).not.toBeInTheDocument();
+    await expect.poll(listed).toEqual(['broken', 'orders']);
+    await expect.element(rowOf('orders-v2')).toMatchTextContent('orders2.0.0in the folder orders-v2');
+    await expect.element(rowOf('broken').getByText(/^package\.yaml is no YAML/)).toBeVisible();
   });
 
-  test('names how many nodes of the pool run which commit, and the nodes behind its record', async () => {
+  test('finds packages by name and description as they are typed, counts what it shows, and says when none matches', async () => {
+    open({
+      clones: [
+        { folder: 'orders', manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 1.0.0\ndescription: Orders from the web shop to the ERP.\n' },
+        { folder: 'billing', manifest: 'schemaVersion: 1\nkind: package\nname: billing\nversion: 1.0.0\ndescription: Invoices to the ledger.\n' },
+        { folder: 'shipping' },
+      ],
+    });
+    await expect.element(rowOf('orders')).toMatchTextContent('Orders from the web shop to the ERP.');
+    const search = page.getByLabelText('Search packages', { exact: true });
+
+    await search.fill('INVOICE');
+    await expect.poll(listed).toEqual(['billing']);
+    await expect.element(page.getByRole('heading', { level: 2, name: 'Packages (1)' })).toBeVisible();
+    await search.fill('ship');
+    await expect.poll(listed).toEqual(['shipping']);
+    await search.fill('payroll');
+    await expect.element(packages().getByText('No package matches “payroll”')).toBeVisible();
+    await expect.element(page.getByRole('heading', { level: 2, name: 'Packages (0)' })).toBeVisible();
+    await search.fill('');
+    await expect.poll(listed).toEqual(['billing', 'orders', 'shipping']);
+  });
+
+  test('sorts by name and by the last commit from the column headers', async () => {
+    // the seed makes the commits one after the other, folder by folder: orders' last commit is the oldest
+    open({ clones: [{ folder: 'orders', commits: ['first', 'second', 'third'] }, { folder: 'billing' }, { folder: 'stock', commits: ['first', 'second'] }] });
+    await expect.poll(listed).toEqual(['billing', 'orders', 'stock']);
+
+    await packages().getByRole('columnheader', { name: 'Package' }).click();
+    await expect.poll(listed).toEqual(['stock', 'orders', 'billing']);
+    await packages().getByRole('columnheader', { name: 'Last commit' }).click();
+    await expect.poll(listed).toEqual(['orders', 'billing', 'stock']);
+  });
+
+  test('has New package as its main action, Get a package… beside it, and Refresh as an icon with its name', async () => {
+    open({ clones: [{ folder: 'orders' }] });
+
+    const refresh = page.getByRole('button', { name: 'Refresh' });
+    await expect.element(refresh).toBeVisible();
+    expect(refresh.element().textContent).toBe('');
+    await refresh.hover();
+    await expect.element(page.getByRole('tooltip').getByText('Refresh')).toBeVisible();
+    const actions = [...document.querySelectorAll('.ant-page-header-heading-extra button')].map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    expect(actions).toEqual(['Refresh', 'Get a package…', 'New package']);
+    await expect.element(page.getByRole('button', { name: 'New package' })).toHaveClass(/ant-btn-primary/);
+    await expect.element(page.getByRole('button', { name: 'Get a package…' })).not.toHaveClass(/ant-btn-primary/);
+  });
+
+  test('says in one line on how many nodes of the pool the commit the node runs runs, and when it was deployed', async () => {
     const why = 'the commit could not be fetched: connection refused';
     const state = open({
       clones: [{ folder: 'orders', commits: ['first', 'second'] }, { folder: 'billing' }],
@@ -113,32 +165,26 @@ describe('the Packages screen', () => {
     });
     const second = state.folders.find((f) => f.name === 'orders')!.commits.find((c) => c.subject === 'second')!.id.slice(0, 7);
 
-    await expect.element(page.getByText('Deployed state on the node at 127.0.0.1:8081, and on every node of its pool')).toBeVisible();
     const orders = rowOf('orders');
-    await expect.element(orders.getByText('Behind 1')).toBeVisible();
-    await expect.element(orders.getByText('Failed')).toBeVisible();
-    await expect.element(orders).toMatchTextContent(`Deployed${second} on 1 of 3 nodes`);
-    await expect.element(orders).toMatchTextContent(`Failed${second} on 1 of 3 nodes`);
-    await expect.element(orders.getByText(/^Behind the pool's commit/)).toMatchTextContent(`Behind the pool's commit ${second}: node-b`);
-    expect(orders.getByText(/^Behind the pool's commit/).element().querySelector('code')?.textContent).toBe(second);
-    await expect.element(orders.getByText(`node-b: ${why}`)).toBeVisible();
+    await expect.element(orders.getByText('Deployed', { exact: true })).toBeVisible();
+    await expect.element(orders).toMatchTextContent(`Deployed${second} on 1 of 3 nodes, 3 days ago`);
+    expect(orders.element().textContent).not.toMatch(/node-b|Behind the pool/);
+    expect(orders.element().querySelectorAll('.ant-badge').length).toBe(1);
     await expect.element(rowOf('billing').getByText('Not running', { exact: true })).toBeVisible();
-    await expect.element(rowOf('billing')).toMatchTextContent('on 3 of 3 nodes');
   });
 
-  test('a node that answers no pool route shows the single node, and a pool that cannot be read says why', async () => {
+  test('a node that answers no pool route, or a pool that cannot be read, shows the node alone', async () => {
     open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }] });
 
     await expect.element(rowOf('orders').getByText('Deployed', { exact: true })).toBeVisible();
     expect(rowOf('orders').element().textContent).not.toMatch(/ of \d+ nodes?|pool/);
-    expect(page.getByText(/every node of its pool/).elements()).toHaveLength(0);
 
     root?.unmount();
     document.body.innerHTML = '';
     open({ clones: [{ folder: 'orders' }], node: [{ repository: 'orders', commit: 'first' }], pool: 'fails' });
 
-    await expect.element(rowOf('orders').getByText(/^What each node of the pool runs is unknown: the node at 127\.0\.0\.1:8081 answered 500/)).toBeVisible();
-    expect(page.getByText(/every node of its pool/).elements()).toHaveLength(0);
+    await expect.element(rowOf('orders')).toMatchTextContent(/[0-9a-f]{7} 3 days ago/);
+    expect(rowOf('orders').element().textContent).not.toMatch(/ of \d+ nodes?|pool/);
   });
 
   test('reads Ahead and Other commit, a detached HEAD and a merge left open', async () => {
@@ -163,26 +209,31 @@ describe('the Packages screen', () => {
     await expect.element(rowOf('returns').getByText('Merge in progress')).toBeVisible();
   });
 
-  test('cuts a long commit subject to its column, and shows it whole on hover', async () => {
-    const subject = `Rework ${'the order mapping and its tests, '.repeat(8)}once more`;
-    open({ clones: [{ folder: 'orders', commits: [subject] }] });
+  test('shows who made the last commit and when in one line, with its id and subject on hover', async () => {
+    const subject = 'Rework the order mapping and its tests';
+    const state = open({ clones: [{ folder: 'orders', commits: [subject] }] });
+    const head = state.folders.find((f) => f.name === 'orders')!.commits.at(-1)!;
 
-    const cut = rowOf('orders').getByText(subject);
+    await expect.element(rowOf('orders').getByRole('cell').nth(3)).toMatchTextContent(new RegExp(`^${head.author}, \\d+ \\w+ ago$`));
+    await subjectOf('orders', subject, head.id.slice(0, 7));
+  });
+
+  test('cuts a long description to its column, and shows it whole on hover', async () => {
+    const description = `Orders ${'from the web shop to the ERP, '.repeat(8)}and back`;
+    open({ clones: [{ folder: 'orders', manifest: `schemaVersion: 1\nkind: package\nname: orders\nversion: 1.0.0\ndescription: ${description}\n` }] });
+
+    const cut = rowOf('orders').getByText(description);
     await expect.element(cut).toBeVisible();
     expect(cut.element().scrollWidth).toBeGreaterThan(cut.element().clientWidth);
     await cut.hover();
-    await expect.element(page.getByRole('tooltip').getByText(subject)).toBeVisible();
+    await expect.element(page.getByRole('tooltip').getByText(description)).toBeVisible();
   });
 
-  test('lists the folders that are no package below the packages, each with the reason', async () => {
+  test('lists no folder that is no package', async () => {
     open({ clones: [{ folder: 'orders' }, { folder: 'loose', manifest: null }], plain: ['docs'], worktrees: [{ folder: 'tree', of: 'orders' }] });
 
-    const others = page.getByRole('table', { name: 'Folders that are no package' });
-    await expect.element(page.getByRole('heading', { level: 2, name: 'Folders that are no package' })).toBeVisible();
-    await expect.element(others.getByRole('row').filter({ hasText: 'docs' })).toMatchTextContent(REASONS.noClone.error);
-    await expect.element(others.getByRole('row').filter({ hasText: 'loose' })).toMatchTextContent(REASONS.noManifest.error);
-    await expect.element(others.getByRole('row').filter({ hasText: 'tree' })).toMatchTextContent(REASONS.worktree.error);
-    expect(packages().getByRole('row').elements()).toHaveLength(2);
+    await expect.poll(listed).toEqual(['orders']);
+    expect(document.body.textContent).not.toMatch(/docs|loose|tree|no package/);
   });
 
   test('says when the node gives no answer, and why, and reads it again on Refresh', async () => {
@@ -193,7 +244,7 @@ describe('the Packages screen', () => {
 
     state.node = { host: '127.0.0.1:8081', answers: true, running: [] };
     await page.getByRole('button', { name: 'Refresh' }).click();
-    await expect.element(rowOf('orders').getByText('Not running on 127.0.0.1:8081')).toBeVisible();
+    await expect.element(rowOf('orders').getByText('Not running', { exact: true })).toBeVisible();
     await expect.element(page.getByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -213,7 +264,7 @@ describe('the Packages screen', () => {
     open({ plain: ['docs'] });
 
     await expect.element(page.getByRole('heading', { level: 2, name: 'No packages' })).toBeVisible();
-    await expect.element(page.getByRole('table', { name: 'Folders that are no package' })).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/docs/);
     await packages().getByRole('button', { name: 'Get a package…' }).click();
     await expect.element(page.getByRole('dialog', { name: 'Get a package' })).toBeVisible();
     await page.getByRole('dialog', { name: 'Get a package' }).getByRole('button', { name: 'Cancel' }).click();
@@ -233,7 +284,7 @@ describe('Get a package', () => {
   const address = 'https://git.example.com/acme/orders.git';
   const dialog = () => page.getByRole('dialog', { name: 'Get a package' });
   const field = () => dialog().getByLabelText('Address', { exact: true });
-  // the toolbar's, which comes before the one an empty table offers
+  // the page's, which comes before the one an empty table offers
   const getButton = () => page.getByRole('button', { name: 'Get a package…' }).first();
 
   test('clones the address into the folder of its name, lists it, and opens its tab', async () => {
@@ -250,8 +301,8 @@ describe('Get a package', () => {
     await expect.element(page.getByRole('tab', { name: /orders$/, selected: true })).toBeVisible();
     await expect.element(dialog()).not.toBeInTheDocument();
     await page.getByRole('tab', { name: /Packages$/ }).click();
-    await expect.element(rowOf('orders')).toMatchTextContent('orders 1.0.0');
-    await expect.element(rowOf('orders')).toMatchTextContent('second');
+    await expect.element(rowOf('orders')).toMatchTextContent('orders1.0.0');
+    await subjectOf('orders', 'second');
   });
 
   test('says why git could not clone, with what git said, and keeps the address to try again', async () => {
@@ -268,7 +319,7 @@ describe('Get a package', () => {
     expect(packages().getByRole('row').filter({ hasText: 'orders' }).elements()).toEqual([]);
   });
 
-  test('says when the clone is no package, and lists it among the folders that are no package', async () => {
+  test('says when the clone is no package, and does not list it', async () => {
     open({ clones: [{ folder: 'billing' }], sources: [{ path: 'acme/orders.git', manifest: null, files: { 'README.md': 'orders\n' } }] });
 
     await getButton().click();
@@ -279,7 +330,7 @@ describe('Get a package', () => {
     await expect.element(got.getByText('The folder orders holds the clone, but it is no package')).toBeVisible();
     await expect.element(got).toMatchTextContent(REASONS.noManifest.error);
     await got.getByRole('button', { name: 'Close' }).last().click();
-    await expect.element(page.getByRole('table', { name: 'Folders that are no package' }).getByText('orders')).toBeVisible();
+    await expect.poll(listed).toEqual(['billing']);
   });
 
   test('is off on a server that takes no writes', async () => {
@@ -294,7 +345,7 @@ describe('New package', () => {
   const repositoryField = () => dialog().getByLabelText('Repository', { exact: true });
   const nameField = () => dialog().getByLabelText('Package name', { exact: true });
   const create = () => dialog().getByRole('button', { name: 'Create', exact: true });
-  // the toolbar's, which comes before the one an empty table offers
+  // the page's, which comes before the one an empty table offers
   const newButton = () => page.getByRole('button', { name: 'New package' }).first();
 
   test('makes the package in the folder of its name, says a deployed environment needs the git host, lists it, and opens its tab', async () => {
@@ -315,8 +366,8 @@ describe('New package', () => {
     await expect.element(page.getByRole('tab', { name: /orders$/, selected: true })).toBeVisible();
     await expect.element(dialog()).not.toBeInTheDocument();
     await page.getByRole('tab', { name: /Packages$/ }).click();
-    await expect.element(rowOf('orders')).toMatchTextContent('orders-app 0.1.0');
-    await expect.element(rowOf('orders')).toMatchTextContent('Create package orders-app');
+    await expect.element(rowOf('orders')).toMatchTextContent('orders-app0.1.0in the folder orders');
+    await subjectOf('orders', 'Create package orders-app');
   });
 
   test('says why it was refused, and keeps the names to try again', async () => {
@@ -383,19 +434,15 @@ describe('the Packages screen in another language', () => {
     });
 
     await expect.element(page.getByRole('heading', { level: 1, name: 'Balíčky' })).toBeVisible();
-    await expect.element(page.getByText('Stav nasazení na uzlu 127.0.0.1:8081')).toBeVisible();
+    await expect.element(page.getByRole('heading', { level: 2, name: 'Balíčky (3)' })).toBeVisible();
     const czech = page.getByRole('table', { name: 'Balíčky' });
     const row = (repository: string) => czech.getByRole('row').filter({ hasText: repository });
     await expect.element(row('orders')).toMatchTextContent('Seed Author, před 22 dny');
-    await expect.element(row('orders')).toMatchTextContent('1 napřed, 1 pozadu vůči origin/main');
-    await expect.element(row('orders')).toMatchTextContent('podle fetche před 22 dny');
-    await expect.element(row('orders')).toMatchTextContent('nasazení před 3 dny');
+    await expect.element(row('orders')).toMatchTextContent(/[0-9a-f]{7} před 3 dny/);
     await expect.element(row('billing').getByText('Pozadu o 2')).toBeVisible();
-    await expect.element(row('billing')).toMatchTextContent('Bez upstreamu');
-    await row('orders').getByText('Připnuto pozadu o 2').hover();
-    await expect
-      .element(page.getByRole('tooltip'))
-      .toHaveTextContent('2 balíčky, které běží na uzlu, připínají jeho commit za tím, který běží: viz Používají ho v jeho kartě.');
+    await expect.element(page.getByRole('button', { name: 'Obnovit' })).toBeVisible();
+    await page.getByLabelText('Hledat balíčky', { exact: true }).fill('nic');
+    await expect.element(czech.getByText('Žádný balíček neodpovídá „nic“')).toBeVisible();
 
     await page.getByRole('button', { name: 'Získat balíček…' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Získat balíček' });

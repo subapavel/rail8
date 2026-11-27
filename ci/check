@@ -288,6 +288,7 @@ check_quickstart() {
   mkdir -p ~/rail8-workspace && cp -r examples/demo ~/rail8-workspace/demo
   cp -r mapping/corpus ~/rail8-workspace/mapping-corpus
   (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')
+  (cd ~/rail8-workspace/mapping-corpus && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The mapping corpus')
   on_exit+=(stop_quickstart_node show_ui_log)
   start_quickstart_node owner deploy
   bin/rail8 deploy demo HEAD --expect none
@@ -310,8 +311,12 @@ check_quickstart() {
   done
 
   # the Sec-Fetch-Site header stands in for the browser's own page in every call of the UI's server below
+  # the working folder holds the two packages, demo and mapping-corpus, and no other folder
+  local listed code packages
+  packages=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/git/packages || true)
+  [ "$(echo "$packages" | jq -c '[[.packages[] | [.repository, .package.name]], .others]')" = '[[["demo","demo"],["mapping-corpus","mapping-corpus"]],[]]' ] \
+    || { echo "::error::the working folder does not hold the packages demo and mapping-corpus alone: $packages"; exit 1; }
   # the mapping studio lists the corpus copy and opens a mapping through the node
-  local listed code
   listed=$(curl -sf -H 'Sec-Fetch-Site: same-origin' localhost:5173/api/mappings || true)
   echo "$listed" | grep -q '"id":"mapping-corpus/mappings/order-id-copy"' \
     || { echo "::error::the studio does not list mapping-corpus/mappings/order-id-copy: $listed"; exit 1; }

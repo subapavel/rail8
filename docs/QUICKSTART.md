@@ -27,6 +27,7 @@ git clone https://github.com/subapavel/rail8.git && cd rail8
 mkdir -p ~/rail8-workspace && cp -r examples/demo ~/rail8-workspace/demo   # once: the packages the endpoint forms edit
 cp -r mapping/corpus ~/rail8-workspace/mapping-corpus                     # once: the mappings the mapping studio edits
 (cd ~/rail8-workspace/demo && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The demo')   # once
+(cd ~/rail8-workspace/mapping-corpus && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The mapping corpus')   # once
 
 export RAIL8_ADMIN_TOKEN=$(bin/rail8 key new)      # the node's emergency key: it makes the first users and does nothing else
 [ -s ~/.rail8-secrets-key ] || { t=$(mktemp ~/.rail8-secrets-key.XXXXXX) && openssl rand -base64 32 > "$t" && ln "$t" ~/.rail8-secrets-key; rm -f "$t"; }
@@ -71,7 +72,8 @@ The node's first start imports the demo's two secrets, the SFTP password and the
 value you change later is entered in the store, or the database starts empty again after `docker compose down -v`.
 
 The working folder `~/rail8-workspace` holds the packages as git repositories, each named as its folder: the demo is the
-repository `demo`. The node mounts the folder read-only and deploys a commit of a repository in it, never the files
+repository `demo`, and the mapping studio's sample mappings, with their structures and cases, the repository
+`mapping-corpus`. The node mounts the folder read-only and deploys a commit of a repository in it, never the files
 beside the commit, so a change is deployed once it is committed. The folder must exist before the first `up`.
 
 Start the UI without a token, so that it asks you to log in: `env -u` takes the two variables out of its environment.
@@ -92,8 +94,8 @@ The menu at the left lists the screens; each opens in a tab of its own in the ro
 Mac) finds a screen, an open tab or an artifact of any package, a flow, an endpoint, a mapping or a test, by its name or
 its path, and Ctrl+B (⌘B) folds the menu to its icons.
 The UI has **Messages**, the list of the messages the node recorded, and **Packages**, each package of `RAIL8_WORKSPACE`
-with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
-artifacts and history. A package's **Artifacts** tab is one tree of its folders, each holding its flows, endpoints,
+with its description, branch, last commit, changed files and what the node runs of it, found by its name or its
+description in the search above the list, each opening a tab of its changes, artifacts and history. A package's **Artifacts** tab is one tree of its folders, each holding its flows, endpoints,
 mappings and tests and every other file, with the artifacts that use it, and a folder whose `folder.yaml` gives a namespace shows it beside its name.
 A flow opens in its picture, an endpoint in its settings form, a mapping in the mapping studio. Above the tree, the kind
 buttons and the filter box show only the flows, say, or what a name, a path or a namespace holds. Choosing a folder's
@@ -104,8 +106,9 @@ namespace and its description in its `folder.yaml`. The tree does not move or re
 
 The studio's mappings are the `*.mapping.json` files in `RAIL8_WORKSPACE`, such as
 `demo/greeting/mappings/greeting`, and the schemas a mapping reads are the files its bundles name, relative to its
-file, so a mapping works in any folder. A folder of `RAIL8_WORKSPACE` that is no package but holds mappings, such as `mapping-corpus`, is a link under
-**Folders that are no package** on **Packages**: its tab lists its mappings, with **New mapping**. Listing them needs no
+file, so a mapping works in any folder. The package `mapping-corpus` holds the studio's sample mappings: its
+**Artifacts** tab lists them, with **New mapping**. Packages lists packages only: a folder of `RAIL8_WORKSPACE` that is no
+package is not listed, and Ctrl+K finds its mappings, whose breadcrumb opens the folder's tab. Listing them needs no
 node; opening, saving, compiling and testing a mapping ask the node, so they need it running. With
 `RAIL8_READ_ONLY=true` the studio saves and creates nothing.
 
@@ -254,6 +257,16 @@ bin/rail8 deploy demo HEAD --expect none
 A working copy of the mapping corpus made by an older checkout, `~/rail8-mapping-workspace`, is moved into the working
 folder once, which keeps its edits: `mv ~/rail8-mapping-workspace ~/rail8-workspace/mapping-corpus`. The studio then
 finds its mappings under `mapping-corpus/`, and nothing else reads the old folder.
+
+A `~/rail8-workspace/mapping-corpus` made by an older checkout is a plain folder, which Packages does not list. Make it
+the package `mapping-corpus` once, from the repository root; its first commit holds the folder as it is, with your edits:
+
+```sh
+cp mapping/corpus/package.yaml ~/rail8-workspace/mapping-corpus/
+(cd ~/rail8-workspace/mapping-corpus && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The mapping corpus')
+```
+
+Its mappings keep their paths, such as `mapping-corpus/mappings/order-id-copy`.
 
 Then start the UI again with the command of the first run:
 `cd ui && env -u RAIL8_TOKEN -u RAIL8_ADMIN_TOKEN RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev`.

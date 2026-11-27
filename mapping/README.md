@@ -20,8 +20,8 @@ GitHub Issues.
 ## Run the Mapping studio and test a mapping
 
 1. Start the node and the UI as the repository's `docs/QUICKSTART.md` does. The UI's development server reads the
-   mappings of its working folder (`RAIL8_WORKSPACE`), where the quickstart copies `corpus/` as `mapping-corpus/`,
-   and the node runs the engine.
+   mappings of its working folder (`RAIL8_WORKSPACE`), where the quickstart makes `corpus/` the package
+   `mapping-corpus`, and the node runs the engine.
 2. Open http://localhost:5173 and choose **Mappings** in the navigation. It lists the mappings.
 3. Choose **Open in studio** on a mapping, for example `order-id-copy`. It opens read-only.
 4. Choose **Edit**, then the **Test** tab.

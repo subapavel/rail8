@@ -27,7 +27,8 @@ export function packageTab(api: PackagesApi, repository: string, writable: boole
 
 /**
  * The tab of the folder `folder` of the working folder that is no package but holds artifacts, on a server that takes
- * writes when `writable`: its id is `folder:` and the folder, its title the folder.
+ * writes when `writable`: its id is `folder:` and the folder, its title the folder. Packages does not list such a
+ * folder: its tab opens from the breadcrumb of an artifact Quick open finds in it.
  */
 export function folderTab(folder: string, writable: boolean): Screen {
   return {
@@ -41,8 +42,7 @@ export function folderTab(folder: string, writable: boolean): Screen {
 
 /**
  * The Packages screen over `api`: every package of the working folder, with its clone's state and what the node runs
- * of it, each opening in a tab of its own, and the folders that are no package, those that hold artifacts opening in
- * theirs; `now` tells the ages.
+ * of it, each opening in a tab of its own; `now` tells the ages.
  */
 export function packagesScreen(api: PackagesApi, now: () => Date = clock): Screen {
   return {
@@ -52,12 +52,7 @@ export function packagesScreen(api: PackagesApi, now: () => Date = clock): Scree
     icon: <BranchesOutlined aria-hidden />,
     description: msg('packages.screen.description'),
     render: (open) => (
-      <PackageList
-        api={api}
-        now={now}
-        onOpen={(repository, writable) => open(packageTab(api, repository, writable, now))}
-        onOpenFolder={(folder, writable) => open(folderTab(folder, writable))}
-      />
+      <PackageList api={api} now={now} onOpen={(repository, writable) => open(packageTab(api, repository, writable, now))} />
     ),
   };
 }

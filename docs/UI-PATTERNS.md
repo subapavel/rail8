@@ -43,21 +43,32 @@ A page uses PageContainer's own slots and nothing beside them:
 | `title` | the screen's or the object's name |
 | `tags` | a short state of the whole page, such as a version or Read-only |
 | `extra` | the page's actions, the main one last and primary |
-| `content` | one line on what the page is, or the object's facts |
+| `content` | a detail page's facts of its object; nothing on a list page |
 | `extraContent` | the object's key state, at the right |
 | `tabList` | the page's own tabs, each with its count when it lists things |
 | children | the sections, one titled card each |
 
+A page shows no explaining text: what a screen is for and how the platform works is the documentation's. An action
+everyone knows by its icon, such as Refresh, is an icon button (`Button` with `icon` and no text) inside a `Tooltip`
+that names it, with that name as its `aria-label`; every other action is a button with its text.
+
 ## A list page
 
-Reference: Pro's Search Table; in Rail8, Packages (`packages-*.png`), and Messages (`messages-*.png`) for a list with a
-search form.
+Reference: Pro's Search Table; in Rail8, Packages (`packages-*.png`, `packages-search-*.png`), and Messages
+(`messages-*.png`) for a list with a search form.
 
-- `Page` with the title and one line of `content`.
-- One card per list: a ProTable with `headerTitle` (a heading of level 2), the list's actions in `toolBarRender`
-  (Refresh, New), `search` only when the list is filtered, `options={false}`.
+- `Page` with the title, the page's actions in `extra` (Refresh as an icon button first, the main one last and
+  primary), and no `content`.
+- One card per list: a ProTable with `headerTitle` (a heading of level 2) that holds the count of the rows it shows,
+  such as "Packages (2)", `search={false}`, `options={false}`, and `toolbar.search` at the card's top right, an
+  `Input.Search` with `allowClear` and an `aria-label`, which narrows the rows as it is typed over the texts the rows
+  show, such as a name and a description. A column of few values that people pick rows by gets `filters`; a column it
+  makes sense to order by, such as a name or a date, gets a `sorter`. A list filtered by many fields uses a search form
+  instead, as Messages does.
+- Plain columns: one fact per column, one line where it fits. The details of an object belong on its own page.
 - The name column is a link (`Button type="link"` with the class `rail8-link`) that opens the object's tab.
 - The status column is the status vocabulary below.
+- A search that matches no row says so in the table, with the text searched for.
 - A second list of the same page is a second card below.
 
 ## A detail page
@@ -173,6 +184,8 @@ into `docs/ui/frame/`; `npm run pictures -- --pro` also takes the matching pages
 | --- | --- | --- |
 | Home | ![](ui/frame/home-1440x900-light.png) | ![](ui/frame/pro/workplace-1440x900-light.png) |
 | List page | ![](ui/frame/packages-1440x900-light.png) | ![](ui/frame/pro/table-list-1440x900-light.png) |
+| List page, searched | ![](ui/frame/packages-search-1440x900-light.png) | ![](ui/frame/pro/table-list-1440x900-light.png) |
+| List page, dark | ![](ui/frame/packages-1440x900-dark.png) | ![](ui/frame/pro/table-list-1440x900-dark.png) |
 | List page with a search form | ![](ui/frame/messages-1440x900-light.png) | ![](ui/frame/pro/table-list-1440x900-light.png) |
 | Detail page | ![](ui/frame/package-changes-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-1440x900-light.png) |
 | Detail page with cards only | ![](ui/frame/message-1440x900-light.png) | ![](ui/frame/pro/profile-advanced-1440x900-light.png) |

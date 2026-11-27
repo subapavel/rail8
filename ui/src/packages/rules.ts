@@ -85,7 +85,7 @@ export function isSaveTemporary(path: string): boolean {
   return /^\..+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/.test(name);
 }
 
-/** The name and version a `package.yaml` of `text` gives, or why it gives none. */
+/** The name and version a `package.yaml` of `text` gives, with its description when it gives one as text, or why it gives no name and version. */
 export function manifestOf(text: string): Pick<PackageRow, 'package' | 'problem'> {
   let doc: unknown;
   try {
@@ -97,7 +97,8 @@ export function manifestOf(text: string): Pick<PackageRow, 'package' | 'problem'
   if (typeof doc !== 'object' || doc === null || !('name' in doc) || !('version' in doc) || typeof doc.name !== 'string' || typeof doc.version !== 'string') {
     return { package: null, problem: 'package.yaml gives no name and version as text' };
   }
-  return { package: { name: doc.name, version: doc.version } };
+  const description = 'description' in doc && typeof doc.description === 'string' ? { description: doc.description } : {};
+  return { package: { name: doc.name, version: doc.version, ...description } };
 }
 
 /** At most this many changed paths of one package or of one comparison are listed, and of one package's artifacts at most this many files read for their kind and as many others. */

@@ -28,10 +28,12 @@ until curl -sf localhost:8081/health >/dev/null; do sleep 2; done
 bin/rail8 bootstrap --admin owner --deploy-account deploy --token-file ~/.rail8-deploy-token   # prints owner's password, once
 ```
 
-Copy the corpus into the working folder once, and start the UI in the same terminal. Vite serves on port 5173:
+Copy the corpus into the working folder once, as the package `mapping-corpus` in a git repository of its own, and start
+the UI in the same terminal. Vite serves on port 5173:
 
 ```bash
 mkdir -p ~/rail8-workspace && cp -r mapping/corpus ~/rail8-workspace/mapping-corpus
+(cd ~/rail8-workspace/mapping-corpus && git init -q -b main && echo '* -text' > .gitattributes && git add -A && git commit -qm 'The mapping corpus')
 cd ui
 npm ci
 RAIL8_TOKEN=$(cat ~/.rail8-deploy-token) RAIL8_WORKSPACE=$HOME/rail8-workspace npm run dev
