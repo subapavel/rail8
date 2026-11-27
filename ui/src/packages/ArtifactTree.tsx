@@ -158,7 +158,7 @@ export function ArtifactTree({ artifacts, folder, writable, open, onCreated, cre
     }
     const problems = row.problems.map((p) => refusedIn(texts, p));
     return (
-      <Space size="small" wrap>
+      <Space size="small">
         {expanded.includes(row.key) ? <FolderOpenOutlined aria-hidden /> : <FolderOutlined aria-hidden />}
         <Button type="text" size="small" aria-pressed={chosen === row.key} onClick={() => setChosen(chosen === row.key ? null : row.key)}>
           {row.name}
@@ -221,10 +221,18 @@ export function ArtifactTree({ artifacts, folder, writable, open, onCreated, cre
               onExpand: (open, row) => !filtering && toggle(row.key, open),
             }}
             columns={[
-              { title: t('packages.name'), key: 'name', render: (_, row) => nameOfRow(row) },
+              { title: t('packages.name'), key: 'name', width: used ? '40%' : undefined, ellipsis: { showTitle: false }, render: (_, row) => nameOfRow(row) },
               { title: t('packages.kind'), key: 'kind', width: 128, render: (_, row) => (row.type === 'folder' ? t('packages.tree.folder') : say(texts, KIND[row.artifact.kind])) },
               ...(used
-                ? [{ title: t('packages.usedBy'), key: 'usedBy', render: (_: unknown, row: Row) => (row.type === 'artifact' ? (row.artifact.usedBy ?? []).map((p) => p.slice(p.indexOf('/') + 1)).join(', ') || '-' : '-') }]
+                ? [
+                    {
+                      title: t('packages.usedBy'),
+                      key: 'usedBy',
+                      render: (_: unknown, row: Row) => (
+                        <span style={{ overflowWrap: 'anywhere' }}>{row.type === 'artifact' ? (row.artifact.usedBy ?? []).map((p) => p.slice(p.indexOf('/') + 1)).join(', ') || '-' : '-'}</span>
+                      ),
+                    },
+                  ]
                 : []),
               {
                 title: t('packages.change'),

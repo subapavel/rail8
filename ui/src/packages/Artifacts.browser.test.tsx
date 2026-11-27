@@ -250,6 +250,32 @@ describe('the artifacts of the demo package', () => {
     await expect.element(line('person.schema.json')).toMatchTextContent(/greeting\/mappings\/greeting\.mapping\.json/);
     await expect.element(line('notes.md')).toMatchTextContent(/^notes\.mdFile-/);
   });
+
+  test('keep in every filter each row on one line: a long name in a nested folder keeps its indent, a folder with a namespace its toggle, name and namespace', async () => {
+    const long = 'a-folder-whose-name-is-longer-than-any-name-column-could-hold-at-this-width-of-the-screen';
+    const longFile = 'a-structure-whose-name-is-longer-than-any-name-column-could-hold-at-this-width.xsd';
+    render({ clones: [{ ...DEMO.clones![0]!, files: { ...DEMO.clones![0]!.files, [`docs/${long}/folder.yaml`]: 'schemaVersion: 1\nkind: folder\nnamespace: urn:rail8:demo:long\n', [`docs/${long}/${longFile}`]: '<xs:schema/>\n' } }] });
+    await openArtifacts('demo');
+    const box = (locator: { element: () => Element }) => locator.element().getBoundingClientRect();
+    const middle = (locator: { element: () => Element }) => box(locator).top + box(locator).height / 2;
+    const name = (text: string) => tree().getByText(text, { exact: true });
+    const namespaced = tree().getByRole('row').filter({ has: page.getByLabelText('Namespace urn:rail8:demo:greeting') });
+    for (const filter of ['All', /^Files \d+$/]) {
+      await page.getByRole('radiogroup', { name: 'Kinds shown' }).getByText(filter).click();
+      await expect.element(name('invoice-to-partner.xsl')).toBeVisible();
+      expect(box(name('invoice-to-partner.xsl')).left).toBeCloseTo(box(name('invoice.xsd')).left, 0);
+      expect(box(name('person.schema.json')).left).toBeCloseTo(box(name('greeting.xsd')).left, 0);
+      expect(box(name('person.schema.json')).left).toBeGreaterThan(box(tree().getByRole('button', { name: 'systems', exact: true })).left);
+      const toggle = namespaced.getByRole('button', { name: /expand|collapse/i });
+      for (const part of [namespaced.getByRole('button', { name: 'greeting', exact: true }), namespaced.getByLabelText('Namespace urn:rail8:demo:greeting')]) {
+        expect(Math.abs(middle(part) - middle(toggle))).toBeLessThan(6);
+      }
+      const longRow = tree().getByRole('row').filter({ has: page.getByLabelText('Namespace urn:rail8:demo:long') });
+      expect(Math.abs(middle(longRow.getByRole('button', { name: long, exact: true })) - middle(longRow.getByRole('button', { name: /expand|collapse/i })))).toBeLessThan(6);
+      expect(box(name(longFile)).left).toBeGreaterThan(box(longRow.getByRole('button', { name: long, exact: true })).left);
+      expect(box(name(longFile)).height).toBeLessThan(box(name('notes.md')).height * 1.5);
+    }
+  });
 });
 
 describe('a folder that is no package', () => {
