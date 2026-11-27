@@ -17,7 +17,13 @@ product: `README.md`, `AGENTS.md`, `docs/ARCHITECTURE.md` (the sections the ques
   rented hardware) goes back unanswered, marked `needs the owner`.
 - Where the owner's picture covers the question, answer and quote the passage you relied on.
 - Where it does not, decide anyway and mark the answer `assumption`, with the reason in one
-  sentence, so the owner can overturn it later.
+  sentence, so the owner can overturn it later. The session that asked sends every assumption
+  to the control session, which puts them to the owner in his daily interview.
+- Three kinds of question are the owner's, also when you could decide them: the words a user
+  reads (the name of a kind of object, of a screen, of a role); what a screen shows and how it
+  looks; and which kinds of object the product has and what each is (a system, a partner, a
+  caller). Give your recommendation with its reason and mark it `needs the owner`; the session
+  goes on with the recommendation where waiting would stop the work, and says so.
 - When an issue's class (`class:A`, `class:B`, `class:C`) is unclear,
   set it: C when a wrong design is expensive to reverse, A when nothing in it needs judgement.
 - When you judge a design or pick between alternatives, name the one you choose, why, and what in
