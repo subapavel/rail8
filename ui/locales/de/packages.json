@@ -242,6 +242,7 @@
   "packages.kind.test": "Test",
   "packages.lastCommit": "Letzter Commit",
   "packages.list.changed": "{count, plural, one {# Datei} other {# Dateien}}",
+  "packages.list.commit": "{author}, {age}",
   "packages.list.count": "Pakete ({count})",
   "packages.list.deployed": "<code>{commit}</code> {age}",
   "packages.list.deployedOn": "<code>{commit}</code> auf {count} von {total, plural, one {# Knoten} other {# Knoten}}, {age}",

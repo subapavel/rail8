@@ -242,6 +242,7 @@
   "packages.kind.test": "Тест",
   "packages.lastCommit": "Последний коммит",
   "packages.list.changed": "{count, plural, one {# файл} few {# файла} many {# файлов} other {# файла}}",
+  "packages.list.commit": "{author}, {age}",
   "packages.list.count": "Пакеты ({count})",
   "packages.list.deployed": "<code>{commit}</code> {age}",
   "packages.list.deployedOn": "<code>{commit}</code> на {count} из {total, plural, one {# узла} few {# узлов} many {# узлов} other {# узла}}, {age}",

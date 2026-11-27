@@ -30,6 +30,11 @@ const open = (seed: Seed) => {
 const packages = () => page.getByRole('table', { name: 'Packages' });
 const rowOf = (repository: string) => packages().getByRole('row').filter({ hasText: repository });
 /** The names the rows' links show, in their order. */
+/** Checks that the Last commit cell of the row `repository` shows, on hover, the commit `id` and its subject `subject`. */
+const subjectOf = async (repository: string, subject: string, id = '[0-9a-f]{7}') => {
+  await rowOf(repository).getByRole('cell').nth(3).getByText(/ ago$/).hover();
+  await expect.element(page.getByRole('tooltip').getByText(new RegExp(`^${id} ${subject}$`))).toBeVisible();
+};
 const listed = () => packages().getByRole('row').elements().slice(1).map((r) => r.querySelector('td button')?.textContent);
 
 afterEach(() => {
@@ -67,7 +72,6 @@ describe('the Packages screen', () => {
     const orders = rowOf('orders');
     await expect.element(orders).toMatchTextContent('orders1.0.0');
     await expect.element(orders).toMatchTextContent('main');
-    await expect.element(orders).toMatchTextContent('second');
     await expect.element(orders).toMatchTextContent('Seed Author, 22 days ago');
     expect(orders.element().textContent).not.toMatch(/ahead|behind|fetch/);
     await expect.element(orders.getByText('Deployed', { exact: true })).toBeVisible();
@@ -205,15 +209,24 @@ describe('the Packages screen', () => {
     await expect.element(rowOf('returns').getByText('Merge in progress')).toBeVisible();
   });
 
-  test('cuts a long commit subject to its column, and shows it whole on hover', async () => {
-    const subject = `Rework ${'the order mapping and its tests, '.repeat(8)}once more`;
-    open({ clones: [{ folder: 'orders', commits: [subject] }] });
+  test('shows who made the last commit and when in one line, with its id and subject on hover', async () => {
+    const subject = 'Rework the order mapping and its tests';
+    const state = open({ clones: [{ folder: 'orders', commits: [subject] }] });
+    const head = state.folders.find((f) => f.name === 'orders')!.commits.at(-1)!;
 
-    const cut = rowOf('orders').getByText(subject);
+    await expect.element(rowOf('orders').getByRole('cell').nth(3)).toMatchTextContent(new RegExp(`^${head.author}, \\d+ \\w+ ago$`));
+    await subjectOf('orders', subject, head.id.slice(0, 7));
+  });
+
+  test('cuts a long description to its column, and shows it whole on hover', async () => {
+    const description = `Orders ${'from the web shop to the ERP, '.repeat(8)}and back`;
+    open({ clones: [{ folder: 'orders', manifest: `schemaVersion: 1\nkind: package\nname: orders\nversion: 1.0.0\ndescription: ${description}\n` }] });
+
+    const cut = rowOf('orders').getByText(description);
     await expect.element(cut).toBeVisible();
     expect(cut.element().scrollWidth).toBeGreaterThan(cut.element().clientWidth);
     await cut.hover();
-    await expect.element(page.getByRole('tooltip').getByText(subject)).toBeVisible();
+    await expect.element(page.getByRole('tooltip').getByText(description)).toBeVisible();
   });
 
   test('lists no folder that is no package', async () => {
@@ -289,7 +302,7 @@ describe('Get a package', () => {
     await expect.element(dialog()).not.toBeInTheDocument();
     await page.getByRole('tab', { name: /Packages$/ }).click();
     await expect.element(rowOf('orders')).toMatchTextContent('orders1.0.0');
-    await expect.element(rowOf('orders')).toMatchTextContent('second');
+    await subjectOf('orders', 'second');
   });
 
   test('says why git could not clone, with what git said, and keeps the address to try again', async () => {
@@ -354,7 +367,7 @@ describe('New package', () => {
     await expect.element(dialog()).not.toBeInTheDocument();
     await page.getByRole('tab', { name: /Packages$/ }).click();
     await expect.element(rowOf('orders')).toMatchTextContent('orders-app0.1.0in the folder orders');
-    await expect.element(rowOf('orders')).toMatchTextContent('Create package orders-app');
+    await subjectOf('orders', 'Create package orders-app');
   });
 
   test('says why it was refused, and keeps the names to try again', async () => {

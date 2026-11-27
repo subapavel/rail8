@@ -139,7 +139,7 @@ const SCENES = {
   'session-home': [visit('in')],
   'session-asking': [visit('in'), menu('Packages'), end],
   'session-failed': [visit('failed')],
-  'session-refused-tab': [visit('in'), ...studio],
+  'session-refused-tab': [visit('in'), menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('order-to-idoc')],
   messages: [menu('Messages')],
   'messages-failed': [menu('Messages'), press('Failed 1')],
   message: [menu('Messages'), message('m-7f3a')],

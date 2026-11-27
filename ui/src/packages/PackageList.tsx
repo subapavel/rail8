@@ -10,7 +10,7 @@ import { useMay } from '../SessionGate';
 import type { PackageList as Listed, PackageRow, PackagesApi } from './api';
 import { GetPackageDialog } from './GetPackageDialog';
 import { NewPackageDialog } from './NewPackageDialog';
-import { Age, BranchFact, code, CommitFact, deployedStatus, short } from './parts';
+import { Age, BranchFact, code, deployedStatus, short } from './parts';
 import { MAX_PACKAGES } from './rules';
 
 export interface PackageListProps {
@@ -49,6 +49,17 @@ function PackageName({ row, onOpen }: { row: PackageRow; onOpen: () => void }) {
       )}
       {row.package === null && <Typography.Text type="danger">{row.problem}</Typography.Text>}
     </Flex>
+  );
+}
+
+/** Who made the last commit and when, in one line, with its id and subject on hover. */
+function LastCommit({ row, at }: { row: PackageRow; at: Date }) {
+  const { t, rich } = useText();
+  if (row.head === null) return <Typography.Text type="secondary">{t('packages.commit.none')}</Typography.Text>;
+  return (
+    <Tooltip title={`${short(row.head.id)} ${row.head.subject}`}>
+      <Typography.Text>{rich('packages.list.commit', { author: row.head.author, age: <Age at={row.head.at} now={at} /> })}</Typography.Text>
+    </Tooltip>
   );
 }
 
@@ -229,28 +240,24 @@ export function PackageList({ api, now, onOpen }: PackageListProps) {
             {
               title: t('packages.description'),
               key: 'description',
-              render: (_, row) =>
-                row.package?.description === undefined ? (
-                  '-'
-                ) : (
-                  <Typography.Text ellipsis={{ tooltip: row.package.description }} style={{ maxWidth: 240 }}>
-                    {row.package.description}
-                  </Typography.Text>
-                ),
+              dataIndex: ['package', 'description'],
+              ellipsis: { tooltip: true },
             },
-            { title: t('packages.branch'), key: 'branch', render: (_, row) => <BranchFact state={row} /> },
+            { title: t('packages.branch'), key: 'branch', width: 128, render: (_, row) => <BranchFact state={row} /> },
             {
               title: t('packages.lastCommit'),
               key: 'head',
+              width: 208,
               sorter: (a, b) => (a.head === null ? 0 : Date.parse(a.head.at)) - (b.head === null ? 0 : Date.parse(b.head.at)),
-              render: (_, row) => <CommitFact state={row} at={at} />,
+              render: (_, row) => <LastCommit row={row} at={at} />,
             },
             {
               title: t('packages.changes'),
               key: 'changed',
+              width: 112,
               render: (_, row) => (row.changed === 0 ? '-' : <Badge status="warning" text={t('packages.list.changed', { count: row.changed })} />),
             },
-            { title: t('packages.deployed'), key: 'deployed', render: (_, row) => <DeployedLine row={row} at={at} /> },
+            { title: t('packages.deployed'), key: 'deployed', width: 352, render: (_, row) => <DeployedLine row={row} at={at} /> },
           ]}
         />
       </Flex>

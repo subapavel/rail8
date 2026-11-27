@@ -242,6 +242,7 @@
   "packages.kind.test": "Test",
   "packages.lastCommit": "Poslední commit",
   "packages.list.changed": "{count, plural, one {# soubor} few {# soubory} many {# souboru} other {# souborů}}",
+  "packages.list.commit": "{author}, {age}",
   "packages.list.count": "Balíčky ({count})",
   "packages.list.deployed": "<code>{commit}</code> {age}",
   "packages.list.deployedOn": "<code>{commit}</code> na {count} z {total, plural, one {# uzlu} few {# uzlů} many {# uzlu} other {# uzlů}}, {age}",
