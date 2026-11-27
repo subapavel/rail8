@@ -61,7 +61,7 @@ function folderOfKey(nodes: readonly TreeNode[], key: string | null): FolderNode
 
 /**
  * The artifacts of the folder `folder`, a package's or a folder that is no package, as one tree in a titled card: its
- * folders nested, folders first, each holding its artifacts of every kind and the files they name, each with the icon
+ * folders nested, folders first, each holding its artifacts of every kind and every other file, each with the icon
  * and the word of its kind, its name (an artifact opens in its editor's tab when a module owns its kind) and its change
  * since the last commit. A folder shows the namespace its `folder.yaml` gives, and for a package what its rules refuse
  * of it. Above the tree, a filter by kind and by text, and Expand all and Collapse all; the folders closed stay closed

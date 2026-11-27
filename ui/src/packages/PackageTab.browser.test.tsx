@@ -315,6 +315,7 @@ describe('the tab of a package', () => {
       'flowsFolder--Edit folder…',
       'ordersFlow-Modified-',
       'orders.xslFileflows/orders.yaml--',
+      'first.txtFile---',
       'package.yamlpackage.yaml---',
     ]);
     await expect.element(tree.getByRole('button', { name: 'in', exact: true })).not.toBeInTheDocument();

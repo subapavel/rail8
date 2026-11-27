@@ -100,7 +100,7 @@ export function manifestOf(text: string): Pick<PackageRow, 'package' | 'problem'
   return { package: { name: doc.name, version: doc.version } };
 }
 
-/** At most this many changed paths of one package, of one comparison, or artifacts of one package are listed. */
+/** At most this many changed paths of one package or of one comparison are listed, and of one package's artifacts at most this many files read for their kind and as many others. */
 export const MAX_LISTED = 1000;
 
 /** One version of one file is read up to 1 MiB; a change over it is listed and not compared. */
@@ -500,12 +500,30 @@ export function kindOf(path: string, text: string | null): { kind: Kind; id?: st
   return 'id' in doc && typeof doc.id === 'string' ? { kind: doc.kind, id: doc.id } : { kind: doc.kind };
 }
 
-/** The texts of a file of `name` holding `text` that may name another file of its package from the package's root. */
-function namedPaths(name: string, text: string): string[] {
+/** The path within the package of `named`, a path from the folder `folder` within it (`''` for its root); null when it leaves the package. */
+function fromFolder(folder: string, named: string): string | null {
+  const segments = folder === '' ? [] : folder.split('/');
+  for (const segment of named.split('/')) {
+    if (segment === '..') {
+      if (segments.pop() === undefined) return null;
+    } else if (segment !== '.') segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+/**
+ * The files of its package that the file at `inside` holding `text` may name: its texts that look like a file's path,
+ * from the package's root, or from the file's own folder for a mapping, whose bundles name their files that way.
+ */
+function namedPaths(inside: string, text: string): string[] {
+  const name = inside.slice(inside.lastIndexOf('/') + 1);
+  const folder = name.endsWith('.mapping.json') ? inside.slice(0, Math.max(inside.lastIndexOf('/'), 0)) : '';
   const named: string[] = [];
   const visit = (value: unknown) => {
     if (typeof value === 'string') {
-      if (/^[^\s/:]+(?:\/[^\s/:]+)*\.[A-Za-z0-9]+$/.test(value) && walked(value)) named.push(value);
+      if (!/^[^\s/:]+(?:\/[^\s/:]+)*\.[A-Za-z0-9]+$/.test(value)) return;
+      const path = fromFolder(folder, value);
+      if (path !== null && walked(path)) named.push(path);
     } else if (Array.isArray(value)) value.forEach(visit);
     else if (typeof value === 'object' && value !== null) Object.values(value).forEach(visit);
   };
@@ -514,39 +532,34 @@ function namedPaths(name: string, text: string): string[] {
 }
 
 /**
- * The artifacts of the package `repository` among `files`, the files its walk found with their paths within the
- * package and their texts (null when not read), sorted by path: every file of a kind other than `file`, and every
- * other file one of them names from the package's root, with the artifacts that name it. `present` answers which of
- * the paths it is given are files of the package the walk looks at. Each artifact's change is `changes`' status of it.
+ * The artifacts of the package `repository`: each of `files`, the files its walk found with their paths within the
+ * package and their texts (null when not read), sorted by path. A file of no kind of its own carries the artifacts that
+ * name it, when any does. Each artifact's change is `changes`' status of it.
  */
-export async function artifactsOf(
-  repository: string,
-  files: readonly { inside: string; text: string | null }[],
-  present: (insides: string[]) => Promise<Set<string>>,
-  changes: ReadonlyMap<string, ChangeStatus>,
-): Promise<Artifact[]> {
-  const artifacts = new Map<string, Artifact>();
+export function artifactsOf(repository: string, files: readonly { inside: string; text: string | null }[], changes: ReadonlyMap<string, ChangeStatus>): Artifact[] {
+  const kinds = files.map(({ inside, text }) => ({ inside, text, ...kindOf(`${repository}/${inside}`, text) }));
   const named = new Map<string, Set<string>>();
-  for (const { inside, text } of files) {
-    const path = `${repository}/${inside}`;
-    const { kind, id } = kindOf(path, text);
-    if (kind === 'file') continue;
-    artifacts.set(inside, { path, kind, ...(id === undefined ? {} : { id }), ...(kind === 'folder' && text !== null ? folderFieldsOf(text) : {}) });
-    if (text === null) continue;
+  for (const { inside, text, kind } of kinds) {
+    if (kind === 'file' || text === null) continue;
     for (const other of namedPaths(inside, text)) {
       if (other === inside) continue;
       if (!named.has(other)) named.set(other, new Set());
-      named.get(other)!.add(path);
+      named.get(other)!.add(`${repository}/${inside}`);
     }
   }
-  const candidates = [...named.keys()].filter((inside) => !artifacts.has(inside)).slice(0, MAX_LISTED);
-  for (const inside of await present(candidates)) {
-    artifacts.set(inside, { path: `${repository}/${inside}`, kind: 'file', usedBy: [...named.get(inside)!].sort() });
-  }
-  return [...artifacts.values()]
-    .map((a) => {
-      const change = changes.get(a.path);
-      return change === undefined ? a : { ...a, change };
+  return kinds
+    .map(({ inside, text, kind, id }): Artifact => {
+      const path = `${repository}/${inside}`;
+      const usedBy = kind === 'file' ? named.get(inside) : undefined;
+      const change = changes.get(path);
+      return {
+        path,
+        kind,
+        ...(id === undefined ? {} : { id }),
+        ...(kind === 'folder' && text !== null ? folderFieldsOf(text) : {}),
+        ...(usedBy === undefined ? {} : { usedBy: [...usedBy].sort() }),
+        ...(change === undefined ? {} : { change }),
+      };
     })
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }

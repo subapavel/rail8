@@ -11,6 +11,7 @@ const DEMO: Artifact[] = [
   { path: 'demo/greeting/mappings/greeting.mapping.json', kind: 'mapping', id: 'greeting' },
   { path: 'demo/greeting/structures/greeting/person.schema.json', kind: 'file', usedBy: ['demo/greeting/mappings/greeting.mapping.json'] },
   { path: 'demo/package.yaml', kind: 'package' },
+  { path: 'demo/systems/acme-erp.yaml', kind: 'file' },
 ];
 
 /** The tree as lines: each node indented by its depth, a folder with a slash, its namespace and its problems' codes. */
@@ -39,6 +40,8 @@ describe('the tree of a package', () => {
       '      person.schema.json',
       '  greet',
       '  greet.test.yaml',
+      'systems/',
+      '  acme-erp.yaml',
       'package.yaml',
     ]);
   });
@@ -71,7 +74,7 @@ describe('the tree of a package', () => {
     expect(lines(filtered(tree, 'flow', ''))).toEqual(['flows/', '  invoice', 'greeting/ urn:rail8:demo:greeting', '  greet']);
     expect(lines(filtered(tree, 'all', 'GREET'))).toEqual(['greeting/ urn:rail8:demo:greeting', '  mappings/', '    greeting', '  structures/', '    greeting/', '      person.schema.json', '  greet', '  greet.test.yaml']);
     expect(lines(filtered(tree, 'all', 'rail8:demo'))).toEqual(lines(filtered(tree, 'all', 'greeting/')));
-    expect(lines(filtered(tree, 'file', ''))).toEqual(['greeting/ urn:rail8:demo:greeting', '  structures/', '    greeting/', '      person.schema.json', 'package.yaml']);
+    expect(lines(filtered(tree, 'file', ''))).toEqual(['greeting/ urn:rail8:demo:greeting', '  structures/', '    greeting/', '      person.schema.json', 'systems/', '  acme-erp.yaml', 'package.yaml']);
     expect(filtered(tree, 'endpoint', 'greet')).toEqual([]);
     expect(filtered(tree, 'all', '  ')).toEqual(tree);
   });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Change } from './api';
-import { ADDRESS_REFUSALS, chosenPaths, cloneSourceOf, discardBodyOf, MAX_ADDRESS, MAX_CHOSEN } from './rules';
+import { ADDRESS_REFUSALS, artifactsOf, chosenPaths, cloneSourceOf, discardBodyOf, MAX_ADDRESS, MAX_CHOSEN } from './rules';
 
 describe('the address rule of Get a package', () => {
   test.each([
@@ -194,6 +194,53 @@ describe('the paths a discard of chosen changes names', () => {
     expect(chosenPaths([renamed, old], [renamed, old])).toEqual([
       { path: 'orders/new.txt', tag: 'tag of orders/new.txt', index: 'staged' },
       { path: 'orders/old.txt', tag: 'tag of orders/old.txt', index: 'clean' },
+    ]);
+  });
+});
+
+describe('the artifacts of a package', () => {
+  const MAPPING = JSON.stringify({ formatVersion: 1, source: { bundle: ['../structures/person.schema.json'] }, target: { bundle: ['./greeting.xsd', 'nested/out.xsd', '../../../outside.xsd'] } });
+
+  test('are every file of the package, a file of no kind of its own, read or not, with the artifacts that name it, if any', () => {
+    const artifacts = artifactsOf(
+      'demo',
+      [
+        { inside: 'flows/a.yaml', text: 'kind: flow\nid: a\nsteps:\n  - stylesheet: flows/a.xsl\n' },
+        { inside: 'flows/a.xsl', text: null },
+        { inside: 'notes.md', text: null },
+        { inside: 'systems/billing.yaml', text: 'kind: system\nname: billing\n' },
+      ],
+      new Map([['demo/notes.md', 'added']]),
+    );
+    expect(artifacts).toEqual([
+      { path: 'demo/flows/a.xsl', kind: 'file', usedBy: ['demo/flows/a.yaml'] },
+      { path: 'demo/flows/a.yaml', kind: 'flow', id: 'a' },
+      { path: 'demo/notes.md', kind: 'file', change: 'added' },
+      { path: 'demo/systems/billing.yaml', kind: 'file' },
+    ]);
+  });
+
+  test("a mapping names the files of its bundles from its own folder, and none outside the package", () => {
+    const artifacts = artifactsOf(
+      'demo',
+      [
+        { inside: 'greeting/mappings/greeting.mapping.json', text: MAPPING },
+        { inside: 'greeting/mappings/greeting.xsd', text: null },
+        { inside: 'greeting/mappings/nested/out.xsd', text: null },
+        { inside: 'greeting/structures/person.schema.json', text: null },
+        { inside: 'nested/out.xsd', text: null },
+        { inside: 'outside.xsd', text: null },
+      ],
+      new Map(),
+    );
+    const by = ['demo/greeting/mappings/greeting.mapping.json'];
+    expect(artifacts).toEqual([
+      { path: 'demo/greeting/mappings/greeting.mapping.json', kind: 'mapping', id: 'greeting' },
+      { path: 'demo/greeting/mappings/greeting.xsd', kind: 'file', usedBy: by },
+      { path: 'demo/greeting/mappings/nested/out.xsd', kind: 'file', usedBy: by },
+      { path: 'demo/greeting/structures/person.schema.json', kind: 'file', usedBy: by },
+      { path: 'demo/nested/out.xsd', kind: 'file' },
+      { path: 'demo/outside.xsd', kind: 'file' },
     ]);
   });
 });

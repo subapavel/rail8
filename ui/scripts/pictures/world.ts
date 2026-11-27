@@ -33,6 +33,10 @@ const ORDERS = flow(
   '  - type: xsd\n    name: validate\n    schema: schemas/order.xsd\n  - type: xslt\n    name: toIdoc\n    stylesheet: flows/orders.xsl\n  - type: to\n    name: erp\n    endpoint: erp-out\n',
 );
 const INVOICES = flow('invoices', 'erp-in', '  - type: xslt\n    name: toPartner\n    stylesheet: flows/invoices.xsl\n  - type: to\n    name: partner\n    endpoint: partner-out\n');
+/** The demo package's files as examples/demo holds them, by their paths within the package. */
+const DEMO: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob<string>('../../../examples/demo/**/*', { query: '?raw', import: 'default', eager: true })).map(([path, text]) => [path.slice('../../../examples/demo/'.length), text]),
+);
 const XSL = '<xsl:stylesheet version="3.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">\n  <xsl:template match="/Order">\n    <ORDERS05/>\n  </xsl:template>\n</xsl:stylesheet>\n';
 
 /** The commits of `main`, oldest first: each one's subject, the files it writes (null deletes one), its author and its date. */
@@ -53,8 +57,9 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
  * nests two folders, each with a flow, and it and its folder `invoices` have a namespace, as `flows` has. Of its three
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
  * `customers` runs on the node one commit behind its `HEAD`, and two packages the node runs from other repositories pin
- * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, and two folders that are
- * no package are listed below them: `mappings`, which holds the fake mapping service's mappings, and `notes`.
+ * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, nor does `demo`, the
+ * demo package as examples/demo holds it, in one commit. Two folders that are no package are listed below them:
+ * `mappings`, which holds the fake mapping service's mappings, and `notes`.
  * The node's pool has three nodes: `node-b` still runs the commit before the pool's record of `orders`, as it could not
  * fetch the record's commit.
  */
@@ -95,6 +100,7 @@ const SEED: Seed = {
         'fixtures/order-4711.xml': '<Order><Id>4711</Id></Order>\n',
       },
     },
+    { folder: 'demo', manifest: null, files: DEMO, commits: ['Start the demo package'], commitFiles: { 'Start the demo package': { 'Start the demo package.txt': null } } },
     { folder: 'common', manifest: 'schemaVersion: 1\nkind: package\nname: common\nversion: 1.2.1\n', commits: ['Share the VAT rounding'], commitFiles: { 'Share the VAT rounding': { 'Share the VAT rounding.txt': null, 'flows/vat.xsl': XSL } } },
     {
       folder: 'customers',
@@ -187,7 +193,7 @@ export function pictureWorld(): PackagesApi {
     commit.at = known?.at ?? '2026-11-22T17:30:00+01:00';
   }
   orders.upstream!.fetchedAt = '2026-11-23T09:12:00+01:00';
-  const others = state.folders.filter((f) => f.name === 'customers' || f.name === 'common');
+  const others = state.folders.filter((f) => f.name === 'customers' || f.name === 'common' || f.name === 'demo');
   for (const commit of others.flatMap((f) => f.commits)) {
     commit.author = 'Petr Svoboda';
     commit.at = '2026-11-04T13:00:00+01:00';

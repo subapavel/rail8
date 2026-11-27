@@ -157,36 +157,32 @@ async function workChanges(
   });
 }
 
-/** The package's artifacts on disk, by the working folder's walk of its folder, each with its change since `HEAD`. */
+/** The package's artifacts on disk, every file the working folder's walk of its folder finds, each with its change since `HEAD`. */
 async function workArtifacts(clone: string, repository: string, changes: readonly Change[]): Promise<{ artifacts: Artifact[]; truncated: boolean }> {
-  const { files, large, truncated } = await walk(clone, readForKind);
-  const found = [...files.map((f) => ({ inside: f.path, text: f.text })), ...large.map((inside) => ({ inside, text: null }))];
-  const present = async (insides: string[]) => {
-    const real = await Promise.all(
-      insides.map(async (inside) => {
-        const full = join(clone, ...inside.split('/'));
-        return (await realpath(full).catch(() => null)) === full && (await stat(full)).isFile();
-      }),
-    );
-    return new Set(insides.filter((_, n) => real[n]));
-  };
+  const { files, large, listed, truncated } = await walk(clone, readForKind, undefined, true);
+  const found = [...files.map((f) => ({ inside: f.path, text: f.text })), ...[...large, ...listed].map((inside) => ({ inside, text: null }))];
   const statuses = new Map<string, ChangeStatus>(changes.map((c) => [c.path, c.status]));
-  return { artifacts: await artifactsOf(repository, found, present, statuses), truncated };
+  return { artifacts: artifactsOf(repository, found, statuses), truncated };
 }
 
-/** The package's artifacts at the commit `rev`: the blobs of its tree that the working folder's walk would look at. */
+/**
+ * The package's artifacts at the commit `rev`: the blobs of its tree that the working folder's walk would look at, at
+ * most {@link MAX_LISTED} of those read for their kind and as many others.
+ */
 async function commitArtifacts(git: Runner, clone: string, repository: string, rev: string): Promise<{ artifacts: Artifact[]; truncated: boolean }> {
   const tree = parseTree(await read(git, clone, ['ls-tree', '-r', '-z', '--long', '--end-of-options', rev])).filter(
     (e) => e.type === 'blob' && (e.mode === '100644' || e.mode === '100755') && walked(e.path),
   );
   const typed = tree.filter((e) => readForKind(e.path.slice(e.path.lastIndexOf('/') + 1)));
-  const truncated = typed.length > MAX_LISTED;
-  const listed = typed.slice(0, MAX_LISTED);
-  const texts = await blobsOf(git, clone, listed.filter((e) => e.size! <= READ_LIMIT).map((e) => ({ name: e.oid, size: e.size! })));
-  const found = listed.map((e) => ({ inside: e.path, text: texts.get(e.oid)?.toString('utf8') ?? null }));
-  const blobs = new Set(tree.map((e) => e.path));
-  const present = async (insides: string[]) => new Set(insides.filter((inside) => blobs.has(inside)));
-  return { artifacts: await artifactsOf(repository, found, present, new Map()), truncated };
+  const others = tree.filter((e) => !readForKind(e.path.slice(e.path.lastIndexOf('/') + 1)));
+  const truncated = typed.length > MAX_LISTED || others.length > MAX_LISTED;
+  const kept = typed.slice(0, MAX_LISTED);
+  const texts = await blobsOf(git, clone, kept.filter((e) => e.size! <= READ_LIMIT).map((e) => ({ name: e.oid, size: e.size! })));
+  const found = [
+    ...kept.map((e) => ({ inside: e.path, text: e.size! <= READ_LIMIT ? (texts.get(e.oid)?.toString('utf8') ?? null) : null })),
+    ...others.slice(0, MAX_LISTED).map((e) => ({ inside: e.path, text: null })),
+  ];
+  return { artifacts: artifactsOf(repository, found, new Map()), truncated };
 }
 
 /**

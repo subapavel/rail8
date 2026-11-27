@@ -253,8 +253,25 @@ describe('walk', () => {
         { path: 'b/deep/one.json', text: '1' },
       ],
       large: ['b/large.json'],
+      listed: [],
       truncated: false,
     });
+  });
+
+  it('lists every other file too, unread, with a limit of its own', async () => {
+    await mkdir(join(root, 'b'));
+    await writeFile(join(root, 'a.json'), '1');
+    await writeFile(join(root, 'b', 'schema.xsd'), '<xs:schema/>');
+    await writeFile(join(root, 'notes.md'), 'notes');
+    await writeFile(join(root, '.hidden.md'), 'hidden');
+
+    expect(await walk(root, isJson, undefined, true)).toEqual({ files: [{ path: 'a.json', text: '1' }], large: [], listed: ['b/schema.xsd', 'notes.md'], truncated: false });
+    for (let i = 0; i < MAX_FILES; i++) await writeFile(join(root, `${String(i).padStart(4, '0')}.md`), '');
+    await writeFile(join(root, 'z.json'), '2');
+    const cut = await walk(root, isJson, undefined, true);
+    expect(cut.listed).toHaveLength(MAX_FILES);
+    expect(cut.files.map((f) => f.path)).toEqual(['a.json', 'z.json']);
+    expect(cut.truncated).toBe(true);
   });
 
   it(`stops past ${MAX_FILES} files it takes, large ones among them`, async () => {
