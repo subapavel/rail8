@@ -17,6 +17,10 @@ class KeysTest {
         assertEquals("eshop/rest", Keys.connection("eshop/rest"));
         assertEquals("acme/erp/rest", Keys.connection("acme/erp/rest"));
         assertEquals("acme/erp", Keys.systemOf("acme/erp/rest"));
+        assertEquals("acme/erp/edi-2026", Keys.credential("acme/erp/edi-2026"));
+        assertEquals("acme/erp", Keys.systemOf(Keys.credential("acme/erp/edi-2026")));
+        assertThrows(IllegalArgumentException.class, () -> Keys.credential("acme"), "a credential key names its system and itself");
+        assertThrows(IllegalArgumentException.class, () -> Keys.credential("rail8/main"));
         assertEquals("eshop", Keys.systemOf("eshop/rest"));
     }
 

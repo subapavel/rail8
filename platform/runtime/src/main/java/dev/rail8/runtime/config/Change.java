@@ -29,6 +29,16 @@ public sealed interface Change {
      */
     record Mock(String reply, Optional<String> delay, Optional<String> fail) { }
 
+    /**
+     * A draft of a credential: {@code fields} are its {@code type} and that type's fields, {@code basic} a {@code user} and a
+     * {@code password}, {@code api-key} an {@code apiKey}, each secret as {@code secret://<name>} of a verifier.
+     */
+    record SaveCredential(String expect, Map<String, Object> fields) implements Change {
+        public SaveCredential {
+            fields = fields == null ? null : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(fields));
+        }
+    }
+
     /** A draft that removes the object: {@code {removed: true}}, activated like any other change. */
     record Remove(String expect) implements Change { }
 

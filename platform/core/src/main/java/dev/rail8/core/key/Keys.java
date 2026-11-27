@@ -5,9 +5,10 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * The one parser of system and connection keys. A key is segments joined by {@code /}, each matching
+ * The one parser of system, connection and credential keys. A key is segments joined by {@code /}, each matching
  * {@code ^[a-z][a-z0-9-]{0,63}$}: a system key has one or two ({@code eshop}, {@code acme/erp}), a connection key two or three
- * ({@code eshop/rest}, {@code acme/erp/rest}), its system's key followed by the connection's name. {@code rail8},
+ * ({@code eshop/rest}, {@code acme/erp/rest}), its system's key followed by the connection's name, and a credential key the
+ * same, its system's key followed by the credential's name ({@code eshop/main}, {@code acme/erp/edi-2026}). {@code rail8},
  * {@code subscribers} and {@code by-agreement} are never the first segment; as a later segment they are taken.
  *
  * <p>Pure: no state, no I/O. A refusal is an {@link IllegalArgumentException} that names the key and the rule it breaks.
@@ -43,7 +44,16 @@ public final class Keys {
         return parse("connection", key, 2, 3);
     }
 
-    /** The key of the system a connection key belongs to: every segment but the last. */
+    /**
+     * {@code key} when it is a credential key: two or three segments.
+     *
+     * @throws IllegalArgumentException naming the key and the rule it breaks
+     */
+    public static String credential(String key) {
+        return parse("credential", key, 2, 3);
+    }
+
+    /** The key of the system a connection or credential key belongs to: every segment but the last. */
     public static String systemOf(String connectionKey) {
         String key = connection(connectionKey);
         return key.substring(0, key.lastIndexOf('/'));

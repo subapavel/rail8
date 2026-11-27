@@ -262,20 +262,21 @@ public final class StoredEnvironment implements Environment {
 
         Map<String, ConnectionState> connections = new HashMap<>();
         Map<String, String> instanceNames = new HashMap<>();
+        Map<String, CredentialState> credentials = new HashMap<>();
         Map<Ref, String> leftOut = new LinkedHashMap<>();
         for (Ref ref : state.refused().objects()) leftOut.put(ref, NOT_VERIFIED);
         int count = state.refused().count();
         List<ConfigStore.InForce> sorted = new ArrayList<>(bodies.values());
         sorted.sort(Comparator.comparing((ConfigStore.InForce f) -> f.ref().kind()).thenComparing(f -> f.ref().key()));
         for (ConfigStore.InForce f : sorted) {
-            Optional<String> reason = take(f, state.mocksAllowed(), connections, instanceNames);
+            Optional<String> reason = take(f, state.mocksAllowed(), connections, instanceNames, credentials);
             if (reason.isEmpty()) continue;
             count++;
             if (leftOut.size() < MAX_NAMED) leftOut.put(f.ref(), reason.get());
         }
         unverified = state.refused().count();
         warnUnverified(state);
-        held = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, leftOut, count);
+        held = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, credentials, leftOut, count);
         tell(List.copyOf(listeners));
     }
 
@@ -311,11 +312,17 @@ public final class StoredEnvironment implements Environment {
 
     /** Takes {@code f} into the snapshot's maps; the reason it is left out when it is. */
     private static Optional<String> take(ConfigStore.InForce f, boolean mocksAllowed, Map<String, ConnectionState> connections,
-                                         Map<String, String> instanceNames) {
+                                         Map<String, String> instanceNames, Map<String, CredentialState> credentials) {
         if (f.format() != ConfigFiles.STANDARD.newest(f.ref().kind())) return Optional.of("its format " + f.format() + " is not one this node reads");
         JsonObject body = f.body();
         if (f.ref().kind() == Ref.Kind.SYSTEM) {
             instanceNames.put(f.ref().key(), body.getString("instanceName"));
+            return Optional.empty();
+        }
+        if (f.ref().kind() == Ref.Kind.CREDENTIAL) {
+            String secret = body.getString(body.containsKey("password") ? "password" : "apiKey");
+            credentials.put(f.ref().key(), new CredentialState(body.getString("type"), Optional.ofNullable(body.getString("user")),
+                    secret.substring("secret://".length())));
             return Optional.empty();
         }
         String adapter = body.getString("adapter");

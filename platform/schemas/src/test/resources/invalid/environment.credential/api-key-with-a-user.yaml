@@ -1,0 +1,7 @@
+# expect: /
+schemaVersion: 1
+kind: environment.credential
+key: acme/main
+type: api-key
+apiKey: secret://acme.key
+user: acme

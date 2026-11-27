@@ -54,22 +54,24 @@ public interface Environment {
      * @param mocksAllowed  whether the environment allows mocks
      * @param connections   each connection in force by its key; a removed one is absent
      * @param instanceNames each system's instance name by its key; a removed one is absent
+     * @param credentials   each credential in force by its key; a removed one is absent
      * @param leftOut       the objects in force the node left out, each with the reason, at most 100 of them
      * @param leftOutCount  how many objects the node left out
      */
     record Snapshot(long generation, boolean mocksAllowed, Map<String, ConnectionState> connections, Map<String, String> instanceNames,
-                    Map<Ref, String> leftOut, int leftOutCount) {
+                    Map<String, CredentialState> credentials, Map<Ref, String> leftOut, int leftOutCount) {
 
         public Snapshot {
             connections = Map.copyOf(connections);
             instanceNames = Map.copyOf(instanceNames);
+            credentials = Map.copyOf(credentials);
             leftOut = Map.copyOf(leftOut);
             if (leftOutCount < leftOut.size()) throw new IllegalArgumentException("the count of objects left out is below those named");
         }
 
         /** The snapshot of a node that has read nothing: generation -1, no mocks, no object. */
         public static Snapshot empty() {
-            return new Snapshot(-1, false, Map.of(), Map.of(), Map.of(), 0);
+            return new Snapshot(-1, false, Map.of(), Map.of(), Map.of(), Map.of(), 0);
         }
 
         /** The connection {@code connectionKey} in force, when the node holds one. */

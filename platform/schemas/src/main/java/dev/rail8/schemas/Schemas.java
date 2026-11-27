@@ -18,7 +18,7 @@ import java.util.Objects;
 
 /**
  * The published JSON Schemas (draft 2020-12) of a package's files — flow, package, endpoint, test, system, {@code folder.yaml}
- * and {@code package.lock} — and of the files of an environment's configuration, a connection and a system, loaded from
+ * and {@code package.lock} — and of the files of an environment's configuration, a connection, a system and a credential, loaded from
  * {@code schemas/<kind>.schema.json} on the classpath. A flow and a test are of {@code schemaVersion} 1, which names endpoint
  * files, or 2, which names connections of systems; every other file is of {@code schemaVersion: 1}.
  * Validation is pure: no I/O, no Vert.x instance.
@@ -27,7 +27,8 @@ import java.util.Objects;
  */
 public enum Schemas {
     FLOW("flow"), PACKAGE("package"), ENDPOINT("endpoint"), TEST("test"), SYSTEM("system"), FOLDER("folder"), LOCK("lock"),
-    ENVIRONMENT_CONNECTION("environment.connection"), ENVIRONMENT_SYSTEM("environment.system");
+    ENVIRONMENT_CONNECTION("environment.connection"), ENVIRONMENT_SYSTEM("environment.system"),
+    ENVIRONMENT_CREDENTIAL("environment.credential");
 
     private final String kind;
     private final JsonObject json;

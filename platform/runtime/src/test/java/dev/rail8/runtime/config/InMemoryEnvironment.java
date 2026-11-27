@@ -15,7 +15,7 @@ public final class InMemoryEnvironment implements Environment {
 
     private final String name;
     private final List<Consumer<Snapshot>> listeners = new CopyOnWriteArrayList<>();
-    private volatile Snapshot held = new Snapshot(0, false, Map.of(), Map.of(), Map.of(), 0);
+    private volatile Snapshot held = new Snapshot(0, false, Map.of(), Map.of(), Map.of(), Map.of(), 0);
 
     public InMemoryEnvironment(String name) {
         this.name = Objects.requireNonNull(name, "name");
@@ -76,7 +76,7 @@ public final class InMemoryEnvironment implements Environment {
     }
 
     private InMemoryEnvironment take(boolean mocksAllowed, Map<String, ConnectionState> connections, Map<String, String> names, Map<Ref, String> leftOut) {
-        Snapshot next = new Snapshot(held.generation() + 1, mocksAllowed, connections, names, leftOut, leftOut.size());
+        Snapshot next = new Snapshot(held.generation() + 1, mocksAllowed, connections, names, held.credentials(), leftOut, leftOut.size());
         held = next;
         for (Consumer<Snapshot> listener : listeners) listener.accept(next);
         return this;

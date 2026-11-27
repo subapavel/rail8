@@ -77,6 +77,12 @@ public final class ConfigObjects implements ConfigStore {
 
     static final int MAX_CONNECTIONS = 20_000;
     static final int MAX_SYSTEMS = 4_096;
+    static final int MAX_CREDENTIALS = 20_000;
+    /** The most credentials in force of one system. */
+    static final int MAX_CREDENTIALS_PER_SYSTEM = 16;
+    /** The most credentials in force of one system that share one basic user. */
+    static final int MAX_SHARING_A_USER = 2;
+    static final int MAX_USER = 128;
     static final long MAX_BODY_BYTES = 64L * 1024;
     static final int MAX_FIELDS = 128;
     static final long MAX_BODIES_BYTES = 64L * 1024 * 1024;
@@ -286,6 +292,10 @@ public final class ConfigObjects implements ConfigStore {
                 if (ref.kind() != Ref.Kind.SYSTEM) throw badRequest("an instance name is a system's");
                 yield draft(actor, ref, s.expect(), systemBody(s.instanceName()), "save");
             }
+            case Change.SaveCredential s -> {
+                if (ref.kind() != Ref.Kind.CREDENTIAL) throw badRequest("a type and its fields are a credential's");
+                yield draft(actor, ref, s.expect(), credentialBody(s.fields()), "save");
+            }
             case Change.Remove r -> draft(actor, ref, r.expect(), null, "save");
             case Change.GoBack g -> goBack(actor, ref, g);
             case Change.Discard d -> discard(actor, ref, d.expect());
@@ -324,7 +334,7 @@ public final class ConfigObjects implements ConfigStore {
             Set<Long> drawn = new HashSet<>();
             ConfigRows.ObjectRow r;
             if (row.isEmpty()) {
-                long most = ref.kind() == Ref.Kind.CONNECTION ? limits.connections() : limits.systems();
+                long most = most(ref.kind());
                 if (tx.count(ref.kind()) >= most) {
                     throw new ConfigRefusal(409, RefusalCode.CONFIG_FULL, "the configuration holds " + most + " objects of kind "
                             + ref.kind().id() + ", the most it holds", values(ref).put("most", most));
@@ -363,8 +373,7 @@ public final class ConfigObjects implements ConfigStore {
                 values(ref).put("version", g.fromVersion())));
         if (kept.body == null) return draft(actor, ref, g.expect(), null, "save");
         JsonObject read = current(ref, kept.format, kept.body);
-        JsonObject body = ref.kind() == Ref.Kind.CONNECTION ? connectionBody(read) : systemBody(read.getString("instanceName"));
-        return draft(actor, ref, g.expect(), body, "save");
+        return draft(actor, ref, g.expect(), bodyOf(ref, read), "save");
     }
 
     private ObjectView discard(Actor actor, Ref ref, String expect) {
@@ -444,7 +453,7 @@ public final class ConfigObjects implements ConfigStore {
         return rows.write(tx -> {
             Optional<ConfigRows.ObjectRow> peeked = tx.row(ref, false);
             Map<String, Set<Secret.Kind>> uses = peeked.map(r -> secretUses(draftOf(r))).orElse(Map.of());
-            List<String> problems = ref.kind() == Ref.Kind.CONNECTION && peeked.isPresent() ? tx.replaceUses(ref, uses) : List.of();
+            List<String> problems = ref.kind() != Ref.Kind.SYSTEM && peeked.isPresent() ? tx.replaceUses(ref, uses) : List.of();
             SecretStore.Binder binder = binder(tx);
             ConfigRows.Head head = tx.head(true);
             Optional<ConfigRows.ObjectRow> row = tx.row(ref, true);
@@ -458,6 +467,8 @@ public final class ConfigObjects implements ConfigStore {
             JsonObject detail = new JsonObject().put("kind", ref.kind().id()).put("key", ref.key());
             if (ref.kind() == Ref.Kind.CONNECTION) {
                 checkConnection(tx, r, removal, head, uses, problems, actor, a.confirm(), detail);
+            } else if (ref.kind() == Ref.Kind.CREDENTIAL) {
+                if (!removal) checkCredential(tx, r, problems);
             } else if (removal) {
                 List<ConfigRows.Use> used = tx.usesOfSystem(ref.key());
                 if (!used.isEmpty()) {
@@ -713,7 +724,7 @@ public final class ConfigObjects implements ConfigStore {
             refuseProblems(planned);
             for (Ref.Kind kind : Ref.Kind.values()) {
                 long creates = planned.named().stream().filter(n -> n.ref.kind() == kind && n.row.isEmpty()).count();
-                long most = kind == Ref.Kind.CONNECTION ? limits.connections() : limits.systems();
+                long most = most(kind);
                 if (creates > 0 && tx.count(kind) + creates > most) {
                     throw new ConfigRefusal(409, RefusalCode.CONFIG_FULL, "the import would make the configuration hold more than " + most
                             + " objects of kind " + kind.id() + ", the most it holds", new JsonObject().put("kind", kind.id()).put("most", most));
@@ -826,7 +837,7 @@ public final class ConfigObjects implements ConfigStore {
             etags.add(Map.of("kind", n.ref.kind().id(), "key", n.ref.key(), "etag", r == null ? EMPTY_ETAG : etag(r)));
             if (n.file == null) continue;
             try {
-                n.body = n.ref.kind() == Ref.Kind.CONNECTION ? importedConnection(n, problems) : systemBody(n.file.getString("instanceName"));
+                n.body = n.ref.kind() == Ref.Kind.CONNECTION ? importedConnection(n, problems) : bodyOf(n.ref, n.file);
                 if (n.body != null && n.ref.kind() == Ref.Kind.CONNECTION) adapterDiffers(tx, n.ref, n.body.getString("adapter"));
             } catch (ConfigRefusal refused) {
                 problems.add(problem(n.path, n.ref, refused.code(), refused.getMessage()).mergeIn(refused.values().copy().put("path", n.path)));
@@ -845,8 +856,13 @@ public final class ConfigObjects implements ConfigStore {
                         + " its author or a connection administrator discards it first").put("savedBy", r.draftBy));
             }
             objects.add(values(n.ref).put("change", n.change).put("fields", n.fields.copy()).put("inForce", n.inForce));
-            boolean deployed = n.ref.kind() == Ref.Kind.CONNECTION ? tx.deployedAdapter(n.ref.key()).isPresent() : tx.deployed(n.ref.key());
-            if (!deployed) notes.add(values(n.ref).put("code", "not-deployed").put("text", "no deployed system defines " + n.ref + " yet"));
+            boolean deployed = switch (n.ref.kind()) {
+                case CONNECTION -> tx.deployedAdapter(n.ref.key()).isPresent();
+                case SYSTEM -> tx.deployed(n.ref.key());
+                case CREDENTIAL -> tx.deployed(Keys.systemOf(n.ref.key()));
+            };
+            if (!deployed) notes.add(values(n.ref).put("code", "not-deployed").put("text", n.ref.kind() == Ref.Kind.CREDENTIAL
+                    ? "no deployed package defines the system of " + n.ref + " yet" : "no deployed system defines " + n.ref + " yet"));
             boolean mocked = n.body.containsKey("mock");
             if (mocked && !head.mocksAllowed()) {
                 notes.add(values(n.ref).put("code", "mocks-not-allowed").put("text", n.ref + " is mocked, and the environment does not allow mocks"));
@@ -1166,6 +1182,125 @@ public final class ConfigObjects implements ConfigStore {
         return connectionBody(b.adapter(), b.values(), mock);
     }
 
+    /** The most objects of {@code kind} the configuration holds. */
+    private long most(Ref.Kind kind) {
+        return switch (kind) {
+            case CONNECTION -> limits.connections();
+            case SYSTEM -> limits.systems();
+            case CREDENTIAL -> MAX_CREDENTIALS;
+        };
+    }
+
+    /** The body of {@code ref} that {@code kept}, a body of its history or the members of its file, gives, checked as any save. */
+    private JsonObject bodyOf(Ref ref, JsonObject kept) {
+        return switch (ref.kind()) {
+            case CONNECTION -> connectionBody(kept);
+            case SYSTEM -> systemBody(kept.getString("instanceName"));
+            case CREDENTIAL -> credentialBody(kept.getMap());
+        };
+    }
+
+    /**
+     * The body of a credential's save: {@code {type: "basic", user, password}} or {@code {type: "api-key", apiKey}}, each secret a
+     * reference {@code secret://<name>}. A user is 1 to {@value #MAX_USER} printable characters without a colon. The types
+     * {@code certificate} and {@code oauth2} are refused: the node does not check them yet.
+     */
+    private static JsonObject credentialBody(Map<String, Object> fields) {
+        if (fields == null) throw badRequest("a credential's save states its type and fields");
+        Object type = fields.get("type");
+        if ("certificate".equals(type) || "oauth2".equals(type)) {
+            throw invalid("type", "the type " + type + " is not built yet: a credential is basic or api-key");
+        }
+        List<String> takes = switch (type) {
+            case CredentialState.BASIC -> List.of("type", "user", "password");
+            case CredentialState.API_KEY -> List.of("type", "apiKey");
+            case null, default -> throw invalid("type", "a credential's type is basic or api-key");
+        };
+        for (String field : fields.keySet()) if (!takes.contains(field)) throw invalid(field, "a credential of type " + type + " takes " + takes);
+        JsonObject body = new JsonObject().put("type", type);
+        if (type.equals(CredentialState.BASIC)) {
+            if (!(fields.get("user") instanceof String user) || user.isEmpty() || user.codePointCount(0, user.length()) > MAX_USER
+                    || user.indexOf(':') >= 0 || user.codePoints().anyMatch(c -> Character.isISOControl(c) || !Character.isDefined(c))) {
+                throw invalid("user", "a user is 1 to " + MAX_USER + " printable characters without a colon");
+            }
+            body.put("user", user).put("password", reference(fields.get("password"), "password"));
+        } else {
+            body.put("apiKey", reference(fields.get("apiKey"), "apiKey"));
+        }
+        return body;
+    }
+
+    /** {@code raw} as a reference {@code secret://<name>}. */
+    private static String reference(Object raw, String field) {
+        if (!(raw instanceof String text) || !text.startsWith(REFERENCE) || !SECRET_NAME.matcher(text.substring(REFERENCE.length())).matches()) {
+            throw invalid(field, "give the verifier as secret://<name>");
+        }
+        return text;
+    }
+
+    /** The verifier a credential's body names, by its name. */
+    private static String verifierOf(JsonObject body) {
+        String reference = body.getString(body.containsKey("password") ? "password" : "apiKey");
+        return reference.substring(REFERENCE.length());
+    }
+
+    /**
+     * The checks of a credential's activation: its system is defined; its verifier is set, of kind verifier and of the form
+     * generated; no other credential in force names that verifier; a basic user is of one system and at most
+     * {@value #MAX_SHARING_A_USER} of its credentials share it; and its system holds at most {@value #MAX_CREDENTIALS_PER_SYSTEM}.
+     */
+    private void checkCredential(ConfigRows.Tx tx, ConfigRows.ObjectRow r, List<String> problems) {
+        Ref ref = r.ref;
+        JsonObject body = draftOf(r);
+        String system = Keys.systemOf(ref.key());
+        if (!tx.deployed(system)) {
+            throw new ConfigRefusal(409, RefusalCode.NO_SYSTEM, "the system '" + system + "' of " + ref + " is not defined: deploy a package"
+                    + " that defines it first", values(ref).put("system", system));
+        }
+        String field = body.containsKey("password") ? "password" : "apiKey";
+        String verifier = verifierOf(body);
+        Secret.Kind kind = tx.kinds(Set.of(verifier)).get(verifier);
+        String lacks = kind == null ? "the secret '" + verifier + "' is not set: create it as a verifier of the form generated"
+                : kind != Secret.Kind.VERIFIER ? "the secret '" + verifier + "' is of kind " + kind.id() + ", not verifier"
+                : secrets.held(verifier).filter(SecretStore.Held::readable).map(h -> ((Verifier) h.value()).form())
+                        .filter(form -> !form.equals(Verifier.GENERATED)).map(form -> "the verifier '" + verifier + "' is of the form "
+                                + form + ", which a credential does not take yet").orElse(null);
+        if (lacks == null && !problems.isEmpty()) lacks = problems.getFirst();
+        if (lacks != null) {
+            JsonArray lines = new JsonArray().add(new JsonObject().put("field", field).put("code", "secret").put("direction", "").put("text", lacks));
+            throw new ConfigRefusal(422, RefusalCode.INCOMPLETE, "the verifier of " + ref + " is not complete: " + lacks, values(ref),
+                    new JsonObject().put("lines", lines), null);
+        }
+        Optional<String> user = Optional.ofNullable(body.getString("user"));
+        int ofSystem = 0;
+        int sharing = 0;
+        for (ConfigRows.ObjectRow other : inScope(tx, new Scope(Optional.of(Ref.Kind.CREDENTIAL), Optional.empty()))) {
+            if (other.ref.equals(ref) || other.body == null) continue;
+            JsonObject in = bodyOf(other);
+            String otherSystem = Keys.systemOf(other.ref.key());
+            if (verifierOf(in).equals(verifier)) {
+                throw new ConfigRefusal(409, RefusalCode.CREDENTIAL_TAKEN, "the verifier '" + verifier + "' is named by " + other.ref
+                        + ": a verifier is one credential's", values(ref).put("other", other.ref.key()));
+            }
+            if (user.isPresent() && user.get().equals(in.getString("user"))) {
+                if (!otherSystem.equals(system)) {
+                    throw new ConfigRefusal(409, RefusalCode.CREDENTIAL_TAKEN, "the user '" + user.get() + "' is the system " + otherSystem
+                            + "'s: a basic user belongs to one system", values(ref).put("other", other.ref.key()));
+                }
+                sharing++;
+            }
+            if (otherSystem.equals(system)) ofSystem++;
+        }
+        if (sharing >= MAX_SHARING_A_USER) {
+            throw new ConfigRefusal(409, RefusalCode.CREDENTIAL_TAKEN, MAX_SHARING_A_USER + " credentials of " + system + " share the user '"
+                    + user.orElseThrow() + "', the most that share one", values(ref).put("most", MAX_SHARING_A_USER));
+        }
+        if (ofSystem >= MAX_CREDENTIALS_PER_SYSTEM) {
+            throw new ConfigRefusal(409, RefusalCode.CONFIG_FULL, "the system " + system + " holds " + MAX_CREDENTIALS_PER_SYSTEM
+                    + " credentials, the most one holds", values(ref).put("most", MAX_CREDENTIALS_PER_SYSTEM));
+        }
+    }
+
     /** The body of a system's save: {@code {instanceName}}, 1 to 128 printable characters. */
     private static JsonObject systemBody(String instanceName) {
         if (instanceName == null) throw badRequest("a system's save states its instance name");
@@ -1298,6 +1433,9 @@ public final class ConfigObjects implements ConfigStore {
 
     /** The names the secret fields of a draft name, with the kinds each takes; none for a mocked or removed connection. */
     private Map<String, Set<Secret.Kind>> secretUses(JsonObject draft) {
+        if (draft != null && draft.containsKey("type") && !draft.getBoolean("removed", false)) {
+            return Map.of(verifierOf(draft), EnumSet.of(Secret.Kind.VERIFIER));
+        }
         if (draft == null || draft.getBoolean("removed", false) || draft.containsKey("mock") || !draft.containsKey("adapter")) return Map.of();
         Body body = Body.of(draft);
         Optional<Adapter> adapter = adapters.apply(body.adapter());

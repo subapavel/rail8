@@ -1,0 +1,7 @@
+# expect: /user
+schemaVersion: 1
+kind: environment.credential
+key: acme/main
+type: basic
+user: "acme:erp"
+password: secret://acme.main

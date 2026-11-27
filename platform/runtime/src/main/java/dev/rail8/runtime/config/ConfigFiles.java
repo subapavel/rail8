@@ -80,10 +80,11 @@ final class ConfigFiles {
         }
     }
 
-    /** The kinds this node reads: a connection and a system, each of format 1. */
+    /** The kinds this node reads: a connection, a system and a credential, each of format 1. */
     static final ConfigFiles STANDARD = new ConfigFiles(List.of(
             new FileKind("environment.connection", Ref.Kind.CONNECTION, Map.of(1, Schemas.ENVIRONMENT_CONNECTION::validate), List.of()),
-            new FileKind("environment.system", Ref.Kind.SYSTEM, Map.of(1, Schemas.ENVIRONMENT_SYSTEM::validate), List.of())));
+            new FileKind("environment.system", Ref.Kind.SYSTEM, Map.of(1, Schemas.ENVIRONMENT_SYSTEM::validate), List.of()),
+            new FileKind("environment.credential", Ref.Kind.CREDENTIAL, Map.of(1, Schemas.ENVIRONMENT_CREDENTIAL::validate), List.of())));
 
     private final Map<String, FileKind> byName = new TreeMap<>();
     private final Map<Ref.Kind, FileKind> byKind = new EnumMap<>(Ref.Kind.class);
@@ -195,7 +196,7 @@ final class ConfigFiles {
         }
     }
 
-    /** The path of the file of {@code ref}: {@code connection/<key>.yaml} or {@code system/<key>.yaml}. */
+    /** The path of the file of {@code ref}: {@code connection/<key>.yaml}, {@code system/<key>.yaml} or {@code credential/<key>.yaml}. */
     static String path(Ref ref) {
         return ref.kind().id() + "/" + ref.key() + ".yaml";
     }
@@ -213,6 +214,8 @@ final class ConfigFiles {
         doc.put("key", ref.key());
         if (ref.kind() == Ref.Kind.SYSTEM) {
             doc.put("instanceName", body.getString("instanceName"));
+        } else if (ref.kind() == Ref.Kind.CREDENTIAL) {
+            for (String field : List.of("type", "user", "password", "apiKey")) if (body.containsKey(field)) doc.put(field, body.getString(field));
         } else {
             JsonObject shown = form.map(f -> withoutDefaults(body, f)).orElse(body);
             doc.put("adapter", shown.getString("adapter"));

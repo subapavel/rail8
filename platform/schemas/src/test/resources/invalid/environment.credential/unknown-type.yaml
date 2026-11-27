@@ -1,0 +1,5 @@
+# expect: /type
+schemaVersion: 1
+kind: environment.credential
+key: acme/main
+type: token

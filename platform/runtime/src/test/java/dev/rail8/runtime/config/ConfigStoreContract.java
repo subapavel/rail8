@@ -1801,4 +1801,146 @@ abstract class ConfigStoreContract {
         assertEquals(List.of(), e.files());
         assertEquals(List.of(API), e.refused());
     }
+
+    // ------------------------------------------------------------------------------------------------- credentials
+
+    static final Ref MAIN = Ref.credential("acme/main");
+
+    /** A generated verifier {@code name} on {@code n}; its value is one no text may hold. */
+    void verifier(Node n, String name) {
+        JsonObject answer = await(n.secrets.create(MemorySecretStores.ADMIN, new JsonObject().put("name", name).put("kind", "verifier")
+                .put("form", "generated")));
+        values.add(answer.getString("value"));
+    }
+
+    ConfigStore.ObjectView saveCredential(Node n, Ref ref, Object... fields) {
+        return write(n, CONNECTIONS, ref, new Change.SaveCredential(etag(n, ref), values(fields)));
+    }
+
+    /** A basic credential of {@code ref} with {@code user} and a new verifier {@code secret}, in force. */
+    ConfigStore.ObjectView basic(Node n, Ref ref, String user, String secret) {
+        verifier(n, secret);
+        saveCredential(n, ref, "type", "basic", "user", user, "password", "secret://" + secret);
+        return activate(n, ref);
+    }
+
+    @Test
+    void aCredentialIsActivatedBoundNamesItsVerifierAsAUseAndIsExportedAndHeld() {
+        Node a = node("a");
+        deploySystem("acme", new JsonObject());
+        verifier(a, "acme.main");
+        ConfigStore.ObjectView saved = saveCredential(a, MAIN, "type", "basic", "user", "acme-erp", "password", "secret://acme.main");
+        assertEquals("basic", saved.json().getJsonObject("draft").getString("type"));
+        assertEquals("acme", saved.json().getString("system"));
+        ConfigStore.ObjectView active = activate(a, MAIN);
+        assertEquals(1, active.json().getInteger("version"));
+        assertEquals("ok", active.json().getJsonObject("inForce").getString("binding"));
+        assertEquals("secret://acme.main", active.json().getJsonObject("inForce").getString("password"));
+
+        JsonObject entry = await(a.secrets.entry("acme.main")).orElseThrow();
+        captured.add(entry.encode());
+        assertEquals(new JsonArray().add(new JsonObject().put("kind", "credential").put("id", "acme/main").put("kinds", new JsonArray().add("verifier"))),
+                entry.getJsonArray("usedBy"));
+        ConfigStore.Export export = exported(a, new ConfigStore.Scope(Optional.of(Ref.Kind.CREDENTIAL), Optional.empty()));
+        assertEquals(List.of("credential/acme/main.yaml"), export.files().stream().map(ConfigStore.File::path).toList());
+        String file = "schemaVersion: 1\nkind: environment.credential\nkey: acme/main\ntype: basic\nuser: acme-erp\npassword: secret://acme.main\n";
+        assertEquals(file, export.files().getFirst().text());
+        JsonObject plan = dryRun(a, EVERYTHING, List.of(new ConfigStore.File("credential/acme/main.yaml", file)));
+        assertEquals("unchanged", plan.getJsonArray("objects").getJsonObject(0).getString("change"), plan.encode());
+
+        StoredEnvironment env = environment(a);
+        assertEquals(new CredentialState("basic", Optional.of("acme-erp"), "acme.main"), env.current().credentials().get("acme/main"));
+        verifier(a, "acme.key");
+        Ref key = Ref.credential("acme/key");
+        saveCredential(a, key, "type", "api-key", "apiKey", "secret://acme.key");
+        activate(a, key);
+        envTick(a);
+        assertEquals(new CredentialState("api-key", Optional.empty(), "acme.key"), env.current().credentials().get("acme/key"));
+
+        write(a, CONNECTIONS, MAIN, new Change.Remove(etag(a, MAIN)));
+        activate(a, MAIN);
+        envTick(a);
+        assertFalse(env.current().credentials().containsKey("acme/main"), "a removed credential is held no more");
+        assertEquals(new JsonArray(), await(a.secrets.entry("acme.main")).orElseThrow().getJsonArray("usedBy"), "nor named as a use");
+        noSecretValueIsInAnyText();
+    }
+
+    @Test
+    void aCredentialsSaveTakesBasicAndApiKeyAndRefusesTheTypesNotBuilt() {
+        Node a = node("a");
+        for (String type : List.of("certificate", "oauth2")) {
+            ConfigRefusal r = refused(() -> a.store.write(CONNECTIONS, MAIN, new Change.SaveCredential(etag(a, MAIN), values("type", type))));
+            assertEquals("invalid", r.code(), type);
+            assertEquals("type", r.values().getString("field"));
+            assertTrue(r.getMessage().contains("not built"), r.getMessage());
+        }
+        refused(422, "invalid", () -> a.store.write(CONNECTIONS, MAIN, new Change.SaveCredential(etag(a, MAIN), values("type", "token"))));
+        refused(422, "invalid", () -> a.store.write(CONNECTIONS, MAIN, new Change.SaveCredential(etag(a, MAIN),
+                values("type", "basic", "user", "acme:erp", "password", "secret://p"))));
+        refused(422, "invalid", () -> a.store.write(CONNECTIONS, MAIN, new Change.SaveCredential(etag(a, MAIN),
+                values("type", "basic", "user", "acme", "password", "plain-text"))));
+        refused(422, "invalid", () -> a.store.write(CONNECTIONS, MAIN, new Change.SaveCredential(etag(a, MAIN),
+                values("type", "api-key", "apiKey", "secret://k", "user", "acme"))));
+        refused(400, "bad-request", () -> a.store.write(CONNECTIONS, API, new Change.SaveCredential(etag(a, API),
+                values("type", "api-key", "apiKey", "secret://k"))));
+        noSecretValueIsInAnyText();
+    }
+
+    @Test
+    void aCredentialsActivationChecksItsSystemAndItsVerifier() {
+        Node a = node("a");
+        verifier(a, "acme.main");
+        saveCredential(a, MAIN, "type", "basic", "user", "acme-erp", "password", "secret://acme.main");
+        refused(409, "no-system", () -> activate(a, MAIN));
+        deploySystem("acme", new JsonObject());
+
+        saveCredential(a, MAIN, "type", "basic", "user", "acme-erp", "password", "secret://absent");
+        refused(422, "incomplete", () -> activate(a, MAIN));
+        secret(a, "plain", "a-plain-value");
+        saveCredential(a, MAIN, "type", "basic", "user", "acme-erp", "password", "secret://plain");
+        ConfigRefusal plain = refused(() -> activate(a, MAIN));
+        assertEquals("incomplete", plain.code());
+        assertTrue(plain.detail().encode().contains("verifier"), plain.detail().encode());
+
+        saveCredential(a, MAIN, "type", "basic", "user", "acme-erp", "password", "secret://acme.main");
+        assertEquals(1, activate(a, MAIN).json().getInteger("version"));
+        noSecretValueIsInAnyText();
+    }
+
+    @Test
+    void aBasicUserBelongsToOneSystemAndAtMostTwoOfItsCredentialsAndAVerifierToOneCredential() {
+        Node a = node("a");
+        deploySystem("acme", new JsonObject());
+        deploySystem("beta", new JsonObject());
+        basic(a, MAIN, "shared", "v1");
+        basic(a, Ref.credential("acme/next"), "shared", "v2");
+        verifier(a, "v3");
+        saveCredential(a, Ref.credential("acme/third"), "type", "basic", "user", "shared", "password", "secret://v3");
+        refused(409, "credential-taken", () -> activate(a, Ref.credential("acme/third")));
+        saveCredential(a, Ref.credential("beta/main"), "type", "basic", "user", "shared", "password", "secret://v3");
+        ConfigRefusal other = refused(() -> activate(a, Ref.credential("beta/main")));
+        assertEquals("credential-taken", other.code());
+        assertTrue(other.getMessage().contains("acme"), other.getMessage());
+
+        saveCredential(a, Ref.credential("beta/main"), "type", "api-key", "apiKey", "secret://v1");
+        refused(409, "credential-taken", () -> activate(a, Ref.credential("beta/main")));
+        saveCredential(a, Ref.credential("beta/main"), "type", "api-key", "apiKey", "secret://v3");
+        assertEquals(1, activate(a, Ref.credential("beta/main")).json().getInteger("version"));
+        noSecretValueIsInAnyText();
+    }
+
+    @Test
+    void aSystemHoldsAtMostSixteenCredentials() {
+        Node a = node("a");
+        deploySystem("acme", new JsonObject());
+        for (int i = 0; i < ConfigObjects.MAX_CREDENTIALS_PER_SYSTEM; i++) {
+            verifier(a, "k" + i);
+            saveCredential(a, Ref.credential("acme/k" + i), "type", "api-key", "apiKey", "secret://k" + i);
+            activate(a, Ref.credential("acme/k" + i));
+        }
+        verifier(a, "k-more");
+        saveCredential(a, Ref.credential("acme/more"), "type", "api-key", "apiKey", "secret://k-more");
+        refused(409, "config-full", () -> activate(a, Ref.credential("acme/more")));
+        noSecretValueIsInAnyText();
+    }
 }
