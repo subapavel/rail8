@@ -58,8 +58,9 @@ const COMMITS: { subject: string; files: Record<string, string | null>; author: 
  * dependencies, `customers` is pinned, `common` has moved since its pin, and `ledger` has no folder. The package
  * `customers` runs on the node one commit behind its `HEAD`, and two packages the node runs from other repositories pin
  * it: `billing` at the commit that runs, `shipping` one commit behind it. `common` runs nowhere, nor does `demo`, the
- * demo package as examples/demo holds it, in one commit. Two folders that are no package are listed below them:
- * `mappings`, which holds the fake mapping service's mappings, and `notes`.
+ * demo package as examples/demo holds it, in one commit, nor does `mapping-corpus`, the package of the studio's sample
+ * mappings, whose mappings the pictures open from the folder `mappings`. Two folders are no package, and Packages does
+ * not list them: `mappings`, which holds the fake mapping service's mappings, and `notes`.
  * The node's pool has three nodes: `node-b` still runs the commit before the pool's record of `orders`, as it could not
  * fetch the record's commit.
  */
@@ -101,9 +102,17 @@ const SEED: Seed = {
       },
     },
     { folder: 'demo', manifest: null, files: DEMO, commits: ['Start the demo package'], commitFiles: { 'Start the demo package': { 'Start the demo package.txt': null } } },
-    { folder: 'common', manifest: 'schemaVersion: 1\nkind: package\nname: common\nversion: 1.2.1\n', commits: ['Share the VAT rounding'], commitFiles: { 'Share the VAT rounding': { 'Share the VAT rounding.txt': null, 'flows/vat.xsl': XSL } } },
+    {
+      folder: 'mapping-corpus',
+      manifest: "schemaVersion: 1\nkind: package\nname: mapping-corpus\nversion: 0.1.0\ndescription: The mapping studio's sample mappings, with their structures and their cases.\n",
+      files: { 'README.md': '# Golden corpus\n' },
+      commits: ['The mapping corpus'],
+      commitFiles: { 'The mapping corpus': { 'The mapping corpus.txt': null } },
+    },
+    { folder: 'common', manifest: 'schemaVersion: 1\nkind: package\nname: common\nversion: 1.2.1\ndescription: The VAT rounding the other packages share.\n', commits: ['Share the VAT rounding'], commitFiles: { 'Share the VAT rounding': { 'Share the VAT rounding.txt': null, 'flows/vat.xsl': XSL } } },
     {
       folder: 'customers',
+      manifest: 'schemaVersion: 1\nkind: package\nname: customers\nversion: 1.0.0\ndescription: Customers from the CRM to the ERP.\n',
       commits: CUSTOMER_COMMITS,
       commitFiles: {
         [CUSTOMER_COMMITS[0]!]: { [`${CUSTOMER_COMMITS[0]}.txt`]: null, 'flows/customers.yaml': flow('customers', 'crm-in', '  - type: to\n    name: erp\n    endpoint: erp-out\n') },
@@ -151,8 +160,12 @@ function idFor(text: string): string {
   return id.slice(0, 40);
 }
 
-/** The git half over the fake world of the seed above, with ids, authors and dates of real work on its commits. */
-export function pictureWorld(): PackagesApi {
+/**
+ * The git half over the fake world of the seed above, with ids, authors and dates of real work on its commits; with
+ * `empty`, over a working folder that holds nothing.
+ */
+export function pictureWorld(empty = false): PackagesApi {
+  if (empty) return fakePackagesApi(fakeStateOf({}).state);
   const { state } = fakeStateOf(SEED);
   const ids = new Map(state.folders.flatMap((f) => f.commits.map((c) => [c.id, idFor(`${f.name}/${c.subject}`)] as const)));
   for (const source of state.sources ?? []) for (const c of source.commits) ids.set(c.id, idFor(`${source.address}/${c.subject}`));
@@ -193,7 +206,7 @@ export function pictureWorld(): PackagesApi {
     commit.at = known?.at ?? '2026-11-22T17:30:00+01:00';
   }
   orders.upstream!.fetchedAt = '2026-11-23T09:12:00+01:00';
-  const others = state.folders.filter((f) => f.name === 'customers' || f.name === 'common' || f.name === 'demo');
+  const others = state.folders.filter((f) => f.name === 'customers' || f.name === 'common' || f.name === 'demo' || f.name === 'mapping-corpus');
   for (const commit of others.flatMap((f) => f.commits)) {
     commit.author = 'Petr Svoboda';
     commit.at = '2026-11-04T13:00:00+01:00';

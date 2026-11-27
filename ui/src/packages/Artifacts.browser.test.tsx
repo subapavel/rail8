@@ -97,7 +97,18 @@ afterEach(() => {
 });
 
 const button = (name: string) => page.getByRole('button', { name, exact: true });
-const others = () => page.getByRole('table', { name: 'Folders that are no package' });
+
+/**
+ * Opens the tab of the folder `folder`, which is no package and which Packages does not list: Quick open finds its
+ * artifact by `term`, and the artifact's breadcrumb leads to the folder's tab.
+ */
+async function openFolder(term: string, folder: string) {
+  await expect.element(page.getByRole('table', { name: 'Packages' })).toBeVisible();
+  await userEvent.keyboard('{Control>}k{/Control}');
+  await page.getByRole('textbox', { name: 'Find a screen, a tab or an artifact' }).fill(term);
+  await userEvent.keyboard('{Enter}');
+  await page.getByRole('navigation', { name: 'Breadcrumb' }).getByText(folder, { exact: true }).click();
+}
 
 async function openArtifacts(repository: string) {
   await page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: repository, exact: true }).click();
@@ -279,10 +290,11 @@ describe('the artifacts of the demo package', () => {
 });
 
 describe('a folder that is no package', () => {
-  test('that holds mappings opens from its row in a tab of the tree of its mappings with New mapping only, after Packages', async () => {
+  test('is not listed on Packages, and one that holds mappings opens from the breadcrumb of its mapping in a tab of their tree with New mapping only', async () => {
     render({ clones: [{ folder: 'orders' }], plain: ['mappings', 'notes'] });
-    await expect.element(others().getByRole('row').filter({ hasText: 'notes' }).getByRole('button')).not.toBeInTheDocument();
-    await others().getByRole('button', { name: 'mappings', exact: true }).click();
+    await expect.element(page.getByRole('table', { name: 'Packages' }).getByRole('button', { name: 'orders', exact: true })).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/mappings|notes/);
+    await openFolder('order-id-copy', 'mappings');
 
     await expect.element(page.getByRole('heading', { level: 1, name: 'mappings' })).toBeVisible();
     const table = tree();
@@ -300,20 +312,13 @@ describe('a folder that is no package', () => {
 
   test('that holds flows and endpoints, as the folder of an adapter does, opens in a tab of their tree, with New flow', async () => {
     render({ plain: ['package', 'src'] });
-    await expect.element(others().getByRole('row').filter({ hasText: 'src' }).getByRole('button')).not.toBeInTheDocument();
-    await others().getByRole('button', { name: 'package', exact: true }).click();
+    await openFolder('package/flows/orders', 'package');
     await expect.element(page.getByRole('heading', { level: 1, name: 'package' })).toBeVisible();
     await expect.element(button('New flow in package within "flows"')).toBeVisible();
     await expect.poll(names).toEqual(['endpoints', '  in', 'flows', '  orders']);
     await tree().getByRole('button', { name: 'in', exact: true }).click();
     await expect.element(page.getByText('The endpoint editor of package/endpoints/in.yaml')).toBeVisible();
     expect(page.getByRole('button', { name: /^New mapping/ }).elements()).toHaveLength(0);
-  });
-
-  test('when its mappings cannot be listed, is no link, and a warning says why', async () => {
-    render({ clones: [{ folder: 'orders' }], plain: ['mappings'] }, kinds(async () => Promise.reject(new Error('the mapping service does not answer'))));
-    await expect.element(page.getByText('the mapping service does not answer')).toBeVisible();
-    await expect.element(others().getByRole('row').filter({ hasText: 'mappings' }).getByRole('button')).not.toBeInTheDocument();
   });
 });
 

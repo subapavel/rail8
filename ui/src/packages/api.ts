@@ -67,8 +67,8 @@ export type Busy = null | 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisec
 export interface PackageRow {
   /** The clone's folder name: what a deploy and a pin name. */
   repository: string;
-  /** The name and version `package.yaml` gives; null when it cannot be read, and `problem` says why. */
-  package: { name: string; version: string } | null;
+  /** The name, version and description `package.yaml` gives; null when it cannot be read, and `problem` says why. */
+  package: { name: string; version: string; description?: string } | null;
   problem?: string;
   /** The branch `HEAD` is on; null for a detached `HEAD`. */
   branch: string | null;

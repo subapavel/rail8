@@ -71,14 +71,20 @@ const fold = (name) => (page) =>
   tree(page).getByRole('row').filter({ has: page.getByRole('button', { name, exact: true }) }).getByRole('button', { name: /collapse/i }).click();
 /** Scrolls the shown tab until the row of the tree named `name` is in view. */
 const scrollTo = (name) => (page) => tree(page).getByText(name, { exact: true }).scrollIntoViewIfNeeded();
-/** Opens the folder `name`, which is no package, from its row on the Packages screen. */
-const folder = (name) => (page) => shown(page).getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name, exact: true }).click();
 /** Opens Quick open with Ctrl+K and types `text` into it. */
 const quick = (text) => async (page) => {
   await page.keyboard.press('Control+k');
   // the dialog's one field, named in the language shown
   await page.getByRole('dialog').getByRole('textbox').fill(text);
 };
+/** Opens the first artifact Quick open finds by `text`. */
+const found = (text) => [quick(text), (page) => page.keyboard.press('Enter')];
+/** Opens the screen `name` from the breadcrumb of the shown tab. */
+const crumb = (name) => (page) => shown(page).getByRole('navigation', { name: 'Breadcrumb' }).getByText(name, { exact: true }).click();
+/** Opens the folder `name`, which is no package and which Packages does not list, from the breadcrumb of its mapping `mapping`. */
+const folder = (name, mapping) => [...found(mapping), crumb(name)];
+/** Opens the page again over a working folder that holds nothing. */
+const emptyFolder = (page) => page.goto(`${page.url().split('?')[0]}?workspace=empty`);
 /** Presses `action` in the row of the secret `name` on the Secrets screen. */
 const secret = (name, action) => (page) =>
   shown(page).getByRole('table', { name: 'Secrets' }).getByRole('row').filter({ hasText: name }).first().getByRole('button', { name: action, exact: true }).click();
@@ -92,7 +98,7 @@ const PEM_CERTIFICATE = '-----BEGIN CERTIFICATE-----\nMIIBszCCAWWgAwIBAgIUPictur
 /** Opens the Secrets screen as a secret administrator. */
 const secrets = [visit('secrets'), menu('Secrets')];
 /** Opens the mapping order-id-copy of the folder mappings, which is no package, in its studio. */
-const studio = [menu('Packages'), folder('mappings'), artifact('order-id-copy')];
+const studio = found('order-id-copy');
 /** Opens the flow orders of the package orders. */
 const orders = [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('orders')];
 /** Opens the endpoint `name` of the package orders. */
@@ -105,6 +111,8 @@ const target = (name) => (page) =>
 const SCENES = {
   home: [],
   packages: [menu('Packages')],
+  'packages-search': [menu('Packages'), fill('Search packages', 'order')],
+  'packages-empty': [emptyFolder, menu('Packages')],
   'package-changes': [menu('Packages'), pkg('orders'), expand('Changes', 'tests/orders.test.yaml')],
   'package-artifacts': [menu('Packages'), pkg('orders'), tab('Artifacts')],
   'package-history': [menu('Packages'), pkg('orders'), tab('History')],
@@ -183,8 +191,8 @@ const SCENES = {
   'message-ru': [visit('in'), menu('Messages'), message('m-7f39'), speak('Русский')],
   'quick-open': [quick('order')],
   'quick-open-cs': [speak('Čeština'), quick('order')],
-  folder: [menu('Packages'), folder('mappings')],
-  'folder-new-mapping': [menu('Packages'), folder('mappings'), press('New mapping')],
+  folder: folder('mappings', 'order-id-copy'),
+  'folder-new-mapping': [...folder('mappings', 'order-id-copy'), press('New mapping')],
   'package-new-flow': [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('credit-notes'), press('New flow'), fill('Id', 'returns')],
   'package-demo-artifacts': [menu('Packages'), pkg('demo'), tab('Artifacts'), fold('endpoints'), fold('fixtures'), fold('flows'), scrollTo('globex-erp.yaml')],
   'package-demo-files': [menu('Packages'), pkg('demo'), tab('Artifacts'), only('Files'), scrollTo('globex-erp.yaml')],

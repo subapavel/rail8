@@ -27,7 +27,9 @@ import { NOW, pictureWorld } from './world';
 // the pictures never open. The production build of the application leaves the page out.
 const people = pictureUsers(() => NOW);
 const modules = import.meta.glob('../../src/*/module.tsx', { eager: true });
-const world = pictureWorld();
+const query = new URLSearchParams(location.search);
+// with ?workspace=empty, Packages shows a working folder that holds nothing
+const world = pictureWorld(query.get('workspace') === 'empty');
 const kinds = new Map(
   [...flowKinds(pictureFlows(), pictureEndpoints()), mappingKind(fakeApiClient(), storageBrowserState(window.sessionStorage))].map((kind) => [kind.kind, kind]),
 );
@@ -111,7 +113,6 @@ const SECRET_ADMINISTRATOR: Me = {
   },
 };
 const SESSIONS: Record<string, Me> = { none: NOBODY, admin: ADMINISTRATOR, developer: DEVELOPER, secrets: SECRET_ADMINISTRATOR };
-const query = new URLSearchParams(location.search);
 const scene = query.get('session');
 let ended = false;
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });

@@ -13,13 +13,13 @@ export const ownPage = { 'sec-fetch-site': 'same-origin' };
 export const mappingsTable = (page: Page) => page.getByRole('table', { name: 'Artifacts' });
 
 /**
- * Loads the application and opens the tab of the folder `mappings`, which is no package, from its row on the Packages
- * screen.
+ * Loads the application and opens the tab of the folder `mappings`, which is no package and which Packages does not
+ * list: Quick open opens its mapping order-id-copy, whose breadcrumb leads to the folder's tab.
  */
 export async function openMappings(page: Page) {
   await page.goto('/');
-  await page.getByRole('navigation', { name: 'Screens' }).getByRole('menuitem', { name: 'Packages', exact: true }).click();
-  await page.getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name: 'mappings', exact: true }).click();
+  await quickOpen(page, 'order-id-copy', 'mappings/order-id-copy.mapping.json');
+  await page.getByRole('navigation', { name: 'Breadcrumb' }).getByText('mappings', { exact: true }).click();
   await expect(mappingsTable(page).getByRole('button').first()).toBeVisible();
 }
 

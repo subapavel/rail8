@@ -80,6 +80,20 @@ describe.each<[string, Build]>([
     expect(rowOf(listed, 'shipping')).toMatchObject({ package: null, problem: 'package.yaml gives no name and version as text' });
   });
 
+  test("a row gives the description package.yaml gives as text, and none when it gives none or no text", async () => {
+    const listed = await list({
+      clones: [
+        { folder: 'orders', manifest: 'schemaVersion: 1\nkind: package\nname: orders\nversion: 1.0.0\ndescription: Orders to the ERP.\n' },
+        { folder: 'billing', manifest: 'schemaVersion: 1\nkind: package\nname: billing\nversion: 1.0.0\ndescription: [a, list]\n' },
+        { folder: 'stock' },
+      ],
+    });
+
+    expect(rowOf(listed, 'orders').package).toEqual({ name: 'orders', version: '1.0.0', description: 'Orders to the ERP.' });
+    expect(rowOf(listed, 'billing').package).toEqual({ name: 'billing', version: '1.0.0' });
+    expect(rowOf(listed, 'stock').package).toEqual({ name: 'stock', version: '1.0.0' });
+  });
+
   test('every folder that is no package is listed below the packages, sorted, with the reason; hidden folders are not', async () => {
     const listed = await list({
       clones: [{ folder: 'orders' }, { folder: 'loose', manifest: null }, { folder: 'deep', manifest: null, files: { 'sub/package.yaml': 'name: deep\nversion: 1.0.0\n' } }],

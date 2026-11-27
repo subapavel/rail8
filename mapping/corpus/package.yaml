@@ -1,0 +1,7 @@
+# The corpus as a Rail8 package, so that the quickstart's working folder holds it as the package mapping-corpus.
+schemaVersion: 1
+kind: package
+name: mapping-corpus
+version: 0.1.0
+description: The mapping studio's sample mappings, with their structures and their cases.
+dependencies: []
