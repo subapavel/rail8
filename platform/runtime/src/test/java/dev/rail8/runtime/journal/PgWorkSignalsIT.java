@@ -20,6 +20,7 @@ import dev.rail8.runtime.queue.PgWorkSignals;
 import dev.rail8.testkit.FakeRuntime;
 import dev.rail8.testkit.SharedPostgres;
 import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
@@ -50,6 +51,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -425,7 +427,10 @@ class PgWorkSignalsIT {
     @Test
     void theStoresNoticesAndEachListenRunItsHook() {
         AtomicInteger notices = new AtomicInteger();
-        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-s", new Workers(), rt.timer(), notices::incrementAndGet);
+        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-s", new Workers(), rt.timer(), () -> {
+            notices.incrementAndGet();
+            return Future.succeededFuture();
+        });
         try {
             bounded(signals.start(), "the signals listen");
             assertEquals(1, notices.get(), "the first LISTEN acknowledged");
@@ -460,8 +465,13 @@ class PgWorkSignalsIT {
     void theConfigurationsNoticesAndEachListenRunItsOwnHook() {
         AtomicInteger store = new AtomicInteger();
         AtomicInteger config = new AtomicInteger();
-        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-c", new Workers(), rt.timer(), store::incrementAndGet,
-                config::incrementAndGet);
+        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-c", new Workers(), rt.timer(), () -> {
+            store.incrementAndGet();
+            return Future.succeededFuture();
+        }, () -> {
+            config.incrementAndGet();
+            return Future.succeededFuture();
+        });
         try {
             bounded(signals.start(), "the signals listen");
             assertEquals(1, store.get(), "the first LISTEN acknowledged, for the secret store");
@@ -473,6 +483,38 @@ class PgWorkSignalsIT {
             assertEquals(2, config.get(), "a store notice is not the configuration's");
             barrier();
             assertEquals(2, store.get(), "a configuration notice is not the store's");
+        } finally {
+            bounded(signals.close(), "the signals close");
+        }
+    }
+
+    /**
+     * The start ends once its first {@code LISTEN} is acknowledged and the looks that acknowledgement started, the secret store's
+     * and the configuration's, have ended, a failed one included: a statement the node's start sends after it does not meet them
+     * in the pool's queue.
+     */
+    @Test
+    void theStartEndsOnceTheLooksItsListenStartedHaveEnded() {
+        AtomicInteger store = new AtomicInteger();
+        AtomicInteger config = new AtomicInteger();
+        Promise<Void> storeLook = Promise.promise();
+        Promise<Void> configRead = Promise.promise();
+        PgWorkSignals signals = new PgWorkSignals(vertx, through(listenWire), pool, "n-w", new Workers(), rt.timer(), () -> {
+            store.incrementAndGet();
+            return storeLook.future();
+        }, () -> {
+            config.incrementAndGet();
+            return configRead.future();
+        });
+        try {
+            Future<Void> started = signals.start();
+            until(() -> store.get() == 1 && config.get() == 1, () -> "the LISTEN acknowledged; looks " + store + ", reads " + config);
+            assertFalse(started.isComplete(), "the start waits for the looks the LISTEN started");
+            storeLook.complete();
+            assertFalse(started.isComplete(), "and for the configuration's read once the store's look ended");
+            configRead.fail(new IllegalStateException("the configuration store could not be read"));
+            bounded(started, "the start ends once both ended, the failed read included");
+            assertTrue(started.succeeded(), "a failed look is the store's to report, not the start's: " + started.cause());
         } finally {
             bounded(signals.close(), "the signals close");
         }

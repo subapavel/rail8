@@ -273,7 +273,9 @@ A node holds at most `RAIL8_PG_POOL_SIZE` + 4 connections to Postgres, and one m
 intake pool holds the at-least-once saves, and the work pool everything else; the two together make `RAIL8_PG_POOL_SIZE`.
 The admin API checks users and sessions in a pool of two connections of its own, so it lets a deploy or an undeploy in
 while the work pool is busy. The membership and the LISTEN connection have one connection each. Check `max_connections`
-against the number of nodes before upgrading.
+against the number of nodes before upgrading. Once the LISTEN connection listens, the node reads the secret store and
+the configuration again, for any change it was told of before it listened. Its start waits for those two reads before
+it restores the packages, so the restore's read does not find the work pool's queue full of the node's own reads.
 
 A pooled connection that reads and writes no byte for `RAIL8_PG_IDLE_TIMEOUT` (default one minute, from 1 ms to one
 hour) is closed by the client, in each of the three pools. This bounds a statement whose server went silent, when the
