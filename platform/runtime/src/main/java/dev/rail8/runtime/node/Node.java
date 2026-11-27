@@ -406,6 +406,7 @@ public final class Node implements AutoCloseable {
                     }
                 }
             };
+            // the looks of the first LISTEN ended before the restore: its read does not find the work pool's queue full of them
             signals.start().await();
             // grouped saves on the intake pool; the wake and the announce after a commit are fire-and-forget on the work pool
             PgIntake intake = new PgIntake(intakePool, blobs, messages, work, workers, timer, config.intakeGroup(), signals);

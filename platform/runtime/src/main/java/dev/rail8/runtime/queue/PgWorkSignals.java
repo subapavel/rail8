@@ -14,6 +14,7 @@ import io.vertx.sqlclient.Tuple;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * The node's {@link WorkSignals} over Postgres {@code LISTEN/NOTIFY} on channel {@value #CHANNEL}, the
@@ -21,7 +22,8 @@ import java.util.Objects;
  *
  * <p>Receiving: one dedicated {@link PgConnection} to {@code listen} — never the pool's — runs {@code LISTEN} and hands every
  * notification's payload to {@link WorkEvents#receive}; a payload not of the {@code w1} form is logged at WARNING once per distinct
- * prefix. {@link #start()} completes once its first {@code LISTEN} is acknowledged. A connection lost (closed by the server, the
+ * prefix. {@link #start()} completes once its first {@code LISTEN} is acknowledged and the store's look and the configuration's
+ * read that acknowledgement started have ended, whatever their outcome. A connection lost (closed by the server, the
  * network, a terminated backend) is reopened on the timer after a backoff — {@value #FIRST_BACKOFF_MILLIS} ms, doubled after each
  * failed try up to {@value #MAX_BACKOFF_MILLIS} ms, tried until {@link #close()}, back to the first once a {@code LISTEN} is
  * acknowledged — and after every {@code LISTEN} acknowledged, the first included, every started worker of the node is woken once:
@@ -56,8 +58,8 @@ public final class PgWorkSignals implements WorkSignals {
 
     private final Vertx vertx;
     private final PgConnectOptions listen;
-    private final Runnable storeNotice;
-    private final Runnable configNotice;
+    private final Supplier<Future<Void>> storeNotice;
+    private final Supplier<Future<Void>> configNotice;
     private final Pool pool;
     private final Workers workers;
     private final Timer timer;
@@ -74,23 +76,26 @@ public final class PgWorkSignals implements WorkSignals {
      * {@code workers}; windows and reconnects on {@code timer}. Connects nowhere before {@link #start()}.
      */
     public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer) {
-        this(vertx, listen, pool, node, workers, timer, () -> { });
+        this(vertx, listen, pool, node, workers, timer, Future::succeededFuture);
     }
 
     /**
-     * As the constructor above, and {@code storeNotice} run on each notification on {@value #STORE_CHANNEL} and after every
-     * {@code LISTEN} acknowledged, the first included: a notice missed while nobody listened costs one look at the store.
+     * As the constructor above, and {@code storeNotice} called on each notification on {@value #STORE_CHANNEL} and after every
+     * {@code LISTEN} acknowledged, the first included: a notice missed while nobody listened costs one look at the store. It
+     * answers its look, which completes once the look ended.
      */
-    public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer, Runnable storeNotice) {
-        this(vertx, listen, pool, node, workers, timer, storeNotice, () -> { });
+    public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer,
+                         Supplier<Future<Void>> storeNotice) {
+        this(vertx, listen, pool, node, workers, timer, storeNotice, Future::succeededFuture);
     }
 
     /**
-     * As the constructor above, and {@code configNotice} run on each notification on {@value #CONFIG_CHANNEL} and after every
+     * As the constructor above, and {@code configNotice} called on each notification on {@value #CONFIG_CHANNEL} and after every
      * {@code LISTEN} acknowledged, the first included: a change of the configuration missed while nobody listened costs one read.
+     * It answers its read, which completes once the read ended.
      */
-    public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer, Runnable storeNotice,
-                         Runnable configNotice) {
+    public PgWorkSignals(Vertx vertx, PgConnectOptions listen, Pool pool, String node, Workers workers, Timer timer,
+                         Supplier<Future<Void>> storeNotice, Supplier<Future<Void>> configNotice) {
         this.storeNotice = Objects.requireNonNull(storeNotice, "storeNotice");
         this.configNotice = Objects.requireNonNull(configNotice, "configNotice");
         this.vertx = Objects.requireNonNull(vertx, "vertx");
@@ -101,12 +106,14 @@ public final class PgWorkSignals implements WorkSignals {
         this.events = new WorkEvents(node, workers, timer, this::send);
     }
 
-    /** Opens the dedicated connection and listens; completes once the {@code LISTEN} is acknowledged, fails when it could not be. */
+    /**
+     * Opens the dedicated connection and listens; completes once the {@code LISTEN} is acknowledged and the store's look and the
+     * configuration's read it started have ended, a failed one included (each reports its own failure); fails when the
+     * {@code LISTEN} could not be acknowledged. A start-up statement the caller sends after this does not meet those two in the
+     * pool's queue.
+     */
     public Future<Void> start() {
-        return open().map(conn -> {
-            listening(conn);
-            return null;
-        });
+        return open().compose(this::listening);
     }
 
     /**
@@ -134,9 +141,13 @@ public final class PgWorkSignals implements WorkSignals {
     private Future<PgConnection> open() {
         return PgConnection.connect(vertx, listen).compose(conn -> {
             conn.notificationHandler(n -> {
-                if (STORE_CHANNEL.equals(n.getChannel())) storeNotice.run();
-                else if (CONFIG_CHANNEL.equals(n.getChannel())) configNotice.run();
-                else received(n.getPayload());
+                if (STORE_CHANNEL.equals(n.getChannel())) {
+                    var _ = storeNotice.get();   // the look reports its own failure
+                } else if (CONFIG_CHANNEL.equals(n.getChannel())) {
+                    var _ = configNotice.get();   // the read reports its own failure
+                } else {
+                    received(n.getPayload());
+                }
             });
             return conn.query(LISTEN).execute().transform(ack -> ack.succeeded() ? Future.succeededFuture(conn)
                     : conn.close().transform(gone -> Future.failedFuture(ack.cause())));
@@ -144,10 +155,12 @@ public final class PgWorkSignals implements WorkSignals {
     }
 
     /**
-     * {@code conn}'s LISTEN was acknowledged: its loss reconnects from now on and every worker is woken once — unless this was closed
-     * meanwhile, then it is closed. The close handler is set in the task that saw the acknowledgement: no close lands in between.
+     * {@code conn}'s LISTEN was acknowledged: its loss reconnects from now on, every worker is woken once, and the store looks and
+     * the configuration is read once — unless this was closed meanwhile, then it is closed. Completes once that look and that read
+     * have ended, whatever their outcome; at once when this was closed. The close handler is set in the task that saw the
+     * acknowledgement: no close lands in between.
      */
-    private void listening(PgConnection conn) {
+    private Future<Void> listening(PgConnection conn) {
         boolean late;
         synchronized (lock) {
             late = closed;
@@ -158,12 +171,13 @@ public final class PgWorkSignals implements WorkSignals {
         }
         if (late) {
             conn.close();
-            return;
+            return Future.succeededFuture();
         }
         conn.closeHandler(gone -> lost());
         workers.wakeAll();   // what was announced while nobody listened
-        storeNotice.run();   // what the store was told while nobody listened
-        configNotice.run();   // what the configuration's writers told while nobody listened
+        Future<Void> looked = storeNotice.get();   // what the store was told while nobody listened
+        Future<Void> read = configNotice.get();   // what the configuration's writers told while nobody listened
+        return Future.join(looked, read).transform(ended -> Future.succeededFuture());
     }
 
     /** The dedicated connection closed: a reconnect armed, unless this is closed (its own close). */

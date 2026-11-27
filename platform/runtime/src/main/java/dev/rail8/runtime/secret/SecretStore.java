@@ -607,9 +607,12 @@ public final class SecretStore {
 
     // ---------------------------------------------------------------------------------------------------------------- refresh
 
-    /** A change may have happened: a notice on {@value #CHANNEL}, or a {@code LISTEN} acknowledged. The node looks. */
-    public void notice() {
-        look();
+    /**
+     * A change may have happened: a notice on {@value #CHANNEL}, or a {@code LISTEN} acknowledged. The node looks; completes once
+     * a look that started after this call has ended, and fails when that look failed.
+     */
+    public Future<Void> notice() {
+        return look();
     }
 
     /**
