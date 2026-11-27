@@ -32,6 +32,14 @@ const NESTED: Seed = {
   ],
 };
 
+/** The demo package's files as examples/demo holds them, by their paths within the package. */
+const DEMO_FILES: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob<string>('../../../examples/demo/**/*', { query: '?raw', import: 'default', eager: true })).map(([path, text]) => [path.slice('../../../examples/demo/'.length), text]),
+);
+
+/** The demo package, with a note that no artifact names. */
+const DEMO: Seed = { clones: [{ folder: 'demo', manifest: null, files: { ...DEMO_FILES, 'docs/notes.md': 'nobody names me\n' } }] };
+
 /** A New action as a module gives one: a button that names the folder it writes into and the folder within it it starts in. */
 const newOf = (word: string) =>
   function New({ folder, within, onCreated }: NewArtifactProps) {
@@ -112,7 +120,7 @@ describe('the artifacts of a package', () => {
     render(NESTED);
     await openArtifacts('orders');
     await expect.element(page.getByRole('heading', { level: 2, name: 'Artifacts' })).toBeVisible();
-    await expect.poll(names).toEqual(['billingurn:acme:billing', '  inbound', '    invoice', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'package.yaml']);
+    await expect.poll(names).toEqual(['billingurn:acme:billing', '  inbound', '    invoice', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'first.txt', 'package.yaml']);
     await expect.element(row('billing').getByLabelText('Namespace urn:acme:billing')).toBeVisible();
     await expect.element(row('invoice')).toMatchTextContent(/Flow/);
     await expect.element(tree().getByRole('row').filter({ hasText: 'orders-test' })).toMatchTextContent(/Test/);
@@ -159,15 +167,15 @@ describe('the artifacts of a package', () => {
     render(NESTED);
     await openArtifacts('orders');
     await row('billing').getByRole('button', { name: /expand|collapse/i }).click();
-    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'package.yaml']);
+    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'first.txt', 'package.yaml']);
     await page.getByRole('tab', { name: /^Changes/ }).click();
     await page.getByRole('tab', { name: /^Artifacts \(\d+\)$/ }).click();
-    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'package.yaml']);
+    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', '  in', 'flows', '  orders', 'tests', '  orders-test', 'first.txt', 'package.yaml']);
 
     await button('Collapse all').click();
-    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', 'flows', 'tests', 'package.yaml']);
+    await expect.poll(names).toEqual(['billingurn:acme:billing', 'endpoints', 'flows', 'tests', 'first.txt', 'package.yaml']);
     await button('Expand all').click();
-    await expect.poll(names).toHaveLength(10);
+    await expect.poll(names).toHaveLength(11);
   });
 
   test('New folder… makes a folder with its namespace in the chosen folder, which the tree then shows chosen and open', async () => {
@@ -224,6 +232,23 @@ describe('the artifacts of a package', () => {
     await expect.element(row('billing')).toBeVisible();
     expect(page.getByRole('button', { name: /^New |^Edit folder/ }).elements()).toHaveLength(0);
     expect(page.getByRole('columnheader', { name: 'Action' }).elements()).toHaveLength(0);
+  });
+});
+
+describe('the artifacts of the demo package', () => {
+  test('are every file of it in its folder: the files of its systems, the structures its mapping reads, and a file that nothing names', async () => {
+    expect(Object.keys(DEMO_FILES)).toContain('systems/acme-erp.yaml');
+    render(DEMO);
+    await openArtifacts('demo');
+    await expect.poll(names).toEqual(expect.arrayContaining(['systems', '  acme-erp.yaml', '  billing.yaml', '  globex-erp.yaml']));
+    const shown = names();
+    expect(shown.slice(shown.indexOf('systems'), shown.indexOf('systems') + 4)).toEqual(['systems', '  acme-erp.yaml', '  billing.yaml', '  globex-erp.yaml']);
+    const structures = shown.indexOf('  structures');
+    expect(shown.slice(structures, structures + 4)).toEqual(['  structures', '    greeting', '      greeting.xsd', '      person.schema.json']);
+    const line = (name: string) => tree().getByRole('row').filter({ has: page.getByText(name, { exact: true }) });
+    await expect.element(line('acme-erp.yaml')).toMatchTextContent(/^acme-erp\.yamlFile-/);
+    await expect.element(line('person.schema.json')).toMatchTextContent(/greeting\/mappings\/greeting\.mapping\.json/);
+    await expect.element(line('notes.md')).toMatchTextContent(/^notes\.mdFile-/);
   });
 });
 

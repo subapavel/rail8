@@ -42,6 +42,7 @@ describe.each<[string, Build]>([
 
     expect(state).toMatchObject({ repository: 'orders', package: { name: 'orders', version: '1.0.0' }, branch: 'main', changed: 0, changes: [], truncated: false });
     expect(state.artifacts).toEqual([
+      { path: 'orders/first.txt', kind: 'file' },
       { path: 'orders/flows/orders.yaml', kind: 'flow', id: 'orders' },
       { path: 'orders/package.yaml', kind: 'package' },
     ]);
@@ -138,7 +139,9 @@ describe.each<[string, Build]>([
             'fixtures/order.json': '{"id": 1}\n',
             'fixtures/logo.png': 'PNG\0\u0001\u0002',
             'endpoints/in.yaml': ENDPOINT('in'),
-            'mappings/order.mapping.json': '{}\n',
+            'mappings/order.mapping.json': '{"source": {"bundle": ["../structures/order.xsd"]}}\n',
+            'structures/order.xsd': '<xs:schema/>\n',
+            'systems/acme-erp.yaml': 'schemaVersion: 1\nkind: system\npartner: acme\nname: erp\n',
             'notes.md': 'nobody names me\n',
             '.hidden/flow.yaml': FLOW,
           },
@@ -148,12 +151,17 @@ describe.each<[string, Build]>([
     };
     const atCommit = [
       { path: 'orders/endpoints/in.yaml', kind: 'endpoint', id: 'in' },
+      { path: 'orders/first.txt', kind: 'file' },
+      { path: 'orders/fixtures/logo.png', kind: 'file' },
       { path: 'orders/fixtures/order.json', kind: 'file', usedBy: ['orders/flows/orders.test.yaml'] },
       { path: 'orders/flows/orders.test.yaml', kind: 'test' },
       { path: 'orders/flows/orders.xsl', kind: 'file', usedBy: ['orders/flows/orders.yaml'] },
       { path: 'orders/flows/orders.yaml', kind: 'flow', id: 'orders' },
       { path: 'orders/mappings/order.mapping.json', kind: 'mapping', id: 'order' },
+      { path: 'orders/notes.md', kind: 'file' },
       { path: 'orders/package.yaml', kind: 'package' },
+      { path: 'orders/structures/order.xsd', kind: 'file', usedBy: ['orders/mappings/order.mapping.json'] },
+      { path: 'orders/systems/acme-erp.yaml', kind: 'file' },
     ];
 
     test('at a commit', async () => {
@@ -175,11 +183,12 @@ describe.each<[string, Build]>([
         artifacts: [
           atCommit[0],
           { path: 'orders/endpoints/out.yaml', kind: 'endpoint', id: 'out', change: 'added' },
+          atCommit[1],
           atCommit[2],
-          atCommit[3],
-          { ...atCommit[4], change: 'modified' },
+          atCommit[4],
           atCommit[5],
-          atCommit[6],
+          { ...atCommit[6], change: 'modified' },
+          ...atCommit.slice(7),
         ],
         truncated: false,
       });
@@ -189,6 +198,18 @@ describe.each<[string, Build]>([
       expect(read.etag).not.toBe((await api.file('orders', id('orders', 'first'), 'orders/flows/orders.yaml')).etag);
       expect((await refusalOf(api.file('orders', 'work', 'orders/fixtures/order.json'))).status).toBe(404);
     });
+  });
+
+  test('at most 1000 files read for their kind and 1000 other files are listed, on disk and at a commit, and the list says it was cut', async () => {
+    const files = Object.fromEntries(Array.from({ length: 1001 }, (_, n) => [`fixtures/${String(n).padStart(4, '0')}.txt`, `${n}\n`]));
+    const { api, id } = await open({ clones: [{ folder: 'orders', files: { ...files, 'flows/orders.yaml': FLOW } }] });
+
+    for (const listed of [await api.artifacts('orders', 'work'), await api.artifacts('orders', id('orders', 'first'))]) {
+      expect(listed.truncated).toBe(true);
+      expect(listed.artifacts.filter((a) => a.kind === 'file')).toHaveLength(1000);
+      expect(listed.artifacts.filter((a) => a.kind !== 'file').map((a) => a.path)).toEqual(['orders/flows/orders.yaml', 'orders/package.yaml']);
+    }
+    expect((await api.get('orders')).truncated).toBe(true);
   });
 
   test('a change over the read limit is listed as large, and its file is not read', async () => {

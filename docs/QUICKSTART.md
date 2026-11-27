@@ -94,7 +94,7 @@ its path, and Ctrl+B (⌘B) folds the menu to its icons.
 The UI has **Messages**, the list of the messages the node recorded, and **Packages**, each package of `RAIL8_WORKSPACE`
 with its branch, last commit, changed files and what the node runs of it, each opening a tab of its changes,
 artifacts and history. A package's **Artifacts** tab is one tree of its folders, each holding its flows, endpoints,
-mappings and tests and the files they use, and a folder whose `folder.yaml` gives a namespace shows it beside its name.
+mappings and tests and every other file, with the artifacts that use it, and a folder whose `folder.yaml` gives a namespace shows it beside its name.
 A flow opens in its picture, an endpoint in its settings form, a mapping in the mapping studio. Above the tree, the kind
 buttons and the filter box show only the flows, say, or what a name, a path or a namespace holds. Choosing a folder's
 name chooses it: **New folder…**, **New flow** and **New mapping** in the card's corner then write into that folder, and

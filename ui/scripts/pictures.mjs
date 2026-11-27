@@ -66,6 +66,11 @@ const tree = (page) => shown(page).getByRole('table', { name: 'Artifacts' });
 const artifact = (name) => (page) => tree(page).getByRole('button', { name, exact: true }).click();
 /** Shows only the artifacts of the kind `kind`, as its button above the tree names it, such as Flows. */
 const only = (kind) => (page) => shown(page).getByRole('radiogroup').getByText(new RegExp(`^${kind} \\d+$`)).click();
+/** Closes the folder `name` of the tree of the shown tab. */
+const fold = (name) => (page) =>
+  tree(page).getByRole('row').filter({ has: page.getByRole('button', { name, exact: true }) }).getByRole('button', { name: /collapse/i }).click();
+/** Scrolls the shown tab until the row of the tree named `name` is in view. */
+const scrollTo = (name) => (page) => tree(page).getByText(name, { exact: true }).scrollIntoViewIfNeeded();
 /** Opens the folder `name`, which is no package, from its row on the Packages screen. */
 const folder = (name) => (page) => shown(page).getByRole('table', { name: 'Folders that are no package' }).getByRole('button', { name, exact: true }).click();
 /** Opens Quick open with Ctrl+K and types `text` into it. */
@@ -181,6 +186,8 @@ const SCENES = {
   folder: [menu('Packages'), folder('mappings')],
   'folder-new-mapping': [menu('Packages'), folder('mappings'), press('New mapping')],
   'package-new-flow': [menu('Packages'), pkg('orders'), tab('Artifacts'), artifact('credit-notes'), press('New flow'), fill('Id', 'returns')],
+  'package-demo-artifacts': [menu('Packages'), pkg('demo'), tab('Artifacts'), fold('endpoints'), fold('fixtures'), fold('flows'), scrollTo('globex-erp.yaml')],
+  'package-demo-files': [menu('Packages'), pkg('demo'), tab('Artifacts'), only('Files'), scrollTo('globex-erp.yaml')],
   'package-artifacts-filtered': [menu('Packages'), pkg('orders'), tab('Artifacts'), only('Flows'), fill('Filter by name, path or namespace', 'billing')],
   'package-folder-namespace': [menu('Packages'), pkg('orders'), tab('Artifacts'), press('Edit folder billing/credit-notes…'), fill('Namespace', 'urn:acme:orders:billing:credit-notes')],
   'canvas-de': [...studio, tab('Definition'), target('OrderId'), speak('Deutsch')],

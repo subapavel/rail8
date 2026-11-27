@@ -506,13 +506,17 @@ async function workChanges(folder: FakeFolder, compared: readonly Compared[], en
   );
 }
 
-/** The artifacts of `folder` among `files`, the files of a revision, each with its status in `changes`. */
+/**
+ * The artifacts of `folder` among `files`, the files of a revision, at most {@link MAX_LISTED} of those read for their
+ * kind and as many others, each with its status in `changes`.
+ */
 function artifactsIn(folder: FakeFolder, files: Record<string, string>, changes: readonly Change[]): Promise<{ artifacts: Artifact[]; truncated: boolean }> {
   const seen = sorted(Object.keys(files)).filter(walked);
   const typed = seen.filter((p) => readForKind(p.slice(p.lastIndexOf('/') + 1)));
-  const found = typed.slice(0, MAX_LISTED).map((inside) => ({ inside, text: sizeOf(files[inside]!) > READ_LIMIT ? null : files[inside]! }));
-  const present = async (insides: string[]) => new Set(insides.filter((p) => seen.includes(p)));
-  return artifactsOf(folder.name, found, present, new Map(changes.map((c) => [c.path, c.status]))).then((artifacts) => ({ artifacts, truncated: typed.length > MAX_LISTED }));
+  const others = seen.filter((p) => !readForKind(p.slice(p.lastIndexOf('/') + 1)));
+  const found = [...typed.slice(0, MAX_LISTED), ...others.slice(0, MAX_LISTED)].map((inside) => ({ inside, text: kindText(inside, files[inside]) }));
+  const truncated = typed.length > MAX_LISTED || others.length > MAX_LISTED;
+  return Promise.resolve({ artifacts: artifactsOf(folder.name, found, new Map(changes.map((c) => [c.path, c.status]))), truncated });
 }
 
 /**
@@ -744,7 +748,7 @@ export function fakePackagesApi(state: FakeState, lock: FakeLock = fakeLock()): 
       const folder = packageOf(repository);
       revisionIn(folder, rev, 'rev');
       if (rev !== 'work') return artifactsIn(folder, filesOf(folder, rev), []);
-      return { artifacts: (await stateOf(folder)).artifacts, truncated: false };
+      return artifactsIn(folder, folder.disk, (await stateOf(folder)).changes);
     },
     async log(repository, page = {}) {
       const folder = packageOf(repository);

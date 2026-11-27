@@ -13,8 +13,8 @@ export type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 /**
  * One artifact of a package at a revision: its path relative to the working folder, with `/`, as the editors' routes
  * name it; its kind; its id when the file gives one; how it changed since the last commit, for the files on disk; for
- * a file of the kind `file`, the paths of the artifacts that name its path from the package's root; and for a
- * `folder.yaml`, the namespace and the description it gives its folder.
+ * a file of the kind `file`, the paths of the artifacts that name its path, when any does; and for a `folder.yaml`, the
+ * namespace and the description it gives its folder.
  */
 export interface Artifact {
   path: string;

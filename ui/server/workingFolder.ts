@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { refusalBody, type RefusalValues } from './refusal.ts';
 
-/** At most this many files of the kind a walk looks for are looked at, this deep, and none longer than this is read. */
+/** At most this many files of the kinds a walk looks for are looked at, this deep, and none longer than this is read. */
 export const MAX_FILES = 1000;
 const MAX_DEPTH = 16;
 const READ_BATCH_SIZE = 8;
@@ -94,15 +94,23 @@ export interface FoundFile {
 
 /**
  * The files under `root` whose name `takes`, in path order, read as text; the paths of those over
- * {@link MAX_FILE_BYTES}, which are not read, in path order too; and whether the walk stopped at {@link MAX_FILES} of
- * them. Hidden folders and files, `node_modules`, `target`, symbolic links and folders more than 16 deep are passed
- * over.
+ * {@link MAX_FILE_BYTES}, which are not read, in path order too; with `others`, the paths of every other file, not read,
+ * in path order; and whether the walk left files out. It stops at {@link MAX_FILES} files it takes, and lists at most
+ * {@link MAX_FILES} other files besides. Hidden folders and files, `node_modules`, `target`, symbolic links and folders
+ * more than 16 deep are passed over.
  */
-export async function walk(root: string, takes: (name: string) => boolean, signal?: AbortSignal): Promise<{ files: FoundFile[]; large: string[]; truncated: boolean }> {
+export async function walk(
+  root: string,
+  takes: (name: string) => boolean,
+  signal?: AbortSignal,
+  others = false,
+): Promise<{ files: FoundFile[]; large: string[]; listed: string[]; truncated: boolean }> {
   const files: FoundFile[] = [];
   const large: string[] = [];
+  const listed: string[] = [];
   const paths: string[] = [];
   let truncated = false;
+  let cut = false;
   const ignoreVanished = (error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
   };
@@ -123,6 +131,9 @@ export async function walk(root: string, takes: (name: string) => boolean, signa
           break;
         }
         paths.push(full);
+      } else if (entry.isFile() && others) {
+        if (listed.length === MAX_FILES) cut = true;
+        else listed.push(relative(root, full).split(sep).join('/'));
       }
     }
   };
@@ -140,7 +151,8 @@ export async function walk(root: string, takes: (name: string) => boolean, signa
   }
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   large.sort();
-  return { files, large, truncated };
+  listed.sort();
+  return { files, large, listed, truncated: truncated || cut };
 }
 
 /** The ETag of a file's bytes. */
