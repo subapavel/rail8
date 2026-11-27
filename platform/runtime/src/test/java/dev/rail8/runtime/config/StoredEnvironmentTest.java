@@ -224,28 +224,41 @@ class StoredEnvironmentTest {
     @Test
     void aGenerationIsReportedHeldOnlyOnceEveryListenerTookItAndAFailedListenerIsCalledAgainAtEachTick() {
         List<Long> took = new CopyOnWriteArrayList<>();
-        AtomicInteger failing = new AtomicInteger();
+        AtomicInteger refusals = new AtomicInteger();
         env.onActivation(s -> took.add(s.generation()));
         env.onActivation(s -> {
-            if (s.generation() == 2 && failing.getAndIncrement() < 2) throw new IllegalStateException("the index cannot be built yet");
+            if (refusals.getAndUpdate(n -> Math.max(0, n - 1)) > 0) throw new IllegalStateException("the index cannot be built yet");
             took.add(-s.generation());
         });
         store.put(connection(API, 11, web("https://acme.example"), Optional.empty()));
         env.start();
-        assertEquals(1L, store.reports.getLast().get(2), "every listener took generation 1");
+        List<Object> first = List.of("node-a", 3L, store.generation, store.stamp, ConfigStore.Refused.none());
+        assertEquals(first, store.reports.getLast(), "every listener took the first generation");
 
+        refusals.set(3);
         store.put(connection(API, 12, web("https://acme.example/v2"), Optional.empty()));
         await(env.notice());
-        assertEquals(1L, store.reports.getLast().get(2), "a listener did not take generation 2: the node reports the generation all took");
+        assertEquals(first, store.reports.getLast(), "a listener did not take the second generation: the node reports the one all took");
         assertEquals(1, warnings.stream().filter(w -> w.contains("did not take")).count(), warnings.toString());
         assertEquals(12, env.current().connection("acme/api").orElseThrow().version(), "the snapshot itself is swapped");
 
         tick();
-        assertEquals(1L, store.reports.getLast().get(2), "it failed again at the tick");
+        assertEquals(first, store.reports.getLast(), "it failed again at the tick");
+        assertEquals(1, warnings.stream().filter(w -> w.contains("did not take")).count(), "a call again is no new warning");
+
+        store.put(connection(MOCKED, 13, new JsonObject().put("adapter", "web").put("values", new JsonObject())
+                .put("mock", new JsonObject().put("reply", "empty")), Optional.empty()));
+        await(env.notice());
+        assertEquals(first, store.reports.getLast(), "a third generation came while the listener was untaken, and it refused that too");
+        assertEquals(2, warnings.stream().filter(w -> w.contains("did not take")).count(), "one warning for the new generation");
+
         tick();
-        assertEquals(2L, store.reports.getLast().get(2), "it took the generation at the next tick, and the report says so");
-        assertEquals(List.of(1L, -1L, 2L, -2L), took, "the listener that took it is not called again; the one that failed is, until it takes it");
-        assertEquals(1, warnings.stream().filter(w -> w.contains("did not take")).count(), "one warning for a generation, not one each tick");
+        assertEquals(List.of("node-a", 3L, store.generation, store.stamp, new ConfigStore.Refused(List.of(MOCKED), 1)), store.reports.getLast(),
+                "every listener took the third generation: the report carries its generation, its stamp and what it left out");
+        long g = store.generation;
+        assertEquals(List.of(g - 2, -(g - 2), g - 1, g, -g), took,
+                "every listener is given a new generation; the one that failed is called again until it takes it");
+        assertEquals(2, warnings.stream().filter(w -> w.contains("did not take")).count(), warnings.toString());
     }
 
     @Test

@@ -81,8 +81,6 @@ public final class StoredEnvironment implements Environment {
     private Snapshot taken = Snapshot.empty();
     private long takenGeneration = ConfigStore.Held.nothing().generation();
     private long takenStamp = ConfigStore.Held.nothing().stamp();
-    /** The generation the untaken listeners were last given. */
-    private long takenAttempt = ConfigStore.Held.nothing().generation();
 
     private Promise<Void> queued;
     private boolean reading;
@@ -248,7 +246,7 @@ public final class StoredEnvironment implements Environment {
             }
             swap(state);
         } else if (!untaken.isEmpty()) {
-            tell(untaken);
+            tell(untaken, false);
         }
         report();
     }
@@ -276,16 +274,16 @@ public final class StoredEnvironment implements Environment {
         unverified = state.refused().count();
         warnUnverified(state);
         held = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, leftOut, count);
-        tell(List.copyOf(listeners));
+        tell(List.copyOf(listeners), true);
     }
 
     /**
-     * Gives {@link #held} to each of {@code those}, in order; those that throw stay untaken, with one WARNING for the generation.
-     * Once none is left, {@link #held} is what the node reports it holds.
+     * Gives {@link #held} to each of {@code those}, in order; those that throw stay untaken. A snapshot just swapped in
+     * ({@code swapped}) that a listener did not take is a WARNING; calling them again with it is not. Once none is left,
+     * {@link #held} is what the node reports it holds.
      */
-    private void tell(List<Consumer<Snapshot>> those) {
+    private void tell(List<Consumer<Snapshot>> those, boolean swapped) {
         Snapshot now = held;
-        boolean again = !untaken.isEmpty() && now.generation() == takenAttempt;
         List<Consumer<Snapshot>> failed = new ArrayList<>();
         RuntimeException first = null;
         for (Consumer<Snapshot> listener : those) {
@@ -297,8 +295,7 @@ public final class StoredEnvironment implements Environment {
             }
         }
         untaken = List.copyOf(failed);
-        takenAttempt = now.generation();
-        if (first != null && !again) {
+        if (first != null && swapped) {
             warn.accept(failed.size() + " listeners of the configuration did not take generation " + now.generation() + " ("
                     + first.getClass().getName() + "): this node reports generation " + takenGeneration + " as held and calls them again at each read");
         }
