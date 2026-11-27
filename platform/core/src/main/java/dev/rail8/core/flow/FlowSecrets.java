@@ -54,7 +54,8 @@ public final class FlowSecrets {
     static final long EARLIER_BYTES = 256 * 1024;
 
     private static final String SCHEME = "secret://";
-    private static final Set<Secret.Kind> EVERY_KIND = Collections.unmodifiableSet(EnumSet.allOf(Secret.Kind.class));
+    /** Every kind a step or an endpoint takes: all but {@link Secret.Kind#VERIFIER}, which only a credential of the environment names. */
+    private static final Set<Secret.Kind> EVERY_KIND = Collections.unmodifiableSet(EnumSet.complementOf(EnumSet.of(Secret.Kind.VERIFIER)));
 
     private final SecretSource source;
     /** The plain values the flow's endpoints hold, by reference. */
@@ -147,6 +148,9 @@ public final class FlowSecrets {
         Objects.requireNonNull(kinds, "kinds");
         if (built) throw new IllegalStateException(step + ": '" + key + "': a secret is taken while the flow builds, in StepFactory.create");
         if (kinds.length == 0) throw new IllegalArgumentException(step + ": '" + key + "': no kind of secret is asked for");
+        if (Arrays.asList(kinds).contains(Secret.Kind.VERIFIER)) {
+            throw new IllegalArgumentException(step + ": '" + key + "': no step takes a verifier: only a credential of the environment names one");
+        }
         String reference = step.requireString(key);
         if (!reference.startsWith(SCHEME)) {
             throw new IllegalArgumentException(step + ": '" + key + "' must name a secret, secret://<name>; its value is not shown");
@@ -188,6 +192,7 @@ public final class FlowSecrets {
             case VALUE -> Secret.of(reference, () -> handle.read(inner::value));
             case CREDENTIALS -> Secret.credentials(reference, () -> handle.read(inner::credentials));
             case KEY_PAIR -> Secret.keyPair(reference, () -> handle.read(inner::keyPair));
+            case VERIFIER -> throw new IllegalStateException("no handle is a verifier: only a credential of the environment names one");
         };
     }
 
@@ -232,6 +237,7 @@ public final class FlowSecrets {
                     case VALUE -> inner.value();
                     case CREDENTIALS -> inner.credentials();
                     case KEY_PAIR -> inner.keyPair();
+                    case VERIFIER -> throw new IllegalStateException("no handle is a verifier: only a credential of the environment names one");
                 };
                 saw(value);
                 return value;

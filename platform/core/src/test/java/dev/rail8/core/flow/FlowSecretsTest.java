@@ -37,6 +37,7 @@ class FlowSecretsTest {
             case VALUE -> Secret.of(reference, () -> (String) store.get(reference));
             case CREDENTIALS -> Secret.credentials(reference, () -> (Secret.Credentials) store.get(reference));
             case KEY_PAIR -> Secret.keyPair(reference, () -> (Secret.KeyPair) store.get(reference));
+            case VERIFIER -> throw new IllegalStateException("this store holds no verifier");
         };
     };
 

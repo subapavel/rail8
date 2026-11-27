@@ -132,7 +132,8 @@ public final class Field {
      * {@link Secret.Kind#VALUE}, a plain value written in place. The handle the adapter gets has the kind of the secret the
      * reference names when the flow is built.
      *
-     * @throws IllegalArgumentException naming the field when {@code kinds} is empty or names a kind twice
+     * @throws IllegalArgumentException naming the field when {@code kinds} is empty, names a kind twice or names
+     *                                  {@link Secret.Kind#VERIFIER}, which no field takes
      * @since 0.4
      */
     public static Field secret(String name, String label, String help, Secret.Kind... kinds) {
@@ -141,6 +142,9 @@ public final class Field {
         for (Secret.Kind k : kinds) {
             if (!taken.add(Objects.requireNonNull(k, "kind"))) {
                 throw new IllegalArgumentException("field '" + name + "': the kind " + k.id() + " is named twice");
+            }
+            if (k == Secret.Kind.VERIFIER) {
+                throw new IllegalArgumentException("field '" + name + "': no field takes a verifier: only a credential of the environment names one");
             }
         }
         if (taken.isEmpty()) throw new IllegalArgumentException("field '" + name + "': a secret field takes at least one kind");

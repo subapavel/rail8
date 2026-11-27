@@ -38,6 +38,14 @@ class FieldKindsTest {
     }
 
     @Test
+    void noFieldTakesAVerifier() {
+        assertEquals("field 'password': no field takes a verifier: only a credential of the environment names one",
+                assertThrows(IllegalArgumentException.class,
+                        () -> Field.secret("password", "Password", "The password.", Secret.Kind.CREDENTIALS, Secret.Kind.VERIFIER)).getMessage());
+        assertEquals("verifier", Secret.Kind.VERIFIER.id());
+    }
+
+    @Test
     void aFieldWithoutAPlainValueTakesOnlyAReference() {
         Settings s = Settings.of(Field.secret("key", "Key", "The key pair.", Secret.Kind.KEY_PAIR, Secret.Kind.CREDENTIALS).required());
         assertEquals(List.of(new Settings.Problem("/key", Settings.Problem.TYPE,

@@ -18,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -25,6 +26,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -42,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.IntFunction;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -114,6 +117,11 @@ public final class SecretStore {
     static final String ENVIRONMENT = "environment";
     private static final byte[] BIND_INFO = "rail8 settings v1 bind".getBytes(StandardCharsets.US_ASCII);
     private static final HexFormat HEX = HexFormat.of();
+    /** The kind whose value the store makes. */
+    private static final String VERIFIER = "verifier";
+    /** The most draws of an id for one generated value. */
+    private static final int MAX_DRAWS = 16;
+    private static final SecureRandom RANDOM = new SecureRandom();
     private static final System.Logger LOG = System.getLogger(SecretStore.class.getName());
 
     /** What a read of a stored secret gives: its kind, the id of the key it is under, and its value, null when unreadable. */
@@ -202,6 +210,7 @@ public final class SecretStore {
     private volatile boolean maintainFailed;
 
     private final Object lock = new Object();
+    private volatile IntFunction<byte[]> random = SecretStore::secureBytes;
     private boolean looking;               // guarded by lock: a look runs
     private Promise<Void> queued;          // guarded by lock: the look that runs after it, null: none
     private Timer.Cancellable tick;        // guarded by lock
@@ -792,21 +801,25 @@ public final class SecretStore {
     // ---------------------------------------------------------------------------------------------------------------- writes
 
     /**
-     * Creates the secret of {@code body}: {@code {name, kind:"value", value}}, {@code {name, kind:"credentials", user, password}}
-     * or {@code {name, kind:"key-pair", privateKey, certificates}}. Answers its entry of the list.
+     * Creates the secret of {@code body}: {@code {name, kind:"value", value}}, {@code {name, kind:"credentials", user, password}},
+     * {@code {name, kind:"key-pair", privateKey, certificates}} or {@code {name, kind:"verifier", form:"generated"}}. Answers its
+     * entry of the list; for a verifier, with the value it verifies as {@code value}, which nothing else ever answers. When the
+     * write is in force but this node cannot read it back (503 {@code written-unread}) that value is not answered: an overwrite
+     * generates another.
      *
      * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code exists}, {@code kind-in-use}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> create(Actor who, JsonObject body) {
         String name;
-        SecretValue value;
+        Made made;
         try {
             name = writable(body.getValue("name"));
-            value = value(name, body);
+            made = made(name, body);
         } catch (SecretRefused refused) {
             return Future.failedFuture(refused);
         }
+        SecretValue value = made.value();
         StoreKey k = key;
         return rows.<SecretRows.Head>write(List.of(name), tx -> keyCheck(tx, k).compose(v -> tx.rows()).compose(all -> {
             if (all.stream().anyMatch(m -> m.name().equals(name))) {
@@ -826,23 +839,25 @@ public final class SecretStore {
                 return full(all, null, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                         sealed.keyId(), sealed.nonce(), sealed.sealed().length, now, now, who.name()), sealed.sealed())));
             }).compose(v -> audit(tx, who, "secret.create", name, detail(value))).compose(v -> tx.changed());
-        })).compose(v -> readBack(name));
+        })).compose(v -> readBack(name)).map(made::answer);
     }
 
     /**
-     * Overwrites {@code name} with the value of {@code body}, of its kind; the last writer wins. Answers its entry of the list.
+     * Overwrites {@code name} with the value of {@code body}, of its kind; the last writer wins. Answers its entry of the list;
+     * for a verifier, with a new generated value under a new id, as {@link #create} does.
      *
      * @return fails with a {@link SecretRefused}: {@code invalid}, {@code reserved}, {@code keys-differ},
      *         {@code no-secret}, {@code kind-differs}, {@code store-full}, {@code unaudited}
      */
     public Future<JsonObject> overwrite(Actor who, String name, JsonObject body) {
-        SecretValue value;
+        Made made;
         try {
             writable(name);
-            value = value(name, body);
+            made = made(name, body);
         } catch (SecretRefused refused) {
             return Future.failedFuture(refused);
         }
+        SecretValue value = made.value();
         StoreKey k = key;
         return rows.<SecretRows.Head>write(List.of(), tx -> keyCheck(tx, k).compose(v -> tx.rows()).compose(all -> {
             SecretRows.Meta old = all.stream().filter(m -> m.name().equals(name)).findFirst().orElse(null);
@@ -856,7 +871,65 @@ public final class SecretStore {
             return full(all, old, sealed).compose(v -> tx.upsert(new SecretRows.Stored(new SecretRows.Meta(name, value.kind(), Seal.FORMAT,
                     sealed.keyId(), sealed.nonce(), sealed.sealed().length, old.createdAt(), clock.instant(), who.name()), sealed.sealed())))
                     .compose(v -> audit(tx, who, "secret.overwrite", name, detail(value))).compose(v -> tx.changed());
-        })).compose(v -> readBack(name));
+        })).compose(v -> readBack(name)).map(made::answer);
+    }
+
+    /**
+     * A value to write, and the generated value a verifier verifies, which the write's answer carries once; null for any other
+     * kind.
+     */
+    private record Made(SecretValue value, String generated) {
+        JsonObject answer(JsonObject entry) {
+            return generated == null ? entry : entry.put("value", generated);
+        }
+
+        @Override public String toString() { return "Made[" + value + "]"; }
+    }
+
+    /** The value of {@code body} for {@code name}; for a verifier, a value generated now. */
+    private Made made(String name, JsonObject body) throws SecretRefused {
+        if (!VERIFIER.equals(body.getValue("kind"))) {
+            if (body.containsKey("form")) throw SecretRefused.invalid("form", "only a verifier takes a form");
+            return new Made(value(name, body), null);
+        }
+        Object form = body.getValue("form");
+        if ("password".equals(form) || "key".equals(form)) {
+            throw SecretRefused.invalid("form", "the form " + form + " is not built yet: give the form generated");
+        }
+        if (!Verifier.GENERATED.equals(form)) throw SecretRefused.invalid("form", "give the form of the verifier: generated");
+        for (String field : body.fieldNames()) {
+            if (!Set.of("name", "kind", "form").contains(field)) {
+                throw SecretRefused.invalid(field, "a generated verifier takes no value: the store makes it");
+            }
+        }
+        String generated = generate();
+        return new Made(new SecretValue.Verifies(Verifier.of(generated)), generated);
+    }
+
+    /**
+     * A new value of the generated form, {@code rail8c_<id>_<secret>}: an id of 8 random bytes in hex that no verifier this node
+     * holds has, drawn again while one does, and a secret of 32 random bytes in base64url without padding.
+     */
+    private String generate() {
+        Set<String> held = new HashSet<>();
+        for (Opened o : state.held().values()) if (o.value() instanceof SecretValue.Verifies v) held.add(v.verifier().id());
+        IntFunction<byte[]> draw = random;
+        for (int attempt = 0; attempt < MAX_DRAWS; attempt++) {
+            String id = HEX.formatHex(draw.apply(8));
+            if (!held.contains(id)) return Verifier.PREFIX + id + "_" + Base64.getUrlEncoder().withoutPadding().encodeToString(draw.apply(32));
+        }
+        throw new IllegalStateException("no free id in " + MAX_DRAWS + " draws: the random source repeats itself");
+    }
+
+    private static byte[] secureBytes(int length) {
+        byte[] out = new byte[length];
+        RANDOM.nextBytes(out);
+        return out;
+    }
+
+    /** From now on the store draws its random bytes from {@code random}; for the tests. */
+    void random(IntFunction<byte[]> random) {
+        this.random = Objects.requireNonNull(random, "random");
     }
 
     /**
@@ -944,10 +1017,11 @@ public final class SecretStore {
         return kinds.stream().sorted().map(Secret.Kind::id).toList();
     }
 
-    /** The audit's detail of a written value: its kind, and a key pair's fingerprint and leaf's end. */
+    /** The audit's detail of a written value: its kind, a key pair's fingerprint and leaf's end, a verifier's form and id. */
     private static JsonObject detail(SecretValue value) {
         JsonObject detail = new JsonObject().put("kind", value.kind().id());
         if (value instanceof SecretValue.Pair pair) facts(detail, pair);
+        if (value instanceof SecretValue.Verifies v) detail.put("form", v.verifier().form()).put("id", v.verifier().id());
         return detail;
     }
 
@@ -1003,7 +1077,7 @@ public final class SecretStore {
      */
     static SecretValue value(JsonObject body) throws SecretRefused {
         Object kind = body.getValue("kind");
-        if (!(kind instanceof String id)) throw SecretRefused.invalid("kind", "give the kind: value, credentials or key-pair");
+        if (!(kind instanceof String id)) throw SecretRefused.invalid("kind", "give the kind: value, credentials, key-pair or verifier");
         return switch (id) {
             case "value" -> {
                 String value = text(body, "value");
@@ -1035,7 +1109,8 @@ public final class SecretStore {
                 }
                 yield KeyPairs.parse(privateKey, certificates);
             }
-            default -> throw SecretRefused.invalid("kind", "the kind is value, credentials or key-pair");
+            case VERIFIER -> throw SecretRefused.invalid("form", "the store makes a verifier's value: give the form generated");
+            default -> throw SecretRefused.invalid("kind", "the kind is value, credentials, key-pair or verifier");
         };
     }
 
@@ -1088,6 +1163,9 @@ public final class SecretStore {
                 JsonObject facts = pair.facts();
                 pair.certificate(now, CERTIFICATE_DAYS).ifPresent(c -> facts.put("certificate", c));
                 e.put("keyPair", facts);
+            }
+            if (readable && o.value() instanceof SecretValue.Verifies v) {
+                e.put("verifier", new JsonObject().put("form", v.verifier().form()).put("id", v.verifier().id()));
             }
             secrets.add(e);
         }

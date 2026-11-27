@@ -55,6 +55,7 @@ public final class EndpointUse {
             case VALUE -> Secret.of(reference, () -> { throw unread.get(); });
             case CREDENTIALS -> Secret.credentials(reference, () -> { throw unread.get(); });
             case KEY_PAIR -> Secret.keyPair(reference, () -> { throw unread.get(); });
+            case VERIFIER -> throw new IllegalStateException("no handle is a verifier: only a credential of the environment names one");
         };
     };
 

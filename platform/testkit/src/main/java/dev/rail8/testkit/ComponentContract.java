@@ -703,6 +703,7 @@ public abstract class ComponentContract {
                 reads.incrementAndGet();
                 return handle.keyPair();
             });
+            case VERIFIER -> throw new IllegalStateException("no adapter's handle is a verifier");
         }));
         return new Connection(c.key(), c.values(), secrets);
     }

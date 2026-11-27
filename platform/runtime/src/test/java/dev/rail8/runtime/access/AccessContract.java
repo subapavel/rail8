@@ -1513,8 +1513,9 @@ abstract class AccessContract {
         a.keyUsed(key(a), "POST", "/admin/tokens/rail8t_0123456789abcdef_" + secret + "/revoke", REMOTE, Optional.of(Action.TOKEN_REVOKE), true);
         a.keyUsed(key(a), "GET", "/admin/rail8s_00112233445566ff_" + secret + "/rail8k_" + secret, REMOTE, Optional.empty(), false);
         a.keyUsed(key(a), "GET", "/admin/rail8d_00112233445566aa_" + secret, REMOTE, Optional.empty(), false);
+        a.keyUsed(key(a), "GET", "/admin/rail8c_00112233445566bb_" + secret, REMOTE, Optional.empty(), false);
         assertEquals(List.of("/admin/tokens/rail8t_0123456789abcdef_***/revoke", "/admin/rail8s_00112233445566ff_***/rail8k_***",
-                        "/admin/rail8d_00112233445566aa_***"),
+                        "/admin/rail8d_00112233445566aa_***", "/admin/rail8c_00112233445566bb_***"),
                 audit("emergency-key.use").stream().map(r -> r.getJsonObject("detail").getString("path")).toList());
     }
 }

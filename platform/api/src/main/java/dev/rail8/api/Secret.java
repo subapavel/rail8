@@ -25,7 +25,8 @@ public final class Secret {
     private static final Pattern REFERENCE = Pattern.compile("secret://[a-z0-9][a-z0-9._-]*");
 
     /**
-     * The kind of a secret: a plain value, credentials (a user and a password), or a key pair with its certificates.
+     * The kind of a secret: a plain value, credentials (a user and a password), a key pair with its certificates, or a verifier
+     * of a calling system's password or key.
      *
      * @since 0.4
      */
@@ -35,9 +36,14 @@ public final class Secret {
         /** A user and a password. */
         CREDENTIALS,
         /** A private key, its public key and its certificates, the leaf first. */
-        KEY_PAIR;
+        KEY_PAIR,
+        /**
+         * What the node checks a calling system's password or key against, never the value itself. Only a credential of the
+         * environment names one: no field of an adapter and no custom code takes it.
+         */
+        VERIFIER;
 
-        /** The kind's id, as the admin API and the settings name it: {@code value}, {@code credentials} or {@code key-pair}. */
+        /** The kind's id, as the admin API and the settings name it: {@code value}, {@code credentials}, {@code key-pair} or {@code verifier}. */
         public String id() {
             return name().toLowerCase(Locale.ROOT).replace('_', '-');
         }

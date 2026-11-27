@@ -62,6 +62,7 @@ class SecretTest {
         assertEquals("value", Secret.Kind.VALUE.id());
         assertEquals("credentials", Secret.Kind.CREDENTIALS.id());
         assertEquals("key-pair", Secret.Kind.KEY_PAIR.id());
+        assertEquals("verifier", Secret.Kind.VERIFIER.id());
         Secret login = Secret.credentials("secret://login", () -> new Secret.Credentials("acme", "pa55"));
         assertEquals(Secret.Kind.CREDENTIALS, login.kind());
         assertEquals("pa55", login.credentials().password());

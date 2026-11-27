@@ -29,8 +29,11 @@ final class Credentials {
     private static final Pattern TOKEN_FORM = Pattern.compile("rail8t_([0-9a-f]{16})_[A-Za-z0-9_-]{43}");
     private static final Pattern DEVICE_FORM = Pattern.compile("rail8d_([0-9a-f]{16})_[A-Za-z0-9_-]{43}");
     private static final Pattern KEY_FORM = Pattern.compile("rail8k_[A-Za-z0-9_-]{43}");
-    /** The secret of a session, a token, a device or the key, wherever it stands: what follows the id, or the key's prefix. */
-    private static final Pattern SECRET = Pattern.compile("(rail8[std]_[0-9a-f]{16}_|rail8k_)[A-Za-z0-9_-]+");
+    /**
+     * The secret of a session, a token, a device, a calling system's generated value or the key, wherever it stands: what
+     * follows the id, or the key's prefix.
+     */
+    private static final Pattern SECRET = Pattern.compile("(rail8[stdc]_[0-9a-f]{16}_|rail8k_)[A-Za-z0-9_-]+");
 
     private Credentials() {}
 
@@ -39,7 +42,7 @@ final class Credentials {
         return header.regionMatches(true, 0, "Bearer ", 0, 7) ? Optional.of(header.substring(7).strip()) : Optional.empty();
     }
 
-    /** {@code text} with the secret of every session, token, device and key in it replaced by {@code ***}. */
+    /** {@code text} with the secret of every session, token, device, calling system's generated value and key in it replaced by {@code ***}. */
     static String redacted(String text) {
         return SECRET.matcher(text).replaceAll("$1***");
     }

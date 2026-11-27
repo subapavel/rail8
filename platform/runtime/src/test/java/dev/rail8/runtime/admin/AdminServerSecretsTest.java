@@ -32,6 +32,7 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -144,6 +145,36 @@ class AdminServerSecretsTest extends AdminAccessFixture {
         assertEquals(List.of("session", "token", "session", "token", "session"), audit.stream().map(a -> a.getString("via")).toList(),
                 "the actor's way, from the permission check");
         assertTrue(audit.stream().allMatch(a -> a.getString("actor").equals("keeper")));
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aGeneratedVerifierIsAnsweredOnceAndNotStored() {
+        Answer made = send(key, "POST", "/admin/secrets", Optional.of(admin),
+                new JsonObject().put("name", "acme.erp").put("kind", "verifier").put("form", "generated").encode());
+        assertEquals(201, made.status(), "the answer's status");
+        assertEquals(Optional.of("no-store"), made.headers().firstValue("cache-control"), "no cache keeps the value");
+        String value = made.json().getString("value");
+        assertTrue(value.matches("rail8c_[0-9a-f]{16}_[A-Za-z0-9_-]{43}"), "the value in its form");
+        written.add(value);
+        assertEquals(value.substring(7, 23), made.json().getJsonObject("verifier").getString("id"));
+        captured.add(made.json().copy().put("value", "").encode());
+
+        Answer again = send(key, "POST", "/admin/secrets/acme.erp", Optional.of(token(admin, "cli")),
+                new JsonObject().put("kind", "verifier").put("form", "generated").encode());
+        assertEquals(200, again.status(), "the overwrite's status");
+        assertEquals(Optional.of("no-store"), again.headers().firstValue("cache-control"));
+        written.add(again.json().getString("value"));
+        assertNotEquals(value, again.json().getString("value"));
+        captured.add(again.json().copy().put("value", "").encode());
+
+        Answer one = call("GET", "/admin/secrets/acme.erp", Optional.of(developer), null);
+        assertEquals("verifier", one.json().getString("kind"), one.body());
+        assertFalse(one.json().containsKey("value"), "no read answers the value");
+        refused(call("POST", "/admin/secrets", Optional.of(admin), new JsonObject().put("name", "typed").put("kind", "verifier")
+                .put("form", "password").encode()), 422, "invalid");
+        assertEquals(List.of("generated", "generated"), secretDb.audit().stream().map(a -> a.getJsonObject("detail").getString("form")).toList(),
+                "the audit names who generated each value, and how");
         assertNoValueCaptured();
     }
 

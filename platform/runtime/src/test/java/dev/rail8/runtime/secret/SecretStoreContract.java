@@ -884,6 +884,121 @@ abstract class SecretStoreContract {
         assertNoValueCaptured();
     }
 
+    // ------------------------------------------------------------------------------------------------- verifiers
+
+    /** A generated verifier's body. */
+    static JsonObject generated(String name) {
+        return new JsonObject().put("name", name).put("kind", "verifier").put("form", "generated");
+    }
+
+    /**
+     * The value the store answers for {@code call}, a create or overwrite of a generated verifier: the answer without it is
+     * captured, and the value is written, so no other text may hold it.
+     */
+    String answered(Future<JsonObject> call) {
+        JsonObject answer = await(call).copy();
+        String value = (String) answer.remove("value");
+        assertTrue(value != null && value.matches("rail8c_[0-9a-f]{16}_[A-Za-z0-9_-]{43}"), "the value is answered in its form");
+        written.add(value);
+        written.add(value.substring(24));
+        captured.add(answer.encode());
+        return value;
+    }
+
+    /** A random source that answers {@code draws} in order, each of the length asked. */
+    static java.util.function.IntFunction<byte[]> scripted(byte[]... draws) {
+        java.util.Deque<byte[]> left = new java.util.ArrayDeque<>(List.of(draws));
+        return length -> {
+            byte[] next = left.poll();
+            if (next == null || next.length != length) throw new AssertionError("an unscripted draw of " + length + " bytes");
+            return next;
+        };
+    }
+
+    static byte[] filled(int length, int b) {
+        byte[] out = new byte[length];
+        Arrays.fill(out, (byte) b);
+        return out;
+    }
+
+    @Test
+    void aGeneratedValueIsAnsweredOnceAndEveryNodeHoldsOnlyItsIdAndFingerprint() {
+        Node a = start("a", K1);
+        Node b = start("b", K1);
+        JsonObject answer = await(a.store.create(ALICE, generated("acme.erp")));
+        String value = (String) answer.remove("value");
+        written.add(value);
+        written.add(value.substring(24));
+        captured.add(answer.encode());
+        String id = value.substring(7, 23);
+        assertEquals("verifier", answer.getString("kind"));
+        assertEquals(new JsonObject().put("form", "generated").put("id", id), answer.getJsonObject("verifier"));
+        awaitNotices();
+
+        for (Node n : List.of(a, b)) {
+            SecretStore.Held held = n.store.held("acme.erp").orElseThrow();
+            assertEquals(Secret.Kind.VERIFIER, held.kind(), n.id);
+            Verifier verifier = (Verifier) held.value();
+            assertEquals(id, verifier.id(), n.id);
+            assertTrue(verifier.verifies(value), n.id + " verifies the value answered");
+            assertFalse(verifier.verifies(value.substring(0, value.length() - 1) + (value.endsWith("A") ? "B" : "A")), n.id);
+            assertEquals(Optional.empty(), read(n, "acme.erp"), "a verifier reads as no value");
+            JsonObject entry = await(n.store.entry("acme.erp")).orElseThrow();
+            captured.add(entry.encode());
+            assertFalse(entry.containsKey("value"), "only the create answers the value");
+            assertEquals(id, entry.getJsonObject("verifier").getString("id"));
+        }
+        assertFalse(list(b).encode().contains(value));
+        JsonObject detail = audit("secret.create").getLast();
+        assertEquals(new JsonObject().put("kind", "verifier").put("form", "generated").put("id", id), detail);
+        assertTrue(captured.stream().noneMatch(t -> t.contains(Verifier.fingerprintOf(value))), "no answer or audit row shows the fingerprint");
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void anOverwriteAnswersAnotherValueAndTheStoreNeverIssuesAnIdItHolds() {
+        Node a = start("a", K1);
+        a.store.random(scripted(filled(8, 1), filled(32, 2), filled(8, 1), filled(8, 4), filled(32, 5), filled(8, 1), filled(8, 4), filled(8, 6), filled(32, 7)));
+        String first = answered(a.store.create(ALICE, generated("first")));
+        assertEquals("0101010101010101", first.substring(7, 23));
+        String second = answered(a.store.create(ALICE, generated("second")));
+        assertEquals("0404040404040404", second.substring(7, 23), "an id the store holds is drawn again");
+        String again = answered(a.store.overwrite(ALICE, "first", generated("first").copy()));
+        assertEquals("0606060606060606", again.substring(7, 23), "an overwrite never keeps or reuses an id");
+        Verifier now = (Verifier) a.store.held("first").orElseThrow().value();
+        assertTrue(now.verifies(again));
+        assertFalse(now.verifies(first), "the overwritten value verifies no more");
+        assertEquals("0606060606060606", audit("secret.overwrite").getLast().getString("id"));
+        assertNoValueCaptured();
+    }
+
+    @Test
+    void aVerifierTakesTheGeneratedFormOnlyAndNoValue() {
+        Node a = start("a", K1);
+        for (String form : List.of("password", "key")) {
+            SecretRefused typed = refused(a.store.create(ALICE, generated("typed").put("form", form)));
+            assertEquals("invalid", typed.code(), form);
+            assertEquals("form", typed.values().getString("field"));
+            assertTrue(typed.getMessage().contains("not built"), typed.getMessage());
+        }
+        assertEquals("form", refused(a.store.create(ALICE, generated("none").put("form", null))).values().getString("field"));
+        assertEquals("form", refused(a.store.create(ALICE, generated("other").put("form", "typed"))).values().getString("field"));
+        SecretRefused given = refused(a.store.create(ALICE, generated("given").put("value", "a-chosen-value")));
+        assertEquals("value", given.values().getString("field"), "the store makes the value: none is taken");
+        written.add("a-chosen-value");
+        assertEquals("form", refused(a.store.create(ALICE, value("plain", "plain-value").put("form", "generated"))).values().getString("field"),
+                "only a verifier takes a form");
+
+        create(a, value("db", "the-value"));
+        assertEquals("kind-differs", refused(a.store.overwrite(ALICE, "db", generated("db"))).code());
+        answered(a.store.create(ALICE, generated("key")));
+        assertEquals("kind-differs", refused(a.store.overwrite(ALICE, "key", value("key", "plain-value"))).code());
+        use("used", "connection", "erp", Set.of(Secret.Kind.CREDENTIALS));
+        assertEquals("kind-in-use", refused(a.store.create(ALICE, generated("used"))).code());
+        assertTrue(a.store.held("used").isEmpty());
+        assertNoValueCaptured();
+    }
+
     // ------------------------------------------------------------------------------------------------- no value anywhere
 
     /** No captured text holds a value written, as text, URL-encoded, JSON-escaped or in base64. */

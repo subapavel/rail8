@@ -286,6 +286,7 @@ public final class Doors implements Component {
                 case VALUE -> secret.value();
                 case CREDENTIALS -> secret.credentials();
                 case KEY_PAIR -> secret.keyPair();
+                case VERIFIER -> throw new IllegalStateException("no field of an adapter takes a verifier");
             };
         } catch (IllegalStateException unread) {
             return secret.reference();

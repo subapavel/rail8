@@ -762,9 +762,9 @@ public final class AdminServer {
             deployments.flatMap(Deployments::secretStore).ifPresent(store -> {
                 admin.get("/admin/secrets", Action.SECRET_LIST, (c, who) -> Json.of(200, store.list().await()));
                 admin.get("/admin/secrets/:name", Action.SECRET_LIST, (c, who) -> secret(c, store));
-                admin.post("/admin/secrets", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.of(201,
+                admin.post("/admin/secrets", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.unstored(201,
                         store.create(who.acting(Action.SECRET_WRITE, PackageRef.ANY, remote(c)), secretBody(c, true)).await()));
-                admin.post("/admin/secrets/:name", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.of(200,
+                admin.post("/admin/secrets/:name", Action.SECRET_WRITE, SECRET_BODY_MAX, (c, who) -> Json.unstored(200,
                         store.overwrite(who.acting(Action.SECRET_WRITE, PackageRef.ANY, remote(c)), c.pathParam("name"), secretBody(c, false)).await()));
                 admin.delete("/admin/secrets/:name", Action.SECRET_DELETE, (c, who) -> {
                     store.delete(who.acting(Action.SECRET_DELETE, PackageRef.ANY, remote(c)), c.pathParam("name"),
@@ -2003,8 +2003,9 @@ public final class AdminServer {
     private static JsonObject secretBody(RoutingContext ctx, boolean named) {
         String shape = "the body is {" + (named ? "\"name\": \"<name>\", " : "") + "\"kind\": \"value\", \"value\": …}, {"
                 + (named ? "\"name\", " : "") + "\"kind\": \"credentials\", \"user\", \"password\"} or {" + (named ? "\"name\", " : "")
-                + "\"kind\": \"key-pair\", \"privateKey\", \"certificates\"}";
-        return object(ctx, shape, named ? Set.of("name", "kind") : Set.of("kind"), Set.of("value", "user", "password", "privateKey", "certificates"));
+                + "\"kind\": \"key-pair\", \"privateKey\", \"certificates\"} or {" + (named ? "\"name\", " : "")
+                + "\"kind\": \"verifier\", \"form\": \"generated\"}";
+        return object(ctx, shape, named ? Set.of("name", "kind") : Set.of("kind"), Set.of("value", "user", "password", "privateKey", "certificates", "form"));
     }
 
     /** 200 {@code {name}}, the user of the route's path. */
@@ -2442,6 +2443,11 @@ public final class AdminServer {
     private record Json(int status, String type, Buffer body, Map<String, String> headers) implements Reply {
         static Json of(int status, JsonObject body) {
             return new Json(status, JSON, body.toBuffer(), Map.of());
+        }
+
+        /** {@link #of}, with {@code Cache-Control: no-store}: for an answer that may carry a generated value. */
+        static Json unstored(int status, JsonObject body) {
+            return new Json(status, JSON, body.toBuffer(), Map.of("cache-control", "no-store"));
         }
 
         @Override

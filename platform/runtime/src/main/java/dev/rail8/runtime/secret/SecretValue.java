@@ -21,7 +21,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * A secret's value as a node holds it opened: a plain value, credentials, or a key pair with the encodings it is stored in.
+ * A secret's value as a node holds it opened: a plain value, credentials, a key pair with the encodings it is stored in, or
+ * a verifier.
  * {@link #plain()} is the JSON object that is sealed. No {@code toString} here holds a value.
  */
 sealed interface SecretValue {
@@ -29,10 +30,13 @@ sealed interface SecretValue {
     /** The kind of this value. */
     Secret.Kind kind();
 
-    /** The JSON object that is sealed, in UTF-8: {@code {"value"}}, {@code {"user", "password"}} or the key pair's encodings. */
+    /**
+     * The JSON object that is sealed, in UTF-8: {@code {"value"}}, {@code {"user", "password"}}, the key pair's encodings, or
+     * {@code {"form", "id", "fingerprint"}}.
+     */
     byte[] plain();
 
-    /** What the API's handle reads: a {@link String}, a {@link Secret.Credentials} or a {@link Secret.KeyPair}. */
+    /** What the API's handle reads: a {@link String}, a {@link Secret.Credentials} or a {@link Secret.KeyPair}; the {@link Verifier}. */
     Object read();
 
     /** A plain value. */
@@ -49,6 +53,16 @@ sealed interface SecretValue {
         @Override public byte[] plain() { return bytes(new JsonObject().put("user", credentials.user()).put("password", credentials.password())); }
         @Override public Object read() { return credentials; }
         @Override public String toString() { return "Login[]"; }
+    }
+
+    /** A verifier: what the node checks a caller's value against. */
+    record Verifies(Verifier verifier) implements SecretValue {
+        @Override public Secret.Kind kind() { return Secret.Kind.VERIFIER; }
+        @Override public byte[] plain() {
+            return bytes(new JsonObject().put("form", verifier.form()).put("id", verifier.id()).put("fingerprint", verifier.fingerprint()));
+        }
+        @Override public Object read() { return verifier; }
+        @Override public String toString() { return verifier.toString(); }
     }
 
     /**
@@ -149,6 +163,7 @@ sealed interface SecretValue {
                 for (Object c : json.getJsonArray("certificates", new JsonArray())) chain.add(b64.decode((String) c));
                 yield KeyPairs.stored(b64.decode(required(json, "privateKey")), b64.decode(required(json, "publicKey")), chain);
             }
+            case VERIFIER -> new Verifies(new Verifier(required(json, "form"), required(json, "id"), required(json, "fingerprint")));
         };
     }
 

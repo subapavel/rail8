@@ -120,6 +120,9 @@ public final class FakeServices implements Services {
         Objects.requireNonNull(step, "step");
         Set<Secret.Kind> asked = kinds.length == 0 ? Set.of() : EnumSet.copyOf(Arrays.asList(kinds));
         if (asked.isEmpty()) throw new IllegalArgumentException(step + ": '" + key + "': no kind of secret is asked for");
+        if (asked.contains(Secret.Kind.VERIFIER)) {
+            throw new IllegalArgumentException(step + ": '" + key + "': no step takes a verifier: only a credential of the environment names one");
+        }
         String reference = step.requireString(key);
         if (!reference.startsWith("secret://")) {
             throw new IllegalArgumentException(step + ": '" + key + "' must name a secret, secret://<name>; its value is not shown");
@@ -142,6 +145,7 @@ public final class FakeServices implements Services {
             case VALUE -> Secret.of(reference, () -> values.get(reference) instanceof String v ? v : null);
             case CREDENTIALS -> Secret.credentials(reference, () -> values.get(reference) instanceof Secret.Credentials v ? v : null);
             case KEY_PAIR -> Secret.keyPair(reference, () -> values.get(reference) instanceof Secret.KeyPair v ? v : null);
+            case VERIFIER -> throw new IllegalStateException("a fake value is never a verifier");
         };
     }
 

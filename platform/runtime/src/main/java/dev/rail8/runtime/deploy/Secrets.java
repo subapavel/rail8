@@ -212,6 +212,7 @@ public final class Secrets {
             case VALUE -> Secret.of(reference, () -> (String) readAs(reference, name, Secret.Kind.VALUE));
             case CREDENTIALS -> Secret.credentials(reference, () -> (Secret.Credentials) readAs(reference, name, Secret.Kind.CREDENTIALS));
             case KEY_PAIR -> Secret.keyPair(reference, () -> (Secret.KeyPair) readAs(reference, name, Secret.Kind.KEY_PAIR));
+            case VERIFIER -> throw new IllegalArgumentException("'" + reference + "' is a verifier: only a credential of the environment names one");
         };
     }
 
