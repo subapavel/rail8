@@ -19,6 +19,7 @@ import java.util.Set;
 import static com.tngtech.archunit.base.DescribedPredicate.describe;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
+import static com.tngtech.archunit.lang.conditions.ArchConditions.onlyHaveDependenciesWhere;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
@@ -295,9 +296,19 @@ final class Rules {
     static final DescribedPredicate<JavaClass> VERTX_NET = describe("io.vertx.core.net.Net*",
             c -> c.getPackageName().equals("io.vertx.core.net") && c.getSimpleName().startsWith("Net"));
 
-    static final ArchRule ONLY_THE_PEER_LINK_OPENS_RAW_TCP = noClasses().that().resideInAPackage("dev.rail8..")
+    /**
+     * The one use of a {@code Net*} type outside the peer link: the node's Postgres pools are given their transport options, the
+     * idle timeout among them, as a {@code NetClientOptions}. The options open no socket; the Postgres client opens its own
+     * connections with them. Only this class may use only this type.
+     */
+    static final String POOLS = "dev.rail8.runtime.node.Node";
+    static final String POOL_TRANSPORT = "io.vertx.core.net.NetClientOptions";
+
+    static final ArchRule ONLY_THE_PEER_LINK_OPENS_RAW_TCP = classes().that().resideInAPackage("dev.rail8..")
             .and().resideOutsideOfPackage(PEER_LINK)
-            .should().dependOnClassesThat(VERTX_NET)
+            .should(onlyHaveDependenciesWhere(describe("the target is no " + VERTX_NET.getDescription() + ", but for " + POOLS + " on " + POOL_TRANSPORT,
+                    d -> !VERTX_NET.test(d.getTargetClass())
+                            || d.getOriginClass().getName().equals(POOLS) && d.getTargetClass().getName().equals(POOL_TRANSPORT))))
             .because("nothing but the Component SPI and the runtime's own listeners opens a socket; the node-to-node journal link is "
-                    + "the one raw TCP user (F-35, CORE-5a)");
+                    + "the one raw TCP user, and the Postgres pools' transport options open none");
 }
