@@ -180,6 +180,37 @@ class ComponentTextsTest {
         assertTrue(warnings().getFirst().contains("drop/cm.json") && warnings().getFirst().contains("at most 64"), warnings().toString());
     }
 
+    /**
+     * A file past the first 64 is never read: here the 65th entry of a jar holds compressed data that cannot be inflated, so
+     * reading it fails and would leave the whole scheme in English.
+     */
+    @Test
+    void aFilePastThe64thIsNeverRead() throws IOException {
+        Path jar = tmp.resolve("many.jar");
+        String last = "META-INF/rail8/texts/drop/zz.json";
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
+            for (int i = 0; i < ComponentTexts.MAX_BUNDLES; i++) {
+                out.putNextEntry(new JarEntry("META-INF/rail8/texts/drop/" + (char) ('a' + i / 26) + (char) ('a' + i % 26) + ".json"));
+                out.write("{}".getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+            out.putNextEntry(new JarEntry(last));
+            out.write("{\"drop.field.host.label\": \"Server\"}".getBytes(StandardCharsets.UTF_8));
+            out.closeEntry();
+        }
+        // the first byte of the entry's data, after its local header, becomes a deflate block of the reserved type
+        byte[] bytes = Files.readAllBytes(jar);
+        int header = new String(bytes, StandardCharsets.ISO_8859_1).indexOf(last) - 30;
+        int extra = (bytes[header + 28] & 0xFF) | (bytes[header + 29] & 0xFF) << 8;
+        bytes[header + 30 + last.length() + extra] = (byte) 0xFF;
+        Files.write(jar, bytes);
+
+        Map<String, JsonObject> read = ComponentTexts.bundles("drop", jar, ComponentTexts.declared("drop", FORMS));
+        assertEquals(ComponentTexts.MAX_BUNDLES, read.size(), warnings().toString());
+        assertEquals(1, warnings().size(), warnings().toString());
+        assertTrue(warnings().getFirst().contains("drop/zz.json") && warnings().getFirst().contains("at most 64"), warnings().toString());
+    }
+
     /** The platform's own translations ship in the node's jar, under {@code rail8}, for the UI's languages other than English. */
     @Test
     void thePlatformsOwnTranslationsAreRead() {

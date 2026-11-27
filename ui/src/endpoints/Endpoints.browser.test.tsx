@@ -533,6 +533,16 @@ describe("an adapter's form in Czech", () => {
     await expect.element(field('colour')).toHaveValue('{"no json');
   });
 
+  test('shows the English again once the language is English again', async () => {
+    await openInCzech(fakeApi([partner], { texts: textsOf(CZECH) }));
+    await expect.element(field('Hostitel')).toHaveValue('files.example');
+    chooseLanguage('en');
+    await expect.element(settingsTab('General')).toBeVisible();
+    await expect.element(settingsTab('Polling')).toBeVisible();
+    await expect.element(field('Host')).toHaveValue('files.example');
+    await expect.element(text("The server's name or address.")).toBeVisible();
+  });
+
   test('shows every text of the adapter in English when the node has none in Czech, or they cannot be had', async () => {
     for (const texts of [vi.fn(async () => null), vi.fn(async () => Promise.reject(new EndpointsError(502, 'the node does not answer')))]) {
       await openInCzech(fakeApi([partner], { texts }));

@@ -231,7 +231,7 @@ export function EndpointForm({ api, path, guardClose }: EndpointFormProps) {
   // the translations of another language than the one shown are not shown, while those of this one are asked for; the
   // form waits for them unless it is being edited, so a draft keeps the controls that hold it
   const translating = language !== 'en' && translations.language !== language;
-  const settings = described.kind === 'read' ? translatedSettings(described.settings, file.scheme, translating ? ENGLISH : translations) : null;
+  const settings = described.kind === 'read' ? translatedSettings(described.settings, file.scheme, translations.language === language ? translations : ENGLISH) : null;
   const options = editing ? draft : file.config;
   const problems = settings === null ? [] : checkOptions(texts, settings, present(options), file.direction);
   const problemOf = new Map<string, string>();

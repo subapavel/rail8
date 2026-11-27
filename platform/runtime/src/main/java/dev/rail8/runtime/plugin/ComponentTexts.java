@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -136,40 +135,78 @@ public final class ComponentTexts {
      */
     static Map<String, JsonObject> bundles(String scheme, Path at, Set<String> declared) {
         String prefix = ROOT + scheme + "/";
-        Map<String, JsonObject> found = new TreeMap<>();
         try {
-            List<Read> files = Files.isDirectory(at) ? fromDirectory(at, prefix) : Files.isRegularFile(at) ? fromJar(at, prefix) : List.of();
-            int taken = 0;
-            for (Read file : files) {
-                String where = at.getFileName() + "!/" + prefix + file.name();
-                if (taken == MAX_BUNDLES) {
-                    LOG.log(System.Logger.Level.WARNING, "the translations " + where + " are left out: a scheme has at most " + MAX_BUNDLES + " files of translations");
-                    continue;
+            if (Files.isDirectory(at)) {
+                Path dir = at.resolve(prefix);
+                if (!Files.isDirectory(dir)) return Map.of();
+                List<String> names;
+                try (Stream<Path> entries = Files.list(dir)) {
+                    names = entries.filter(Files::isRegularFile).map(file -> file.getFileName().toString()).sorted().toList();
                 }
-                taken++;
-                String name = file.name();
-                String language = name.endsWith(".json") ? name.substring(0, name.length() - ".json".length()) : name;
-                Optional<String> refused = !name.endsWith(".json") || !LANGUAGE.matcher(language).matches()
-                        ? Optional.of("its name is no language of " + LANGUAGE.pattern() + " followed by .json")
-                        : file.bytes() == null ? Optional.of("it is over " + MAX_BYTES + " bytes") : Optional.empty();
-                JsonObject bundle = null;
-                if (refused.isEmpty()) {
-                    try {
-                        bundle = new JsonObject(utf8(file.bytes()));
-                        refused = refusal(bundle, declared);
-                    } catch (DecodeException | CharacterCodingException | ClassCastException notAnObject) {
-                        refused = Optional.of("it is not one flat JSON object of strings in UTF-8");
+                return take(scheme, at.getFileName() + "!/" + prefix, names, declared, name -> Files.newInputStream(dir.resolve(name)));
+            }
+            if (Files.isRegularFile(at)) {
+                try (JarFile jar = new JarFile(at.toFile(), false)) {
+                    List<String> names = new ArrayList<>();
+                    for (Enumeration<JarEntry> all = jar.entries(); all.hasMoreElements(); ) {
+                        JarEntry e = all.nextElement();
+                        String rest = e.getName().startsWith(prefix) ? e.getName().substring(prefix.length()) : "";
+                        if (!e.isDirectory() && !rest.isEmpty() && !rest.contains("/")) names.add(rest);
                     }
-                }
-                if (refused.isPresent()) {
-                    LOG.log(System.Logger.Level.WARNING, "the translations " + where + " are left out, and scheme " + scheme + " shows its English there: " + refused.get());
-                } else {
-                    found.put(language, bundle);
+                    Collections.sort(names);
+                    return take(scheme, at.getFileName() + "!/" + prefix, names, declared, name -> jar.getInputStream(jar.getJarEntry(prefix + name)));
                 }
             }
+            return Map.of();
         } catch (IOException | UncheckedIOException failed) {
             LOG.log(System.Logger.Level.WARNING, "the translations of scheme " + scheme + " in " + at + " cannot be read, so it shows its English: " + failed);
             return Map.of();
+        }
+    }
+
+    /** Opens one file of translations by its name. */
+    private interface Opener {
+        InputStream open(String name) throws IOException;
+    }
+
+    /**
+     * The translations of the first {@value #MAX_BUNDLES} of {@code names}, in their order, each read through {@code open} and
+     * kept when it keeps the rules of the class comment; the others are named in a WARNING and never read.
+     */
+    private static Map<String, JsonObject> take(String scheme, String place, List<String> names, Set<String> declared, Opener open) throws IOException {
+        Map<String, JsonObject> found = new TreeMap<>();
+        for (int i = 0; i < names.size(); i++) {
+            String name = names.get(i);
+            String where = place + name;
+            if (i >= MAX_BUNDLES) {
+                LOG.log(System.Logger.Level.WARNING, "the translations " + where + " are left out: a scheme has at most " + MAX_BUNDLES + " files of translations");
+                continue;
+            }
+            String language = name.endsWith(".json") ? name.substring(0, name.length() - ".json".length()) : name;
+            Optional<String> refused = Optional.empty();
+            byte[] bytes = null;
+            if (!name.endsWith(".json") || !LANGUAGE.matcher(language).matches()) {
+                refused = Optional.of("its name is no language of " + LANGUAGE.pattern() + " followed by .json");
+            } else {
+                try (InputStream in = open.open(name)) {
+                    bytes = bounded(in);
+                }
+                if (bytes == null) refused = Optional.of("it is over " + MAX_BYTES + " bytes");
+            }
+            JsonObject bundle = null;
+            if (refused.isEmpty()) {
+                try {
+                    bundle = new JsonObject(utf8(bytes));
+                    refused = refusal(bundle, declared);
+                } catch (DecodeException | CharacterCodingException | ClassCastException notAnObject) {
+                    refused = Optional.of("it is not one flat JSON object of strings in UTF-8");
+                }
+            }
+            if (refused.isPresent()) {
+                LOG.log(System.Logger.Level.WARNING, "the translations " + where + " are left out, and scheme " + scheme + " shows its English there: " + refused.get());
+            } else {
+                found.put(language, bundle);
+            }
         }
         return Collections.unmodifiableMap(found);
     }
@@ -186,42 +223,6 @@ public final class ComponentTexts {
     private static String utf8(byte[] bytes) throws CharacterCodingException {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(bytes)).toString();
-    }
-
-    /** A file of translations: its name, and its bytes, or null when it is over {@link #MAX_BYTES}. */
-    private record Read(String name, byte[] bytes) {}
-
-    private static List<Read> fromDirectory(Path classes, String prefix) throws IOException {
-        Path dir = classes.resolve(prefix);
-        if (!Files.isDirectory(dir)) return List.of();
-        List<Read> files = new ArrayList<>();
-        try (Stream<Path> entries = Files.list(dir)) {
-            for (Path file : entries.filter(Files::isRegularFile).sorted().toList()) {
-                try (InputStream in = Files.newInputStream(file)) {
-                    files.add(new Read(file.getFileName().toString(), bounded(in)));
-                }
-            }
-        }
-        return files;
-    }
-
-    private static List<Read> fromJar(Path jar, String prefix) throws IOException {
-        List<Read> files = new ArrayList<>();
-        try (JarFile file = new JarFile(jar.toFile(), false)) {
-            List<JarEntry> entries = new ArrayList<>();
-            for (Enumeration<JarEntry> all = file.entries(); all.hasMoreElements(); ) {
-                JarEntry e = all.nextElement();
-                String rest = e.getName().startsWith(prefix) ? e.getName().substring(prefix.length()) : "";
-                if (!e.isDirectory() && !rest.isEmpty() && !rest.contains("/")) entries.add(e);
-            }
-            entries.sort(Comparator.comparing(JarEntry::getName));
-            for (JarEntry e : entries) {
-                try (InputStream in = file.getInputStream(e)) {
-                    files.add(new Read(e.getName().substring(prefix.length()), bounded(in)));
-                }
-            }
-        }
-        return files;
     }
 
     /** The bytes of {@code in}, or null when it holds more than {@link #MAX_BYTES}. */
