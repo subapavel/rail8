@@ -1763,7 +1763,7 @@ public final class Deployments {
         } finally {
             tickFetch = null;
             if (!started) {
-                built.forEach(Deployments::dropBuilt);
+                Future.join(built.stream().map(Deployments::dropBuilt).toList()).await();   // each never fails
                 for (Path w : written) quietly("the directory " + w + " a drain's build wrote could not be deleted", () -> deleteWritten(w));
             }
             Path left = folder;   // moved by now, unless the copy was refused
