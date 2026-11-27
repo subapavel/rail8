@@ -410,7 +410,7 @@ export interface UiSessionOptions {
  *
  * For a request under `/admin`, `/git` or `/api` it refuses what {@link foreign} refuses (403 `foreign-origin`), then
  * what {@link credentialOf} refuses, reading no body and sending nothing; refusals under `/api` are problem+json. In
- * session mode the answer carries `Cache-Control: no-store`. It leaves its decision on the request for
+ * either mode the answer carries `Cache-Control: no-store`. It leaves its decision on the request for
  * {@link nodeFor}, and goes on. Every other path goes on untouched.
  */
 export function uiSession(options: UiSessionOptions) {
@@ -513,7 +513,7 @@ export function uiSession(options: UiSessionOptions) {
     if (refused !== undefined) return refuse(res, 403, 'foreign-origin', refused, problem);
     const decided = credentialOf(mode, req.method ?? 'GET', req.headers);
     if ('refused' in decided) return refuse(res, decided.refused.status, decided.refused.code, decided.refused.error, problem);
-    if (mode.kind === 'session') res.setHeader('cache-control', 'no-store');
+    res.setHeader('cache-control', 'no-store');
     const admitted: Admitted = { ...decided, clear: mode.kind === 'session' ? cookieHeader(mode, '') : null };
     (req as unknown as Record<symbol, Admitted>)[DECIDED] = admitted;
     next();

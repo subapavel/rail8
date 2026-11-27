@@ -365,18 +365,26 @@ describe('uiSession', () => {
     expect(git.headers['set-cookie']).toBeUndefined();
   });
 
-  it('lets an admitted request on with no-store in session mode, and every other path untouched', async () => {
+  it('lets an admitted request on with no-store in either mode, and every other path untouched', async () => {
     const { call } = await gate(SESSION_MODE);
     const admitted = await call('POST', '/git/packages/x/commit', naming);
     expect(admitted.status).toBe(299);
     expect(admitted.headers['cache-control']).toBe('no-store');
-    expect((await call('GET', '/src/main.tsx', { 'sec-fetch-site': 'cross-site' })).status).toBe(299);
-    expect((await call('PUT', '/files/endpoints/x', { 'sec-fetch-site': 'cross-site' })).status).toBe(299);
-    expect((await call('GET', '/administration')).status).toBe(299);
+    for (const outside of [
+      await call('GET', '/src/main.tsx', { 'sec-fetch-site': 'cross-site' }),
+      await call('PUT', '/files/endpoints/x', { 'sec-fetch-site': 'cross-site' }),
+      await call('GET', '/administration'),
+    ]) {
+      expect(outside.status).toBe(299);
+      expect(outside.headers['cache-control']).toBeUndefined();
+    }
     const token = await gate(tokenMode('t'));
-    const open = await token.call('GET', '/admin/messages');
-    expect(open.status).toBe(299);
-    expect(open.headers['cache-control']).toBeUndefined();
+    for (const path of ['/admin/messages', '/git/packages', '/api/mappings']) {
+      const open = await token.call('GET', path);
+      expect(open.status).toBe(299);
+      expect(open.headers['cache-control']).toBe('no-store');
+    }
+    expect((await token.call('GET', '/src/main.tsx')).headers['cache-control']).toBeUndefined();
   });
 });
 
