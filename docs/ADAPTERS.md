@@ -141,10 +141,22 @@ Both forms give each value its default when the endpoint file sets none. A compo
 nothing (`Settings.NONE`) takes every key the flow form does not, as it is written.
 
 The UI reads the forms from `GET /admin/components`, format 2: for each scheme its `reach`, the fields of each form with
-their label, help, type, default and rules, and the tabs. Every label has a text key that the UI's translations may
-override: `<scheme>.field.<name>.label` and `<scheme>.field.<name>.help` for a field, `<scheme>.field.<name>.choice.<value>`
-for a choice, `<scheme>.tab.<id>` for a tab of the adapter's own and `rail8.tab.<id>` for a common one. A text key without a
-translation shows the label as the adapter wrote it. The scheme `rail8` is the platform's own and no adapter may take it.
+their label, help, type, default and rules, and the tabs. Every label and help text has a text key, derived and never
+written: `<scheme>.field.<name>.label` and `<scheme>.field.<name>.help` for a field, `<scheme>.field.<name>.choice.<value>`
+for a choice, `<scheme>.tab.<id>` for a tab of the adapter's own and `rail8.tab.<id>` for a common one. The schemes `rail8`
+and `step`, and every scheme that starts `rail8.` or `step.`, are the platform's and no adapter may take them.
+
+An adapter carries its own translations of those texts in the jar its component's class comes from:
+`src/main/resources/META-INF/rail8/texts/<scheme>/<language>.json`, one flat JSON object of its keys to ICU messages, the
+form of the UI's own texts, such as `{"acme.field.url.label": "Adresa URL"}`, at most 256 KiB a file and 64 files a
+scheme. The language is two or three lower-case letters, perhaps a dash and two upper-case letters (`cs`, `pt-BR`); English
+is the text in the code, so a jar needs no `en.json` and the UI asks for none. The node serves each file at
+`GET /admin/components/<scheme>/texts/<language>`, and the UI shows the adapter's English for every key a language lacks.
+A file over the limit, one that is not a flat object of strings, or one holding a key the adapter does not declare is left
+out with a WARNING in the node's log, and the adapter shows its English. The contract suite fails for a translation that
+holds an undeclared key, does not parse as ICU, or names other arguments than its English (`{count}` for `{n}`), or the
+same argument with another type (a `plural` for a plain one). The names of `ui/locales/<language>/terms.md` stay in
+English in a translation, as they do in the UI's own texts. The template of `rail8 new-adapter` ships `cs`, `de` and `ru`.
 
 ### Secret fields
 

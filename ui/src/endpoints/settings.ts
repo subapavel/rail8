@@ -4,6 +4,8 @@ import { msg, type Label, type Texts } from '../language';
 export interface SettingsTab {
   id: string;
   label: string;
+  /** The key of the tab's label among the texts of its component, or of the platform for a common tab. */
+  labelKey?: string;
   common: boolean;
 }
 
@@ -16,7 +18,11 @@ export interface SettingsField {
   type: 'text' | 'secret' | 'integer' | 'boolean' | 'choice' | (string & {});
   /** What the form calls the field; its name when it has none. */
   label?: Label;
+  /** The key of the label among its component's texts, for a field a component describes. */
+  labelKey?: string;
   help: Label;
+  /** The key of the help text among its component's texts, for a field a component describes. */
+  helpKey?: string;
   tab: string;
   required: boolean;
   directions: ('in' | 'out')[];
@@ -27,6 +33,8 @@ export interface SettingsField {
   choices?: string[];
   /** What the form calls each of the choices, by value; a choice without one is called by its value. */
   choiceLabels?: Record<string, string>;
+  /** The key of each choice's label among its component's texts, by value. */
+  choiceKeys?: Record<string, string>;
   visibleWhen?: { field: string; values: unknown[] };
   /** The form of the adapter the field belongs to, on an endpoint's form. */
   group?: Group;
@@ -52,11 +60,9 @@ export interface SettingsDescription {
 }
 
 /** A field as the node describes it: with its label, its texts' keys, and its choices each with its label. */
-export interface DescribedField extends Omit<SettingsField, 'label' | 'help' | 'choices' | 'choiceLabels' | 'group'> {
+export interface DescribedField extends Omit<SettingsField, 'label' | 'help' | 'choices' | 'choiceLabels' | 'choiceKeys' | 'group'> {
   label: string;
-  labelKey?: string;
   help: string;
-  helpKey?: string;
   choices?: { value: string; label: string; labelKey?: string }[];
   /** How a value written as an expression is escaped, on a field of the flow's form that takes one. */
   expression?: string;
@@ -80,7 +86,7 @@ export interface ComponentForms {
   format: number;
   reach: Partial<Record<'in' | 'out', 'connection' | 'none'>>;
   described: { connection: boolean; flow: boolean };
-  tabs: (SettingsTab & { labelKey?: string })[];
+  tabs: SettingsTab[];
   connection: DescribedField[];
   flow: DescribedField[];
   rules: SettingsRule[];
@@ -195,7 +201,7 @@ export function fieldProblem(texts: Texts, field: SettingsField, value: unknown)
   return wrong(texts, field, value)?.message ?? null;
 }
 
-/** `form` as the form takes it: each choice by its value, with its label beside it, and each field in `group`. */
+/** `form` as the form takes it: each choice by its value, with its label and its label's key beside it, and each field in `group`. */
 export function readForm(form: DescribedForm, group?: Group): SettingsDescription {
   return { format: 2, described: form.described, tabs: form.tabs, fields: form.fields.map((f) => readField(f, group)), rules: form.rules };
 }
@@ -203,13 +209,13 @@ export function readForm(form: DescribedForm, group?: Group): SettingsDescriptio
 function readField(described: DescribedField, group?: Group): SettingsField {
   const { choices, ...field } = described;
   const read: SettingsField = { ...field, ...(group === undefined ? {} : { group }) };
-  // the texts' keys and the expression are the description's, no business of the form yet
-  delete (read as Partial<DescribedField>).labelKey;
-  delete (read as Partial<DescribedField>).helpKey;
+  // the expression is the description's, no business of the form yet
   delete (read as Partial<DescribedField>).expression;
   if (choices !== undefined) {
     read.choices = choices.map((c) => c.value);
     read.choiceLabels = Object.fromEntries(choices.map((c) => [c.value, c.label]));
+    const keyed = choices.filter((c) => c.labelKey !== undefined);
+    if (keyed.length > 0) read.choiceKeys = Object.fromEntries(keyed.map((c) => [c.value, c.labelKey!]));
   }
   return read;
 }
@@ -236,7 +242,7 @@ export function endpointSettings(forms: ComponentForms, direction: 'in' | 'out')
     served: forms.reach[direction] !== undefined,
     described: (connects && forms.described.connection) || forms.described.flow,
     stray: connects && !forms.described.connection ? 'connection' : !forms.described.flow ? 'flow' : null,
-    tabs: forms.tabs.map(({ id, label, common }) => ({ id, label, common })),
+    tabs: forms.tabs.map(({ id, label, labelKey, common }) => ({ id, label, ...(labelKey === undefined ? {} : { labelKey }), common })),
     fields: [...connection, ...reply, ...forms.flow.map((f) => readField(f, 'flow'))],
     rules: forms.rules,
   };

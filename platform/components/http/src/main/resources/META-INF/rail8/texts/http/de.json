@@ -1,0 +1,12 @@
+{
+  "http.field.url.label": "URL",
+  "http.field.url.help": "Die http- oder https-URL, an die Anfragen gesendet werden: Schema, Host, Port und ein Pfadpräfix, etwa https://partner.example/api. Ohne Benutzernamen und Passwort.",
+  "http.field.timeoutMs.label": "Zeitlimit (ms)",
+  "http.field.timeoutMs.help": "Wie lange eine Anfrage dauern darf, in Millisekunden.",
+  "http.field.poolSize.label": "Poolgröße",
+  "http.field.poolSize.help": "Wie viele Verbindungen zum Partner höchstens offen gehalten werden.",
+  "http.field.address.label": "Adresse",
+  "http.field.address.help": "Der Pfad unter dem Präfix des Adapters am HTTP-Port des Knotens, den ein Sender aufruft, etwa /orders; er muss genau übereinstimmen.",
+  "http.field.path.label": "Pfad",
+  "http.field.path.help": "Der Pfad, an den ein Versand geht, angehängt an den Pfad der url der Connection, etwa /orders. Keiner: die url, wie sie ist."
+}

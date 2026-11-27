@@ -69,7 +69,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * and supplies the component, the {@link Inbound} its consumer is built for and, where the defaults do not fit, the
  * {@link Outbound} and {@link Call} that reach a started consumer. Every case asserts an observable: the scheme (named,
  * never {@link Forms#PLATFORM}); the forms (the same on every call, serving both directions, every field, choice and tab
- * labelled and every field with a help text, their text keys in {@link Forms#toJson}, the connection form only adding to
+ * labelled and every field with a help text, their text keys in {@link Forms#toJson}, every English text an ICU message and
+ * each translation the component's jar carries holding only declared keys with their English's arguments, the connection form only adding to
  * the one recorded in the test resources' {@code forms/<scheme>.json}); the uses passing the forms (a
  * connection handed over exactly where a direction reaches one); no secret handle read while a consumer or a producer is
  * built; delivery to the running consumer's handler with the body intact (the receiver mints its own message id — a
@@ -262,6 +263,22 @@ public abstract class ComponentContract {
     public void everyFieldChoiceAndTabHasALabelAndItsTextKeys() {
         Component component = component();
         assertLabelled(component.scheme(), component.forms());
+    }
+
+    /**
+     * Every English text of the forms is an ICU message, and each file of translations the component's jar carries,
+     * {@code META-INF/rail8/texts/<scheme>/<language>.json}, holds only keys the forms declare, each an ICU message with the
+     * same argument names as its English, each of the same type; a failure names the scheme, the language and the key.
+     */
+    @Test
+    public void theTextsAreIcuMessagesAndEachTranslationKeepsTheKeysAndArgumentsOfTheEnglish() {
+        assertTranslated(component());
+    }
+
+    /** Requires the texts of {@code component} and its translations to keep the rules of {@link Translations}. */
+    static void assertTranslated(Component component) {
+        assertEquals(List.of(), Translations.problems(component.scheme(), component.forms(), Translations.location(component.getClass())),
+                "the texts of scheme " + component.scheme() + " and its translations");
     }
 
     /**

@@ -109,6 +109,7 @@ function fakeApi(files: EndpointFile[] = [inbox], overrides: Partial<EndpointsAp
     save: vi.fn(async (path: string, config) => ({ file: { ...byPath.get(path)!, config }, etag: '"v2"' })),
     create: vi.fn(),
     components: vi.fn(async () => components),
+    texts: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -464,5 +465,115 @@ describe('the endpoint editor in another language', () => {
     await button('Zkontrolovat').click();
     await expect.element(text('Kontrola našla nedostatky')).toBeVisible();
     await expect.element(page.getByRole('list', { name: 'Nedostatky' }).getByText('colour: takové nastavení neexistuje')).toBeVisible();
+  });
+});
+
+/** An in endpoint of the sftp adapter, which describes its texts with their keys. */
+const partner: EndpointFile = {
+  path: 'demo/endpoints/partner.yaml',
+  editable: true,
+  id: 'partner',
+  scheme: 'sftp',
+  direction: 'in',
+  description: null,
+  config: { host: 'files.example', afterSuccess: 'move', moveTo: '/done' },
+  environments: [],
+};
+
+/** The sftp adapter's Czech, short of the texts of its port, and the platform's Czech short of its retry tab. */
+const CZECH: Record<string, Record<string, string>> = {
+  sftp: {
+    'sftp.tab.polling': 'Dotazování',
+    'sftp.field.host.label': 'Hostitel',
+    'sftp.field.host.help': 'Název nebo adresa serveru.',
+    'sftp.field.afterSuccess.label': 'Po úspěchu',
+    'sftp.field.afterSuccess.choice.move': 'Přesunout',
+  },
+  rail8: { 'rail8.tab.general': 'Obecné', 'rail8.tab.recording': 'Záznam', 'rail8.tab.security': 'Zabezpečení' },
+};
+
+/** The texts `bundles` holds for each scheme, in Czech only. */
+const textsOf = (bundles: Record<string, Record<string, string>>) =>
+  vi.fn(async (scheme: string, language: string) => (language === 'cs' ? (bundles[scheme] ?? null) : null));
+
+describe("an adapter's form in Czech", () => {
+  afterEach(() => {
+    chooseLanguage('en');
+    localStorage.removeItem('rail8.language');
+  });
+
+  async function openInCzech(api: EndpointsApi, id = 'partner') {
+    chooseLanguage('cs');
+    await open(api, id);
+  }
+
+  test("shows the adapter's own Czech and the platform's, and the English of a text they lack", async () => {
+    const texts = textsOf(CZECH);
+    await openInCzech(fakeApi([partner], { texts }));
+    for (const name of ['Obecné', 'Dotazování', 'Retry', 'Záznam', 'Zabezpečení']) await expect.element(settingsTab(name)).toBeVisible();
+    await expect.element(field('Hostitel')).toHaveValue('files.example');
+    await expect.element(text('Název nebo adresa serveru.')).toBeVisible();
+    await expect.element(field('Port')).toHaveAttribute('placeholder', 'Výchozí: 22');
+    await expect.element(text("The server's port.")).toBeVisible();
+    await settingsTab('Dotazování').click();
+    await expect.element(field('Po úspěchu')).toHaveValue('Přesunout');
+    await expect.element(text('What becomes of a file once it is taken in.')).toBeVisible();
+    expect(texts.mock.calls).toEqual([
+      ['sftp', 'cs'],
+      ['rail8', 'cs'],
+    ]);
+  });
+
+  test('a draft keeps what its controls hold when the language changes while it is edited', async () => {
+    await open(fakeApi([{ ...partner, config: { ...partner.config, colour: 'red' } }], { texts: textsOf(CZECH) }), 'partner');
+    await button('Edit').click();
+    await field('colour').fill('{"no json');
+    chooseLanguage('cs');
+    await expect.element(field('Hostitel')).toHaveValue('files.example');
+    await expect.element(field('colour')).toHaveValue('{"no json');
+  });
+
+  test('shows the English again once the language is English again', async () => {
+    await openInCzech(fakeApi([partner], { texts: textsOf(CZECH) }));
+    await expect.element(field('Hostitel')).toHaveValue('files.example');
+    chooseLanguage('en');
+    await expect.element(settingsTab('General')).toBeVisible();
+    await expect.element(settingsTab('Polling')).toBeVisible();
+    await expect.element(field('Host')).toHaveValue('files.example');
+    await expect.element(text("The server's name or address.")).toBeVisible();
+  });
+
+  test('shows every text of the adapter in English when the node has none in Czech, or they cannot be had', async () => {
+    for (const texts of [vi.fn(async () => null), vi.fn(async () => Promise.reject(new EndpointsError(502, 'the node does not answer')))]) {
+      await openInCzech(fakeApi([partner], { texts }));
+      for (const name of ['General', 'Polling', 'Retry', 'Recording', 'Security']) await expect.element(settingsTab(name)).toBeVisible();
+      await expect.element(field('Host')).toHaveValue('files.example');
+      await expect.element(field('Port')).toHaveAttribute('placeholder', 'Výchozí: 22');
+      await expect.element(text("The server's name or address.")).toBeVisible();
+      root?.unmount();
+      host?.remove();
+    }
+  });
+
+  test('shows the English of a message that does not format, and a text holding markup as typed', async () => {
+    const texts = textsOf({ sftp: { 'sftp.field.host.label': 'Hostitel {n}', 'sftp.field.host.help': 'Pozor: <b>tučně</b> a <i>' } });
+    await openInCzech(fakeApi([partner], { texts }));
+    await expect.element(field('Host')).toHaveValue('files.example');
+    await expect.element(page.getByText('Pozor: <b>tučně</b> a <i>', { exact: true })).toBeVisible();
+  });
+
+  test("an adapter named like a module of the UI takes none of the UI's texts", async () => {
+    const named: ComponentForms = {
+      ...web,
+      tabs: [{ id: 'general', label: 'General', labelKey: 'rail8.tab.general', common: true }],
+      connection: [{ name: 'replyLimit', type: 'integer', label: 'Reply limit', labelKey: 'endpoints.field.replyLimit.label', help: 'How big a reply may be.', helpKey: 'endpoints.field.replyLimit.help', tab: 'general', required: false, directions: ['out'] }],
+      flow: [],
+    };
+    const own: EndpointFile = { ...partner, id: 'own', path: 'demo/endpoints/own.yaml', scheme: 'endpoints', direction: 'out', config: {} };
+    const texts = textsOf({ endpoints: {}, rail8: CZECH.rail8! });
+    await openInCzech(fakeApi([own], { texts, components: vi.fn(async () => ({ ...components, items: [{ scheme: 'endpoints', httpPrefix: null, settings: named }] })) }), 'own');
+    await expect.element(settingsTab('Obecné')).toBeVisible();
+    await expect.element(field('Reply limit')).toBeVisible();
+    await expect.element(text('How big a reply may be.')).toBeVisible();
   });
 });

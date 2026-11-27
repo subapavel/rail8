@@ -1,0 +1,4 @@
+{
+  "direct.field.address.label": "Adresse",
+  "direct.field.address.help": "Die Adresse in diesem Knoten: ein Sender bedient sie, ein Versand ruft den Flow auf, der sie bedient. Ein Pfad wie /orders, der genau übereinstimmen muss."
+}

@@ -46,7 +46,7 @@ const NODE: NodeComponents = {
 /** The node's components as `components` answers them; nothing else is asked. */
 function apiOf(components: () => Promise<NodeComponents>): EndpointsApi {
   const unused = () => Promise.reject(new Error('not asked'));
-  return { list: unused, read: unused, save: unused, create: unused, components };
+  return { list: unused, read: unused, save: unused, create: unused, components, texts: unused };
 }
 
 let root: Root | undefined;

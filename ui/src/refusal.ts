@@ -79,6 +79,7 @@ export function refusalText(body: unknown, words: Readonly<Record<string, Messag
  */
 export const NOT_TRANSLATED: ReadonlySet<string> = new Set([
   'bad-request', // a request of another shape, which no screen sends; its text says what is wrong with it
+  'no-texts', // a form shows its component's English where the node has no translations, and never this refusal
   'invalid-request', // a request of another shape, which no screen sends; its text says what is wrong with it
   'malformed-input', // its text says where the parser found the test input malformed
   'endpoint-file-refused', // its text says what the endpoint file parser refused

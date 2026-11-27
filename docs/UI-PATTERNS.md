@@ -152,6 +152,11 @@ browser; without a choice the UI follows the browser's languages.
 - Dates are `instant(texts, iso)`, minutes in UTC in the language's form; numbers go through `texts.intl`.
 - Names from data stay as they are: a user's, a package's, a flow's, a role's. The terms of
   `ui/locales/<language>/terms.md` stay in English in every language, with their capital letter.
+- The labels, help texts, choices and tabs of an adapter's form are the adapter's own: a screen that draws the form
+  asks the node for the adapter's translations and the platform's (`GET /admin/components/<scheme>/texts/<language>`)
+  in the language shown, keeps them in a table of their own by scheme, never among the UI's texts, and shows the
+  description's English for a key they lack, when there are none, and for a message that does not format. They are
+  shown as text, with their tags as typed.
 - Ant Design and ProComponents follow the language through `Rail8Theme`.
 - Not translated: the node's own refusals, shown as it gave them, logs, the audit's rows, files in git, names of
   artifacts and the command line.

@@ -33,7 +33,7 @@ import javax.lang.model.SourceVersion;
 /**
  * {@code rail8 new-adapter <dir> --scheme <scheme> [--package <java package>]}: writes the skeleton of a new adapter into
  * {@code <dir>}, which must not exist or be empty. The skeleton is the sample adapter, the webhook plugin, under the new names:
- * its Maven build, the component with its forms, the plugin and its service file, the contract tests of the
+ * its Maven build, the component with its forms and their translations, the plugin and its service file, the contract tests of the
  * component and of its mock, the component's own tests, and a package that uses it ({@code package/}). It builds and passes
  * the contract suite as written; its HTTP code is what the developer replaces with their protocol. {@code <dir>} is made a git
  * repository on {@code main} whose first commit holds every file written, with a {@code .gitattributes} of {@code * -text}, so git
@@ -41,7 +41,8 @@ import javax.lang.model.SourceVersion;
  * a commit ({@code RAIL8_GIT_PATH=package}). The commit's author is the user's git identity, as git reads it.
  *
  * <p>The scheme is a lower-case letter, then lower-case letters and digits, at most {@value #SCHEME_MAX} characters, not a Java
- * keyword, not {@code rail8} (the skeleton's HTTP prefix is {@code /<scheme>}, and {@code /rail8} is the platform's), and not the
+ * keyword, not {@code rail8} (the skeleton's HTTP prefix is {@code /<scheme>}, and {@code /rail8} is the platform's), not
+ * {@code step} (the text keys of the steps start with it), and not the
  * scheme of a component the node ships or of the platform's mock. The class names start with the scheme,
  * its first letter upper-cased ({@code acme}: {@code AcmeComponent}, {@code AcmePlugin}). The Java package, also the Maven group,
  * is {@code --package}, else {@code com.example.<scheme>}. A wrong scheme, package or directory is a usage error, exit 2, nothing
@@ -57,6 +58,8 @@ final class NewAdapter {
     static final int PACKAGE_MAX = 200;
 
     private static final Pattern SCHEME = Pattern.compile("[a-z][a-z0-9]*");
+    /** The scheme no adapter takes: the text keys of the steps start with it. */
+    private static final String STEPS = "step";
     /** The sample's names, longest first: each is replaced in one pass, so a new name that contains an old one stays as given. */
     private static final Pattern NAMES = Pattern.compile("dev\\.rail8\\.examples\\.webhook|dev/rail8/examples/webhook|dev\\.rail8\\.examples|Webhook|webhook");
     /** The files of the adapter's repository beside the template's, by path: git keeps the bytes as written, and leaves the build's output out. */
@@ -109,6 +112,7 @@ final class NewAdapter {
             throw new Cli.Usage("new-adapter: the scheme '" + scheme + "' is taken: its HTTP prefix " + HttpIngress.RESERVED_PREFIX
                     + " is kept for the platform itself");
         }
+        if (STEPS.equals(scheme)) throw new Cli.Usage("new-adapter: the scheme '" + scheme + "' is taken: the texts of the steps are keyed under it");
         Set<String> taken = shippedSchemes(modules);
         if (taken.contains(scheme)) throw new Cli.Usage("new-adapter: the scheme '" + scheme + "' is taken: the node has " + taken);
     }

@@ -47,6 +47,7 @@ import dev.rail8.runtime.secret.SecretRefused;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.runtime.git.CredentialsCheck;
 import dev.rail8.runtime.pg.PgTx;
+import dev.rail8.runtime.plugin.ComponentTexts;
 import dev.rail8.runtime.plugin.Plugins;
 import dev.rail8.runtime.queue.NotAdmittedException;
 import dev.rail8.runtime.refusal.RefusalCode;
@@ -180,7 +181,10 @@ import java.util.stream.Collectors;
  * {@code RAIL8_ENV}, {@code httpOrigin} the origin senders call its HTTP port at ({@code RAIL8_HTTP_ORIGIN}, null when not set),
  * {@code httpPrefix} the path the component's in endpoints are served under on that port (null when it takes no requests there),
  * and {@code settings} the component's two forms, its reach and its text keys ({@code Forms.toJson}, format 2), as the UI draws
- * its forms from them. {@code GET /admin/steps} lists every step type a module or plugin of the node builds, sorted by type: 200
+ * its forms from them. {@code GET /admin/components/{scheme}/texts/{language}} answers the translations of the texts the
+ * component of {@code scheme} declares, or of the platform's own for {@code rail8}, into {@code language}: 200 one flat object
+ * of text keys to ICU messages ({@link ComponentTexts}), 400 for a language that is not of {@link ComponentTexts#LANGUAGE},
+ * 404 for a scheme the node has no component of and for a language it has no translations into. {@code GET /admin/steps} lists every step type a module or plugin of the node builds, sorted by type: 200
  * {@code {items:[{type, configSchema}]}}, {@code configSchema} the JSON Schema of the step's options, or null when the factory's
  * is no JSON object; the built-in steps are not listed. Without one these routes do not exist (404).
  *
@@ -756,6 +760,7 @@ public final class AdminServer {
                 admin.get("/admin/pool/packages", Action.DEPLOYMENT_READ, (c, who) -> poolPackages(d));
                 admin.get("/admin/targets", Action.DEPLOYMENT_READ, (c, who) -> targets(d));
                 admin.get("/admin/components", Action.DEPLOYMENT_READ, (c, who) -> components(d));
+                admin.get("/admin/components/:scheme/texts/:language", Action.DEPLOYMENT_READ, (c, who) -> texts(c, d));
                 admin.get("/admin/steps", Action.DEPLOYMENT_READ, (c, who) -> steps(d));
                 admin.get("/admin/flows/:flow/cpu", Action.DEPLOYMENT_READ, (c, who) -> cpu(c, d));
             });
@@ -2104,6 +2109,25 @@ public final class AdminServer {
                 .put("httpPrefix", deployments.httpPrefix(scheme).orElse(null)).put("settings", new JsonObject(forms.toJson(scheme)))));
         return Json.of(200, new JsonObject().put("environment", deployments.environment()).put("httpOrigin", deployments.httpOrigin().orElse(null))
                 .put("items", items));
+    }
+
+    /**
+     * {@code GET /admin/components/<scheme>/texts/<language>}: the translations of the texts the component of {@code scheme}
+     * declares, or of the platform's own for {@code rail8}, into {@code language}, one flat object of text keys to
+     * ICU messages; 400 for a language that is not of {@link ComponentTexts#LANGUAGE}, 404 for a scheme the node has no
+     * component of and for a language it has no translations into.
+     */
+    private static Reply texts(RoutingContext ctx, Deployments deployments) {
+        String scheme = ctx.pathParam("scheme");
+        String language = ctx.pathParam("language");
+        if (!ComponentTexts.LANGUAGE.matcher(language).matches()) {
+            throw new Refused("a language is two or three lower-case letters, perhaps a dash and two upper-case letters: " + ComponentTexts.LANGUAGE.pattern());
+        }
+        ComponentTexts texts = deployments.texts();
+        Map<String, Object> values = Map.of("scheme", scheme, "language", language);
+        if (!texts.knows(scheme)) return Json.of(404, error(RefusalCode.NO_TEXTS, "the node has no component of scheme '" + scheme + "'", values));
+        return texts.of(scheme, language).map(bundle -> Json.of(200, bundle)).orElseGet(() -> Json.of(404, error(RefusalCode.NO_TEXTS,
+                "the component of scheme '" + scheme + "' has no translations into '" + language + "'", values)));
     }
 
     /**

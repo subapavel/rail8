@@ -42,7 +42,7 @@ class AdminServerAccessTest extends AdminAccessFixture {
 
     /** A value for each parameter of a path: nothing it names exists, so an act let through finds nothing to act on. */
     static final Map<String, String> VALUES = Map.of("name", "nobody", "id", "m-404", "n", "1", "seq", "999999", "flow", "shop",
-            "plugin", "demo", "path", "ping", "key", "nobody/conn");
+            "plugin", "demo", "path", "ping", "key", "nobody/conn", "scheme", "nobody", "language", "cs");
 
     static final Pattern PARAM = Pattern.compile(":(\\w+)");
 

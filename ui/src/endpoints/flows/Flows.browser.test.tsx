@@ -120,6 +120,7 @@ function fakeEndpoints(): EndpointsApi {
     read: vi.fn(async () => ({ file: httpIn, etag: '"1"' })),
     save: vi.fn(),
     create: vi.fn(async (path: string) => ({ file: { ...httpIn, path }, etag: '"1"' })),
+    texts: vi.fn(async () => null),
     components: vi.fn(async () => ({
       environment: 'dev',
       httpOrigin: null,

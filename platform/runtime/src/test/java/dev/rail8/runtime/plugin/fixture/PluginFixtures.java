@@ -145,6 +145,27 @@ public final class PluginFixtures {
         @Override public List<Component> components(ComponentContext context) { return List.of(new Named("rail8", context)); }
     }
 
+    /** A plugin that brings a component of the scheme {@code step}, whose text keys are kept for the steps. */
+    public static final class StepScheme implements Plugin {
+        @Override public String name() { return "step-scheme"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new Named("step", context)); }
+    }
+
+    /** A plugin that brings a component of the scheme {@code rail8.x}, under the platform's own text keys. */
+    public static final class PlatformDotScheme implements Plugin {
+        @Override public String name() { return "platform-dot-scheme"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new Named("rail8.x", context)); }
+    }
+
+    /** A plugin that brings a component of the scheme {@code step.x}, under the text keys kept for the steps. */
+    public static final class StepDotScheme implements Plugin {
+        @Override public String name() { return "step-dot-scheme"; }
+        @Override public String api() { return API; }
+        @Override public List<Component> components(ComponentContext context) { return List.of(new Named("step.x", context)); }
+    }
+
     /** A component of the scheme {@code loner} whose out direction reaches no connection, as only an internal adapter's may. */
     public static final class Unconnected implements Component {
         private final String scheme;

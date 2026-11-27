@@ -162,7 +162,11 @@ class AdminServerComponentsTest {
     }
 
     Answer get(int port, String authorization) throws Exception {
-        return client.request(new RequestOptions().setMethod(HttpMethod.GET).setAbsoluteURI("http://127.0.0.1:" + port + "/admin/components"))
+        return get(port, "/admin/components", authorization);
+    }
+
+    Answer get(int port, String path, String authorization) throws Exception {
+        return client.request(new RequestOptions().setMethod(HttpMethod.GET).setAbsoluteURI("http://127.0.0.1:" + port + path))
                 .compose(req -> {
                     if (authorization != null) req.putHeader("Authorization", authorization);
                     req.response().onSuccess(HttpClientResponse::pause);   // the body may arrive before the compose below attaches to it
@@ -247,5 +251,41 @@ class AdminServerComponentsTest {
     void theRouteNeedsTheToken() throws Exception {
         int port = server.start(vertx).await(10, TimeUnit.SECONDS);
         assertUnauthenticated(get(port, null), null, "GET /admin/components without the token");
+        assertUnauthenticated(get(port, "/admin/components/drop/texts/cs", null), null, "GET /admin/components/drop/texts/cs without the token");
+    }
+
+    static void assertCode(int status, String code, Answer a, String what) {
+        assertError(status, a, what);
+        assertEquals(code, a.json().getString("code"), what);
+    }
+
+    /**
+     * {@code drop}'s jar (here the test's classes) carries {@code META-INF/rail8/texts/drop/cs.json}: served as it is for
+     * {@code cs}. The platform's own are served under {@code rail8}.
+     */
+    @Test
+    void aComponentsTranslationsAreServedForTheirLanguage() throws Exception {
+        int port = server.start(vertx).await(10, TimeUnit.SECONDS);
+        Answer cs = get(port, "/admin/components/drop/texts/cs", "Bearer " + TOKEN);
+        assertJson(200, cs, "GET /admin/components/drop/texts/cs");
+        assertEquals(new JsonObject().put("drop.field.host.label", "Server").put("drop.tab.polling", "Dotazování"), cs.json());
+        Answer platform = get(port, "/admin/components/rail8/texts/de", "Bearer " + TOKEN);
+        assertJson(200, platform, "GET /admin/components/rail8/texts/de");
+        assertEquals("Allgemein", platform.json().getString("rail8.tab.general"));
+    }
+
+    /**
+     * 404 for a language the jar lacks, for one whose file is left out (its {@code de.json} holds a key {@code drop} does not
+     * declare), and for a scheme the node has no component of; 400 for a language that is not one, a path included.
+     */
+    @Test
+    void aMissingLanguageOrSchemeIs404AndALanguageThatIsNoneIs400() throws Exception {
+        int port = server.start(vertx).await(10, TimeUnit.SECONDS);
+        assertCode(404, "no-texts", get(port, "/admin/components/drop/texts/ru", "Bearer " + TOKEN), "a language the jar lacks");
+        assertCode(404, "no-texts", get(port, "/admin/components/drop/texts/de", "Bearer " + TOKEN), "a file left out");
+        assertCode(404, "no-texts", get(port, "/admin/components/nobody/texts/cs", "Bearer " + TOKEN), "an unknown scheme");
+        assertEquals("drop", get(port, "Bearer " + TOKEN).json().getJsonArray("items").getJsonObject(0).getString("scheme"), "drop still loads");
+        assertCode(400, "bad-request", get(port, "/admin/components/drop/texts/cz_CZ", "Bearer " + TOKEN), "cz_CZ");
+        assertCode(400, "bad-request", get(port, "/admin/components/drop/texts/..%2Fen", "Bearer " + TOKEN), "../en");
     }
 }
