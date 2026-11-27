@@ -28,8 +28,11 @@ import java.util.regex.Pattern;
 /**
  * The {@link Environment} of a node over the configuration store. It reads the store at its start, at each notice on
  * {@code rail8_config}, after each {@code LISTEN} acknowledged and at each tick of {@value #TICK_SECONDS} s; one read runs at a
- * time, and a notice during it makes one more. Each read that finds a change swaps in a new immutable snapshot, calls the
- * listeners, and writes what the node holds into its row of {@code nodes}; a write that fails is tried again at the next read.
+ * time, and a notice during it makes one more. Each read that finds a change swaps in a new immutable snapshot and calls the
+ * listeners. After each read the node writes into its row of {@code nodes} the generation every listener has taken: a listener
+ * that throws has not taken its snapshot, and is called again with it at each read until it takes it, while the row keeps the
+ * generation before. So the row tells a change committed from a change this node holds. A write of the row that fails is tried
+ * again at the next read.
  *
  * <p>An object is left out of the snapshot, with its reason, when its binding does not verify, when its format is one this
  * node does not read, or when it is mocked while the environment does not allow mocks. A node that cannot read the store
@@ -72,6 +75,14 @@ public final class StoredEnvironment implements Environment {
     /** The objects refused for a binding that does not verify, each with the key id its WARNING named. */
     private Map<Ref, String> warned = Map.of();
     private boolean failing;
+    /** The listeners that have not taken {@link #held}, touched only by the one read that runs. */
+    private List<Consumer<Snapshot>> untaken = List.of();
+    /** The last snapshot every listener took, with the stamp it was read at: what the node reports it holds. */
+    private Snapshot taken = Snapshot.empty();
+    private long takenGeneration = ConfigStore.Held.nothing().generation();
+    private long takenStamp = ConfigStore.Held.nothing().stamp();
+    /** The generation the untaken listeners were last given. */
+    private long takenAttempt = ConfigStore.Held.nothing().generation();
 
     private Promise<Void> queued;
     private boolean reading;
@@ -236,6 +247,8 @@ public final class StoredEnvironment implements Environment {
                         + holding.generation() + "; the node holds what it read now");
             }
             swap(state);
+        } else if (!untaken.isEmpty()) {
+            tell(untaken);
         }
         report();
     }
@@ -262,14 +275,37 @@ public final class StoredEnvironment implements Environment {
         }
         unverified = state.refused().count();
         warnUnverified(state);
-        Snapshot next = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, leftOut, count);
-        held = next;
-        for (Consumer<Snapshot> listener : listeners) {
+        held = new Snapshot(state.generation(), state.mocksAllowed(), connections, instanceNames, leftOut, count);
+        tell(List.copyOf(listeners));
+    }
+
+    /**
+     * Gives {@link #held} to each of {@code those}, in order; those that throw stay untaken, with one WARNING for the generation.
+     * Once none is left, {@link #held} is what the node reports it holds.
+     */
+    private void tell(List<Consumer<Snapshot>> those) {
+        Snapshot now = held;
+        boolean again = !untaken.isEmpty() && now.generation() == takenAttempt;
+        List<Consumer<Snapshot>> failed = new ArrayList<>();
+        RuntimeException first = null;
+        for (Consumer<Snapshot> listener : those) {
             try {
-                listener.accept(next);
+                listener.accept(now);
             } catch (RuntimeException failure) {
-                LOG.log(System.Logger.Level.WARNING, "a listener of the configuration's changes failed: " + failure.getClass().getName());
+                failed.add(listener);
+                if (first == null) first = failure;
             }
+        }
+        untaken = List.copyOf(failed);
+        takenAttempt = now.generation();
+        if (first != null && !again) {
+            warn.accept(failed.size() + " listeners of the configuration did not take generation " + now.generation() + " ("
+                    + first.getClass().getName() + "): this node reports generation " + takenGeneration + " as held and calls them again at each read");
+        }
+        if (failed.isEmpty()) {
+            taken = now;
+            takenGeneration = holding.generation();
+            takenStamp = holding.stamp();
         }
     }
 
@@ -331,13 +367,13 @@ public final class StoredEnvironment implements Environment {
     }
 
     /**
-     * Writes what the node holds into its row after each read that succeeded, so the row says when the node last read the store;
-     * a failure is a WARNING, tried again at the next read.
+     * Writes what the node holds, the last generation every listener took, into its row after each read that succeeded, so the
+     * row says when the node last read the store; a failure is a WARNING, tried again at the next read.
      */
     private void report() {
-        Snapshot now = held;
+        Snapshot now = taken;
         try {
-            store.holds(node, epoch.getAsLong(), holding.generation(), holding.stamp(),
+            store.holds(node, epoch.getAsLong(), takenGeneration, takenStamp,
                     new ConfigStore.Refused(List.copyOf(now.leftOut().keySet()), now.leftOutCount()));
         } catch (RuntimeException failure) {
             warn.accept("what this node holds of the configuration could not be written to its row: the next read writes it again; "
