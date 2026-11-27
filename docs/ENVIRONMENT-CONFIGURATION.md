@@ -480,9 +480,11 @@ record Ref(Kind kind, String key) { enum Kind { CONNECTION, SYSTEM } }
   when, and, as the connection's version, its `activation`; per system key the instance name; whether mocks are allowed;
   the generation), swaps it in, and calls the listeners. A mocked connection is left out while the environment does not
   allow mocks, with that reason. A snapshot may cover several activations, and after a database set back it may carry a
-  lower generation; a listener compares it with the one before. Then it writes `config_generation`, `config_stamp`,
-  `config_epoch`, `config_read_at` and what it left out into its row of `nodes`, only while that row carries its own
-  epoch. A failed write is a WARNING, and the next tick writes again.
+  lower generation; a listener compares it with the one before. A listener that throws has not taken the snapshot: one
+  WARNING names the generation, and that listener is called again with it at each read until it takes it. Then the node
+  writes into its row of `nodes`, only while that row carries its own epoch, `config_epoch`, `config_read_at`, and the
+  `config_generation`, `config_stamp` and what was left out of the last snapshot every listener took. So the row tells a
+  change committed from a change this node holds. A failed write is a WARNING, and the next tick writes again.
 - **At start**, a node reads the whole store before it restores its packages and takes any work.
 - **Postgres away.** A node that cannot read the store keeps its last good snapshot and goes on sending by it. After
   30 s without a successful read, `/health` is `DEGRADED`, naming the time of its last read. A change committed
