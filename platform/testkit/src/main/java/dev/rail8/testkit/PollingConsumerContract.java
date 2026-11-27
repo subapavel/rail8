@@ -3,6 +3,7 @@ package dev.rail8.testkit;
 import dev.rail8.api.Ack;
 import dev.rail8.api.Body;
 import dev.rail8.api.Component;
+import dev.rail8.api.Connection;
 import dev.rail8.api.Consumer;
 import dev.rail8.api.Envelope;
 import dev.rail8.api.Health;
@@ -18,7 +19,9 @@ import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -53,7 +56,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * A consumer's successor, started once it stopped, delivers what it left and never a file it acknowledged. Health is up
  * only while a consumer runs. The forms are the same on every call, serve the in direction and are labelled, with their
  * text keys; the connection form only adds to the one recorded in the test resources' {@code forms/<scheme>.json};
- * {@link #inbound()} passes them; building a consumer reads no secret.
+ * {@link #inbound()} passes them; building a consumer reads no secret. The place a consumer polls is answered from the
+ * inbound alone, and the same every time.
  *
  * @since 0.1
  */
@@ -267,6 +271,30 @@ public abstract class PollingConsumerContract {
                 new Inbound(in.flow(), in.connection().map(c -> ComponentContract.counted(c, reads)), in.settings(), in.maxBodyBytes()), ACCEPT);
         assertNotNull(built, "consumer() answers a consumer");
         assertEquals(0, reads.get(), "a consumer that was only built read a secret");
+    }
+
+    /**
+     * The place a consumer of {@link #inbound()} polls, within its connection, is answered from the inbound alone: never a
+     * throw, null or a blank place, the same twice, for an equal copy and from a fresh component. The node asks it at every
+     * deploy and restore, and refuses the deploy of a sender whose adapter cannot say which place it polls.
+     */
+    @Test
+    public void thePolledPlaceIsAnsweredFromTheInboundAloneAndStable() {
+        Component component = component();
+        Inbound in = inbound();
+        Optional<String> place;
+        try {
+            place = component.polledPlace(in);
+        } catch (RuntimeException unanswered) {
+            throw new AssertionError("polledPlace threw: a deploy of this sender is refused", unanswered);
+        }
+        assertNotNull(place, "polledPlace answers an Optional, never null");
+        place.ifPresent(p -> assertFalse(p.isBlank(), "a polled place is named, never blank"));
+        assertEquals(place, component.polledPlace(in), "asked twice");
+        Inbound copy = new Inbound(in.flow(), in.connection().map(c -> new Connection(c.key(), new HashMap<>(c.values()), new HashMap<>(c.secrets()))),
+                new HashMap<>(in.settings()), in.maxBodyBytes());
+        assertEquals(place, component.polledPlace(copy), "an equal copy of the inbound");
+        assertEquals(place, component().polledPlace(in), "a fresh component");
     }
 
     /**
