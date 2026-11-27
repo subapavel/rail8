@@ -1,0 +1,8 @@
+{
+  "webhook.field.url.label": "URL",
+  "webhook.field.url.help": "URL, na kterou se posílá každá zpráva, například https://partner.example/hook. Bez uživatelského jména a hesla.",
+  "webhook.field.timeoutMs.label": "Časový limit (ms)",
+  "webhook.field.timeoutMs.help": "Jak dlouho smí požadavek trvat, v milisekundách.",
+  "webhook.field.address.label": "Adresa",
+  "webhook.field.address.help": "Cesta pod předponou adaptéru na portu HTTP uzlu, kterou volá Sender, například /orders; musí se shodovat přesně."
+}

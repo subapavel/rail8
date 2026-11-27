@@ -80,8 +80,9 @@ import java.util.stream.Stream;
  * {@link #CLI_COMMANDS} that brings one, and a usage outside the rule of {@link Command}.
  *
  * <p>A module or plugin adds and never replaces: a scheme, step type or expression language that is already another's is
- * refused, naming both owners, and so are a built-in step type ({@link FlowBuilder#BUILT_INS}) and the schemes {@code mock} and
- * {@code rail8}, whose text keys are the platform's own. So are a call that throws — a component's {@code forms()} is called once
+ * refused, naming both owners, and so are a built-in step type ({@link FlowBuilder#BUILT_INS}), the scheme {@code mock}, and
+ * the schemes {@code rail8} and {@code step} and every scheme that starts {@code rail8.} or {@code step.}, under which the
+ * platform's own texts and the steps' are keyed. So are a call that throws — a component's {@code forms()} is called once
  * as it is built, so forms that cannot be built are one —, a null scheme, step type, language or {@code forms()}, a component
  * whose out direction reaches no connection unless it is one of the platform's internal adapters ({@link #INTERNAL}), so a flow
  * sends only through a connection, a component whose {@code reads()} is null, or names a kind of credential and does not
@@ -118,6 +119,8 @@ public final class Plugins implements AutoCloseable {
     private static final Pattern NAME = Pattern.compile("[a-z][a-z0-9-]{0,63}");
     private static final Pattern API = Pattern.compile("(\\d{1,4})\\.(\\d{1,4})");
     private static final Pattern SERVICE_PATH = Pattern.compile("[a-z0-9-]{1,32}(/[a-z0-9-]{1,32}){0,3}");
+    /** The first segments of the text keys that are not an adapter's: the platform's own, and those kept for the steps. */
+    private static final List<String> RESERVED = List.of(Forms.PLATFORM, "step");
     /** The name that stands for the platform itself, its built-in steps and its mock: no module's or plugin's. */
     private static final String PLATFORM = "rail8";
     /** What a {@link LinkageError} in a plugin's call is most likely about. */
@@ -399,7 +402,7 @@ public final class Plugins implements AutoCloseable {
 
     private static List<Component> components(List<Loaded> loaded, ComponentContext context, Map<String, List<String>> owned) {
         return merge(loaded, "components()", l -> l.plugin().components(context), Component::scheme, "scheme",
-                Map.of("mock", "is the platform's mock", Forms.PLATFORM, "is the platform's own"), "forms()", Plugins::forms, IllegalStateException::new, owned);
+                Map.of("mock", "is the platform's mock"), "forms()", Plugins::forms, IllegalStateException::new, owned);
     }
 
     /**
@@ -407,6 +410,7 @@ public final class Plugins implements AutoCloseable {
      * it has none.
      */
     private static Forms forms(Component c) {
+        if (reserved(c.scheme())) throw new Broken("the scheme " + c.scheme() + " is the platform's own");
         Forms forms = c.forms();
         if (forms != null && forms.serves(Direction.OUT) && !forms.connects(Direction.OUT) && !INTERNAL.contains(c.scheme())) {
             throw new Broken("the out direction of scheme " + c.scheme() + " reaches no connection: only the platform's internal adapters "
@@ -419,6 +423,14 @@ public final class Plugins implements AutoCloseable {
                     + " but does not override consumer(Inbound, Entry), through which its consumers hand them to the node's entry");
         }
         return forms;
+    }
+
+    /**
+     * Whether {@code scheme} is one no component may have: {@code rail8} and {@code step}, and every scheme that starts
+     * {@code rail8.} or {@code step.}, under which the platform's own texts and the steps' are keyed.
+     */
+    static boolean reserved(String scheme) {
+        return RESERVED.stream().anyMatch(r -> scheme.equals(r) || scheme.startsWith(r + "."));
     }
 
     /** Whether {@code c}'s class overrides {@link Component#consumer(Inbound, Entry)}. */

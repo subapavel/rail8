@@ -60,6 +60,7 @@ import dev.rail8.runtime.git.PackageRepositories;
 import dev.rail8.runtime.lease.InMemoryPollerLeases;
 import dev.rail8.runtime.lease.PollerLeases;
 import dev.rail8.runtime.node.NodeConfig;
+import dev.rail8.runtime.plugin.ComponentTexts;
 import dev.rail8.runtime.refusal.RefusalCode;
 import dev.rail8.runtime.secret.SecretStore;
 import dev.rail8.schemas.Package;
@@ -325,6 +326,8 @@ public final class Deployments {
     private final NodeConfig config;
     private final Runtime runtime;
     private final Map<String, Component> components;
+    /** The translations of the components' texts and the platform's own. */
+    private final ComponentTexts texts;
     /** The HTTP prefix of each scheme whose component declares one ({@code Component.httpPrefix}), read once. */
     private final Map<String, String> prefixes;
     private final Clock clock;
@@ -596,6 +599,7 @@ public final class Deployments {
         this.config = Objects.requireNonNull(config, "config");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.components = Map.copyOf(components);
+        this.texts = ComponentTexts.read(this.components);
         this.prefixes = SharedHttpPort.prefixes(List.copyOf(this.components.values()));
         this.clock = Objects.requireNonNull(clock, "clock");
         this.timer = Objects.requireNonNull(timer, "timer");
@@ -802,6 +806,11 @@ public final class Deployments {
         SortedMap<String, Forms> all = new TreeMap<>();
         components.forEach((scheme, component) -> all.put(scheme, component.forms()));
         return Collections.unmodifiableSortedMap(all);
+    }
+
+    /** The translations of the texts every component declares, and of the platform's own, read as the deployments were built. */
+    public ComponentTexts texts() {
+        return texts;
     }
 
     /** The {@code configSchema()} of every step type that a module or plugin of the node builds, by type in name order. */

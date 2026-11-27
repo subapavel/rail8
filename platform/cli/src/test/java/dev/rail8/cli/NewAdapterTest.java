@@ -1,6 +1,7 @@
 package dev.rail8.cli;
 
 import dev.rail8.cli.CliRuns.Ran;
+import io.vertx.core.json.JsonObject;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.treewalk.TreeWalk;
@@ -72,6 +73,9 @@ class NewAdapterTest {
                 "pom.xml",
                 PATH + "AcmeComponent.java",
                 PATH + "AcmePlugin.java",
+                "src/main/resources/META-INF/rail8/texts/acme/cs.json",
+                "src/main/resources/META-INF/rail8/texts/acme/de.json",
+                "src/main/resources/META-INF/rail8/texts/acme/ru.json",
                 "src/main/resources/META-INF/services/dev.rail8.api.plugin.Plugin",
                 "src/test/java/org/acme/rail8/adapter/AcmeComponentContractTest.java",
                 "src/test/java/org/acme/rail8/adapter/AcmeComponentTest.java",
@@ -86,6 +90,9 @@ class NewAdapterTest {
         assertTrue(Files.readString(dir.resolve(PATH + "AcmeComponent.java")).contains("public static final String SCHEME = \"acme\";"));
         assertTrue(Files.readString(dir.resolve("pom.xml")).contains("<groupId>org.acme.rail8.adapter</groupId>"));
         assertTrue(Files.readString(dir.resolve("package/endpoints/orders-in.yaml")).contains("scheme: acme"));
+        JsonObject cs = new JsonObject(Files.readString(dir.resolve("src/main/resources/META-INF/rail8/texts/acme/cs.json")));
+        assertTrue(cs.containsKey("acme.field.url.label") && cs.fieldNames().stream().allMatch(key -> key.startsWith("acme.")),
+                "the translations' keys take the new scheme: " + cs.fieldNames());
         assertEquals("* -text\n", Files.readString(dir.resolve(".gitattributes")), "git keeps the bytes as written: no line ending changes");
         assertEquals("target/\n", Files.readString(dir.resolve(".gitignore")), "the build's output is never committed");
     }
@@ -132,6 +139,10 @@ class NewAdapterTest {
         Files.copy(dir.resolve("src/main/resources/META-INF/services/dev.rail8.api.plugin.Plugin"),
                 Files.createDirectories(main.resolve("META-INF/services")).resolve("dev.rail8.api.plugin.Plugin"));
         Files.copy(dir.resolve("src/test/resources/forms/acme.json"), Files.createDirectories(tests.resolve("forms")).resolve("acme.json"));
+        Path texts = Files.createDirectories(main.resolve("META-INF/rail8/texts/acme"));
+        for (String language : List.of("cs", "de", "ru")) {
+            Files.copy(dir.resolve("src/main/resources/META-INF/rail8/texts/acme/" + language + ".json"), texts.resolve(language + ".json"));
+        }
 
         try (URLClassLoader loader = new URLClassLoader(new URL[] {main.toUri().toURL(), tests.toUri().toURL()}, getClass().getClassLoader())) {
             List<String> classes = List.of("AcmeComponentContractTest", "AcmeMockContractTest", "AcmeComponentTest");
@@ -156,7 +167,7 @@ class NewAdapterTest {
     @Test
     void aWrongSchemePackageOrDirectoryIsAUsageErrorAndWritesNothing() throws IOException {
         Path dir = temp.resolve("none");
-        for (String scheme : List.of("Acme", "1acme", "ac-me", "", "class", "http", "sftp", "mock", "rail8", "a".repeat(NewAdapter.SCHEME_MAX + 1))) {
+        for (String scheme : List.of("Acme", "1acme", "ac-me", "", "class", "http", "sftp", "mock", "rail8", "step", "a".repeat(NewAdapter.SCHEME_MAX + 1))) {
             Ran ran = run("new-adapter", dir.toString(), "--scheme", scheme);
             assertEquals(2, ran.exit(), scheme + ": " + ran);
             assertFalse(Files.exists(dir), scheme + ": nothing written");
@@ -186,6 +197,9 @@ class NewAdapterTest {
         Ran rail8 = run("new-adapter", dir.toString(), "--scheme", "rail8");
         assertEquals(List.of("rail8: new-adapter: the scheme 'rail8' is taken: its HTTP prefix /rail8 is kept for the platform itself"),
                 rail8.errLines().subList(0, 1), "the skeleton's prefix would be the platform's own: " + rail8);
+        Ran step = run("new-adapter", dir.toString(), "--scheme", "step");
+        assertEquals(List.of("rail8: new-adapter: the scheme 'step' is taken: the texts of the steps are keyed under it"),
+                step.errLines().subList(0, 1), "the steps' text keys start with step.: " + step);
     }
 
     /** The regular files under {@code dir}, relative to it with '/', sorted. */

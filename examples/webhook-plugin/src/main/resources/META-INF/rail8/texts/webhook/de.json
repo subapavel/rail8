@@ -1,0 +1,8 @@
+{
+  "webhook.field.url.label": "URL",
+  "webhook.field.url.help": "Die URL, an die jede Nachricht gesendet wird, etwa https://partner.example/hook. Ohne Benutzernamen und Passwort.",
+  "webhook.field.timeoutMs.label": "Zeitlimit (ms)",
+  "webhook.field.timeoutMs.help": "Wie lange eine Anfrage dauern darf, in Millisekunden.",
+  "webhook.field.address.label": "Adresse",
+  "webhook.field.address.help": "Der Pfad unter dem Präfix des Adapters am HTTP-Port des Knotens, den ein Sender aufruft, etwa /orders; er muss genau übereinstimmen."
+}

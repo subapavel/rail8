@@ -1,0 +1,12 @@
+{
+  "http.field.url.label": "URL",
+  "http.field.url.help": "URL http nebo https, na kterou se posílají požadavky: schéma, hostitel, port a předpona cesty, například https://partner.example/api. Bez uživatelského jména a hesla.",
+  "http.field.timeoutMs.label": "Časový limit (ms)",
+  "http.field.timeoutMs.help": "Jak dlouho smí požadavek trvat, v milisekundách.",
+  "http.field.poolSize.label": "Velikost poolu",
+  "http.field.poolSize.help": "Kolik spojení k partnerovi se nejvýše drží otevřených.",
+  "http.field.address.label": "Adresa",
+  "http.field.address.help": "Cesta pod předponou adaptéru na portu HTTP uzlu, kterou volá Sender, například /orders; musí se shodovat přesně.",
+  "http.field.path.label": "Cesta",
+  "http.field.path.help": "Cesta, na kterou odeslání míří, připojená k cestě url z Connection, například /orders. Žádná: url, jak je."
+}

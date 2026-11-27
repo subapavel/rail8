@@ -52,7 +52,8 @@ class PollingConsumerContractSelfTest {
 
     static final Set<String> CASES = Set.of("theSchemeIsNamedAndNotThePlatforms", "theFormsAreTheSameOnEveryCallAndServeTheInDirection",
             "theConnectionFormOnlyAddsToTheRecordedOne",
-            "everyFieldChoiceAndTabHasALabelAndItsTextKeys", "theInboundPassesTheForms", "noSecretHandleIsReadWhileAConsumerIsBuilt",
+            "everyFieldChoiceAndTabHasALabelAndItsTextKeys", "theTextsAreIcuMessagesAndEachTranslationKeepsTheKeysAndArgumentsOfTheEnglish",
+            "theInboundPassesTheForms", "noSecretHandleIsReadWhileAConsumerIsBuilt",
             "thePolledPlaceIsAnsweredFromTheInboundAloneAndStable",
             "aSuccessorStartedOnceTheConsumerStoppedDeliversWhatIsLeftAndNothingAcknowledged",
             "aDroppedFileIsDeliveredIntactAndRemovedAfterAccepted", "theFileStaysWhileTheAnswerIsPending",

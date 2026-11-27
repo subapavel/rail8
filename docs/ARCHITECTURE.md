@@ -651,7 +651,12 @@ producer calls.
   `.choice.<value>`, `<scheme>.tab.<id>`, and `rail8.tab.<id>` for a common tab), and the UI draws
   its screens from them. A hidden field is never required, and the empty string is no value.
   Forms that cannot be built, or are null, refuse the node's start, naming their owner; so does a
-  plugin's component of the scheme `rail8`, the platform's own. A form that describes nothing
+  plugin's component of the scheme `rail8` or `step`, or of one that starts `rail8.` or `step.`:
+  the platform's own texts and the steps' are keyed under them. A component's jar may carry its
+  translations of those texts, `META-INF/rail8/texts/<scheme>/<language>.json`, and the platform's
+  own are in the runtime's jar under `rail8`; the node reads them as it builds its components,
+  leaves out a bad file with a WARNING, and serves each at
+  `GET /admin/components/<scheme>/texts/<language>`. The UI lays them over the English. A form that describes nothing
   (`Settings.NONE`) takes every key the other form does not.
 - **An endpoint file of `schemaVersion: 1`** is one use of the forms. The node splits its config, the
   environment's overlay applied: the connection form's fields become a `Connection` whose key is the
@@ -1452,6 +1457,7 @@ named token, or the emergency key. The rules are those of `docs/USERS-AND-ROLES.
 | `GET /admin/pool/packages` | the pool's records and what each node of the pool runs |
 | `GET /admin/targets`, `GET /admin/flows/{flow}/cpu` | limits per target system, CPU by step |
 | `GET /admin/components` | the components the node serves and their forms (format 2) |
+| `GET /admin/components/{scheme}/texts/{language}` | the translations an adapter carries of the texts it declares, or the platform's own under `rail8`, into one language |
 | `GET /admin/steps` | the step types of the node's modules and plugins, each with its `configSchema`, sorted by type |
 | `GET /admin/modules` | the loaded modules and plugins, each with its version, api, SHA-256, where it came from and what it brings (part 5) |
 | `GET`, `POST /admin/modules/{module}/{path}` | the admin services of the node's modules (part 5) |

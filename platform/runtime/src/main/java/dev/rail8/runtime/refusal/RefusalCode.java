@@ -189,6 +189,11 @@ public enum RefusalCode {
     /** 503: the change is written, but this node could not read it back: it is in force within one tick. */
     WRITTEN_UNREAD("written-unread"),
 
+    // --- the components
+
+    /** 404: the node has no translations of the texts of {@code scheme} into {@code language}, or no component of that scheme. */
+    NO_TEXTS("no-texts"),
+
     // --- the configuration of an environment
 
     /** 404: no row holds the object {@code key}, and no deployed system names it; or a version whose history row is gone. */

@@ -1,0 +1,4 @@
+{
+  "direct.field.address.label": "Adresa",
+  "direct.field.address.help": "Adresa v tomto uzlu: Sender ji obsluhuje, odeslání volá tok, který ji obsluhuje. Cesta, například /orders, musí se shodovat přesně."
+}

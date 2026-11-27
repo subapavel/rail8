@@ -55,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * files for a fresh consumer of the inbound, which delivers them once the partner is back; a stop is not a break.
  * A consumer's successor, started once it stopped, delivers what it left and never a file it acknowledged. Health is up
  * only while a consumer runs. The forms are the same on every call, serve the in direction and are labelled, with their
- * text keys; the connection form only adds to the one recorded in the test resources' {@code forms/<scheme>.json};
+ * text keys, every English text an ICU message and each translation the component's jar carries holding only declared keys
+ * with their English's arguments; the connection form only adds to the one recorded in the test resources' {@code forms/<scheme>.json};
  * {@link #inbound()} passes them; building a consumer reads no secret. The place a consumer polls is answered from the
  * inbound alone, and the same every time.
  *
@@ -240,6 +241,15 @@ public abstract class PollingConsumerContract {
     public void everyFieldChoiceAndTabHasALabelAndItsTextKeys() {
         Component component = component();
         ComponentContract.assertLabelled(component.scheme(), component.forms());
+    }
+
+    /**
+     * Every English text of the forms is an ICU message, and each translation the component's jar carries holds only keys the
+     * forms declare, each with the same arguments as its English, as {@link ComponentContract} requires.
+     */
+    @Test
+    public void theTextsAreIcuMessagesAndEachTranslationKeepsTheKeysAndArgumentsOfTheEnglish() {
+        ComponentContract.assertTranslated(component());
     }
 
     /**

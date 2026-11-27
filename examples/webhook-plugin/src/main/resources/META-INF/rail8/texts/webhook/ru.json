@@ -1,0 +1,8 @@
+{
+  "webhook.field.url.label": "URL",
+  "webhook.field.url.help": "URL, на который отправляется каждое сообщение, например https://partner.example/hook. Без имени пользователя и пароля.",
+  "webhook.field.timeoutMs.label": "Тайм-аут (мс)",
+  "webhook.field.timeoutMs.help": "Сколько может длиться запрос, в миллисекундах.",
+  "webhook.field.address.label": "Адрес",
+  "webhook.field.address.help": "Путь под префиксом адаптера на HTTP-порту узла, который вызывает Sender, например /orders; должен совпадать точно."
+}

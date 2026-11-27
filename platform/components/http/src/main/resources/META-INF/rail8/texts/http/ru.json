@@ -1,0 +1,12 @@
+{
+  "http.field.url.label": "URL",
+  "http.field.url.help": "URL http или https, на который отправляются запросы: схема, хост, порт и префикс пути, например https://partner.example/api. Без имени пользователя и пароля.",
+  "http.field.timeoutMs.label": "Тайм-аут (мс)",
+  "http.field.timeoutMs.help": "Сколько может длиться запрос, в миллисекундах.",
+  "http.field.poolSize.label": "Размер пула",
+  "http.field.poolSize.help": "Сколько соединений с партнёром держится открытыми самое большее.",
+  "http.field.address.label": "Адрес",
+  "http.field.address.help": "Путь под префиксом адаптера на HTTP-порту узла, который вызывает Sender, например /orders; должен совпадать точно.",
+  "http.field.path.label": "Путь",
+  "http.field.path.help": "Путь, по которому идёт отправка, добавленный к пути url из Connection, например /orders. Нет: url как есть."
+}

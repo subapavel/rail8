@@ -665,6 +665,24 @@ class PluginsTest {
         }
     }
 
+    /**
+     * The schemes {@code rail8} and {@code step}, and every scheme that starts {@code rail8.} or {@code step.}, are refused:
+     * the platform's own texts and the steps' are keyed under them.
+     */
+    @Test
+    void aSchemeThatTheTextKeysOfThePlatformOrOfTheStepsUseRefusesTheStart() throws IOException {
+        Map<String, Class<?>> fixtures = Map.of("step", PluginFixtures.StepScheme.class, "rail8.x", PluginFixtures.PlatformDotScheme.class,
+                "step.x", PluginFixtures.StepDotScheme.class);
+        for (Map.Entry<String, Class<?>> fixture : new java.util.TreeMap<>(fixtures).entrySet()) {
+            jar("reserved.jar", fixture.getValue());
+            try (Plugins plugins = load()) {
+                String refused = assertThrows(IllegalStateException.class, () -> plugins.components(context())).getMessage();
+                assertTrue(refused.contains(": the scheme " + fixture.getKey() + " is the platform's own"), refused);
+            }
+            Files.delete(dir.resolve("reserved.jar"));
+        }
+    }
+
     /** Only the platform's internal adapters send without a connection: a plugin's out direction that reaches none is refused. */
     @Test
     void aComponentThatSendsWithoutAConnectionRefusesTheStartNamingThePlugin() throws IOException {
