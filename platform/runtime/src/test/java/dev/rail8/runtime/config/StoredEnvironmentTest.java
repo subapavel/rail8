@@ -222,6 +222,33 @@ class StoredEnvironmentTest {
     }
 
     @Test
+    void aGenerationIsReportedHeldOnlyOnceEveryListenerTookItAndAFailedListenerIsCalledAgainAtEachTick() {
+        List<Long> took = new CopyOnWriteArrayList<>();
+        AtomicInteger failing = new AtomicInteger();
+        env.onActivation(s -> took.add(s.generation()));
+        env.onActivation(s -> {
+            if (s.generation() == 2 && failing.getAndIncrement() < 2) throw new IllegalStateException("the index cannot be built yet");
+            took.add(-s.generation());
+        });
+        store.put(connection(API, 11, web("https://acme.example"), Optional.empty()));
+        env.start();
+        assertEquals(1L, store.reports.getLast().get(2), "every listener took generation 1");
+
+        store.put(connection(API, 12, web("https://acme.example/v2"), Optional.empty()));
+        await(env.notice());
+        assertEquals(1L, store.reports.getLast().get(2), "a listener did not take generation 2: the node reports the generation all took");
+        assertEquals(1, warnings.stream().filter(w -> w.contains("did not take")).count(), warnings.toString());
+        assertEquals(12, env.current().connection("acme/api").orElseThrow().version(), "the snapshot itself is swapped");
+
+        tick();
+        assertEquals(1L, store.reports.getLast().get(2), "it failed again at the tick");
+        tick();
+        assertEquals(2L, store.reports.getLast().get(2), "it took the generation at the next tick, and the report says so");
+        assertEquals(List.of(1L, -1L, 2L, -2L), took, "the listener that took it is not called again; the one that failed is, until it takes it");
+        assertEquals(1, warnings.stream().filter(w -> w.contains("did not take")).count(), "one warning for a generation, not one each tick");
+    }
+
+    @Test
     void noticesDuringARunningReadMakeOneMoreRead() throws Exception {
         env.start();
         int before = store.reads.get();
