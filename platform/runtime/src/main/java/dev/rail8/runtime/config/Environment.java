@@ -20,8 +20,11 @@ public interface Environment {
     Snapshot current();
 
     /**
-     * Calls {@code listener} once for each snapshot taken after this call, in the order taken. One snapshot may cover several
+     * Calls {@code listener} with each snapshot taken after this call, in the order taken. One snapshot may cover several
      * activations, and after a database set back it may carry a lower generation: a listener compares it with the one before.
+     * A listener that throws has not taken the snapshot: it is called again with the same snapshot at each later read until
+     * it returns, or until a newer snapshot replaces it, so it must take a snapshot twice safely. Meanwhile the node reports
+     * the last snapshot every listener took as the one it holds.
      */
     void onActivation(Consumer<Snapshot> listener);
 
