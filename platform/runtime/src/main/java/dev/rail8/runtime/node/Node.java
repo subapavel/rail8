@@ -58,6 +58,7 @@ import dev.rail8.runtime.time.VertxTimer;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.net.ClientSSLOptions;
+import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.PemTrustOptions;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
@@ -269,18 +270,12 @@ public final class Node implements AutoCloseable {
         // building a pool connects nowhere (connections open on the first query), so the refusals below still come before
         // anything touches Postgres; from here on every failed start closes both again. One source of the options, each
         // session named by its role: the two pools, the membership and the LISTEN connection connect alike.
-        // Both sizes and both options come before either pool is built; an intake share at or above the total never gets here,
-        // because the NodeConfig constructor refuses it. Each pool waits at most RAIL8_PG_POOL_WAIT for a connection
-        // and queues at most RAIL8_PG_POOL_QUEUE callers: never the client's unbounded queue and 30 s wait
-        PoolOptions intakeSize = bounded(new PoolOptions().setMaxSize(pg.intakePoolSize()), pg);
-        PoolOptions workSize = bounded(new PoolOptions().setMaxSize(pg.workPoolSize()), pg);
-        PgConnectOptions intakeConnect = connectOptions(pg, "intake", config.nodeId());
-        PgConnectOptions workConnect = connectOptions(pg, "work", config.nodeId());
-        Pool intakePool = PgBuilder.pool().connectingTo(intakeConnect).with(intakeSize).using(vertx).build();   // the ACK path's only pool
-        Pool pool = PgBuilder.pool().connectingTo(workConnect).with(workSize).using(vertx).build();
+        // An intake share at or above the total never gets here, because the NodeConfig constructor refuses it. Each pool bounds
+        // the wait for a connection, the callers waiting and a connection's silence (pool below)
+        Pool intakePool = pool(vertx, pg, connectOptions(pg, "intake", config.nodeId()), pg.intakePoolSize());   // the ACK path's only pool
+        Pool pool = pool(vertx, pg, connectOptions(pg, "work", config.nodeId()), pg.workPoolSize());
         // the admin API's door reads here, so a deploy or an undeploy is let in while the work queue holds the work pool
-        Pool accessPool = PgBuilder.pool().connectingTo(connectOptions(pg, "access", config.nodeId()))
-                .with(bounded(new PoolOptions().setMaxSize(ACCESS_POOL_SIZE), pg)).using(vertx).build();
+        Pool accessPool = pool(vertx, pg, connectOptions(pg, "access", config.nodeId()), ACCESS_POOL_SIZE);
         PgMessageStore messages = null;
         Journal journal = null;   // once open: closed after the deployments, before the store and the pools its rows go through
         Runnable closeValkey = () -> {};   // the Valkey client once built: closed last
@@ -532,13 +527,25 @@ public final class Node implements AutoCloseable {
     }
 
     /**
-     * {@code options} with {@code pg}'s bounds on the wait for a pooled connection: a caller waits at most
-     * {@link NodeConfig.Pg#poolWait() poolWait} (in whole milliseconds), at most {@link NodeConfig.Pg#poolQueue() poolQueue} callers
-     * wait, and the pool refuses the rest at once.
+     * A pool of the node: at most {@code size} connections opened with {@code connect}, and {@code pg}'s bounds. A caller waits at
+     * most {@link NodeConfig.Pg#poolWait() poolWait} for a connection (in whole milliseconds), at most
+     * {@link NodeConfig.Pg#poolQueue() poolQueue} callers wait, and the pool refuses the rest at once: never the client's unbounded
+     * queue and 30 s wait. A connection that reads and writes no byte for {@link NodeConfig.Pg#idleTimeout() idleTimeout} is
+     * closed by the client: a statement in flight on it fails, and the pool opens a fresh connection for its next caller. Building
+     * the pool connects nowhere; connections open on the first query.
+     *
+     * @param vertx the node's Vert.x
+     * @param pg the node's Postgres settings
+     * @param connect the server, the credentials and the session's pins
+     * @param size the most connections the pool holds
+     * @return the pool
      */
-    private static PoolOptions bounded(PoolOptions options, NodeConfig.Pg pg) {
-        return options.setConnectionTimeout(Math.toIntExact(pg.poolWait().toMillis())).setConnectionTimeoutUnit(TimeUnit.MILLISECONDS)
-                .setMaxWaitQueueSize(pg.poolQueue());
+    static Pool pool(Vertx vertx, NodeConfig.Pg pg, PgConnectOptions connect, int size) {
+        PoolOptions bounds = new PoolOptions().setMaxSize(size).setConnectionTimeout(Math.toIntExact(pg.poolWait().toMillis()))
+                .setConnectionTimeoutUnit(TimeUnit.MILLISECONDS).setMaxWaitQueueSize(pg.poolQueue());
+        NetClientOptions silence = new NetClientOptions().setIdleTimeout(Math.toIntExact(pg.idleTimeout().toMillis()))
+                .setIdleTimeoutUnit(TimeUnit.MILLISECONDS);
+        return PgBuilder.pool().connectingTo(connect).with(bounds).with(silence).using(vertx).build();
     }
 
     /**
